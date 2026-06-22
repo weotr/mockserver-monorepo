@@ -1,0 +1,35 @@
+meta {
+  name: replay a previously recorded request to its original target
+  type: http
+  seq: 16
+}
+
+put {
+  url: {{baseUrl}}/mockserver/replay
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "method": "PUT",
+    "path": "/mockserver/status",
+    "headers": {
+      "Host": [
+        "localhost:1080"
+      ]
+    }
+  }
+}
+
+docs {
+  Re-issues a previously recorded or proxied HTTP request to its upstream target and returns the upstream response. The target host/port is resolved from the socketAddress field or the Host header in the submitted HttpRequest JSON. Subject to the SSRF policy (mockserver.forwardProxyBlockPrivateNetworks) and a 10 MB body-size cap on both the outbound request and the upstream response.
+  
+  the HTTP request to replay to its original upstream target
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

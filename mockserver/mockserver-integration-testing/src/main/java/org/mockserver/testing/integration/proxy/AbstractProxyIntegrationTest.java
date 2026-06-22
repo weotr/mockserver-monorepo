@@ -45,8 +45,8 @@ import java.util.concurrent.TimeUnit;
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
@@ -60,6 +60,8 @@ import static org.mockserver.model.JsonSchemaBody.jsonSchema;
 import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.test.Assert.assertContains;
 import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
+import static org.mockserver.verify.Verification.verification;
+import static org.mockserver.verify.VerificationSequence.verificationSequence;
 import static org.mockserver.verify.VerificationTimes.atLeast;
 import static org.mockserver.verify.VerificationTimes.exactly;
 
@@ -617,6 +619,293 @@ public abstract class AbstractProxyIntegrationTest {
     }
 
     @Test
+    public void shouldVerifyRequestAndResponsePair() throws Exception {
+        // given
+        getMockServerClient()
+            .when(
+                request()
+                    .withPath(calculatePath("verify_response_test")),
+                Times.exactly(1)
+            )
+            .respond(
+                response()
+                    .withStatusCode(OK_200.code())
+                    .withBody("response_body")
+            );
+
+        // when
+        HttpClient httpClient = createHttpClient();
+        HttpGet request = new HttpGet(
+            new URIBuilder()
+                .setScheme("http")
+                .setHost("127.0.0.1")
+                .setPort(getServerPort())
+                .setPath(addContextToPath("verify_response_test"))
+                .build()
+        );
+        HttpResponse response = httpClient.execute(request);
+
+        // then - verify the response was 200
+        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
+
+        // and - verify request-response pair with matching status code passes
+        getMockServerClient()
+            .verify(
+                request()
+                    .withPath("/verify_response_test"),
+                response()
+                    .withStatusCode(OK_200.code()),
+                atLeast(1)
+            );
+
+        // and - verify request-response pair with wrong status code fails
+        try {
+            getMockServerClient()
+                .verify(
+                    request()
+                        .withPath("/verify_response_test"),
+                    response()
+                        .withStatusCode(500),
+                    atLeast(1)
+                );
+            fail("expected exception to be thrown");
+        } catch (AssertionError ae) {
+            assertThat(ae.getMessage(), startsWith("Response not found"));
+        }
+    }
+
+    @Test
+    public void shouldVerifyRequestAndResponsePairWithBodyMatcher() throws Exception {
+        // given
+        getMockServerClient()
+            .when(
+                request()
+                    .withPath(calculatePath("verify_body_test")),
+                Times.exactly(1)
+            )
+            .respond(
+                response()
+                    .withStatusCode(OK_200.code())
+                    .withBody("expected_body_content")
+            );
+
+        // when
+        HttpClient httpClient = createHttpClient();
+        HttpGet request = new HttpGet(
+            new URIBuilder()
+                .setScheme("http")
+                .setHost("127.0.0.1")
+                .setPort(getServerPort())
+                .setPath(addContextToPath("verify_body_test"))
+                .build()
+        );
+        HttpResponse response = httpClient.execute(request);
+
+        // then - verify the response was 200
+        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
+
+        // and - verify request-response pair with matching body passes
+        getMockServerClient()
+            .verify(
+                request()
+                    .withPath("/verify_body_test"),
+                response()
+                    .withBody("expected_body_content"),
+                atLeast(1)
+            );
+
+        // and - verify request-response pair with non-matching body fails
+        try {
+            getMockServerClient()
+                .verify(
+                    request()
+                        .withPath("/verify_body_test"),
+                    response()
+                        .withBody("wrong_body"),
+                    atLeast(1)
+                );
+            fail("expected exception to be thrown");
+        } catch (AssertionError ae) {
+            assertThat(ae.getMessage(), startsWith("Response not found"));
+        }
+    }
+
+    @Test
+    public void shouldVerifyResponseOnly() throws Exception {
+        // given
+        getMockServerClient()
+            .when(
+                request()
+                    .withPath(calculatePath("verify_response_only")),
+                Times.exactly(1)
+            )
+            .respond(
+                response()
+                    .withStatusCode(OK_200.code())
+                    .withBody("some_response_body")
+            );
+
+        // when
+        HttpClient httpClient = createHttpClient();
+        httpClient.execute(
+            new HttpGet(
+                new URIBuilder()
+                    .setScheme("http")
+                    .setHost("127.0.0.1")
+                    .setPort(getServerPort())
+                    .setPath(addContextToPath("verify_response_only"))
+                    .build()
+            )
+        );
+
+        // then - verify response-only with matching status code passes
+        getMockServerClient()
+            .verify(
+                response()
+                    .withStatusCode(OK_200.code()),
+                atLeast(1)
+            );
+
+        // and - verify response-only with non-matching status code fails
+        try {
+            getMockServerClient()
+                .verify(
+                    response()
+                        .withStatusCode(500),
+                    atLeast(1)
+                );
+            fail("expected exception to be thrown");
+        } catch (AssertionError ae) {
+            assertThat(ae.getMessage(), startsWith("Response not found"));
+        }
+    }
+
+    @Test
+    public void shouldVerifyWithVerificationObject() throws Exception {
+        // given
+        getMockServerClient()
+            .when(
+                request()
+                    .withPath(calculatePath("verify_object_test")),
+                Times.exactly(1)
+            )
+            .respond(
+                response()
+                    .withStatusCode(OK_200.code())
+                    .withBody("verification_body")
+            );
+
+        // when
+        HttpClient httpClient = createHttpClient();
+        HttpGet request = new HttpGet(
+            new URIBuilder()
+                .setScheme("http")
+                .setHost("127.0.0.1")
+                .setPort(getServerPort())
+                .setPath(addContextToPath("verify_object_test"))
+                .build()
+        );
+        HttpResponse response = httpClient.execute(request);
+
+        // then - verify the response was 200
+        assertEquals(HttpStatusCode.OK_200.code(), response.getStatusLine().getStatusCode());
+
+        // and - verify using a pre-built Verification object with request and response
+        getMockServerClient()
+            .verify(
+                verification()
+                    .withRequest(request()
+                        .withPath("/verify_object_test"))
+                    .withResponse(response()
+                        .withStatusCode(OK_200.code()))
+                    .withTimes(atLeast(1))
+            );
+    }
+
+    @Test
+    public void shouldVerifySequenceWithResponses() throws Exception {
+        // given
+        getMockServerClient()
+            .when(
+                request()
+                    .withPath(calculatePath("verify_seq_first")),
+                Times.exactly(1)
+            )
+            .respond(
+                response()
+                    .withStatusCode(OK_200.code())
+                    .withBody("first_response")
+            );
+        getMockServerClient()
+            .when(
+                request()
+                    .withPath(calculatePath("verify_seq_second")),
+                Times.exactly(1)
+            )
+            .respond(
+                response()
+                    .withStatusCode(201)
+                    .withBody("second_response")
+            );
+
+        // when
+        HttpClient httpClient = createHttpClient();
+        httpClient.execute(
+            new HttpGet(
+                new URIBuilder()
+                    .setScheme("http")
+                    .setHost("127.0.0.1")
+                    .setPort(getServerPort())
+                    .setPath(addContextToPath("verify_seq_first"))
+                    .build()
+            )
+        );
+        httpClient.execute(
+            new HttpGet(
+                new URIBuilder()
+                    .setScheme("http")
+                    .setHost("127.0.0.1")
+                    .setPort(getServerPort())
+                    .setPath(addContextToPath("verify_seq_second"))
+                    .build()
+            )
+        );
+
+        // then - verify sequence with index-aligned responses passes
+        getMockServerClient()
+            .verify(
+                verificationSequence()
+                    .withRequests(
+                        request().withPath("/verify_seq_first"),
+                        request().withPath("/verify_seq_second")
+                    )
+                    .withResponses(
+                        response().withStatusCode(OK_200.code()),
+                        response().withStatusCode(201)
+                    )
+            );
+
+        // and - verify sequence with wrong response fails
+        try {
+            getMockServerClient()
+                .verify(
+                    verificationSequence()
+                        .withRequests(
+                            request().withPath("/verify_seq_first"),
+                            request().withPath("/verify_seq_second")
+                        )
+                        .withResponses(
+                            response().withStatusCode(OK_200.code()),
+                            response().withStatusCode(500)
+                        )
+                );
+            fail("expected exception to be thrown");
+        } catch (AssertionError ae) {
+            assertThat(ae.getMessage(), startsWith("Response sequence not found"));
+        }
+    }
+
+    @Test
     public void shouldVerifyRequestsWithHopByHopHeaders() throws Exception {
         // given
         HttpClient httpClient = createHttpClient();
@@ -970,9 +1259,10 @@ public abstract class AbstractProxyIntegrationTest {
             "" + NEW_LINE +
             " schema validation errors:" + NEW_LINE +
             "" + NEW_LINE +
-            "  8 errors:\n" +
+            "  9 errors:\n" +
             "   - $.binaryData: is missing but it is required\n" +
             "   - $.dnsName: is missing but it is required\n" +
+            "   - $.if: is missing but it is required\n" +
             "   - $.keepAlive: string found, boolean expected\n" +
             "   - $.method: boolean found, string expected\n" +
             "   - $.method: should be valid to one and only one schema, but 0 are valid\n" +
@@ -1051,10 +1341,11 @@ public abstract class AbstractProxyIntegrationTest {
             "" + NEW_LINE +
             " schema validation errors:" + NEW_LINE +
             "" + NEW_LINE +
-            "  5 errors:\n" +
+            "  6 errors:\n" +
             "   - $.expectationIds: is missing but it is required\n" +
             "   - $.httpRequest: is not defined in the schema and the schema does not allow additional properties\n" +
             "   - $.httpRequests: is missing, but is required, if specifying action of type Requests\n" +
+            "   - $.httpResponses: is missing, but is required, if specifying action of type Responses\n" +
             "   - $: should be valid to one and only one schema, but 0 are valid\n" +
             "   - oneOf of the following must be specified [httpError, httpForward, httpForwardClassCallback, httpForwardObjectCallback, httpForwardTemplate, httpForwardValidateAction, httpForwardWithFallback, httpOverrideForwardedRequest, httpResponse, httpResponseClassCallback, httpResponseObjectCallback, httpResponseTemplate]" + NEW_LINE +
             "  " + NEW_LINE +

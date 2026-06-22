@@ -54,7 +54,7 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
         this.forwardProxyClient = forwardProxyClient;
         this.httpProtocol = httpProtocol;
         this.protocolFuture = new CompletableFuture<>();
-        this.httpClientHandler = new HttpClientHandler();
+        this.httpClientHandler = new HttpClientHandler(mockServerLogger);
         this.httpClientConnectionHandler = new HttpClientConnectionErrorHandler();
         this.nettySslContextFactory = nettySslContextFactory;
     }

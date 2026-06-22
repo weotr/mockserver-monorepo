@@ -27,6 +27,17 @@ public class Scheduler {
 
     private final Configuration configuration;
     private final ScheduledExecutorService scheduler;
+    // Dedicated, UNBOUNDED executor used solely to dispatch LOCAL (in-JVM) object/class callbacks off
+    // the server worker event loop. A local callback may make a BLOCKING loopback call back to the same
+    // server (e.g. registering a nested expectation via the same MockServerClient); running it inline on
+    // the worker event loop, or on the bounded scheduler pool, risks a self-deadlock (the canonical
+    // twice-burned regression) or pool starvation under recursion. An unbounded cached pool guarantees
+    // that an inner (recursively-triggered) local callback always obtains a fresh thread even when every
+    // outer callback thread is blocked waiting on its own loopback — so the wait is always bounded and
+    // never a pool-exhaustion deadlock. Threads are reused and reaped after 60s idle, so steady-state
+    // cost is the high-water mark of CONCURRENT in-flight blocking callbacks, not a fixed allocation.
+    // Null in synchronous mode (callbacks then run inline, preserving WAR/servlet blocking semantics).
+    private final ExecutorService localCallbackExecutor;
 
     private final boolean synchronous;
 
@@ -72,8 +83,20 @@ public class Scheduler {
                 new SchedulerThreadFactory("Scheduler"),
                 new ThreadPoolExecutor.CallerRunsPolicy()
             );
+            // Unbounded cached pool for local-callback dispatch (see field javadoc). Core size 0,
+            // max Integer.MAX_VALUE, 60s keep-alive — grows on demand and shrinks back to zero when
+            // idle, so it never deadlocks a recursive/nested blocking local callback the way a bounded
+            // pool would, yet costs nothing at rest.
+            ThreadPoolExecutor localCallbackPool = new ThreadPoolExecutor(
+                0, Integer.MAX_VALUE,
+                60L, TimeUnit.SECONDS,
+                new SynchronousQueue<>(),
+                new SchedulerThreadFactory("LocalCallback")
+            );
+            this.localCallbackExecutor = localCallbackPool;
         } else {
             this.scheduler = null;
+            this.localCallbackExecutor = null;
         }
     }
 
@@ -87,10 +110,20 @@ public class Scheduler {
     }
 
     public synchronized void shutdown() {
-        if (!scheduler.isShutdown()) {
+        // Both executors are null in synchronous mode (WAR/servlet) — guard both so shutdown() is a
+        // safe no-op there, matching the localCallbackExecutor guard below.
+        if (scheduler != null && !scheduler.isShutdown()) {
             scheduler.shutdown();
             try {
                 scheduler.awaitTermination(500, MILLISECONDS);
+            } catch (InterruptedException ignore) {
+                // ignore interrupted exception
+            }
+        }
+        if (localCallbackExecutor != null && !localCallbackExecutor.isShutdown()) {
+            localCallbackExecutor.shutdown();
+            try {
+                localCallbackExecutor.awaitTermination(500, MILLISECONDS);
             } catch (InterruptedException ignore) {
                 // ignore interrupted exception
             }
@@ -153,6 +186,45 @@ public class Scheduler {
             } else {
                 run(command, port);
             }
+        }
+    }
+
+    /**
+     * Dispatch a LOCAL (in-JVM) object/class callback so that — in asynchronous (Netty) mode — its
+     * potentially-BLOCKING body never runs on the server worker event loop and never consumes the
+     * bounded scheduler pool.
+     * <p>
+     * In asynchronous mode the callback is run on the dedicated, unbounded {@link #localCallbackExecutor}
+     * (see its field javadoc): this both moves the blocking loopback off the worker thread (so the
+     * loopback's reply can be read on a now-free worker) and guarantees a recursively-triggered inner
+     * local callback always gets its own thread, so the only failure mode is a BOUNDED wait, never a
+     * pool-exhaustion deadlock. An optional delay is honoured on the shared scheduled executor first
+     * (it only occupies a timer thread until it fires), after which the body hops to the cached pool.
+     * <p>
+     * In synchronous mode (WAR/servlet, or the unit-test {@code synchronous=true} path) the body runs
+     * INLINE after any delay, exactly as the equivalent {@link #schedule} call would, so the response is
+     * written before the caller returns and blocking-model deployments keep their semantics unchanged.
+     * <p>
+     * Whatever thread the body ends up on, it runs through {@link #run(Runnable, Integer)} with the
+     * captured loop-prevention port restored, so response routing/{@code HttpState.getPort()} behave
+     * identically to the existing scheduler paths.
+     */
+    public void scheduleLocalCallback(Runnable command, boolean synchronous, Delay... delays) {
+        long delayMillis = sampleCombinedDelayMillis(delays);
+        Integer port = getPort();
+        if (this.synchronous || synchronous) {
+            if (delayMillis > 0) {
+                try {
+                    MILLISECONDS.sleep(delayMillis);
+                } catch (InterruptedException ie) {
+                    throw new RuntimeException("InterruptedException while applying delay to local callback", ie);
+                }
+            }
+            run(command, port);
+        } else if (delayMillis > 0) {
+            scheduler.schedule(() -> localCallbackExecutor.execute(() -> run(command, port)), delayMillis, MILLISECONDS);
+        } else {
+            localCallbackExecutor.execute(() -> run(command, port));
         }
     }
 

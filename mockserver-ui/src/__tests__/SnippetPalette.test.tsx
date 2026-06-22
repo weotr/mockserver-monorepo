@@ -42,6 +42,9 @@ function renderPalette(engine: TemplateEngine = 'VELOCITY', onInsert = vi.fn()) 
 }
 
 function renderComposer() {
+  // The composer now defaults to "Quick mock"; this integration test exercises
+  // the Advanced TemplatePanel, so seed the session preference to Advanced.
+  try { globalThis.sessionStorage?.setItem('mockserver-composer-mode', 'advanced'); } catch { /* noop */ }
   return render(
     <ThemeProvider theme={theme}>
       <ComposerView connectionParams={params} />

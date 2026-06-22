@@ -1948,3 +1948,402 @@ If no request matcher is specified then every request matched
   }
 }
 ```
+
+#### Match Request By Fuzzy Body
+
+Matches a text body that is approximately equal to the expected value (edit-distance similarity at or above the threshold)
+
+```json
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "body": {
+      "type": "FUZZY",
+      "fuzzy": "the quick brown fox",
+      "threshold": 0.8,
+      "ignoreCase": true
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}
+```
+
+#### Match Request By Conditional (If/Then/Else) Request Definition
+
+Applies the `then` matcher when the `if` matcher matches, otherwise the `else` matcher
+
+```json
+{
+  "httpRequest": {
+    "if": {
+      "method": "GET"
+    },
+    "then": {
+      "path": "/admin"
+    },
+    "else": {
+      "path": "/public"
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}
+```
+
+#### Match Request By Accept Media Type
+
+Matches when the request `Accept` header makes the given media type acceptable (respects wildcards and `q` values)
+
+```json
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "headers": {
+      "Accept": [
+        "accept:application/json"
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}
+```
+
+#### Match Request And Return One Of Several Weighted Responses
+
+```json
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponses": [
+    {
+      "statusCode": 200,
+      "body": "success"
+    },
+    {
+      "statusCode": 500,
+      "body": "error"
+    }
+  ],
+  "responseMode": "WEIGHTED",
+  "responseWeights": [90, 10]
+}
+```
+
+#### Match Request And Switch Response After A Hit Count
+
+Serves the first response for the first `switchAfter` matches, then the next response for all subsequent matches
+
+```json
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponses": [
+    {
+      "statusCode": 200,
+      "body": "healthy"
+    },
+    {
+      "statusCode": 503,
+      "body": "unavailable"
+    }
+  ],
+  "responseMode": "SWITCH",
+  "switchAfter": 3
+}
+```
+
+#### Match Request And Generate Response Body From A JSON Schema
+
+```json
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "generateFromSchema": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\"]}"
+  }
+}
+```
+
+#### Verify Request (Soft / verifyAll Body)
+
+The per-verification body used by the client `verifyAll(Verification...)` call (sent to `PUT /mockserver/verify`)
+
+```json
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "times": {
+    "atLeast": 1
+  },
+  "maximumNumberOfRequestToReturnInVerificationFailure": 10
+}
+```
+
+#### Verify Response Received
+
+Verify a forwarded/proxied response was received by matching on `httpResponse` (sent to `PUT /mockserver/verify`)
+
+```json
+{
+  "httpResponse": {
+    "statusCode": 200
+  },
+  "times": {
+    "atLeast": 1
+  }
+}
+```
+
+#### Mock An LLM Chat Completion
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "httpLlmResponse": {
+    "provider": "ANTHROPIC",
+    "model": "claude-sonnet-4-20250514",
+    "completion": {
+      "text": "Hello, world!",
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 25
+      }
+    }
+  }
+}
+```
+
+#### Mock An LLM Embeddings Response
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/embeddings"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "text-embedding-3-small",
+    "embedding": {
+      "dimensions": 1536,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}
+```
+
+#### Mock An LLM Rerank Response
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/rerank"
+  },
+  "httpLlmResponse": {
+    "provider": "COHERE",
+    "model": "rerank-english-v3.0",
+    "rerank": {
+      "topN": 3,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}
+```
+
+#### Mock An MCP Server Tool List
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/mcp",
+    "body": {
+      "type": "JSON_RPC",
+      "method": "tools/list"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"tools\": [{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}]}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}
+```
+
+#### Mock An MCP Server Tool Call
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/mcp",
+    "body": {
+      "type": "JSON_PATH",
+      "jsonPath": "$[?(@.method == 'tools/call' && @.params.name == 'get_weather')]"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"content\": [{\"type\": \"text\", \"text\": \"72F and sunny\"}], \"isError\": false}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}
+```
+
+#### Mock An A2A Agent Card
+
+```json
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/.well-known/agent.json"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": ["application/json"]
+    },
+    "body": {
+      "name": "TranslationAgent",
+      "description": "Translates text between languages",
+      "version": "1.0.0",
+      "url": "http://localhost:1080/a2a",
+      "capabilities": {
+        "streaming": false,
+        "pushNotifications": false,
+        "stateTransitionHistory": false
+      },
+      "skills": [
+        {
+          "id": "translate",
+          "name": "Translation",
+          "description": "Translates text between languages",
+          "tags": ["nlp"],
+          "examples": ["Translate hello to Spanish"]
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Mock An A2A Task Response
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/a2a",
+    "body": {
+      "type": "JSON_RPC",
+      "method": "tasks/send"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"id\": \"mock-task-id\", \"status\": {\"state\": \"completed\"}, \"artifacts\": [{\"parts\": [{\"type\": \"text\", \"text\": \"Task completed successfully\"}]}]}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}
+```
+
+#### Match GraphQL Request By Query
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/graphql",
+    "body": {
+      "type": "GRAPHQL",
+      "query": "query GetUser($id: ID!) { user(id: $id) { name email } }"
+    }
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": ["application/json"]
+    },
+    "body": "{\"data\":{\"user\":{\"name\":\"Alice\",\"email\":\"alice@example.com\"}}}"
+  }
+}
+```
+
+#### Match GraphQL Request By Operation Name And Variables Schema
+
+```json
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/graphql",
+    "body": {
+      "type": "GRAPHQL",
+      "query": "mutation CreateOrder($input: OrderInput!) { createOrder(input: $input) { id status } }",
+      "operationName": "CreateOrder",
+      "variablesSchema": "{\"type\":\"object\",\"properties\":{\"input\":{\"type\":\"object\",\"required\":[\"productId\",\"quantity\"]}},\"required\":[\"input\"]}"
+    }
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": ["application/json"]
+    },
+    "body": "{\"data\":{\"createOrder\":{\"id\":\"order-42\",\"status\":\"PENDING\"}}}"
+  }
+}
+```
+
+#### Contract Test An OpenAPI Spec Against A Live Service
+
+Body for `PUT /mockserver/contractTest` — runs each operation of the spec
+against `baseUrl` and returns a per-operation pass/fail report.
+
+```json
+{
+  "spec": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+  "baseUrl": "https://example.com",
+  "operationId": "listPets"
+}
+```
+
+#### Import A Pact Contract With A Provider State
+
+Body for `PUT /mockserver/pact/import` — the interaction is gated by a provider
+state, so the generated expectation only matches once the
+`pact-provider-state` scenario is set to that state.
+
+```json
+{
+  "consumer": {"name": "frontend"},
+  "provider": {"name": "users-service"},
+  "interactions": [
+    {
+      "description": "get user 1 when it exists",
+      "providerStates": [
+        {"name": "a user with id 1 exists", "params": {"id": 1}}
+      ],
+      "request": {"method": "GET", "path": "/api/users/1"},
+      "response": {
+        "status": 200,
+        "headers": {"content-type": ["application/json"]},
+        "body": {"id": 1, "name": "Alice"}
+      }
+    }
+  ],
+  "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}
+```

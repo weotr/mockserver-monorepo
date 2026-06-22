@@ -1,0 +1,17 @@
+meta {
+  name: list all registered breakpoint matchers
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/mockserver/breakpoint/matchers
+  body: none
+  auth: inherit
+}
+
+docs {
+  Returns all currently registered breakpoint matchers. Each entry includes the matcher id, the httpRequest definition, the set of phases, and the clientId.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

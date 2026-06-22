@@ -14,9 +14,11 @@ import org.mockserver.time.EpochService;
 import org.mockserver.uuid.UUIDService;
 import org.slf4j.event.Level;
 
-import java.text.DateFormat;
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.Date;
 import java.util.Locale;
 
 import static org.apache.commons.lang3.StringUtils.isBlank;
@@ -33,7 +35,42 @@ public class LogEntry implements EventTranslator<LogEntry> {
     private static final ObjectMapper OBJECT_MAPPER = ObjectMapperFactory.createObjectMapper();
     private static final RequestDefinition[] EMPTY_REQUEST_DEFINITIONS = new RequestDefinition[0];
     private static final RequestDefinition[] DEFAULT_REQUESTS_DEFINITIONS = {request()};
-    public static final DateFormat LOG_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+    /**
+     * Thread-safe replacement for the previous shared {@code SimpleDateFormat}.
+     * <p>
+     * {@code SimpleDateFormat} is NOT thread-safe; this single static instance was formatted
+     * concurrently from the Disruptor log handler and the retrieve/export/serialize threads,
+     * which can corrupt its internal {@code Calendar} and produce garbled timestamps or an
+     * intermittent {@link ArrayIndexOutOfBoundsException}. {@link DateTimeFormatter} is
+     * immutable and thread-safe, so a single shared instance is safe to format from any number
+     * of threads. The pattern and the system-default zone reproduce exactly the same output the
+     * old {@code SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS")} (which used the default zone)
+     * produced, so timestamp strings remain byte-for-byte identical.
+     */
+    public static final LogDateFormat LOG_DATE_FORMAT = new LogDateFormat();
+
+    /**
+     * Tiny thread-safe formatter exposing the same {@code format(Date)} call shape the previous
+     * public {@code DateFormat LOG_DATE_FORMAT} field offered, backed by an immutable
+     * {@link DateTimeFormatter}. Kept as a nested type so existing callers
+     * ({@code LOG_DATE_FORMAT.format(new Date(...))}) compile unchanged while gaining
+     * thread-safety.
+     */
+    public static final class LogDateFormat {
+        private static final DateTimeFormatter FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS", Locale.ENGLISH).withZone(ZoneId.systemDefault());
+
+        private LogDateFormat() {
+        }
+
+        public String format(Date date) {
+            return FORMATTER.format(date.toInstant());
+        }
+
+        public String format(long epochMillis) {
+            return FORMATTER.format(Instant.ofEpochMilli(epochMillis));
+        }
+    }
     private int hashCode;
     private String id;
     private String correlationId;
@@ -78,6 +115,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
 
     public void clear() {
         id = null;
+        hashCode = 0;
         logLevel = Level.INFO;
         alwaysLog = false;
         correlationId = null;
@@ -86,7 +124,9 @@ public class LogEntry implements EventTranslator<LogEntry> {
         timestamp = null;
         type = null;
         httpRequests = null;
+        httpUpdatedRequests = null;
         httpResponse = null;
+        httpUpdatedResponse = null;
         httpError = null;
         expectation = null;
         expectationId = null;
@@ -108,6 +148,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
         if (type == null) {
             type = LogMessageType.valueOf(logLevel.name());
         }
+        this.hashCode = 0;
         return this;
     }
 
@@ -117,6 +158,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
 
     public LogEntry setAlwaysLog(boolean alwaysLog) {
         this.alwaysLog = alwaysLog;
+        this.hashCode = 0;
         return this;
     }
 
@@ -127,12 +169,13 @@ public class LogEntry implements EventTranslator<LogEntry> {
     public LogEntry setEpochTime(long epochTime) {
         this.epochTime = epochTime;
         this.timestamp = null;
+        this.hashCode = 0;
         return this;
     }
 
     public String getTimestamp() {
         if (timestamp == null) {
-            timestamp = LOG_DATE_FORMAT.format(new Date(epochTime));
+            timestamp = LOG_DATE_FORMAT.format(epochTime);
         }
         return timestamp;
     }
@@ -143,6 +186,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
 
     public LogEntry setType(LogMessageType type) {
         this.type = type;
+        this.hashCode = 0;
         return this;
     }
 
@@ -178,14 +222,67 @@ public class LogEntry implements EventTranslator<LogEntry> {
         if (httpRequests == null) {
             return EMPTY_REQUEST_DEFINITIONS;
         } else if (httpUpdatedRequests == null) {
+            org.mockserver.fixture.FixtureRedactor redactor = logRedactor();
             httpUpdatedRequests = Arrays
                 .stream(httpRequests)
                 .map(this::updateBody)
+                .map(requestDefinition -> redactor == null ? requestDefinition : redactor.redactRequestDefinition(requestDefinition))
                 .toArray(RequestDefinition[]::new);
             return httpUpdatedRequests;
         } else {
             return httpUpdatedRequests;
         }
+    }
+
+    /**
+     * Like {@link #getHttpRequests()} but with sensitive headers / configured JSON body
+     * fields masked when {@code mockserver.redactSecretsInLog} is enabled. Unlike
+     * {@link #getHttpUpdatedRequests()} this does NOT apply body templating ({@code updateBody}),
+     * so when redaction is off it returns the raw requests byte-for-byte unchanged — it is the
+     * redaction-aware view for the {@code retrieveRecordedRequests} / export paths, which must
+     * otherwise preserve the captured request exactly.
+     */
+    @JsonIgnore
+    public RequestDefinition[] getRedactedHttpRequests() {
+        RequestDefinition[] requests = getHttpRequests();
+        org.mockserver.fixture.FixtureRedactor redactor = logRedactor();
+        if (redactor == null) {
+            return requests;
+        }
+        return Arrays
+            .stream(requests)
+            .map(redactor::redactRequestDefinition)
+            .toArray(RequestDefinition[]::new);
+    }
+
+    /**
+     * Like {@link #getHttpRequest()} but with sensitive data masked when
+     * {@code mockserver.redactSecretsInLog} is enabled; returns the raw request unchanged
+     * when redaction is off. Used by the {@code retrieveRecordedRequestsAndResponses} path.
+     */
+    @JsonIgnore
+    public RequestDefinition getRedactedHttpRequest() {
+        RequestDefinition request = getHttpRequest();
+        org.mockserver.fixture.FixtureRedactor redactor = logRedactor();
+        if (redactor == null || request == null) {
+            return request;
+        }
+        return redactor.redactRequestDefinition(request);
+    }
+
+    /**
+     * Like {@link #getHttpResponse()} but with sensitive data masked when
+     * {@code mockserver.redactSecretsInLog} is enabled; returns the raw response unchanged
+     * when redaction is off. Used by the {@code retrieveRecordedRequestsAndResponses} path.
+     */
+    @JsonIgnore
+    public HttpResponse getRedactedHttpResponse() {
+        HttpResponse response = getHttpResponse();
+        org.mockserver.fixture.FixtureRedactor redactor = logRedactor();
+        if (redactor == null || response == null) {
+            return response;
+        }
+        return redactor.redactResponseObject(response);
     }
 
     @JsonIgnore
@@ -208,6 +305,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
     @JsonIgnore
     public LogEntry setHttpRequests(RequestDefinition[] httpRequests) {
         this.httpRequests = httpRequests;
+        this.httpUpdatedRequests = null;
+        this.hashCode = 0;
         return this;
     }
 
@@ -229,6 +328,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
         } else {
             this.httpRequests = DEFAULT_REQUESTS_DEFINITIONS;
         }
+        this.httpUpdatedRequests = null;
+        this.hashCode = 0;
         return this;
     }
 
@@ -240,7 +341,9 @@ public class LogEntry implements EventTranslator<LogEntry> {
         if (httpResponse == null) {
             return null;
         } else if (httpUpdatedResponse == null) {
-            httpUpdatedResponse = updateBody(httpResponse);
+            HttpResponse updated = updateBody(httpResponse);
+            org.mockserver.fixture.FixtureRedactor redactor = logRedactor();
+            httpUpdatedResponse = redactor == null ? updated : redactor.redactResponseObject(updated);
             return httpUpdatedResponse;
         } else {
             return httpUpdatedResponse;
@@ -250,6 +353,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
     @JsonIgnore
     public LogEntry setHttpResponse(HttpResponse httpResponse) {
         this.httpResponse = httpResponse;
+        this.httpUpdatedResponse = null;
+        this.hashCode = 0;
         return this;
     }
 
@@ -260,6 +365,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
     @JsonIgnore
     public LogEntry setHttpError(HttpError httpError) {
         this.httpError = httpError;
+        this.hashCode = 0;
         return this;
     }
 
@@ -270,12 +376,14 @@ public class LogEntry implements EventTranslator<LogEntry> {
     @JsonIgnore
     public LogEntry setExpectation(Expectation expectation) {
         this.expectation = expectation;
+        this.hashCode = 0;
         return this;
     }
 
     @JsonIgnore
     public LogEntry setExpectation(RequestDefinition httpRequest, HttpResponse httpResponse) {
         this.expectation = new Expectation(httpRequest, Times.once(), TimeToLive.unlimited(), 0).thenRespond(httpResponse);
+        this.hashCode = 0;
         return this;
     }
 
@@ -285,6 +393,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
 
     public LogEntry setExpectationId(String expectationId) {
         this.expectationId = expectationId;
+        this.hashCode = 0;
         return this;
     }
 
@@ -304,6 +413,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
         this.throwable = throwable;
         if (isBlank(messageFormat) && throwable != null) {
             messageFormat = throwable.getClass().getSimpleName();
+            this.message = null;
+            this.hashCode = 0;
         }
         return this;
     }
@@ -315,6 +426,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
     @JsonIgnore
     public LogEntry setConsumer(Runnable consumer) {
         this.consumer = consumer;
+        this.hashCode = 0;
         return this;
     }
 
@@ -324,6 +436,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
 
     public LogEntry setDeleted(boolean deleted) {
         this.deleted = deleted;
+        this.hashCode = 0;
         return this;
     }
 
@@ -337,6 +450,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
         } else {
             this.messageFormat = messageFormat;
         }
+        this.message = null;
+        this.hashCode = 0;
         return this;
     }
 
@@ -384,6 +499,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
         } else {
             this.arguments = null;
         }
+        this.message = null;
+        this.hashCode = 0;
         return this;
     }
 
@@ -394,6 +511,31 @@ public class LogEntry implements EventTranslator<LogEntry> {
     public LogEntry setBecause(String because) {
         this.because = because;
         return this;
+    }
+
+    /**
+     * Build the redactor applied to the displayed/retrieved copies of the request and
+     * response when {@code mockserver.redactSecretsInLog} is enabled, or {@code null}
+     * when redaction is off (the default) so the log is byte-for-byte unchanged.
+     * <p>
+     * Sensitive headers are the {@link org.mockserver.fixture.FixtureRedactor} defaults
+     * (Authorization, Proxy-Authorization, Cookie, Set-Cookie, x-api-key, api-key); JSON
+     * body fields named in {@code mockserver.fixtureBodyRedactFields} are masked too. The
+     * redactor only ever operates on clones, so the live log entry is never mutated and
+     * matching/verification (which read the unredacted request) are unaffected.
+     */
+    private static org.mockserver.fixture.FixtureRedactor logRedactor() {
+        if (!org.mockserver.configuration.ConfigurationProperties.redactSecretsInLog()) {
+            return null;
+        }
+        String bodyFields = org.mockserver.configuration.ConfigurationProperties.fixtureBodyRedactFields();
+        List<String> bodyFieldList = isBlank(bodyFields)
+            ? Collections.emptyList()
+            : Arrays.asList(bodyFields.split(","));
+        return new org.mockserver.fixture.FixtureRedactor(
+            org.mockserver.fixture.FixtureRedactor.defaultSensitiveHeaders(),
+            bodyFieldList
+        );
     }
 
     private RequestDefinition updateBody(RequestDefinition requestDefinition) {

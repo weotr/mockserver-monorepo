@@ -59,6 +59,27 @@ public class HttpErrorDTOTest {
     }
 
     @Test
+    public void shouldRoundTripStreamError() {
+        // given
+        HttpError httpError = new HttpError().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM);
+
+        // when
+        HttpErrorDTO httpErrorDTO = new HttpErrorDTO(httpError);
+        HttpError builtHttpError = httpErrorDTO.buildObject();
+
+        // then
+        assertThat(httpErrorDTO.getStreamError(), is(0x7L));
+        assertThat(builtHttpError.getStreamError(), is(0x7L));
+        assertThat(builtHttpError, is(httpError));
+    }
+
+    @Test
+    public void shouldLeaveStreamErrorNullByDefault() {
+        assertThat(new HttpErrorDTO(new HttpError()).getStreamError(), is(nullValue()));
+        assertThat(new HttpErrorDTO(new HttpError()).buildObject().getStreamError(), is(nullValue()));
+    }
+
+    @Test
     public void shouldReturnValuesSetInSetter() {
         // given
         DelayDTO delay = new DelayDTO(new Delay(TimeUnit.HOURS, 1));
@@ -99,5 +120,40 @@ public class HttpErrorDTOTest {
         assertThat(httpErrorDTO.getDelay(), is(nullValue()));
         assertThat(httpErrorDTO.getDropConnection(), is(nullValue()));
         assertThat(httpErrorDTO.getResponseBytes(), is(nullValue()));
+        assertThat(httpErrorDTO.getStreamError(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldRoundTripStreamErrorThroughExpectationJson() {
+        // given
+        org.mockserver.serialization.ExpectationSerializer serializer =
+            new org.mockserver.serialization.ExpectationSerializer(new org.mockserver.logging.MockServerLogger());
+        org.mockserver.mock.Expectation expectation = new org.mockserver.mock.Expectation(
+            new org.mockserver.model.HttpRequest().withPath("/reset"))
+            .thenError(new HttpError().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM));
+
+        // when
+        String json = serializer.serialize(expectation);
+        org.mockserver.mock.Expectation deserialized = serializer.deserialize(json);
+
+        // then
+        assertThat(json.contains("\"streamError\" : 7"), is(true));
+        assertThat(((HttpError) deserialized.getHttpError()).getStreamError(), is(0x7L));
+    }
+
+    @Test
+    public void shouldOmitStreamErrorFromJsonWhenNull() {
+        // given
+        org.mockserver.serialization.ExpectationSerializer serializer =
+            new org.mockserver.serialization.ExpectationSerializer(new org.mockserver.logging.MockServerLogger());
+        org.mockserver.mock.Expectation expectation = new org.mockserver.mock.Expectation(
+            new org.mockserver.model.HttpRequest().withPath("/drop"))
+            .thenError(new HttpError().withDropConnection(true));
+
+        // when
+        String json = serializer.serialize(expectation);
+
+        // then
+        assertThat(json.contains("streamError"), is(false));
     }
 }

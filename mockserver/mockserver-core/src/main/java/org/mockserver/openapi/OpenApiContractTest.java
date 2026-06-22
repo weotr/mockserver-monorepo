@@ -20,7 +20,6 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import java.util.*;
 import java.util.function.Function;
 
-import static org.apache.commons.lang3.StringUtils.isBlank;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.openapi.OpenAPIParser.buildOpenAPI;
@@ -60,6 +59,11 @@ public class OpenApiContractTest {
         List<ContractTestResult> results = new ArrayList<>();
         OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, mockServerLogger);
 
+        // A valid OpenAPI document may have no paths (e.g. a webhooks-only or components-only spec)
+        if (openAPI.getPaths() == null) {
+            return results;
+        }
+
         // Iterate over all paths and operations
         for (Map.Entry<String, io.swagger.v3.oas.models.PathItem> pathEntry : openAPI.getPaths().entrySet()) {
             String pathTemplate = pathEntry.getKey();
@@ -95,7 +99,8 @@ public class OpenApiContractTest {
                     results.add(new ContractTestResult(
                         operationId, method, pathTemplate, null,
                         0, false,
-                        Collections.singletonList("contract test error: " + e.getMessage())
+                        Collections.singletonList(OpenAPIValidationErrors.unexpectedError(
+                            "contract test for operation " + operationId + " (" + method.toUpperCase() + " " + pathTemplate + ")", e, mockServerLogger))
                     ));
                 }
             }

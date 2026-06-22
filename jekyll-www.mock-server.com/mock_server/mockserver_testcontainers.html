@@ -1,22 +1,70 @@
 ---
 title: Testcontainers
 shortTitle: Testcontainers
-description: Run MockServer in your tests with the mockserver-testcontainers module — helpers for DNS, transparent proxy, HTTP/3, init JSON and a ready-wired client.
+description: Run MockServer in your tests with Testcontainers — official modules for Java, .NET, Node.js, Python, Rust and Go start a throwaway MockServer container automatically.
 layout: page
-pageOrder: 4
+pageOrder: 5
 section: 'Getting Started'
 subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2026-06-03T08:00:00+01:00
+  lastmod: 2026-06-11T00:00:00+01:00
 ---
 
-<p>MockServer publishes its own <a href="https://testcontainers.com">Testcontainers</a> module, <strong>mockserver-testcontainers</strong>, that starts the official MockServer Docker image for the duration of a test and gives you a ready-wired client. It is the MockServer-maintained module and is kept in lockstep with each MockServer release.</p>
+<p>MockServer publishes official <a href="https://testcontainers.com">Testcontainers</a> modules for six languages. Each module starts the official <span class="inline_code">mockserver/mockserver</span> Docker container, waits for it to be ready, and provides connection helpers (host, port, base URL). The container is started and stopped automatically by the test run — no manual server management is needed.</p>
 
-<p><strong>Note:</strong> this module supersedes the older bundled <span class="inline_code"><code>org.testcontainers:mockserver</code></span> module. The bundled module exposes only a single port, pins an old default image, and has no configuration helpers. New projects should use <span class="inline_code"><code>org.mock-server:mockserver-testcontainers</code></span> described here.</p>
+<table class="comparison_table">
+    <thead>
+    <tr>
+        <th>Language</th>
+        <th>Package / registry</th>
+        <th>Add dependency</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+        <td><a href="#java-testcontainers">Java</a></td>
+        <td><span class="inline_code">org.mock-server:mockserver-testcontainers</span> (Maven Central)</td>
+        <td><span class="inline_code">&lt;artifactId&gt;mockserver-testcontainers&lt;/artifactId&gt;</span></td>
+    </tr>
+    <tr>
+        <td><a href="#dotnet-testcontainers">.NET</a></td>
+        <td><span class="inline_code">MockServer.Testcontainers</span> (NuGet)</td>
+        <td><span class="inline_code">dotnet add package MockServer.Testcontainers</span></td>
+    </tr>
+    <tr>
+        <td><a href="#node-testcontainers">Node.js</a></td>
+        <td><span class="inline_code">@mockserver/testcontainers</span> (npm)</td>
+        <td><span class="inline_code">npm install --save-dev @mockserver/testcontainers</span></td>
+    </tr>
+    <tr>
+        <td><a href="#python-testcontainers">Python</a></td>
+        <td><span class="inline_code">testcontainers-mockserver</span> (PyPI)</td>
+        <td><span class="inline_code">pip install testcontainers-mockserver</span></td>
+    </tr>
+    <tr>
+        <td><a href="#rust-testcontainers">Rust</a></td>
+        <td><span class="inline_code">testcontainers-mockserver</span> (crates.io)</td>
+        <td>Add to <span class="inline_code">[dev-dependencies]</span> in <span class="inline_code">Cargo.toml</span></td>
+    </tr>
+    <tr>
+        <td><a href="#go-testcontainers">Go</a></td>
+        <td><span class="inline_code">github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go</span></td>
+        <td><span class="inline_code">go get github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go</span></td>
+    </tr>
+    </tbody>
+</table>
 
-<button id="button_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<a id="java-testcontainers" class="anchor" href="#java-testcontainers">&nbsp;</a>
+
+<h2>Java</h2>
+
+<p>MockServer publishes its own Testcontainers module, <strong>mockserver-testcontainers</strong>, that starts the official MockServer Docker image for the duration of a test and gives you a ready-wired client. It is the MockServer-maintained module and is kept in lockstep with each MockServer release.</p>
+
+<p><strong>Note:</strong> this module supersedes the older bundled <span class="inline_code">org.testcontainers:mockserver</span> module. The bundled module exposes only a single port, pins an old default image, and has no configuration helpers. New projects should use <span class="inline_code">org.mock-server:mockserver-testcontainers</span> described here.</p>
+
+<button id="button_java_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
 <div class="panel">
 
 <p><strong>Maven</strong></p>
@@ -36,7 +84,7 @@ sitemap:
 
 </div>
 
-<button id="button_basic_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<button id="button_java_basic_usage" class="accordion title"><strong>Basic Usage</strong></button>
 <div class="panel">
 
 <p>Start the container, set up an expectation through the wired client, then point the system under test at the container endpoint. By default the image tag is derived from the MockServer client library on the classpath, so the container and client always match.</p>
@@ -66,11 +114,11 @@ class ExampleTest {
     }
 }</code></pre>
 
-<p>Use <span class="inline_code"><code>getEndpoint()</code></span> / <span class="inline_code"><code>getSecureEndpoint()</code></span> for the HTTP / HTTPS base URL (MockServer serves both on the same port), and <span class="inline_code"><code>getServerPort()</code></span> for the mapped host port. The client returned by <span class="inline_code"><code>getClient()</code></span> is cached and stopped automatically when the container stops.</p>
+<p>Use <span class="inline_code">getEndpoint()</span> / <span class="inline_code">getSecureEndpoint()</span> for the HTTP / HTTPS base URL (MockServer serves both on the same port), and <span class="inline_code">getServerPort()</span> for the mapped host port. The client returned by <span class="inline_code">getClient()</span> is cached and stopped automatically when the container stops.</p>
 
 </div>
 
-<button id="button_configuration" class="accordion title"><strong>Configuration Helpers</strong></button>
+<button id="button_java_configuration" class="accordion title"><strong>Configuration Helpers</strong></button>
 <div class="panel">
 
 <p>Fluent helpers configure the container before it starts. Each returns the container for chaining.</p>
@@ -80,22 +128,338 @@ class ExampleTest {
     <tr><th>Helper</th><th>What it does</th></tr>
     </thead>
     <tbody>
-    <tr><td><span class="inline_code"><code>withServerPort(int)</code></span></td><td>Change the port MockServer listens on inside the container.</td></tr>
-    <tr><td><span class="inline_code"><code>withDnsPort(int)</code></span></td><td>Enable the DNS resolver and expose the DNS port over UDP.</td></tr>
-    <tr><td><span class="inline_code"><code>withTransparentProxy()</code></span></td><td>Enable transparent proxy mode and add the <span class="inline_code"><code>NET_ADMIN</code></span> capability. iptables / redirect rules remain your responsibility.</td></tr>
-    <tr><td><span class="inline_code"><code>withHttp3(int)</code></span></td><td>Enable experimental HTTP/3 (QUIC) and expose the port over UDP.</td></tr>
-    <tr><td><span class="inline_code"><code>withInitializationJson(String)</code></span></td><td>Copy an initialization JSON file into the container and load its expectations at startup.</td></tr>
-    <tr><td><span class="inline_code"><code>withLogLevel(String)</code></span></td><td>Set the MockServer log level (e.g. <span class="inline_code"><code>DEBUG</code></span>).</td></tr>
-    <tr><td><span class="inline_code"><code>withProperty(key, value)</code></span> / <span class="inline_code"><code>withProperties(Map)</code></span></td><td>Set any MockServer configuration property by its environment-variable name (e.g. <span class="inline_code"><code>MOCKSERVER_MAX_EXPECTATIONS</code></span>).</td></tr>
+    <tr><td><span class="inline_code">withServerPort(int)</span></td><td>Change the port MockServer listens on inside the container.</td></tr>
+    <tr><td><span class="inline_code">withDnsPort(int)</span></td><td>Enable the DNS resolver and expose the DNS port over UDP.</td></tr>
+    <tr><td><span class="inline_code">withTransparentProxy()</span></td><td>Enable transparent proxy mode and add the <span class="inline_code">NET_ADMIN</span> capability. iptables / redirect rules remain your responsibility.</td></tr>
+    <tr><td><span class="inline_code">withHttp3(int)</span></td><td>Enable experimental HTTP/3 (QUIC) and expose the port over UDP.</td></tr>
+    <tr><td><span class="inline_code">withInitializationJson(String)</span></td><td>Copy an initialization JSON file into the container and load its expectations at startup.</td></tr>
+    <tr><td><span class="inline_code">withLogLevel(String)</span></td><td>Set the MockServer log level (e.g. <span class="inline_code">DEBUG</span>).</td></tr>
+    <tr><td><span class="inline_code">withProperty(key, value)</span> / <span class="inline_code">withProperties(Map)</span></td><td>Set any MockServer configuration property by its environment-variable name (e.g. <span class="inline_code">MOCKSERVER_MAX_EXPECTATIONS</span>).</td></tr>
     </tbody>
 </table>
 
-<p>To connect MockServer to other containers (for example an AsyncAPI broker), use the standard Testcontainers <span class="inline_code"><code>withNetwork(Network)</code></span> and <span class="inline_code"><code>withNetworkAliases(String...)</code></span> methods inherited from <span class="inline_code"><code>GenericContainer</code></span>.</p>
+<p>To connect MockServer to other containers (for example an AsyncAPI broker), use the standard Testcontainers <span class="inline_code">withNetwork(Network)</span> and <span class="inline_code">withNetworkAliases(String...)</span> methods inherited from <span class="inline_code">GenericContainer</span>.</p>
 
-<p><strong>Pinning the image:</strong> to use a specific image instead of the version-matched default, pass a <span class="inline_code"><code>DockerImageName</code></span> to the constructor:</p>
+<p><strong>Pinning the image:</strong> to use a specific image instead of the version-matched default, pass a <span class="inline_code">DockerImageName</span> to the constructor:</p>
 
 <pre class="prettyprint lang-java code"><code class="code">new MockServerContainer(
     DockerImageName.parse("mockserver/mockserver:mockserver-{{ site.mockserver_version }}")
 );</code></pre>
 
 </div>
+
+<a id="dotnet-testcontainers" class="anchor" href="#dotnet-testcontainers">&nbsp;</a>
+
+<h2>.NET</h2>
+
+<p>The <span class="inline_code">MockServer.Testcontainers</span> NuGet package integrates with the <a href="https://dotnet.testcontainers.org/">Testcontainers for .NET</a> library. It starts a <span class="inline_code">mockserver/mockserver</span> container, waits for readiness, and exposes the mapped URL via helper methods. The C# namespace is <span class="inline_code">Testcontainers.MockServer</span> (NuGet's <span class="inline_code">Testcontainers.*</span> id prefix is reserved, so the install id and the <span class="inline_code">using</span> differ).</p>
+
+<button id="button_dotnet_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-sh code"><code class="code">dotnet add package MockServer.Testcontainers</code></pre>
+
+<p>Requires .NET 8.0 SDK and Docker.</p>
+
+</div>
+
+<button id="button_dotnet_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-csharp code"><code class="code">using Testcontainers.MockServer;
+
+// Create and start a MockServer container
+await using var container = new MockServerBuilder()
+    .WithLogLevel("INFO")
+    .Build();
+
+await container.StartAsync();
+
+// Get the connection URL
+var url = container.GetUrl();        // http://localhost:xxxxx
+
+// Use MockServer via its REST API
+using var httpClient = new HttpClient();
+
+// Create an expectation
+var expectation = """
+    {
+        "httpRequest": { "method": "GET", "path": "/hello" },
+        "httpResponse": { "statusCode": 200, "body": "world" }
+    }
+    """;
+
+await httpClient.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"{url}/mockserver/expectation")
+{
+    Content = new StringContent(expectation, System.Text.Encoding.UTF8, "application/json")
+});
+
+// Issue a request that matches the expectation
+var response = await httpClient.GetStringAsync($"{url}/hello");
+// response == "world"</code></pre>
+
+<p>Use <span class="inline_code">GetUrl()</span> for the HTTP base URL, <span class="inline_code">GetSecureUrl()</span> for HTTPS, and <span class="inline_code">GetConnectionString()</span> for <span class="inline_code">host:port</span>.</p>
+
+</div>
+
+<button id="button_dotnet_configuration" class="accordion title"><strong>Builder Configuration</strong></button>
+<div class="panel">
+
+<table>
+    <thead>
+    <tr><th>Method</th><th>What it does</th></tr>
+    </thead>
+    <tbody>
+    <tr><td><span class="inline_code">WithLogLevel(string)</span></td><td>Set the MockServer log level (<span class="inline_code">INFO</span>, <span class="inline_code">DEBUG</span>, <span class="inline_code">WARN</span>, <span class="inline_code">ERROR</span>, <span class="inline_code">TRACE</span>).</td></tr>
+    <tr><td><span class="inline_code">WithMockServerProperty(string, string)</span></td><td>Set any MockServer configuration property as an environment variable.</td></tr>
+    <tr><td><span class="inline_code">WithImage(string)</span></td><td>Override the Docker image.</td></tr>
+    <tr><td><span class="inline_code">WithPortBinding(int, int)</span></td><td>Bind a specific host port to the container port.</td></tr>
+    </tbody>
+</table>
+
+</div>
+
+<a id="node-testcontainers" class="anchor" href="#node-testcontainers">&nbsp;</a>
+
+<h2>Node.js</h2>
+
+<p>The <span class="inline_code">@mockserver/testcontainers</span> npm package integrates with the <a href="https://node.testcontainers.org/">Testcontainers for Node.js</a> library. It works with Node.js &gt;= 18 and supports TypeScript out of the box.</p>
+
+<button id="button_node_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-sh code"><code class="code">npm install --save-dev @mockserver/testcontainers</code></pre>
+
+<p>Requires Docker to be running and Node.js &gt;= 18.</p>
+
+</div>
+
+<button id="button_node_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-typescript code"><code class="code">import { MockServerContainer } from "@mockserver/testcontainers";
+
+// Start a MockServer container (pulls the image if needed)
+const container = await MockServerContainer.start();
+
+// Get the URL to connect to
+const url = container.getUrl(); // e.g. http://localhost:32789
+
+// Create an expectation via the REST API
+await fetch(`${url}/mockserver/expectation`, {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    httpRequest: { method: "GET", path: "/hello" },
+    httpResponse: { statusCode: 200, body: "world" },
+  }),
+});
+
+// Make requests against the mock
+const response = await fetch(`${url}/hello`);
+console.log(await response.text()); // "world"
+
+// Stop the container when done
+await container.stop();</code></pre>
+
+<p><span class="inline_code">MockServerContainer.start(options?)</span> accepts an optional <span class="inline_code">image</span>, <span class="inline_code">serverPort</span>, and <span class="inline_code">env</span> map. The started container exposes <span class="inline_code">getUrl()</span>, <span class="inline_code">getEndpoint()</span> (alias), <span class="inline_code">getSecureEndpoint()</span>, <span class="inline_code">getHost()</span>, and <span class="inline_code">getPort()</span>.</p>
+
+</div>
+
+<a id="python-testcontainers" class="anchor" href="#python-testcontainers">&nbsp;</a>
+
+<h2>Python</h2>
+
+<p>The <span class="inline_code">testcontainers-mockserver</span> PyPI package integrates with the <a href="https://testcontainers.com">Testcontainers for Python</a> library (&gt;= 4.0.0). It works with Python &gt;= 3.9 and can be used as a context manager.</p>
+
+<button id="button_python_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-sh code"><code class="code">pip install testcontainers-mockserver</code></pre>
+
+<p>Requires Python &gt;= 3.9, <span class="inline_code">testcontainers &gt;= 4.0.0</span>, and Docker.</p>
+
+</div>
+
+<button id="button_python_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-python code"><code class="code">from testcontainers_mockserver import MockServerContainer
+import requests
+
+with MockServerContainer() as mockserver:
+    url = mockserver.get_url()  # e.g. "http://localhost:49152"
+
+    # Create an expectation
+    requests.put(f"{url}/mockserver/expectation", json={
+        "httpRequest": {"method": "GET", "path": "/hello"},
+        "httpResponse": {"statusCode": 200, "body": "world"},
+    })
+
+    # Match it
+    resp = requests.get(f"{url}/hello")
+    assert resp.text == "world"</code></pre>
+
+<p>The container is automatically stopped when the <span class="inline_code">with</span> block exits. Helpers <span class="inline_code">get_url()</span>, <span class="inline_code">get_secure_url()</span>, <span class="inline_code">get_host()</span>, and <span class="inline_code">get_port()</span> expose the connection details.</p>
+
+</div>
+
+<button id="button_python_configuration" class="accordion title"><strong>Configuration Helpers</strong></button>
+<div class="panel">
+
+<table>
+    <thead>
+    <tr><th>Method</th><th>What it does</th></tr>
+    </thead>
+    <tbody>
+    <tr><td><span class="inline_code">with_server_port(port)</span></td><td>Override the listen port inside the container.</td></tr>
+    <tr><td><span class="inline_code">with_log_level(level)</span></td><td>Set <span class="inline_code">MOCKSERVER_LOG_LEVEL</span>.</td></tr>
+    <tr><td><span class="inline_code">with_property(key, value)</span></td><td>Set any MockServer environment variable.</td></tr>
+    <tr><td><span class="inline_code">with_initialization_json(path)</span></td><td>Point to a startup expectations JSON file loaded at container start.</td></tr>
+    </tbody>
+</table>
+
+</div>
+
+<a id="rust-testcontainers" class="anchor" href="#rust-testcontainers">&nbsp;</a>
+
+<h2>Rust</h2>
+
+<p>The <span class="inline_code">testcontainers-mockserver</span> crate integrates with the <a href="https://crates.io/crates/testcontainers">testcontainers</a> crate. It supports both synchronous and async (Tokio) test runners.</p>
+
+<button id="button_rust_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<div class="panel">
+
+<p>Add to your <span class="inline_code">Cargo.toml</span>:</p>
+
+<pre class="prettyprint lang-toml code"><code class="code">[dev-dependencies]
+testcontainers-mockserver = "7.0"
+testcontainers = { version = "0.23", features = ["blocking"] }
+reqwest = { version = "0.13", features = ["blocking"] }</code></pre>
+
+<p>Requires Rust 1.70+ and Docker.</p>
+
+</div>
+
+<button id="button_rust_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<div class="panel">
+
+<p><strong>Synchronous</strong></p>
+
+<pre class="prettyprint lang-rust code"><code class="code">use testcontainers::runners::SyncRunner;
+use testcontainers_mockserver::MockServer;
+
+#[test]
+fn test_with_mockserver() {
+    let container = MockServer::default().start().unwrap();
+    let base_url = testcontainers_mockserver::base_url(&amp;container);
+
+    // Create an expectation
+    let client = reqwest::blocking::Client::new();
+    client.put(format!("{base_url}/mockserver/expectation"))
+        .header("Content-Type", "application/json")
+        .body(r#"[{
+            "httpRequest": { "method": "GET", "path": "/hello" },
+            "httpResponse": { "statusCode": 200, "body": "world" }
+        }]"#)
+        .send()
+        .unwrap();
+
+    // Call the mocked endpoint
+    let resp = client.get(format!("{base_url}/hello")).send().unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().unwrap(), "world");
+}</code></pre>
+
+<p><strong>Async (Tokio)</strong></p>
+
+<pre class="prettyprint lang-rust code"><code class="code">use testcontainers::runners::AsyncRunner;
+use testcontainers_mockserver::MockServer;
+
+#[tokio::test]
+async fn test_with_mockserver_async() {
+    let container = MockServer::default().start().await.unwrap();
+    let base_url = testcontainers_mockserver::async_base_url(&amp;container).await;
+    // ... use base_url with an async HTTP client
+}</code></pre>
+
+</div>
+
+<button id="button_rust_configuration" class="accordion title"><strong>Configuration</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-rust code"><code class="code">use testcontainers_mockserver::MockServer;
+
+let image = MockServer::new("mockserver-7.1.0")
+    .with_env("MOCKSERVER_LOG_LEVEL", "DEBUG")
+    .with_env("MOCKSERVER_MAX_EXPECTATIONS", "500")
+    .with_server_port(9090);</code></pre>
+
+<p><span class="inline_code">with_env(key, value)</span> sets any MockServer environment variable. <span class="inline_code">with_server_port(port)</span> overrides the container listen port.</p>
+
+</div>
+
+<a id="go-testcontainers" class="anchor" href="#go-testcontainers">&nbsp;</a>
+
+<h2>Go</h2>
+
+<p>The Go module integrates with the <a href="https://golang.testcontainers.org/">Testcontainers for Go</a> library. It starts and waits for the MockServer container, then provides <span class="inline_code">URL(ctx)</span> and <span class="inline_code">ServerPort(ctx)</span> helpers.</p>
+
+<button id="button_go_dependency" class="accordion title"><strong>Add The Dependency</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-sh code"><code class="code">go get github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go</code></pre>
+
+<p>Requires Go 1.22+ and Docker.</p>
+
+</div>
+
+<button id="button_go_usage" class="accordion title"><strong>Basic Usage</strong></button>
+<div class="panel">
+
+<pre class="prettyprint lang-go code"><code class="code">package example_test
+
+import (
+    "context"
+    "net/http"
+    "strings"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go"
+)
+
+func Example() {
+    ctx := context.Background()
+
+    // Start a MockServer container
+    ctr, err := mockserver.Run(ctx, mockserver.DefaultImage)
+    if err != nil {
+        // handle error
+    }
+    defer ctr.Terminate(ctx)
+
+    // Get the base URL
+    url, err := ctr.URL(ctx)
+    if err != nil {
+        // handle error
+    }
+
+    // Create an expectation
+    expectation := `{
+        "httpRequest": {"method": "GET", "path": "/hello"},
+        "httpResponse": {"statusCode": 200, "body": "world"}
+    }`
+    req, _ := http.NewRequestWithContext(ctx, http.MethodPut, url+"/mockserver/expectation",
+        strings.NewReader(expectation))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+
+    // Call the mocked endpoint
+    resp, _ := http.Get(url + "/hello")
+    // resp.StatusCode == 200
+}</code></pre>
+
+<p><span class="inline_code">mockserver.Run(ctx, image, opts...)</span> accepts optional <span class="inline_code">testcontainers.ContainerCustomizer</span> values. The container waits for <span class="inline_code">/mockserver/status</span> to return HTTP 200 before <span class="inline_code">Run</span> returns. Use <span class="inline_code">ctr.URL(ctx)</span> for the HTTP base URL and <span class="inline_code">ctr.ServerPort(ctx)</span> for the mapped port.</p>
+
+</div>
+
+<p>For more information see <a href="/mock_server/running_mock_server.html#running_via_testcontainers">Running MockServer via Testcontainers</a> and the available <a href="/mock_server/mockserver_clients.html">MockServer clients</a>.</p>

@@ -3,6 +3,8 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
@@ -12,6 +14,8 @@ import Button from '@mui/material/Button';
 import Alert from '@mui/material/Alert';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { createOidcProvider, type OidcConfig } from '../lib/oidc';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import HumanErrorAlert from './HumanErrorAlert';
 
 export default function OidcDialog({
   open,
@@ -22,6 +26,8 @@ export default function OidcDialog({
   onClose: () => void;
   connectionParams: ConnectionParams;
 }) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [issuer, setIssuer] = useState('');
   const [subject, setSubject] = useState('');
   const [clientId, setClientId] = useState('');
@@ -33,7 +39,7 @@ export default function OidcDialog({
   const [tamperedSignature, setTamperedSignature] = useState(false);
 
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
   const [created, setCreated] = useState<number | null>(null);
 
   const submit = useCallback(async () => {
@@ -56,22 +62,37 @@ export default function OidcDialog({
     try {
       setCreated(await createOidcProvider(connectionParams, config));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setBusy(false);
     }
   }, [connectionParams, issuer, subject, clientId, audience, scopes, tokenExpiry, issueExpiredToken, wrongIssuer, tamperedSignature]);
 
+  const handleClose = useCallback(() => {
+    setIssuer('');
+    setSubject('');
+    setClientId('');
+    setAudience('');
+    setScopes('');
+    setTokenExpiry('');
+    setIssueExpiredToken(false);
+    setWrongIssuer(false);
+    setTamperedSignature(false);
+    setError(null);
+    setCreated(null);
+    onClose();
+  }, [onClose]);
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Mock OIDC provider</DialogTitle>
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth fullScreen={fullScreen} aria-labelledby="oidc-dialog-title">
+      <DialogTitle id="oidc-dialog-title">Mock OIDC provider</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Register a mock OIDC/OAuth2 provider — discovery document, JWKS, and token / userinfo /
           introspection / revocation endpoints — as expectations. Leave a field blank to use the
           server default.
         </Typography>
-        {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+        {error && <HumanErrorAlert error={error} sx={{ mb: 1.5 }} />}
         {created !== null && (
           <Alert severity="success" sx={{ mb: 1.5 }}>Created {created} expectation{created === 1 ? '' : 's'} for the mock OIDC provider.</Alert>
         )}
@@ -83,7 +104,7 @@ export default function OidcDialog({
           </Box>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <TextField size="small" label="Audience" placeholder="mock-audience" value={audience} onChange={(e) => setAudience(e.target.value)} sx={{ flex: 1 }} />
-            <TextField size="small" label="Token expiry (s)" type="number" placeholder="3600" value={tokenExpiry} onChange={(e) => setTokenExpiry(e.target.value)} sx={{ width: 150 }} />
+            <TextField size="small" label="Token expiry (s)" type="number" placeholder="3600" value={tokenExpiry} onChange={(e) => setTokenExpiry(e.target.value)} sx={{ width: { xs: '100%', sm: 150 } }} />
           </Box>
           <TextField size="small" label="Scopes (space/comma separated)" placeholder="openid profile email" value={scopes} onChange={(e) => setScopes(e.target.value)} />
           <Box>
@@ -97,7 +118,7 @@ export default function OidcDialog({
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={handleClose}>Close</Button>
         <Button variant="contained" disabled={busy} onClick={() => void submit()}>Create provider</Button>
       </DialogActions>
     </Dialog>

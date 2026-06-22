@@ -97,4 +97,22 @@ describe('useConnectionParams', () => {
     const { result } = renderHook(() => useConnectionParams());
     expect(result.current.basePath).toBe('/api/v2');
   });
+
+  it('honors ?secure=true to override HTTP dashboard protocol', () => {
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { hostname: 'h', port: '1080', protocol: 'http:', search: '?secure=true', pathname: '/' },
+    });
+    const { result } = renderHook(() => useConnectionParams());
+    expect(result.current.secure).toBe(true);
+  });
+
+  it('honors ?secure=false to override HTTPS dashboard protocol', () => {
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { hostname: 'h', port: '443', protocol: 'https:', search: '?secure=false', pathname: '/' },
+    });
+    const { result } = renderHook(() => useConnectionParams());
+    expect(result.current.secure).toBe(false);
+  });
 });

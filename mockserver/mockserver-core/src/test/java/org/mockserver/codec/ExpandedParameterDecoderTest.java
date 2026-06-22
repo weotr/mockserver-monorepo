@@ -203,6 +203,45 @@ public class ExpandedParameterDecoderTest {
     }
 
     @Test
+    public void shouldSplitMatrixParametersWithRegexReplacementMetaCharactersInName() {
+        // a name containing '$' or '\' must be treated as a literal replacement
+        // (via Matcher.quoteReplacement) rather than as a regex replacement string,
+        // otherwise '$' is interpreted as a group reference and '\' as an escape
+        assertThat(new ExpandedParameterDecoder(configuration, mockServerLogger).splitOnDelimiter(
+                ParameterStyle.MATRIX_EXPLODED,
+                "$ref",
+                Arrays.asList(
+                    string("2;$ref=3"),
+                    string("3;$ref=4;$ref=5")
+                )
+            ),
+            containsInAnyOrder(
+                string("2"),
+                string("3"),
+                string("3"),
+                string("4"),
+                string("5")
+            )
+        );
+        assertThat(new ExpandedParameterDecoder(configuration, mockServerLogger).splitOnDelimiter(
+                ParameterStyle.MATRIX_EXPLODED,
+                "a\\b",
+                Arrays.asList(
+                    string("2;a\\b=3"),
+                    string("3;a\\b=4;a\\b=5")
+                )
+            ),
+            containsInAnyOrder(
+                string("2"),
+                string("3"),
+                string("3"),
+                string("4"),
+                string("5")
+            )
+        );
+    }
+
+    @Test
     public void shouldNotSplitMatrixParameters() {
         assertThat(new ExpandedParameterDecoder(configuration, mockServerLogger).splitOnDelimiter(
                 ParameterStyle.MATRIX,

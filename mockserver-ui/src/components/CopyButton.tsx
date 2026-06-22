@@ -10,20 +10,23 @@ interface CopyButtonProps {
 }
 
 export default function CopyButton({ text, size = 'small' }: CopyButtonProps) {
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setStatus('copied');
+      setTimeout(() => setStatus('idle'), 1500);
     } catch {
-      // clipboard API may not be available
+      setStatus('failed');
+      setTimeout(() => setStatus('idle'), 2000);
     }
   };
 
+  const tooltipTitle = status === 'copied' ? 'Copied!' : status === 'failed' ? 'Copy failed' : 'Copy';
+
   return (
-    <Tooltip title={copied ? 'Copied!' : 'Copy'}>
+    <Tooltip title={tooltipTitle}>
       <IconButton
         size={size}
         onClick={handleCopy}
@@ -34,7 +37,7 @@ export default function CopyButton({ text, size = 'small' }: CopyButtonProps) {
           '& .MuiSvgIcon-root': { fontSize: '0.875rem' },
         }}
       >
-        {copied ? <CheckIcon /> : <ContentCopyIcon />}
+        {status === 'copied' ? <CheckIcon /> : <ContentCopyIcon />}
       </IconButton>
     </Tooltip>
   );

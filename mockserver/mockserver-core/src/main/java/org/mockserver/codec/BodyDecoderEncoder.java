@@ -5,7 +5,6 @@ import io.netty.buffer.Unpooled;
 import org.mockserver.model.*;
 
 import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.model.JsonBody.DEFAULT_MATCH_TYPE;

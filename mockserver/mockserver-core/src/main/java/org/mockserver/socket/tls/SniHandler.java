@@ -114,6 +114,22 @@ public class SniHandler extends AbstractSniHandler<SslContext> {
         return clientCertificates;
     }
 
+    /**
+     * Record the negotiated application protocol on the channel as a trusted, server-side signal.
+     * Used by the cleartext HTTP/2 (h2c) path, where there is no ALPN to read the protocol from: the
+     * pipeline detects the h2c connection preface and marks the channel as HTTP/2 so downstream
+     * stream-scoped behaviour (e.g. capturing the HTTP/2 stream id) is enabled for genuine h2c
+     * connections without trusting any client-supplied header.
+     *
+     * @param channel  the channel the protocol was negotiated on
+     * @param protocol the negotiated protocol (e.g. {@link Protocol#HTTP_2} for h2c)
+     */
+    public static void setNegotiatedApplicationProtocol(io.netty.channel.Channel channel, Protocol protocol) {
+        if (channel != null && protocol != null) {
+            channel.attr(NEGOTIATED_APPLICATION_PROTOCOL).set(protocol);
+        }
+    }
+
     public static Protocol getALPNProtocol(MockServerLogger mockServerLogger, ChannelHandlerContext ctx) {
         Protocol protocol = null;
         try {

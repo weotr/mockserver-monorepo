@@ -1,0 +1,414 @@
+---
+title: Client Capability Matrix and Test Usage
+description: Feature coverage across all MockServer clients — expectations, verification, LLM/MCP builders, test fixtures, retrieveAsCode, Testcontainers — with idiomatic per-language test snippets.
+shortTitle: Client Compatibility
+layout: page
+pageOrder: 4
+section: 'Getting Started'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-20T00:00:00+00:00
+---
+
+<p>All eight MockServer clients cover the core control-plane API (expectations, verification, clear/reset, retrieve). Feature coverage diverges for higher-level capabilities. Use the matrix below to pick a client and jump to the idiomatic test-fixture snippet for your language.</p>
+
+<h2>Capability Matrix</h2>
+
+<p><strong>Key:</strong> &#x2705; supported &nbsp;|&nbsp; &mdash; not available</p>
+
+<table class="comparison" style="width:100%; border-collapse:collapse; font-size:0.9em;">
+    <thead>
+        <tr style="background:#f5f5f5;">
+            <th style="text-align:left; padding:6px 8px; border:1px solid #ddd;">Feature</th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#java">Java</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#node">Node</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#python">Python</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#ruby">Ruby</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#go">Go</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#dotnet">.NET</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#rust">Rust</a></th>
+            <th style="text-align:center; padding:6px 8px; border:1px solid #ddd;"><a href="#php">PHP</a></th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="padding:6px 8px; border:1px solid #ddd;">Expectations (create / upsert)</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr style="background:#fafafa;">
+            <td style="padding:6px 8px; border:1px solid #ddd;">Verify requests</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr>
+            <td style="padding:6px 8px; border:1px solid #ddd;">OpenAPI expectations</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr style="background:#fafafa;">
+            <td style="padding:6px 8px; border:1px solid #ddd;"><a href="/mock_server/llm_response_mocking.html">LLM mock builder</a></td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr>
+            <td style="padding:6px 8px; border:1px solid #ddd;"><a href="/mock_server/ai_protocol_mocking.html">MCP mock builder</a></td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr style="background:#fafafa;">
+            <td style="padding:6px 8px; border:1px solid #ddd;"><a href="#test-fixtures">Test fixture / auto-cleanup</a></td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&mdash;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr>
+            <td style="padding:6px 8px; border:1px solid #ddd;">retrieveAsCode</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+        <tr style="background:#fafafa;">
+            <td style="padding:6px 8px; border:1px solid #ddd;"><a href="/mock_server/mockserver_testcontainers.html">Testcontainers module</a></td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&mdash;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&mdash;</td>
+        </tr>
+        <tr>
+            <td style="padding:6px 8px; border:1px solid #ddd;"><a href="/mock_server/load_injection.html">Load scenario (start / status / stop)</a></td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+            <td style="text-align:center; border:1px solid #ddd;">&#x2705;</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Notes on specific cells:</p>
+<ul>
+    <li><strong>Rust &mdash; test fixture:</strong> the Rust client has no built-in auto-reset helper. Use the Testcontainers module and call <code class="code inline">client.reset()</code> manually at the start of each test.</li>
+    <li><strong>Ruby / PHP &mdash; Testcontainers:</strong> no official MockServer Testcontainers module for these languages. Use Docker Compose or the binary launcher instead.</li>
+</ul>
+
+<a id="test-fixtures" class="anchor" href="#test-fixtures">&nbsp;</a>
+
+<h2>Using MockServer in Tests &mdash; Per-Language Fixtures</h2>
+
+<p>The snippets below show the idiomatic way to wire MockServer into each language's test framework so that recorded requests, expectations, and logs are reset between tests and connections are cleaned up automatically.</p>
+
+<a id="java" class="anchor" href="#java">&nbsp;</a>
+
+<h3>Java &mdash; JUnit 5 (<code class="code inline">@ExtendWith(MockServerExtension.class)</code>)</h3>
+
+<p>The <code class="code inline">mockserver-junit-jupiter</code> artifact provides a JUnit 5 extension that starts a <code class="code inline">ClientAndServer</code> and injects a <code class="code inline">MockServerClient</code> into each test method. Add <code class="code inline">mockserver-junit-jupiter</code> to your test dependencies:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.junit.jupiter.MockServerExtension;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
+
+@ExtendWith(MockServerExtension.class)
+class PaymentServiceTest {
+
+    @Test
+    void returnsPaymentConfirmation(MockServerClient client) {
+        client.when(
+            request().withMethod("POST").withPath("/payments")
+        ).respond(
+            response().withStatusCode(201).withBody("{\"id\":\"pay_001\"}")
+        );
+
+        // ... call the system under test ...
+
+        client.verify(request().withPath("/payments"));
+    }
+}</code></pre>
+
+<p>For JUnit 4, use <code class="code inline">mockserver-junit-rule</code> and annotate a field with <code class="code inline">@Rule MockServerRule rule = new MockServerRule(this)</code>.</p>
+
+<a id="node" class="anchor" href="#node">&nbsp;</a>
+
+<h3>Node / TypeScript &mdash; <code class="code inline">await using</code> (<code class="code inline">Symbol.asyncDispose</code>)</h3>
+
+<p>The Node client implements <code class="code inline">Symbol.asyncDispose</code>, so any runtime that supports the TC39 Explicit Resource Management proposal (Node.js 20+, TypeScript 5.2+) can use <code class="code inline">await using</code> to reset the server automatically when the test scope exits:</p>
+
+<pre class="prettyprint lang-javascript code"><code class="code">import { mockServerClient } from 'mockserver-client';
+
+describe('payment service', () => {
+    it('records a payment request', async () => {
+        await using client = mockServerClient('localhost', 1080);
+
+        await client.mockSimpleResponse('/payments', { id: 'pay_001' }, 201);
+
+        // ... call the system under test ...
+
+        await client.verify({ path: '/payments' }, 1, 1);
+        // client[Symbol.asyncDispose]() fires automatically on scope exit
+    });
+});</code></pre>
+
+<p>On runtimes that do not yet support <code class="code inline">Symbol.asyncDispose</code>, call <code class="code inline">client.stop()</code> (which also resets) in an <code class="code inline">afterEach</code> hook instead.</p>
+
+<a id="python" class="anchor" href="#python">&nbsp;</a>
+
+<h3>Python &mdash; pytest <code class="code inline">conftest.py</code> fixture</h3>
+
+<p>Define a session-scoped fixture that locates MockServer and a test-scoped fixture that provides a reset client for each test. Place these in your <code class="code inline">conftest.py</code>:</p>
+
+<pre class="prettyprint lang-python code"><code class="code">import os
+import pytest
+from mockserver import MockServerClient
+
+
+@pytest.fixture(scope="session")
+def mockserver_url():
+    host = os.environ.get("MOCKSERVER_HOST", "localhost")
+    port = int(os.environ.get("MOCKSERVER_PORT", "1080"))
+    yield host, port
+
+
+@pytest.fixture()
+def mockserver_client(mockserver_url):
+    host, port = mockserver_url
+    with MockServerClient(host, port) as client:
+        client.reset()
+        yield client
+        client.reset()</code></pre>
+
+<p>Use the fixture in tests:</p>
+
+<pre class="prettyprint lang-python code"><code class="code">from mockserver import HttpRequest, HttpResponse, VerificationTimes
+
+def test_payment(mockserver_client):
+    mockserver_client.when(
+        HttpRequest.request("/payments").with_method("POST")
+    ).respond(
+        HttpResponse.response('{"id":"pay_001"}', status_code=201)
+    )
+
+    # ... call the system under test ...
+
+    mockserver_client.verify(
+        HttpRequest.request("/payments"),
+        VerificationTimes.at_least(1)
+    )</code></pre>
+
+<a id="ruby" class="anchor" href="#ruby">&nbsp;</a>
+
+<h3>Ruby &mdash; RSpec shared context (<code class="code inline">:mockserver</code> tag)</h3>
+
+<p>Require <code class="code inline">mockserver/rspec</code> from your <code class="code inline">spec_helper.rb</code> to register a shared context. Tag any example group with <code class="code inline">:mockserver</code> to receive a memoised, pre-reset <code class="code inline">mockserver</code> client that is reset before and after each example:</p>
+
+<pre class="prettyprint lang-ruby code"><code class="code"># spec_helper.rb
+require 'mockserver/rspec'</code></pre>
+
+<pre class="prettyprint lang-ruby code"><code class="code"># spec/payment_service_spec.rb
+RSpec.describe PaymentService, :mockserver do
+  # Override host/port if needed:
+  # let(:mockserver_host) { 'localhost' }
+  # let(:mockserver_port) { 1080 }
+
+  it 'sends a POST to /payments' do
+    mockserver.when(
+      MockServer::HttpRequest.request(path: '/payments').with_method('POST')
+    ).respond(
+      MockServer::HttpResponse.response(body: '{"id":"pay_001"}', status_code: 201)
+    )
+
+    # ... call the system under test ...
+
+    mockserver.verify(
+      MockServer::HttpRequest.request(path: '/payments'),
+      times: MockServer::VerificationTimes.at_least(1)
+    )
+  end
+end</code></pre>
+
+<p>The host and port default to <code class="code inline">127.0.0.1:1080</code> and can be overridden with the <code class="code inline">MOCKSERVER_HOST</code> / <code class="code inline">MOCKSERVER_PORT</code> environment variables, or by defining a <code class="code inline">mockserver_host</code> / <code class="code inline">mockserver_port</code> <code class="code inline">let</code> in your example group.</p>
+
+<a id="go" class="anchor" href="#go">&nbsp;</a>
+
+<h3>Go &mdash; <code class="code inline">MockServerT</code> / <code class="code inline">t.Cleanup</code></h3>
+
+<p><code class="code inline">mockserver.NewMockServerT(t, host, port)</code> creates a client and registers a <code class="code inline">t.Cleanup</code> that calls <code class="code inline">Reset()</code> when the test (and any sub-tests) finish. Use <code class="code inline">MockServerT(t, client)</code> to attach the cleanup to an existing client:</p>
+
+<pre class="prettyprint lang-go code"><code class="code">package payment_test
+
+import (
+    "testing"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func TestPayment(t *testing.T) {
+    client := mockserver.NewMockServerT(t, "localhost", 1080)
+
+    client.When(
+        mockserver.Request().Method("POST").Path("/payments"),
+    ).Respond(
+        mockserver.Response().StatusCode(201).Body(`{"id":"pay_001"}`),
+    )
+
+    // ... call the system under test ...
+
+    client.Verify(mockserver.Request().Path("/payments"), mockserver.AtLeast(1))
+    // client.Reset() runs automatically via t.Cleanup when the test ends
+}</code></pre>
+
+<a id="dotnet" class="anchor" href="#dotnet">&nbsp;</a>
+
+<h3>.NET &mdash; <code class="code inline">MockServerFixture</code> (<code class="code inline">IAsyncLifetime</code>)</h3>
+
+<p><code class="code inline">MockServerFixture</code> from the <code class="code inline">MockServer.Client.IntegrationTests</code> namespace implements xUnit's <code class="code inline">IAsyncLifetime</code> interface. Derive your test class from it to get a <code class="code inline">Client</code> property that is reset before and after the test class runs. Set the <code class="code inline">MOCKSERVER_URL</code> environment variable (for example <code class="code inline">http://localhost:1080</code>) before running tests:</p>
+
+<pre class="prettyprint lang-cs code"><code class="code">using MockServer.Client.IntegrationTests;
+using MockServer.Client;
+using MockServer.Client.Models;
+using Xunit;
+
+public class PaymentServiceTests : MockServerFixture
+{
+    [SkippableFact]
+    public async Task RecordsPaymentRequest()
+    {
+        SkipIfNoServer(); // skip gracefully when MOCKSERVER_URL is not set
+
+        Client!.When(
+            HttpRequest.Request().WithMethod("POST").WithPath("/payments")
+        ).Respond(
+            HttpResponse.Response().WithStatusCode(201).WithBody("{\"id\":\"pay_001\"}")
+        );
+
+        // ... call the system under test ...
+
+        await Client.VerifyAsync(
+            HttpRequest.Request().WithPath("/payments"),
+            VerificationTimes.AtLeastTimes(1)
+        );
+    }
+}</code></pre>
+
+<a id="rust" class="anchor" href="#rust">&nbsp;</a>
+
+<h3>Rust &mdash; manual reset (no built-in fixture)</h3>
+
+<p>The Rust client has no built-in test fixture helper. The recommended pattern is to use the <a href="/mock_server/mockserver_testcontainers.html">Testcontainers module</a> to start a dedicated MockServer container and call <code class="code inline">client.reset()</code> at the start of each test:</p>
+
+<pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse, VerificationTimes};
+use testcontainers::runners::SyncRunner;
+use testcontainers_mockserver::MockServer as MockServerImage;
+
+#[test]
+#[ignore = "requires Docker"]
+fn records_payment_request() {
+    let container = MockServerImage::default().start().unwrap();
+    let base_url = testcontainers_mockserver::base_url(&container);
+    let client = ClientBuilder::from_base_url(&base_url).build().unwrap();
+
+    client.reset().unwrap();
+
+    client.when(HttpRequest::new().method("POST").path("/payments"))
+        .respond(HttpResponse::new().status_code(201).body(r#"{"id":"pay_001"}"#))
+        .unwrap();
+
+    // ... call the system under test ...
+
+    client.verify(
+        HttpRequest::new().path("/payments"),
+        VerificationTimes::at_least(1),
+    ).unwrap();
+    // container is dropped here -- MockServer stops automatically
+}</code></pre>
+
+<a id="php" class="anchor" href="#php">&nbsp;</a>
+
+<h3>PHP &mdash; <code class="code inline">MockServerTestTrait</code> (PHPUnit)</h3>
+
+<p>Mix <code class="code inline">MockServer\Testing\MockServerTestTrait</code> into your PHPUnit test case and call the lifecycle helpers from <code class="code inline">setUp()</code> and <code class="code inline">tearDown()</code>. The trait provides <code class="code inline">$this-&gt;mockServer</code> as a reset client. Set the <code class="code inline">MOCKSERVER_URL</code> environment variable (for example <code class="code inline">http://localhost:1080</code>) before running tests:</p>
+
+<pre class="prettyprint lang-php code"><code class="code">use MockServer\Testing\MockServerTestTrait;
+use PHPUnit\Framework\TestCase;
+
+final class PaymentServiceTest extends TestCase
+{
+    use MockServerTestTrait;
+
+    protected function setUp(): void
+    {
+        $this->setUpMockServer();
+    }
+
+    protected function tearDown(): void
+    {
+        $this->tearDownMockServer();
+    }
+
+    public function testRecordsPaymentRequest(): void
+    {
+        $this->mockServer->when(
+            \MockServer\HttpRequest::request()->method('POST')->path('/payments')
+        )->respond(
+            \MockServer\HttpResponse::response()->statusCode(201)->body('{"id":"pay_001"}')
+        );
+
+        // ... call the system under test ...
+
+        $this->mockServer->verify(
+            \MockServer\HttpRequest::request()->path('/payments'),
+            \MockServer\VerificationTimes::atLeast(1)
+        );
+    }
+}</code></pre>

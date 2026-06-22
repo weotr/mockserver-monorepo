@@ -9,11 +9,20 @@
     "httpRequest": {
       "$ref": "#/definitions/requestDefinition"
     },
+    "httpResponse": {
+      "$ref": "#/definitions/httpResponse"
+    },
     "times": {
       "$ref": "#/definitions/verificationTimes"
     },
     "maximumNumberOfRequestToReturnInVerificationFailure": {
       "type": "integer"
+    },
+    "disposition": {
+      "enum": [
+        "MOCKED",
+        "FORWARDED"
+      ]
     }
   },
   "oneOf": [
@@ -26,6 +35,25 @@
       "required": [
         "httpRequest"
       ]
+    },
+    {
+      "required": [
+        "httpResponse"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "expectationId"
+            ]
+          },
+          {
+            "required": [
+              "httpRequest"
+            ]
+          }
+        ]
+      }
     }
   ],
   "definitions": {

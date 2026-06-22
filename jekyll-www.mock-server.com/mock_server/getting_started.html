@@ -27,6 +27,55 @@ sitemap:
 
 <p>For example code see the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples" rel="noopener noreferrer">code examples folder</a> in the git repository.</p>
 
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>Most of MockServer's power is in step&nbsp;1, <a href="#setup_expectations">Setup Expectations</a>. Rather than scrolling, jump straight to the capability you need &mdash; <strong>match</strong> the request, choose an <strong>action</strong>, and (optionally) drive <strong>stateful scenarios</strong>:</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Match requests</th>
+			<th>Respond with actions</th>
+			<th>Sequencing &amp; scenarios</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#request_matchers">Request Matchers</a> &mdash; method, path, query, headers, cookies</li>
+					<li><a href="#request_body_matchers">Body matching</a> &mdash; string, JSON, XML, schema</li>
+					<li><a href="#graphql_body_matching">GraphQL</a> &amp; <a href="#graphql_subscriptions">subscriptions</a></li>
+					<li><a href="#path_matching_curly_braces">Path templates</a></li>
+					<li><a href="#request_openapi_matchers">OpenAPI matchers</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#response_action">Response</a></li>
+					<li><a href="#forward_action">Forward</a> / <a href="#forward_with_fallback_action">Forward with Fallback</a></li>
+					<li><a href="#error_action">Error / drop connection</a></li>
+					<li><a href="#llm_response_action">LLM Response</a></li>
+					<li><a href="#websocket_response_action">WebSocket Response</a></li>
+					<li><a href="#crud_simulation">CRUD Simulation</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#matching_order">Matching Order</a></li>
+					<li><a href="#probabilistic_matching">Probabilistic Matching</a></li>
+					<li><a href="#stateful_scenarios">Stateful Scenarios</a></li>
+					<li><a href="#updating_expectations">Updating Expectations</a></li>
+				</ul>
+			</td>
+		</tr>
+	</tbody>
+</table>
+
+<p><strong>Workflow:</strong> <a href="#start_mockserver">0. Start MockServer</a> &middot; <a href="#setup_expectations">1. Setup Expectations</a> &middot; <a href="#verify_requests">3. Verify Requests</a>&emsp;|&emsp;<strong>Reference:</strong> <a href="#next_steps">Next Steps</a> &middot; <a href="#spring_boot_compatibility">Spring Boot</a> &middot; <a href="#upgrading">Upgrading</a> &middot; <a href="#http2_proxy_limitations">HTTP/2 Proxy Limitations</a> &middot; <a href="#single_port_architecture">Single Port Architecture</a></p>
+
 <a id="start_mockserver" class="anchor" href="#start_mockserver">&nbsp;</a>
 
 <h2>0. Start MockServer</h2>
@@ -48,6 +97,111 @@ sitemap:
 <h2>3. Verify Requests</h2>
 
 {% include_subpage _includes/verification_summary.html %}
+
+<a id="advanced_sequencing" class="anchor" href="#advanced_sequencing">&nbsp;</a>
+
+<h2>Advanced sequencing</h2>
+
+<p>Beyond a single fixed response, MockServer lets you control exactly what gets returned on each call.</p>
+
+<h3>Stateful scenarios</h3>
+
+<p>A <strong>stateful scenario</strong> is a named state machine that tracks which step of a multi-step conversation the client has reached. Each expectation declares the state it requires (<span class="inline_code">scenarioState</span>) and the state it sets after matching (<span class="inline_code">newScenarioState</span>). Every scenario starts in the <span class="inline_code">"Started"</span> state. This lets you model login flows, pagination, and any API where the correct response depends on what came before.</p>
+
+<pre class="prettyprint lang-json code"><code class="code">// First POST /login transitions the scenario from "Started" → "LoggedIn"
+// and returns a token.
+{
+    "httpRequest":  { "method": "POST", "path": "/login" },
+    "httpResponse": { "statusCode": 200, "body": "{\"token\": \"abc123\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "Started",
+    "newScenarioState": "LoggedIn",
+    "times": { "remainingTimes": 1 }
+}
+
+// Subsequent GET /profile only matches once the scenario is in "LoggedIn".
+{
+    "httpRequest":  { "method": "GET", "path": "/profile" },
+    "httpResponse": { "statusCode": 200, "body": "{\"name\": \"Alice\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "LoggedIn"
+}</code></pre>
+
+<p>See <a href="/mock_server/stateful_scenarios.html">Stateful Scenarios</a> for the full reference including pagination, cross-protocol correlation, and timed flows.</p>
+
+<h3>Probabilistic matching</h3>
+
+<p><strong>Probabilistic matching</strong> adds a <span class="inline_code">percentage</span> field (0–100) to an expectation. MockServer only acts on the expectation for that fraction of structurally matching requests; the rest fall through to the next expectation. Use this to simulate intermittent failures or flaky upstreams &mdash; for example, make an endpoint succeed 80% of the time and return 503 the other 20%:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">// 80% of GET /api/data requests return 200
+{
+    "httpRequest":  { "path": "/api/data" },
+    "httpResponse": { "statusCode": 200, "body": "{\"result\": \"ok\"}" },
+    "times": { "unlimited": true },
+    "timeToLive": { "unlimited": true },
+    "priority": 10,
+    "percentage": 80
+}
+
+// The remaining 20% return 503
+{
+    "httpRequest":  { "path": "/api/data" },
+    "httpResponse": { "statusCode": 503, "body": "{\"error\": \"Service Unavailable\"}" }
+}</code></pre>
+
+<p>See <a href="/mock_server/creating_expectations.html#probabilistic_matching">Probabilistic Matching</a> for the full reference.</p>
+
+<h3>Sequential / cycling responses</h3>
+
+<p><strong>Sequential responses</strong> let a single expectation return a different response on each successive call by providing an <span class="inline_code">httpResponses</span> array instead of a single <span class="inline_code">httpResponse</span>. After the last response the list cycles back to the start. Set <span class="inline_code">responseMode</span> to <span class="inline_code">RANDOM</span> to pick randomly instead of in order &mdash; useful for simulating unpredictable upstreams:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "httpRequest": { "path": "/api/status" },
+    "httpResponses": [
+        { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+        { "statusCode": 503, "body": "{\"status\": \"degraded\"}" },
+        { "statusCode": 200, "body": "{\"status\": \"ok\"}" }
+    ]
+}
+// First call → 200, second call → 503, third call → 200, then cycles.</code></pre>
+
+<p>See <a href="/mock_server/stateful_scenarios.html#sequential_cycling_responses">Sequential / Cycling Responses</a> for the full reference including random mode and the Java client API.</p>
+
+<a id="what_else" class="anchor" href="#what_else">&nbsp;</a>
+
+<h2>What else can MockServer do?</h2>
+
+<p>The core mocking flow above covers the most common use case. MockServer also handles more specialised protocols and workflows:</p>
+
+<table class="comparison_table">
+    <thead>
+        <tr>
+            <th>Capability</th>
+            <th>When to use it</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td><a href="/mock_server/grpc_mocking.html">gRPC mocking</a></td><td>Your service communicates over protobuf / HTTP-2 RPC</td></tr>
+        <tr><td><a href="/mock_server/llm_response_mocking.html">LLM response mocking</a></td><td>Testing an AI application that calls OpenAI, Anthropic, Bedrock, or another LLM provider</td></tr>
+        <tr><td><a href="/mock_server/chaos_testing.html">Chaos &amp; fault injection</a></td><td>Verifying your system degrades gracefully when dependencies misbehave</td></tr>
+        <tr><td><a href="/mock_server/load_injection.html">Performance testing / load injection</a></td><td>Driving API traffic at a target with multi-stage VU or arrival-rate profiles and asserting SLOs over the results</td></tr>
+        <tr><td><a href="/mock_server/interactive_breakpoints.html">Interactive breakpoints</a></td><td>Pausing live requests in the dashboard to inspect or mutate them before continuing</td></tr>
+        <tr><td><a href="/mock_server/drift_detection.html">Mock drift detection</a></td><td>Being warned when a mock no longer matches the real API contract</td></tr>
+        <tr><td><a href="/mock_server/wasm_rules.html">WASM custom rules</a></td><td>Matching or responding with logic written in any language that compiles to WebAssembly</td></tr>
+        <tr><td><a href="/mock_server/asyncapi_messaging.html">AsyncAPI broker mocking</a></td><td>Publishing or recording Kafka / MQTT messages driven by an AsyncAPI spec</td></tr>
+    </tbody>
+</table>
+
+<a id="next_steps" class="anchor" href="#next_steps">&nbsp;</a>
+
+<h2>Next Steps</h2>
+
+<ul>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; the full reference for request matchers and response, forward, callback, and error actions</li>
+    <li><a href="/mock_server/verification.html">Verify Requests</a> &mdash; assert that your code under test sent the requests you expected</li>
+    <li><a href="/mock_server/mockserver_testcontainers.html">Testcontainers Integration</a> &mdash; start a MockServer container for your JVM tests with the official Testcontainers module</li>
+    <li><a href="/mock_server/importing_expectations.html">Importing Expectations</a> &mdash; load expectations in bulk from JSON or an OpenAPI specification instead of one at a time</li>
+</ul>
 
 <a id="spring_boot_compatibility" class="anchor" href="#spring_boot_compatibility">&nbsp;</a>
 
@@ -110,14 +264,3 @@ sitemap:
 <h2>Single Port Architecture</h2>
 
 <p>MockServer serves both mock and proxy traffic on the same port (default 1080). There is no separate port for proxying. The <span class="inline_code">proxyRemotePort</span> and <span class="inline_code">proxyRemoteHost</span> settings specify the upstream target server that unmatched requests are forwarded to — they do not open a separate listening port. All expectations, proxy forwarding, and protocol support (HTTP, HTTPS, SOCKS) share the single <span class="inline_code">serverPort</span>.</p>
-
-<a id="next_steps" class="anchor" href="#next_steps">&nbsp;</a>
-
-<h2>Next Steps</h2>
-
-<ul>
-    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; the full reference for request matchers and response, forward, callback, and error actions</li>
-    <li><a href="/mock_server/verification.html">Verify Requests</a> &mdash; assert that your code under test sent the requests you expected</li>
-    <li><a href="/mock_server/mockserver_testcontainers.html">Testcontainers Integration</a> &mdash; start a MockServer container for your JVM tests with the official Testcontainers module</li>
-    <li><a href="/mock_server/importing_expectations.html">Importing Expectations</a> &mdash; load expectations in bulk from JSON or an OpenAPI specification instead of one at a time</li>
-</ul>

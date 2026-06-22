@@ -1,7 +1,7 @@
 ---
-title: Pact Contract Export & Verification
-description: Export active MockServer expectations as a Pact v3 consumer contract, or verify expectations satisfy a Pact contract — closing the contract-testing loop.
-shortTitle: Pact Export & Verify
+title: Pact Contract Import, Export & Verification
+description: Import a Pact v3 consumer contract to create stub expectations, export active expectations as a Pact v3 contract, or verify expectations satisfy a contract — the complete contract-testing loop.
+shortTitle: Pact Import / Export / Verify
 layout: page
 pageOrder: 4
 section: 'Verify & Test'
@@ -9,10 +9,105 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-06-02T08:00:00+00:00
+  lastmod: 2026-06-17T00:00:00+00:00
 ---
 
-<p>MockServer can export its active response expectations as a <a target="_blank" href="https://docs.pact.io/" rel="noopener noreferrer"><strong>Pact v3</strong></a> consumer contract. This bridges MockServer's record/mock workflow with consumer-driven contract testing: mock the API in MockServer during development, then export a Pact contract that can be published to a <a target="_blank" href="https://pactflow.io/" rel="noopener noreferrer">PactFlow</a> or <a target="_blank" href="https://docs.pact.io/pact_broker" rel="noopener noreferrer">Pact Broker</a> instance and used to verify the real provider.</p>
+<p>MockServer supports the complete <a target="_blank" href="https://docs.pact.io/" rel="noopener noreferrer"><strong>Pact v3</strong></a> contract-testing loop: <strong>import</strong> a contract to generate stub expectations, <strong>export</strong> active expectations as a new contract, and <strong>verify</strong> that existing expectations satisfy a contract. Each direction is a separate endpoint.</p>
+
+<a id="pact_import_endpoint" class="anchor" href="#pact_import_endpoint">&nbsp;</a>
+
+<h2>Pact Import Endpoint</h2>
+
+<p>Send a <span class="inline_code">PUT</span> request to <span class="inline_code">/mockserver/pact/import</span> with a Pact v3 consumer contract as the request body. MockServer generates one expectation per interaction and returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+
+<p>This is the inverse of the export endpoint below: rather than producing a contract from active expectations, it <em>creates</em> expectations from the contract, turning a published contract into a ready-to-use stub provider.</p>
+
+<p>The same operation is also available at the generic import endpoint with the <span class="inline_code">?format=pact</span> query parameter, or via auto-detection (a body with a top-level <span class="inline_code">interactions</span> array is auto-detected as Pact). See <a href="/mock_server/importing_expectations.html">Importing Expectations</a> for the generic endpoint and redaction options.</p>
+
+<h3>How interactions become expectations</h3>
+
+<p>For each interaction, the importer builds:</p>
+<ul>
+    <li>A request matcher from <span class="inline_code">request.method</span>, <span class="inline_code">request.path</span>, <span class="inline_code">request.query</span>, <span class="inline_code">request.headers</span>, and <span class="inline_code">request.body</span></li>
+    <li>A response from <span class="inline_code">response.status</span>, <span class="inline_code">response.headers</span>, and <span class="inline_code">response.body</span></li>
+</ul>
+
+<p>JSON request bodies are matched semantically (key-order and whitespace insensitive). The expectation ID is set to the interaction's <span class="inline_code">description</span> field, or <span class="inline_code">pact-&lt;index&gt;</span> when the description is blank. Re-importing the same contract updates existing expectations in place.</p>
+
+<h3>Provider states</h3>
+
+<p>A Pact interaction's provider state — its <span class="inline_code">providerState</span> (v2) or <span class="inline_code">providerStates</span> (v3) "given&nbsp;..." precondition — is preserved on import. The generated expectation is gated on a scenario named <span class="inline_code">pact-provider-state</span> whose required state is the provider-state name, so the interaction only matches once that provider state has been <em>activated</em>. Interactions without a provider state are unaffected and always match.</p>
+
+<p>During <a href="#pact_verify_endpoint">verification</a> MockServer activates each interaction's provider state before matching it, so a contract that uses provider states verifies end-to-end. Provider states are also round-tripped on <a href="#pact_export_endpoint">export</a>. Only the first provider state on an interaction gates matching (a scenario holds one active state at a time).</p>
+
+<h3>matchingRules mapping</h3>
+
+<p>Pact v3 <span class="inline_code">matchingRules.request</span> are translated to MockServer matcher values:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Pact rule</th>
+            <th>MockServer matcher value</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">regex</span></td>
+            <td>The supplied regex pattern</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">include</span></td>
+            <td><span class="inline_code">.*&lt;value&gt;.*</span> (substring regex)</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">type</span> / <span class="inline_code">number</span> / <span class="inline_code">integer</span> / <span class="inline_code">decimal</span> / <span class="inline_code">boolean</span></td>
+            <td><span class="inline_code">.+</span> (any non-empty value)</td>
+        </tr>
+        <tr>
+            <td>Unrecognised / no rule</td>
+            <td>The concrete example value (exact match)</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Sensitive data redaction</h3>
+
+<p>The same redaction rules apply as for HAR and Postman imports: credential-bearing headers and common secret body fields are masked by default. Pass <span class="inline_code">?redactSensitiveData=false</span> to import values verbatim. See <a href="/mock_server/importing_expectations.html#import_redaction">Sensitive Data Redaction</a> for the full list of query parameters.</p>
+
+<button id="button_pact_import" class="accordion">import a Pact v3 contract as expectations</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact/import" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "headers": {"content-type": ["application/json"]}, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+  }'</code></pre>
+        <p>MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON:</p>
+        <pre class="prettyprint code"><code class="code">[ {
+  "id" : "get users",
+  "httpRequest" : {
+    "method" : "GET",
+    "path" : "/api/users"
+  },
+  "httpResponse" : {
+    "statusCode" : 200,
+    "headers" : {
+      "content-type" : [ "application/json" ]
+    },
+    "body" : "{\"users\":[]}"
+  }
+} ]</code></pre>
+    </div>
+</div>
 
 <a id="pact_export_endpoint" class="anchor" href="#pact_export_endpoint">&nbsp;</a>
 
@@ -218,11 +313,11 @@ sitemap:
 
 <h2>Full Consumer-Driven Contract Loop</h2>
 
-<p>With both export and verify, MockServer supports the complete consumer-driven contract testing loop:</p>
+<p>With import, export, and verify, MockServer supports the complete consumer-driven contract testing loop:</p>
 
 <ol>
     <li><strong>Consumer side</strong> — create expectations in MockServer and run consumer tests against them.</li>
     <li><strong>Export</strong> — call <span class="inline_code">PUT /mockserver/pact</span> to export the contract.</li>
-    <li><strong>Provider side</strong> — set up the provider's expectations in a separate MockServer instance and call <span class="inline_code">PUT /mockserver/pact/verify</span> with the exported contract to confirm the provider satisfies the consumer's expectations.</li>
+    <li><strong>Provider side</strong> — import the contract into a separate MockServer instance with <span class="inline_code">PUT /mockserver/pact/import</span> to stub the provider, or call <span class="inline_code">PUT /mockserver/pact/verify</span> to verify that existing provider expectations satisfy the contract.</li>
     <li><strong>Publish</strong> — optionally publish the contract to a Pact Broker for cross-team visibility.</li>
 </ol>

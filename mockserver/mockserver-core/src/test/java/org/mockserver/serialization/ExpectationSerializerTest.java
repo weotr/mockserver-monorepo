@@ -233,7 +233,7 @@ public class ExpectationSerializerTest {
             String message = throwable.getMessage();
             assertThat(message, containsString("incorrect expectation json format for:"));
             assertThat(message, containsString("schema validation errors:"));
-            assertThat(message, containsString("6 errors:"));
+            assertThat(message, containsString("7 errors:"));
             assertThat(message, containsString("$.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties"));
             assertThat(message, containsString("$.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties"));
             assertThat(message, containsString("oneOf of the following must be specified"));
@@ -349,7 +349,7 @@ public class ExpectationSerializerTest {
             assertThat(message, containsString("incorrect expectation json format for:"));
             assertThat(message.split("incorrect expectation json format for:", -1).length - 1, is(3));
             assertThat(message, containsString("schema validation errors:"));
-            assertThat(message, containsString("6 errors:"));
+            assertThat(message, containsString("7 errors:"));
             assertThat(message, containsString("$.httpRequest.extra_field: is not defined in the schema and the schema does not allow additional properties"));
             assertThat(message, containsString("$.httpResponse.extra_field: is not defined in the schema and the schema does not allow additional properties"));
             assertThat(message, containsString("oneOf of the following must be specified"));

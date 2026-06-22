@@ -1,6 +1,5 @@
 package org.mockserver.authentication.jwt;
 
-import com.nimbusds.jose.proc.BadJOSEException;
 import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.proc.BadJWTException;

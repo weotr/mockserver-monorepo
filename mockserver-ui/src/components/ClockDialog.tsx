@@ -3,6 +3,8 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
@@ -10,9 +12,11 @@ import Button from '@mui/material/Button';
 import TextField from '@mui/material/TextField';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
-import Alert from '@mui/material/Alert';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { getClock, freezeClock, advanceClock, resetClock, type ClockStatus } from '../lib/clock';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import { monospaceFontFamily } from '../theme';
+import HumanErrorAlert from './HumanErrorAlert';
 
 const UNIT_MS: Record<string, number> = { ms: 1, s: 1000, m: 60000, h: 3600000 };
 
@@ -25,8 +29,10 @@ export default function ClockDialog({
   onClose: () => void;
   connectionParams: ConnectionParams;
 }) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [status, setStatus] = useState<ClockStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
   const [busy, setBusy] = useState(false);
   const [amount, setAmount] = useState(1);
   const [unit, setUnit] = useState<'ms' | 's' | 'm' | 'h'>('m');
@@ -47,7 +53,7 @@ export default function ClockDialog({
         setStatus(next);
         setError(null);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(humanizeError(e));
       }
     }
     void load();
@@ -61,25 +67,30 @@ export default function ClockDialog({
       await fn();
       refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setBusy(false);
     }
   }, [refresh]);
 
+  const handleClose = useCallback(() => {
+    setError(null);
+    onClose();
+  }, [onClose]);
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Server clock</DialogTitle>
+    <Dialog open={open} onClose={handleClose} maxWidth="xs" fullWidth fullScreen={fullScreen} aria-labelledby="clock-dialog-title">
+      <DialogTitle id="clock-dialog-title">Server clock</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Freeze or advance the server clock to drive time-to-live expiry and scenario timers
           deterministically. Affects the whole server.
         </Typography>
-        {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+        {error && <HumanErrorAlert error={error} sx={{ mb: 1.5 }} />}
         {status && (
           <Box sx={{ mb: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{status.currentInstant || '—'}</Typography>
+              <Typography variant="body2" sx={{ fontFamily: monospaceFontFamily }}>{status.currentInstant || '—'}</Typography>
               <Chip size="small" label={status.frozen ? 'frozen' : 'live'} color={status.frozen ? 'warning' : 'success'} variant="outlined" />
             </Box>
           </Box>
@@ -112,7 +123,7 @@ export default function ClockDialog({
         </Typography>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={handleClose}>Close</Button>
       </DialogActions>
     </Dialog>
   );

@@ -1,0 +1,17 @@
+meta {
+  name: clears all expectations and recorded requests
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/mockserver/reset
+  body: none
+  auth: inherit
+}
+
+docs {
+  Clears all expectations and recorded requests.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

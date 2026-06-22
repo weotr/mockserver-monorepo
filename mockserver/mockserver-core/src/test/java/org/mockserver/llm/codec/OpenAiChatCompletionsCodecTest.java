@@ -220,4 +220,85 @@ public class OpenAiChatCompletionsCodecTest {
         assertThat(usage.get("completion_tokens").asInt(), is(0));
         assertThat(usage.get("total_tokens").asInt(), is(0));
     }
+
+    @Test
+    public void shouldForceToolCallsFinishReasonWhenToolChoiceRequired() throws Exception {
+        // given — tool_choice=required forces tool_calls even if a stop reason says otherwise
+        Completion completion = completion()
+            .withToolCall(toolUse("fn").withArguments("{}"))
+            .withStopReason("end_turn")
+            .withToolChoice("required");
+
+        // when
+        HttpResponse response = codec.encode(completion, "gpt-4o");
+
+        // then
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("choices").get(0).get("finish_reason").asText(), is("tool_calls"));
+    }
+
+    @Test
+    public void shouldForceToolCallsFinishReasonWhenToolChoiceRequiredInStreaming() throws Exception {
+        // given
+        Completion completion = completion()
+            .withText("ignored")
+            .withToolCall(toolUse("fn").withArguments("{}"))
+            .withStopReason("end_turn")
+            .withToolChoice("required");
+
+        // when
+        java.util.List<SseEvent> events = codec.encodeStreaming(completion, "gpt-4o", null);
+
+        // then — the final non-[DONE] chunk carries finish_reason tool_calls
+        String lastChunk = null;
+        for (SseEvent e : events) {
+            if (!"[DONE]".equals(e.getData())) {
+                lastChunk = e.getData();
+            }
+        }
+        JsonNode root = OBJECT_MAPPER.readTree(lastChunk);
+        assertThat(root.get("choices").get(0).get("finish_reason").asText(), is("tool_calls"));
+    }
+
+    @Test
+    public void shouldIgnoreToolChoiceRequiredWhenNoToolCalls() throws Exception {
+        // given — required but no tool call configured: behaviour unchanged (stop)
+        Completion completion = completion().withText("hi").withToolChoice("required");
+
+        // when
+        HttpResponse response = codec.encode(completion, "gpt-4o");
+
+        // then
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("choices").get(0).get("finish_reason").asText(), is("stop"));
+    }
+
+    @Test
+    public void shouldLeaveFinishReasonUnchangedWhenToolChoiceAbsent() throws Exception {
+        // given — back-compat: no tool_choice, a stop reason is honoured as before
+        Completion completion = completion()
+            .withToolCall(toolUse("fn").withArguments("{}"))
+            .withStopReason("end_turn");
+
+        // when
+        HttpResponse response = codec.encode(completion, "gpt-4o");
+
+        // then — "end_turn" maps to "stop", unchanged from prior behaviour
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("choices").get(0).get("finish_reason").asText(), is("stop"));
+    }
+
+    @Test
+    public void shouldDefaultToToolCallsFinishReasonWhenToolCallsPresentAndNoStopReasonOrToolChoice() throws Exception {
+        // given — back-compat: tool calls present, no stopReason, no toolChoice
+        Completion completion = completion()
+            .withToolCall(toolUse("fn").withArguments("{}"));
+
+        // when
+        HttpResponse response = codec.encode(completion, "gpt-4o");
+
+        // then — defaults to tool_calls exactly as before this change
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("choices").get(0).get("finish_reason").asText(), is("tool_calls"));
+    }
 }

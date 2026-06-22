@@ -2,6 +2,7 @@
 name: review-cheap
 description: Intermediate deep reviewer for quality loops — non-authoritative PASS. Spawn this agent as a cost-effective first-pass review before escalating to review-final. Its PASS verdict is not binding.
 model: claude-sonnet-4-6
+effort: medium
 tools:
   - Read
   - Bash

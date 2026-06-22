@@ -3,7 +3,6 @@ package org.mockserver.serialization.model;
 import org.mockserver.model.ParameterBody;
 import org.mockserver.model.Parameters;
 
-import java.util.Objects;
 
 /**
  * @author jamesdbloom

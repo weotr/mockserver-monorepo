@@ -87,8 +87,15 @@ classDiagram
         +headers: Headers
         +cookies: Cookies
         +connectionOptions: ConnectionOptions
+        +recoverAfter: RecoverAfter
         +timing: Timing
     }
+    class RecoverAfter {
+        +failTimes: Integer
+        +failResponse: HttpResponse
+        +idempotencyHeader: String
+    }
+    HttpResponse --> RecoverAfter : optional
     class HttpForward {
         +host: String
         +port: Integer
@@ -356,6 +363,41 @@ GraphQLBody.graphQL("query GetUser { user profile }")
 | `closeSocket` | Boolean | Force close (true) or keep open (false) the socket after responding |
 | `closeSocketDelay` | Delay | Delay before closing the socket (ignored if socket is not being closed) |
 
+### RecoverAfter (Retry/Backoff Recovery)
+
+`RecoverAfter` is an optional, nullable field on `HttpResponse` (`org.mockserver.model.RecoverAfter`) that makes a mocked response "fail N times then succeed" — a deterministic recovery primitive for testing a client's retry/backoff logic against a transiently-failing dependency. It is a response-level value object (not a chaos field and not a new action type), so a response without a `recoverAfter` clause behaves and serializes byte-for-byte as before.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `failTimes` | Integer | K — the number of leading attempts that serve the failure response. `null` or `<= 0` makes the primitive inert (the configured response is served unchanged) |
+| `failResponse` | HttpResponse | Optional failure response. When omitted, a default `503 Service Unavailable` is served for the failing attempts |
+| `idempotencyHeader` | String | Optional request header whose value scopes an independent failure window (see below) |
+
+Counting is 1-based over attempt `n`: attempts `1..failTimes` serve the failure response; attempt `failTimes + 1` and beyond serve the configured success response. So `failTimes = K` yields exactly K failures followed by success.
+
+**Counter source.** By default the counter is per-expectation, taken from the expectation's match count (`capturedMatchCount`) — so no extra state is held. When `idempotencyHeader` is set and present on the request, the counter is instead keyed per `(expectationId, header-value)` in the node-local `RecoveryAttemptRegistry` (`org.mockserver.mock.action.http.RecoveryAttemptRegistry`), so each distinct idempotency key gets its own `1..K` window while requests sharing a key share one window. If the header is configured but absent on a request, that request falls back to the per-expectation count. The keyed registry is touched only on the keyed path; the default path adds zero new state or overhead. The registry is **bounded** (a synchronized access-ordered `LinkedHashMap` capped at 10,000 keys, mirroring `DnsIntentRegistry`) so client-supplied idempotency keys — typically fresh UUIDs — cannot exhaust the heap; once full, the least-recently-used key is evicted and a subsequent request under that key restarts its failure window at attempt 1 (matching `reset()` semantics). The composite key uses a NUL separator (`expectationId + NUL + keyValue`) so a client-settable expectation id containing a space cannot collide with another `(id, key)` pair. The registry is node-local in v1 (clustering deferred) and is cleared by `HttpState.reset()`.
+
+**Independence from `Times`.** Recovery counting is independent of `Times`: a failing attempt still matches the expectation but does not consume an extra `Times` use, so the expectation keeps matching across the whole failure window. For example `Times.exactly(5)` with `failTimes = 2` yields `503, 503, 200, 200, 200` over five matches.
+
+**Relationship to chaos `succeedFirst`/`failRequestCount`.** `HttpChaosProfile`'s `succeedFirst`/`failRequestCount` define a count-window over which *probabilistic* faults are injected. `RecoverAfter` is the simpler, deterministic, response-level "fail-then-succeed" with optional idempotency-key scoping, expressed directly on the response action. v1 covers RESPONSE actions only (FORWARD-action support is deferred).
+
+Example JSON (default 503 for the first 3 attempts, then the configured 200):
+
+```json
+{ "httpResponse": { "statusCode": 200, "body": "ok", "recoverAfter": { "failTimes": 3 } } }
+```
+
+Example with an explicit failure response and idempotency-key scoping:
+
+```json
+{ "httpResponse": { "statusCode": 200, "body": "ok",
+  "recoverAfter": {
+    "failTimes": 3,
+    "failResponse": { "statusCode": 503, "headers": { "Retry-After": ["1"] } },
+    "idempotencyHeader": "Idempotency-Key"
+  } } }
+```
+
 ### Timing (Forward Response Metadata)
 
 `Timing` captures latency metrics when MockServer forwards a request:
@@ -417,6 +459,12 @@ Expectation.when(request)      // RequestDefinition
 
 Scenario fields are optional. When `scenarioName` and `scenarioState` are set, the expectation only matches when the named scenario is in the required state. After matching, the scenario transitions to `newScenarioState` (if set). All scenarios start in the `"Started"` state. State is managed by `ScenarioManager` in `RequestMatchers`.
 
+#### Rate Limit (`rateLimit`)
+
+`Expectation.rateLimit` (a `RateLimit`, `org.mockserver.model`) is an optional, nullable clause — a sibling of `chaos` — that declaratively rate-limits the matched expectation. It follows the same model field / `withX` / getter convention as `HttpChaosProfile` (plain Jackson bean, no custom serializer) and round-trips through `RateLimitDTO` (`org.mockserver.serialization.model`), wired into `ExpectationDTO` exactly like `chaos` (nullable field, null-guarded copy in the constructor, `withRateLimit(...)` in `buildObject()`). An expectation **without** a `rateLimit` clause serializes and behaves byte-for-byte identically to before (the field is omitted from JSON, the response is untouched).
+
+`RateLimit` fields: `name` (shared counter key; `null` ⇒ the expectation id is used), `algorithm` (`FIXED_WINDOW` default, or `TOKEN_BUCKET`; serialized as a lowercase string), `limit` + `windowMillis` (fixed-window, each `>= 1`), `burst` + `refillPerSecond` (token-bucket, `>= 1` and `> 0`), `errorStatus` (default `429`), and `retryAfter` (literal `Retry-After` override, else computed). The `withX` setters carry the same `>= 1` / range guards as `HttpChaosProfile.withQuotaLimit`. Counting is backed by the node-local `RateLimitRegistry` (`org.mockserver.ratelimit`) and the over-limit response is produced in the write path — see [docs/code/request-processing.md](request-processing.md).
+
 #### Timed and Triggered Scenario Flows
 
 Beyond expectation-driven transitions, scenarios support timed auto-transitions and external triggers via REST endpoints:
@@ -437,7 +485,7 @@ These endpoints are handled in `HttpState.handleScenarioPut()`, `HttpState.handl
 
 #### Sequential/Cycling Responses (`httpResponses`)
 
-An expectation can return multiple responses by setting `httpResponses` (a `List<HttpResponse>`) instead of `httpResponse`. Each match returns the next response, cycling back to the first after the last. The `responseMode` field (`ResponseMode.SEQUENTIAL` or `ResponseMode.RANDOM`) controls selection. Sequential mode uses `(matchCount - 1) % size` because `matchCount` is incremented in `consumeMatch()` before `getPrimaryAction()` is called.
+An expectation can return multiple responses by setting `httpResponses` (a `List<HttpResponse>`) instead of `httpResponse`. Each match returns the next response, cycling back to the first after the last. The `responseMode` field (`ResponseMode.SEQUENTIAL`, `ResponseMode.RANDOM`, or `ResponseMode.WEIGHTED`) controls selection. Sequential mode uses `(matchCount - 1) % size` because `matchCount` is incremented in `consumeMatch()` before `getPrimaryAction()` is called. `WEIGHTED` mode selects probabilistically using the index-aligned `responseWeights` list (`List<Integer>`); a missing or non-positive weight defaults to `1`, and a non-positive total falls back to uniform random.
 
 #### Before & After Actions (`beforeActions` / `afterActions`)
 
@@ -751,7 +799,57 @@ Schema → example values"]
     EB --> RESP[Example HttpResponse]
 ```
 
-`OpenAPIConverter` creates one `Expectation` per operation, with an `OpenAPIDefinition` matcher and an example `HttpResponse` built from the spec's response schemas, headers, and examples.
+`OpenAPIConverter` creates one `Expectation` per operation, with an `OpenAPIDefinition` matcher and an example `HttpResponse` built from the spec's response schemas, headers, and examples. Both path operations and webhook operations (OAS 3.1 `webhooks` top-level key) are included.
+
+### OpenAPI 3.1 Support
+
+MockServer fully supports OpenAPI 3.1 specifications. The swagger-parser library (2.1.x with swagger-models 2.2.x) handles both 3.0.x and 3.1 specs transparently. Three 3.1-specific constructs are explicitly handled:
+
+| Construct | How it works |
+|-----------|-------------|
+| `type` as array (`type: [string, "null"]`) | `ExampleBuilder` detects `Schema.getTypes()` (the OAS 3.1 type set) when no typed subclass matches, extracts the primary non-null type, and generates the correct example value. `alreadyProcessedRefExample` also resolves types from the set. |
+| `$ref` siblings | Handled by the swagger-parser with `resolveFully(true)` -- sibling properties (e.g. `description` alongside `$ref`) are preserved in the resolved model. |
+| `webhooks` top-level key | `OpenAPIParser.addMissingOperationIds()`, `OpenAPIConverter.buildExpectations()`, `OpenAPISerialiser.retrieveOperation(s)()`, and both validators iterate `openAPI.getWebhooks()` alongside `openAPI.getPaths()`. |
+
+### Realistic Example Values (`generateRealisticExampleValues`)
+
+By default `ExampleBuilder` produces generic placeholder values (`"string"`, `0`, `true`). When the `generateRealisticExampleValues` configuration property is set to `true`, `ExampleBuilder` constructs a `SampleDataGenerator` instance and delegates format-aware value generation to it. `SampleDataGenerator` (`mockserver-core/.../openapi/examples/SampleDataGenerator.java`) uses [Datafaker](https://www.datafaker.net/) with a fixed seed (`42L`) so every run produces the same output — generated examples are deterministic and safe to commit as fixtures.
+
+Coverage by schema format:
+
+| Format | Generated value |
+|--------|----------------|
+| `email` | `faker.internet().emailAddress()` |
+| `uuid` | Seeded UUID v4 |
+| `date` | ISO-8601 date (e.g. `2022-07-14`) |
+| `date-time` | ISO-8601 offset date-time (UTC) |
+| `time` | `HH:mm:ss` (e.g. `14:32:07`) |
+| `uri` / `url` | `faker.internet().url()` |
+| `hostname` | `faker.internet().domainName()` |
+| `ipv4` / `ipv6` | `faker.internet().ipV4Address()` / `ipV6Address()` |
+| `password` | Mixed-case alphanumeric 8–16 chars |
+| `byte` | Base64-encoded 12 random bytes |
+| `string` (no format) | `faker.lorem().word()`, respecting `minLength`/`maxLength` |
+| `integer` / `int32` | Random int within `minimum`/`maximum` (default 0–1000) |
+| `int64` | Random long within bounds (default 0–10 000) |
+| `float` / `number` | Random float/double/decimal within bounds (2 decimal places) |
+| `boolean` | `random.nextBoolean()` |
+
+This feature is off by default (`generateRealisticExampleValues=false`). Enabling it affects all paths that call `ExampleBuilder`: `PUT /mockserver/openapi`, `initializationOpenAPIPath`, the `run_contract_test` and `run_resiliency_test` MCP tools, and `OpenApiContractTest` used by WSDL-generated callbacks.
+
+### JSON-Schema constraints honoured during generation
+
+Independently of the `generateRealisticExampleValues` flag, `ExampleBuilder` honours several additional JSON-Schema constraints so generated examples are less likely to fail a consumer's own validators. These apply in both the default (placeholder) and realistic modes:
+
+| Constraint | Behaviour |
+|------------|-----------|
+| `minItems` / `maxItems` (arrays) | Emits `minItems` items (clamped to a small cap of 5) instead of always a single element; `maxItems` below 1 yields an empty array. Default is still 1 item when neither is set. |
+| `pattern` (strings) | Generates a value matching the regex via Datafaker's seeded `regexify` (e.g. SKUs, phone numbers). An unsupported/invalid regex falls back to the previous behaviour rather than failing. This runs even with the flag off, using a deterministic generator. |
+| `exclusiveMinimum` / `exclusiveMaximum` (numbers) | The generated number sits strictly inside the open bound. Both the OpenAPI 3.0 boolean-flag form (paired with `minimum`/`maximum`) and the 3.1 numeric form (`exclusiveMinimumValue`/`exclusiveMaximumValue`) are supported. |
+| `time` format (strings) | Produces a valid `HH:mm:ss` example. |
+| `minProperties` (free-form / `additionalProperties` objects) | Emits at least that many entries (clamped to a cap of 10). |
+
+Unconstrained schemas are unaffected — there is no behaviour change when none of these constraints are present.
 
 ## Configuration
 

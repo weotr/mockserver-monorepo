@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -322,6 +323,66 @@ func TestClient_Verify_URL(t *testing.T) {
 	}
 }
 
+func TestClient_RetrieveExpectationsAsCode_URLAndFormat(t *testing.T) {
+	var receivedPath string
+	var receivedQuery string
+	generated := "new MockServerClient().when(request().withPath(\"/hello\"));"
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+		w.Write([]byte(generated))
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	code, err := client.RetrieveExpectationsAsCode(nil, FormatJava)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code != generated {
+		t.Errorf("expected generated code %q, got %q", generated, code)
+	}
+	if receivedPath != "/mockserver/retrieve" {
+		t.Errorf("expected path /mockserver/retrieve, got %s", receivedPath)
+	}
+	if !strings.Contains(receivedQuery, "type=active_expectations") {
+		t.Errorf("expected type=active_expectations in query, got %s", receivedQuery)
+	}
+	if !strings.Contains(receivedQuery, "format=java") {
+		t.Errorf("expected format=java in query, got %s", receivedQuery)
+	}
+}
+
+func TestClient_RetrieveRecordedExpectationsAsCode_URLAndFormat(t *testing.T) {
+	var receivedQuery string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQuery = r.URL.RawQuery
+		w.WriteHeader(200)
+		w.Write([]byte("# generated python"))
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	code, err := client.RetrieveRecordedExpectationsAsCode(Request().Path("/hello"), FormatPython)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code != "# generated python" {
+		t.Errorf("unexpected generated code %q", code)
+	}
+	if !strings.Contains(receivedQuery, "type=recorded_expectations") {
+		t.Errorf("expected type=recorded_expectations in query, got %s", receivedQuery)
+	}
+	if !strings.Contains(receivedQuery, "format=python") {
+		t.Errorf("expected format=python in query, got %s", receivedQuery)
+	}
+}
+
 func TestClient_Verify_406ReturnsError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(406)
@@ -364,6 +425,307 @@ func TestClient_VerifySequence_URL(t *testing.T) {
 
 	if receivedPath != "/mockserver/verifySequence" {
 		t.Errorf("expected path /mockserver/verifySequence, got %s", receivedPath)
+	}
+}
+
+// --- Response Verification Tests ---
+
+func TestVerification_WithResponse_JSON(t *testing.T) {
+	req := Request().Method("GET").Path("/api").Build()
+	resp := Response().StatusCode(200).Build()
+	v := verification{
+		HttpRequest:  &req,
+		HttpResponse: &resp,
+		Times:        AtLeast(1),
+	}
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	if m["httpRequest"] == nil {
+		t.Error("expected httpRequest in JSON")
+	}
+	if m["httpResponse"] == nil {
+		t.Error("expected httpResponse in JSON")
+	}
+	httpResp := m["httpResponse"].(map[string]interface{})
+	if httpResp["statusCode"] != float64(200) {
+		t.Errorf("expected statusCode 200, got %v", httpResp["statusCode"])
+	}
+}
+
+func TestVerification_ResponseOnly_JSON(t *testing.T) {
+	resp := Response().StatusCode(404).Build()
+	v := verification{
+		HttpResponse: &resp,
+		Times:        AtLeast(1),
+	}
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := m["httpRequest"]; ok {
+		t.Error("expected httpRequest to be omitted")
+	}
+	if m["httpResponse"] == nil {
+		t.Error("expected httpResponse in JSON")
+	}
+}
+
+func TestVerificationSequence_WithResponses_JSON(t *testing.T) {
+	r1 := Request().Path("/first").Build()
+	r2 := Request().Path("/second").Build()
+	resp1 := Response().StatusCode(200).Build()
+	resp2 := Response().StatusCode(201).Build()
+	vs := verificationSequence{
+		HttpRequests:  []HttpRequest{r1, r2},
+		HttpResponses: []HttpResponse{resp1, resp2},
+	}
+
+	data, err := json.Marshal(vs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	reqs := m["httpRequests"].([]interface{})
+	if len(reqs) != 2 {
+		t.Errorf("expected 2 requests, got %d", len(reqs))
+	}
+	resps := m["httpResponses"].([]interface{})
+	if len(resps) != 2 {
+		t.Errorf("expected 2 responses, got %d", len(resps))
+	}
+}
+
+func TestVerificationSequence_NoResponses_OmitsField(t *testing.T) {
+	r1 := Request().Path("/first").Build()
+	vs := verificationSequence{
+		HttpRequests: []HttpRequest{r1},
+	}
+
+	data, err := json.Marshal(vs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := m["httpResponses"]; ok {
+		t.Error("expected httpResponses to be omitted when nil")
+	}
+}
+
+func TestClient_VerifyResponse_URLAndBody(t *testing.T) {
+	var receivedPath string
+	var receivedBody []byte
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(202)
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	err := client.VerifyResponse(
+		Request().Method("GET").Path("/api"),
+		Response().StatusCode(200),
+		AtLeast(1),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if receivedPath != "/mockserver/verify" {
+		t.Errorf("expected path /mockserver/verify, got %s", receivedPath)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(receivedBody, &m); err != nil {
+		t.Fatalf("body is not valid JSON: %s", err)
+	}
+
+	if m["httpRequest"] == nil {
+		t.Error("expected httpRequest in body")
+	}
+	if m["httpResponse"] == nil {
+		t.Error("expected httpResponse in body")
+	}
+	httpResp := m["httpResponse"].(map[string]interface{})
+	if httpResp["statusCode"] != float64(200) {
+		t.Errorf("expected statusCode 200, got %v", httpResp["statusCode"])
+	}
+}
+
+func TestClient_VerifyResponse_ResponseOnly(t *testing.T) {
+	var receivedBody []byte
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(202)
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	err := client.VerifyResponse(nil, Response().StatusCode(500), AtLeast(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(receivedBody, &m); err != nil {
+		t.Fatalf("body is not valid JSON: %s", err)
+	}
+
+	if _, ok := m["httpRequest"]; ok {
+		t.Error("expected httpRequest to be absent for response-only verification")
+	}
+	if m["httpResponse"] == nil {
+		t.Error("expected httpResponse in body")
+	}
+}
+
+func TestClient_VerifyResponse_406ReturnsError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(406)
+		w.Write([]byte("Response not found"))
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	err := client.VerifyResponse(
+		Request().Path("/missing"),
+		Response().StatusCode(200),
+		AtLeast(1),
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	verErr, ok := err.(*VerificationError)
+	if !ok {
+		t.Fatalf("expected *VerificationError, got %T: %v", err, err)
+	}
+	if verErr.Message != "Response not found" {
+		t.Errorf("unexpected message: %s", verErr.Message)
+	}
+}
+
+func TestClient_VerifyResponseSequence_URLAndBody(t *testing.T) {
+	var receivedPath string
+	var receivedBody []byte
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(202)
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	err := client.VerifyResponseSequence(
+		[]*RequestBuilder{Request().Path("/first"), Request().Path("/second")},
+		[]*ResponseBuilder{Response().StatusCode(200), Response().StatusCode(201)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if receivedPath != "/mockserver/verifySequence" {
+		t.Errorf("expected path /mockserver/verifySequence, got %s", receivedPath)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(receivedBody, &m); err != nil {
+		t.Fatalf("body is not valid JSON: %s", err)
+	}
+
+	reqs := m["httpRequests"].([]interface{})
+	if len(reqs) != 2 {
+		t.Errorf("expected 2 requests, got %d", len(reqs))
+	}
+	resps := m["httpResponses"].([]interface{})
+	if len(resps) != 2 {
+		t.Errorf("expected 2 responses, got %d", len(resps))
+	}
+}
+
+func TestClient_VerifyResponseSequence_406ReturnsError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(406)
+		w.Write([]byte("Sequence not found"))
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	err := client.VerifyResponseSequence(
+		[]*RequestBuilder{Request().Path("/first")},
+		[]*ResponseBuilder{Response().StatusCode(200)},
+	)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	verErr, ok := err.(*VerificationError)
+	if !ok {
+		t.Fatalf("expected *VerificationError, got %T: %v", err, err)
+	}
+	if verErr.Message != "Sequence not found" {
+		t.Errorf("unexpected message: %s", verErr.Message)
+	}
+}
+
+func TestClient_VerifyResponse_WithResponseHeaders(t *testing.T) {
+	var receivedBody []byte
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(202)
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	err := client.VerifyResponse(
+		Request().Path("/api"),
+		Response().StatusCode(200).Header("Content-Type", "application/json"),
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(receivedBody, &m); err != nil {
+		t.Fatalf("body is not valid JSON: %s", err)
+	}
+
+	httpResp := m["httpResponse"].(map[string]interface{})
+	headers := httpResp["headers"].(map[string]interface{})
+	ct := headers["Content-Type"].([]interface{})
+	if len(ct) != 1 || ct[0] != "application/json" {
+		t.Errorf("expected Content-Type header, got %v", ct)
 	}
 }
 

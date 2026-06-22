@@ -3,10 +3,20 @@ package org.mockserver.serialization.model;
 import com.google.common.collect.ImmutableMap;
 import org.junit.Test;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.model.Delay;
 import org.slf4j.event.Level;
 
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -83,6 +93,22 @@ public class ConfigurationDTOTest {
         assertThat(rebuilt.enableCORSForAPI(), is(original.enableCORSForAPI()));
         assertThat(rebuilt.validateProxyOpenAPISpec(), is(original.validateProxyOpenAPISpec()));
         assertThat(rebuilt.validateProxyEnforce(), is(original.validateProxyEnforce()));
+    }
+
+    @Test
+    public void shouldRoundTripLoadGenerationMetricLabelsThroughJson() {
+        // a List<String> property must survive a full serialize -> JSON -> deserialize cycle as a JSON array
+        Configuration original = configuration()
+            .loadGenerationMetricLabels(Arrays.asList("scenario", "region", "tier"));
+
+        String json = new org.mockserver.serialization.ConfigurationSerializer(new org.mockserver.logging.MockServerLogger())
+            .serialize(original);
+        assertThat(json, containsString("loadGenerationMetricLabels"));
+
+        Configuration rebuilt = new org.mockserver.serialization.ConfigurationSerializer(new org.mockserver.logging.MockServerLogger())
+            .deserialize(json);
+
+        assertThat(rebuilt.loadGenerationMetricLabels(), is(Arrays.asList("scenario", "region", "tier")));
     }
 
     @Test(expected = IllegalArgumentException.class)
@@ -262,37 +288,325 @@ public class ConfigurationDTOTest {
     }
 
     @Test
-    public void shouldRoundTripBreakpointResponseEnabled() {
+    public void shouldRoundTripBreakpointTimeoutAndMaxHeld() {
         Configuration original = configuration()
-            .breakpointEnabled(true)
-            .breakpointResponseEnabled(true)
             .breakpointTimeoutMillis(5000L)
             .breakpointMaxHeld(10);
 
         ConfigurationDTO dto = new ConfigurationDTO(original);
-        assertThat(dto.getBreakpointEnabled(), is(true));
-        assertThat(dto.getBreakpointResponseEnabled(), is(true));
         assertThat(dto.getBreakpointTimeoutMillis(), is(5000L));
         assertThat(dto.getBreakpointMaxHeld(), is(10));
 
         Configuration rebuilt = dto.buildObject();
-        assertThat(rebuilt.breakpointEnabled(), is(true));
-        assertThat(rebuilt.breakpointResponseEnabled(), is(true));
         assertThat(rebuilt.breakpointTimeoutMillis(), is(5000L));
         assertThat(rebuilt.breakpointMaxHeld(), is(10));
     }
 
-    @Test
-    public void shouldApplyBreakpointResponseEnabledPartially() {
-        Configuration target = configuration()
-            .breakpointEnabled(false)
-            .breakpointResponseEnabled(false);
+    // ---------------------------------------------------------------------------------------------
+    // Reflection-driven drift guard.
+    //
+    // ConfigurationDTO hand-mirrors every Configuration property in four places (field,
+    // copy-constructor, buildObject(), applyTo()). Missing a property in any of these silently drops
+    // config on a /mockserver/configuration round-trip. This test reflects over every Configuration
+    // property that has both a no-arg getter and a single-argument fluent setter, assigns it a
+    // distinctive NON-DEFAULT value, round-trips the Configuration through
+    //   new ConfigurationDTO(config).buildObject()
+    // and asserts every covered property survives. A NEW Configuration property that is not mirrored
+    // in the DTO will therefore fail this test automatically.
+    //
+    // A small, explicitly-documented set of properties is excluded because they are deliberately not
+    // part of the serialized configuration DTO surface (runtime callbacks, internal volatile flags,
+    // runtime-mutated proxy targets, and complex/aggregate types not carried by the DTO).
+    // ---------------------------------------------------------------------------------------------
 
-        ConfigurationDTO dto = new ConfigurationDTO();
-        dto.setBreakpointResponseEnabled(true);
+    /**
+     * Properties that intentionally do NOT round-trip through ConfigurationDTO. Each is excluded for
+     * a concrete reason (not a convenience to make the test pass):
+     * <ul>
+     *   <li>{@code logEventListener}, {@code binaryProxyListener} — runtime callback objects, not
+     *       JSON-serializable config.</li>
+     *   <li>{@code rebuildTLSContext}, {@code rebuildServerTLSContext} — internal volatile primitive
+     *       flags driving TLS re-initialisation, not user configuration.</li>
+     *   <li>{@code proxyRemoteHost}, {@code proxyRemotePort} — runtime record-and-forward target set
+     *       via the retrieve {@code ?forwardUnmatchedTo=} convenience, not part of the config DTO.</li>
+     *   <li>{@code proxyPassMappings} — {@code List<ProxyPassMapping>} aggregate not carried by the DTO.</li>
+     *   <li>{@code controlPlaneScopeMapping} — {@code Map<String, ControlPlaneRole>} aggregate not
+     *       carried by the DTO.</li>
+     * </ul>
+     * If you add one of these to the DTO, remove it from this set so the guard starts enforcing it.
+     */
+    private static final Set<String> DTO_EXCLUDED_PROPERTIES = new HashSet<>(Arrays.asList(
+        "logEventListener",
+        "binaryProxyListener",
+        "rebuildTLSContext",
+        "rebuildServerTLSContext",
+        "proxyRemoteHost",
+        "proxyRemotePort",
+        "proxyPassMappings",
+        "controlPlaneScopeMapping"
+    ));
+
+    @Test
+    public void shouldRoundTripEveryMirroredConfigurationPropertyThroughDTO() throws Exception {
+        Configuration defaults = configuration();
+        Configuration original = configuration();
+        List<PropertyAccessor> accessors = discoverProperties();
+        List<String> covered = new ArrayList<>();
+        AtomicInteger counter = new AtomicInteger(1);
+
+        // assign a distinctive non-default value to every mirrored property
+        for (PropertyAccessor accessor : accessors) {
+            Object value = distinctiveValueFor(accessor, counter, accessor.getter.invoke(defaults));
+            accessor.setter.invoke(original, value);
+            covered.add(accessor.name);
+        }
+
+        // sanity: the guard must actually be exercising a large, representative property set, so a
+        // regression that silently stops discovering properties does not pass vacuously
+        assertThat("reflection-driven drift guard should cover a large property set",
+            covered.size(), greaterThan(100));
+
+        // round-trip through the DTO exactly as the /mockserver/configuration control plane does
+        ConfigurationDTO dto = new ConfigurationDTO(original);
+        Configuration rebuilt = dto.buildObject();
+
+        // every covered property must survive the round-trip
+        List<String> dropped = new ArrayList<>();
+        for (PropertyAccessor accessor : accessors) {
+            Object before = accessor.getter.invoke(original);
+            Object after = accessor.getter.invoke(rebuilt);
+            if (!equalsForRoundTrip(before, after)) {
+                dropped.add(accessor.name + " (expected <" + before + "> but DTO round-trip produced <" + after + ">)");
+            }
+        }
+
+        assertThat("Configuration properties dropped by ConfigurationDTO round-trip — they are missing "
+                + "from the DTO field/constructor/buildObject (add them, or add to DTO_EXCLUDED_PROPERTIES "
+                + "with a documented reason if intentionally not part of the serialized config): " + dropped,
+            dropped, is(empty()));
+    }
+
+    @Test
+    public void shouldApplyEveryMirroredConfigurationPropertyToTarget() throws Exception {
+        // a fully-populated source DTO applied onto a fresh target must transfer every covered
+        // property (guards the applyTo() mirror specifically — buildObject() is covered above)
+        Configuration defaults = configuration();
+        Configuration source = configuration();
+        List<PropertyAccessor> accessors = discoverProperties();
+        AtomicInteger counter = new AtomicInteger(1000);
+        for (PropertyAccessor accessor : accessors) {
+            accessor.setter.invoke(source, distinctiveValueFor(accessor, counter, accessor.getter.invoke(defaults)));
+        }
+
+        ConfigurationDTO dto = new ConfigurationDTO(source);
+        Configuration target = configuration();
         dto.applyTo(target);
 
-        assertThat("breakpointEnabled should be unchanged", target.breakpointEnabled(), is(false));
-        assertThat("breakpointResponseEnabled should be updated", target.breakpointResponseEnabled(), is(true));
+        List<String> dropped = new ArrayList<>();
+        for (PropertyAccessor accessor : accessors) {
+            Object expected = accessor.getter.invoke(source);
+            Object actual = accessor.getter.invoke(target);
+            if (!equalsForRoundTrip(expected, actual)) {
+                dropped.add(accessor.name + " (expected <" + expected + "> but applyTo() produced <" + actual + ">)");
+            }
+        }
+
+        assertThat("Configuration properties not transferred by ConfigurationDTO.applyTo() — they are "
+                + "missing from the applyTo() mirror (or DTO_EXCLUDED_PROPERTIES): " + dropped,
+            dropped, is(empty()));
+    }
+
+    private static final class PropertyAccessor {
+        final String name;
+        final Method getter;
+        final Method setter;
+        final Class<?> type;
+
+        PropertyAccessor(String name, Method getter, Method setter, Class<?> type) {
+            this.name = name;
+            this.getter = getter;
+            this.setter = setter;
+            this.type = type;
+        }
+    }
+
+    /**
+     * Discover every Configuration property exposed as a no-arg getter {@code T name()} paired with a
+     * single-argument fluent setter {@code Configuration name(T)}, minus the documented exclusions.
+     */
+    private static List<PropertyAccessor> discoverProperties() {
+        Method[] methods = Configuration.class.getDeclaredMethods();
+        // index single-arg setters that return Configuration, grouped by name (a property may have
+        // overloaded setters, e.g. logLevel(Level) and logLevel(String) — keep all and pick the one
+        // whose parameter type matches the getter return type)
+        java.util.Map<String, List<Method>> setters = new java.util.HashMap<>();
+        for (Method m : methods) {
+            if (m.getParameterCount() == 1
+                && m.getReturnType().equals(Configuration.class)
+                && !m.isSynthetic()) {
+                setters.computeIfAbsent(m.getName(), k -> new ArrayList<>()).add(m);
+            }
+        }
+        List<PropertyAccessor> accessors = new ArrayList<>();
+        Set<String> seen = new TreeSet<>();
+        for (Method getter : methods) {
+            if (getter.getParameterCount() != 0 || getter.isSynthetic()) {
+                continue;
+            }
+            String name = getter.getName();
+            if (DTO_EXCLUDED_PROPERTIES.contains(name) || seen.contains(name)) {
+                continue;
+            }
+            Class<?> getterType = getter.getReturnType();
+            if (getterType.equals(void.class)) {
+                continue;
+            }
+            List<Method> candidateSetters = setters.get(name);
+            if (candidateSetters == null) {
+                continue;
+            }
+            // prefer the setter whose parameter type matches the getter return type (boxing aside)
+            Method setter = null;
+            for (Method candidate : candidateSetters) {
+                if (compatible(getterType, candidate.getParameterTypes()[0])) {
+                    setter = candidate;
+                    break;
+                }
+            }
+            if (setter == null) {
+                continue;
+            }
+            seen.add(name);
+            accessors.add(new PropertyAccessor(name, getter, setter, setter.getParameterTypes()[0]));
+        }
+        return accessors;
+    }
+
+    private static boolean compatible(Class<?> getterType, Class<?> setterType) {
+        return box(getterType).equals(box(setterType));
+    }
+
+    private static Class<?> box(Class<?> type) {
+        if (type.equals(boolean.class)) return Boolean.class;
+        if (type.equals(int.class)) return Integer.class;
+        if (type.equals(long.class)) return Long.class;
+        if (type.equals(double.class)) return Double.class;
+        if (type.equals(float.class)) return Float.class;
+        if (type.equals(short.class)) return Short.class;
+        if (type.equals(byte.class)) return Byte.class;
+        return type;
+    }
+
+    /**
+     * Produce a distinctive, valid, non-default value for the given property. A few properties have
+     * value constraints (validated in ConfigurationDTO.buildObject()/applyTo() or by enum parsing),
+     * so they are special-cased; everything else gets a type-driven distinctive value.
+     */
+    private static Object distinctiveValueFor(PropertyAccessor accessor, AtomicInteger counter, Object defaultValue) {
+        String name = accessor.name;
+        Class<?> type = box(accessor.type);
+
+        // --- value-constrained properties (must be special-cased to satisfy validation/enums) ---
+        switch (name) {
+            case "logLevel":
+                // setter accepts Level; pick a non-default level
+                return Level.TRACE;
+            case "forwardProxyTLSX509CertificatesTrustManagerType":
+                // setter accepts the enum; round-trips via name()
+                return org.mockserver.socket.tls.ForwardProxyTLSX509CertificatesTrustManager.CUSTOM;
+            case "forwardHttpProxy":
+                return java.net.InetSocketAddress.createUnresolved("http-proxy.example", 8081);
+            case "forwardHttpsProxy":
+                return java.net.InetSocketAddress.createUnresolved("https-proxy.example", 8082);
+            case "forwardSocksProxy":
+                return java.net.InetSocketAddress.createUnresolved("socks-proxy.example", 1080);
+            case "connectionDelay":
+                return Delay.milliseconds(1234);
+            case "maxExpectations":
+                return 4242;            // validated 0..100000
+            case "maxLogEntries":
+                return 424242;          // validated 0..1000000
+            case "maxWebSocketExpectations":
+                return 4243;            // validated 0..100000
+            case "driftAlertSeverityThreshold":
+                return "WARNING";       // a valid severity name
+            // file-path properties whose setter calls fileExists(...) — must point at a real file
+            case "controlPlaneTLSMutualAuthenticationCAChain":
+            case "controlPlanePrivateKeyPath":
+            case "controlPlaneX509CertificatePath":
+            case "tlsMutualAuthenticationCertificateChain":
+            case "forwardProxyTLSCustomTrustX509Certificates":
+            case "forwardProxyPrivateKey":
+            case "forwardProxyCertificateChain":
+                return existingFilePath();
+            default:
+                break;
+        }
+
+        // --- type-driven distinctive values ---
+        int n = counter.getAndIncrement();
+        if (type.equals(Boolean.class)) {
+            // negate the property's own default so that if the DTO drops this property (reverting it
+            // to its default on round-trip) the assertion reliably fails. If the default resolves to
+            // null, true is non-null and distinctive.
+            return !(Boolean.TRUE.equals(defaultValue));
+        }
+        if (type.equals(Integer.class)) {
+            return 1_000_000 + n;
+        }
+        if (type.equals(Long.class)) {
+            return 5_000_000_000L + n;
+        }
+        if (type.equals(Double.class)) {
+            return 123.5d + n;
+        }
+        if (type.equals(String.class)) {
+            return "distinctive-value-" + name + "-" + n;
+        }
+        if (List.class.isAssignableFrom(type)) {
+            return new ArrayList<>(Arrays.asList("list-value-" + name + "-a-" + n, "list-value-" + name + "-b-" + n));
+        }
+        if (Set.class.isAssignableFrom(type)) {
+            return new LinkedHashSet<>(Arrays.asList("set-value-" + name + "-a-" + n, "set-value-" + name + "-b-" + n));
+        }
+        if (Map.class.isAssignableFrom(type)) {
+            // the only Map<String,String> property carried by the DTO
+            return ImmutableMap.of("key-" + name + "-1", "val-" + n, "key-" + name + "-2", "val-" + (n + 1));
+        }
+        throw new AssertionError("Reflection drift guard has no distinctive-value strategy for property '"
+            + name + "' of type " + accessor.type.getName()
+            + " — add a strategy in distinctiveValueFor(...) or, if this property is intentionally not "
+            + "part of the serialized config DTO, add it to DTO_EXCLUDED_PROPERTIES with a documented reason.");
+    }
+
+    private static volatile String existingFilePath;
+
+    /**
+     * An absolute path to a real, readable file, used as the distinctive value for the cert/key
+     * file-path properties whose setter validates existence via {@code fileExists(...)}. These
+     * properties cannot accept an arbitrary made-up string, so they share one real path; the
+     * round-trip assertion still compares each property against its own original value.
+     */
+    private static String existingFilePath() {
+        String path = existingFilePath;
+        if (path == null) {
+            try {
+                java.io.File file = java.io.File.createTempFile("configuration-dto-drift-guard", ".pem");
+                file.deleteOnExit();
+                path = file.getAbsolutePath();
+                existingFilePath = path;
+            } catch (java.io.IOException e) {
+                throw new RuntimeException("failed to create temp file for drift-guard cert-path properties", e);
+            }
+        }
+        return path;
+    }
+
+    private static boolean equalsForRoundTrip(Object a, Object b) {
+        if (a instanceof Set && b instanceof Set) {
+            // order-insensitive comparison; the DTO may rebuild a set in a different iteration order
+            return new HashSet<>((Set<?>) a).equals(new HashSet<>((Set<?>) b));
+        }
+        return java.util.Objects.equals(a, b);
     }
 }

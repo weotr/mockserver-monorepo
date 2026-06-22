@@ -5,6 +5,7 @@ import {
   summarizeTraffic,
   getModelLabel,
   getTokenSummary,
+  getNumericTokens,
   getTimingLabel,
   getTimingBreakdown,
   extractBodyContent,
@@ -498,6 +499,16 @@ describe('parseSseStream', () => {
   it('returns empty array for empty string', () => {
     expect(parseSseStream('')).toEqual([]);
   });
+
+  it('normalises CRLF line endings (real on-the-wire SSE) without stray carriage returns', () => {
+    const text = 'event: message\r\ndata: {"text":"hi"}\r\n\r\ndata: [DONE]\r\n\r\n';
+    const events = parseSseStream(text);
+    expect(events).toHaveLength(2);
+    expect(events[0]!.event).toBe('message');
+    expect(events[0]!.data).toBe('{"text":"hi"}');
+    // The DONE sentinel must compare equal — no trailing '\r'.
+    expect(events[1]!.data).toBe('[DONE]');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -567,6 +578,31 @@ describe('getTokenSummary', () => {
   it('returns null for generic', () => {
     const parsed = parseTraffic({ httpRequest: { method: 'GET', path: '/health' }, httpResponse: { statusCode: 200 } });
     expect(getTokenSummary(parsed)).toBeNull();
+  });
+});
+
+describe('getNumericTokens', () => {
+  it('extracts Anthropic numeric tokens', () => {
+    const parsed = parseTraffic({
+      httpRequest: { method: 'POST', path: '/v1/messages', body: { type: 'JSON', json: '{"model":"x","messages":[]}' } },
+      httpResponse: { statusCode: 200, body: { type: 'JSON', json: '{"content":[],"usage":{"input_tokens":100,"output_tokens":50}}' } },
+    });
+    const tokens = getNumericTokens(parsed);
+    expect(tokens).toEqual({ inputTokens: 100, outputTokens: 50 });
+  });
+
+  it('extracts OpenAI numeric tokens', () => {
+    const parsed = parseTraffic({
+      httpRequest: { method: 'POST', path: '/v1/chat/completions', body: { type: 'JSON', json: '{"model":"gpt-4","messages":[]}' } },
+      httpResponse: { statusCode: 200, body: { type: 'JSON', json: '{"choices":[],"usage":{"prompt_tokens":200,"completion_tokens":100}}' } },
+    });
+    const tokens = getNumericTokens(parsed);
+    expect(tokens).toEqual({ inputTokens: 200, outputTokens: 100 });
+  });
+
+  it('returns null for non-LLM traffic', () => {
+    const parsed = parseTraffic({ httpRequest: { method: 'GET', path: '/health' }, httpResponse: { statusCode: 200 } });
+    expect(getNumericTokens(parsed)).toBeNull();
   });
 });
 

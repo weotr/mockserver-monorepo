@@ -365,7 +365,9 @@ describe('standardToJava with sideEffects', () => {
     expect(java).toContain('import static org.mockserver.model.AfterAction.beforeAction;');
     expect(java).toContain('.withBeforeAction(');
     expect(java).toContain('beforeAction()');
-    expect(java).toContain('.withHttpRequest(request()');
+    // request() must start on its own line after the opening bracket
+    expect(java).toContain('.withHttpRequest(\n');
+    expect(java).toMatch(/\.withHttpRequest\(\s*\n\s*request\(\)/);
     expect(java).toContain('.withPath("/auth")');
     expect(java).toContain('.withHeader("Host", "auth.svc:8080")');
   });
@@ -380,6 +382,19 @@ describe('standardToJava with sideEffects', () => {
     expect(java).toContain('.withAfterAction(');
     expect(java).toContain('afterAction()');
     expect(java).toContain('.withPath("/audit")');
+  });
+
+  it('puts the closing semicolon at the end of the last code line, not on its own line', () => {
+    const action: StandardActionPayload = {
+      ...baseAction(),
+      sideEffects: [makeBefore()],
+    };
+    const java = standardToJava(baseMatcher(), action);
+    const codeLines = java.split('\n');
+    const lastLine = codeLines[codeLines.length - 1] ?? '';
+    expect(lastLine).not.toBe(';');
+    expect(lastLine.trim().endsWith(';')).toBe(true);
+    expect(lastLine.trim().length).toBeGreaterThan(1);
   });
 
   it('includes Delay/TimeUnit imports when side-effect has delay', () => {

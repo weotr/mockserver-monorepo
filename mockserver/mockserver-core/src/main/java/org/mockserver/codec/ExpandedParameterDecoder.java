@@ -4,7 +4,6 @@ import io.netty.handler.codec.http.HttpConstants;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import org.apache.commons.lang3.StringUtils;
 import org.mockserver.configuration.Configuration;
-import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.NottableString;
@@ -212,7 +211,7 @@ public class ExpandedParameterDecoder {
                         splitValues.add(string(quotedValue.group(1), value.isNot()));
                     }
                 } else if (!JSON_VALUE.matcher(value.getValue()).matches()) {
-                    for (String splitValue : value.getValue().split(style.getRegex().replaceAll("<name>", name))) {
+                    for (String splitValue : value.getValue().split(style.getRegex().replaceAll("<name>", Matcher.quoteReplacement(Pattern.quote(name))))) {
                         if (value.isOptional()) {
                             splitValues.add(optional(splitValue, value.isNot()));
                         } else {

@@ -11,6 +11,37 @@ source "${SCRIPT_DIR}/docker-compose.sh"
 # SKIP_JAVA_BUILD=true ./integration_tests.sh
 # SKIP_HELM_TESTS=true SKIP_JAVA_BUILD=true DOCKER_BUILD=true ./container_integration_tests/integration_tests.sh
 
+# Variants whose Dockerfile now `COPY ca-bundle.pem` from the build context.
+# A placeholder must exist before `docker build` or the COPY fails. The base
+# docker/ context COPYs it too, but the smoke tests only build variant dirs;
+# `local` is single-stage and does NOT COPY a bundle, so it is excluded.
+function variant_copies_ca_bundle() {
+  case "$1" in
+    root|snapshot|root-snapshot|clustered|graaljs) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Ensure ${variant_dir}/ca-bundle.pem exists before a variant build. If
+# MOCKSERVER_LOCAL_CA_BUNDLE points at a readable PEM (corporate proxy), copy it
+# in; otherwise leave an empty placeholder (the Dockerfiles' `[ -s ]` guards make
+# that a no-op). Echoes "true" if the harness created the file (caller removes it
+# afterward) or "false" if it was already present / not needed.
+function ensure_variant_ca_bundle() {
+  local variant="$1" variant_dir="$2"
+  local ca_bundle_path="${variant_dir}/ca-bundle.pem"
+  if ! variant_copies_ca_bundle "${variant}" || [[ -f "${ca_bundle_path}" ]]; then
+    echo "false"
+    return 0
+  fi
+  if [[ -n "${MOCKSERVER_LOCAL_CA_BUNDLE:-}" && -r "${MOCKSERVER_LOCAL_CA_BUNDLE}" ]]; then
+    cp "${MOCKSERVER_LOCAL_CA_BUNDLE}" "${ca_bundle_path}"
+  else
+    touch "${ca_bundle_path}"
+  fi
+  echo "true"
+}
+
 function build_docker() {
   runCommand "cd ${SCRIPT_DIR}"
   if [[ "${SKIP_JAVA_BUILD:-}" != "true" ]]; then
@@ -18,8 +49,15 @@ function build_docker() {
   fi
   if [[ "${SKIP_DOCKER_BUILD_MOCKSERVER:-}" != "true" ]]; then
     runCommand "cp ${SCRIPT_DIR}/../mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar ${SCRIPT_DIR}/../docker/mockserver-netty-jar-with-dependencies.jar"
+    # The base docker/Dockerfile now COPYs ca-bundle.pem; stage a placeholder
+    # (or the corporate CA via MOCKSERVER_LOCAL_CA_BUNDLE) before building.
+    local base_ca_created
+    base_ca_created=$(ensure_variant_ca_bundle "root" "${SCRIPT_DIR}/../docker")
     runCommand "docker build --no-cache -t mockserver/mockserver:integration_testing --build-arg source=copy ${SCRIPT_DIR}/../docker"
     runCommand "rm ${SCRIPT_DIR}/../docker/mockserver-netty-jar-with-dependencies.jar"
+    if [[ "${base_ca_created}" == "true" ]]; then
+      rm -f "${SCRIPT_DIR}/../docker/ca-bundle.pem"
+    fi
   fi
   if [[ "${SKIP_DOCKER_BUILD_MOCKSERVER:-}" != "true" ]]; then
     build_clustered_docker
@@ -61,11 +99,19 @@ function build_clustered_docker() {
   runCommand "(cd ${SCRIPT_DIR}/../mockserver && ./mvnw -pl mockserver-state-infinispan dependency:copy-dependencies -DincludeScope=runtime -DexcludeGroupIds=org.mock-server -DoutputDirectory=${libs_dir} -q)"
   cp "${SCRIPT_DIR}"/../mockserver/mockserver-state-infinispan/target/mockserver-state-infinispan-*.jar "${libs_dir}/"
 
+  # The clustered Dockerfile's tcnative stage COPYs ca-bundle.pem; stage a
+  # placeholder (or the corporate CA via MOCKSERVER_LOCAL_CA_BUNDLE) first.
+  local ca_bundle_created
+  ca_bundle_created=$(ensure_variant_ca_bundle "clustered" "${clustered_dir}")
+
   runCommand "docker build --no-cache -t mockserver/mockserver:integration_testing_clustered ${clustered_dir}"
 
   # Clean up build context
   rm -f "${clustered_dir}/mockserver-netty-jar-with-dependencies.jar"
   rm -rf "${libs_dir}"
+  if [[ "${ca_bundle_created}" == "true" ]]; then
+    rm -f "${clustered_dir}/ca-bundle.pem"
+  fi
 }
 
 function test() {
@@ -115,15 +161,13 @@ function smoke_test_variant() {
     build_args="--build-arg source=copy"
   fi
 
-  # The graaljs Dockerfile COPYs ca-bundle.pem from the build context (for
-  # corporate proxies); ensure an empty placeholder exists when no real bundle
-  # is provided, so the COPY instruction does not fail.
+  # Every variant whose Dockerfile COPYs ca-bundle.pem from the build context
+  # (for corporate proxies) needs a placeholder before `docker build`, so the
+  # COPY instruction does not fail. Populated from MOCKSERVER_LOCAL_CA_BUNDLE
+  # when set, otherwise an empty no-op file.
   local ca_bundle_path="${variant_dir}/ca-bundle.pem"
-  local ca_bundle_created="false"
-  if [[ "${variant}" == "graaljs" && ! -f "${ca_bundle_path}" ]]; then
-    touch "${ca_bundle_path}"
-    ca_bundle_created="true"
-  fi
+  local ca_bundle_created
+  ca_bundle_created=$(ensure_variant_ca_bundle "${variant}" "${variant_dir}")
 
   runCommand "docker build ${build_args} -t ${tag} ${variant_dir}" || exit_code=1
   rm -f "${jar_path}"
@@ -191,12 +235,10 @@ function smoke_test_variant_nonblocking() {
     build_args="--build-arg source=copy"
   fi
 
+  # Same ca-bundle.pem placeholder requirement as smoke_test_variant.
   local ca_bundle_path="${variant_dir}/ca-bundle.pem"
-  local ca_bundle_created="false"
-  if [[ "${variant}" == "graaljs" && ! -f "${ca_bundle_path}" ]]; then
-    touch "${ca_bundle_path}"
-    ca_bundle_created="true"
-  fi
+  local ca_bundle_created
+  ca_bundle_created=$(ensure_variant_ca_bundle "${variant}" "${variant_dir}")
 
   runCommand "docker build ${build_args} -t ${tag} ${variant_dir}" || exit_code=1
   rm -f "${jar_path}"
@@ -333,6 +375,10 @@ function test_arm64_build_gate() {
   fi
 
   cp "${source_jar}" "${jar_path}"
+  # The base docker/Dockerfile now COPYs ca-bundle.pem; stage a placeholder
+  # (or the corporate CA via MOCKSERVER_LOCAL_CA_BUNDLE) before building.
+  local ca_bundle_created
+  ca_bundle_created=$(ensure_variant_ca_bundle "root" "${docker_dir}")
   # Ensure a buildx builder that supports cross-platform builds exists.
   # The default "docker" driver cannot cross-build; create a
   # "docker-container" driver builder matching the release pipeline.
@@ -342,6 +388,9 @@ function test_arm64_build_gate() {
   # Build-only (no --load / --push) for linux/arm64.
   runCommand "docker buildx build --platform linux/arm64 --build-arg source=copy -t mockserver/mockserver:arm64-gate ${docker_dir}" || exit_code=1
   rm -f "${jar_path}"
+  if [[ "${ca_bundle_created}" == "true" ]]; then
+    rm -f "${docker_dir}/ca-bundle.pem"
+  fi
 
   # Non-blocking: a failure here warns but does not fail the pipeline.
   logTestResultNonBlocking "${exit_code}" "${TEST_CASE}"

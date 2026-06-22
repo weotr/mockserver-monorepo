@@ -1,0 +1,1 @@
+{ "method": "{{ request.method }}", "path": "{{ request.path }}" }

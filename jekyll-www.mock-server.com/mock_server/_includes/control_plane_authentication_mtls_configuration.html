@@ -39,7 +39,7 @@
     <p>File system path or classpath location of the private key used by MockServerClient when <a href="#button_configuration_control_plane_mtls_authentication_required">controlPlaneTLSMutualAuthenticationRequired</a> is enabled to ensure control plane request are correctly
         authorised</p>
     <p>For control plane requests to be authorised the private key <a href="#button_configuration_control_plane_mtls_authentication_private_key_path">controlPlanePrivateKeyPath</a> and certificate <a
-            href="#button_configuration_control_plane_mtls_authentication_private_key_path">controlPlanePrivateKeyPath</a> must:</p>
+            href="#button_configuration_control_plane_mtls_authentication_certificate_path">controlPlaneX509CertificatePath</a> must:</p>
     <ul>
         <li>be a valid key pair</li>
         <li>be signed by one of the certificates in the CA chain <a href="#button_configuration_control_plane_mtls_authentication_ca_chain">controlPlaneTLSMutualAuthenticationCAChain</a> for control plane requests to be authorised</li>
@@ -62,7 +62,7 @@
     <p>File system path or classpath location of the certificate used by MockServerClient when <a href="#button_configuration_control_plane_mtls_authentication_required">controlPlaneTLSMutualAuthenticationRequired</a> is enabled to ensure control plane request are correctly
         authorised</p>
     <p>For control plane requests to be authorised the private key <a href="#button_configuration_control_plane_mtls_authentication_private_key_path">controlPlanePrivateKeyPath</a> and certificate <a
-            href="#button_configuration_control_plane_mtls_authentication_private_key_path">controlPlanePrivateKeyPath</a> must:</p>
+            href="#button_configuration_control_plane_mtls_authentication_certificate_path">controlPlaneX509CertificatePath</a> must:</p>
     <ul>
         <li>be a valid key pair</li>
         <li>be signed by one of the certificates in the CA chain <a href="#button_configuration_control_plane_mtls_authentication_ca_chain">controlPlaneTLSMutualAuthenticationCAChain</a> for control plane requests to be authorised</li>

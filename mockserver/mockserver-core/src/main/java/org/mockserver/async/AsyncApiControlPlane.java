@@ -61,4 +61,23 @@ public interface AsyncApiControlPlane {
      * @throws IllegalArgumentException if the request is malformed
      */
     String verify(String verificationJson);
+
+    /**
+     * Generate HTTP mock expectations from an AsyncAPI spec so that example messages can be
+     * served over plain HTTP (one {@code GET} expectation per channel returning a schema-aware
+     * example payload), without standing up a live message broker.
+     * <p>
+     * This is the import analogue of {@link #load(String)}: instead of publishing example
+     * messages to a broker, it returns expectations the caller can register on the HTTP mock.
+     * Implemented in mockserver-async (which has access to {@code mockserver-core} types), the
+     * result is returned as a JSON array string in the standard MockServer expectation format,
+     * so that {@link org.mockserver.mock.HttpState} can deserialize and add it without a
+     * compile-time dependency on the async module's parser.
+     *
+     * @param requestBody the raw request body — a plain AsyncAPI spec (JSON/YAML) or a JSON
+     *                    wrapper {@code {"spec": "...", "channelPathPrefix": "..."}}
+     * @return a JSON array string of MockServer expectations (one per channel)
+     * @throws IllegalArgumentException if the spec is missing or cannot be parsed
+     */
+    String generateHttpExpectations(String requestBody);
 }

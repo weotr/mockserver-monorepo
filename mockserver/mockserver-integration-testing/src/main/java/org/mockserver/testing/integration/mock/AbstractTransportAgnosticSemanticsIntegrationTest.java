@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
+import static org.junit.Assert.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;
@@ -40,7 +40,6 @@ import static org.mockserver.model.NottableString.not;
 import static org.mockserver.model.NottableString.string;
 import static org.mockserver.model.Parameter.param;
 import static org.mockserver.model.Parameter.schemaParam;
-import static org.mockserver.model.StringBody.exact;
 
 /**
  * Transport-agnostic matching/priority/TTL/verify/retrieve semantic tests.

@@ -11,7 +11,22 @@ source "${SCRIPT_DIR}/../logging.sh"
 printMessage "Start: \"${SCRIPT_DIR/\//}\""
 
 function integration_test() {
-  start-up "--set image.repositoryNameAndTag=mockserver/mockserver:integration_testing --set app.config.enabled=true --set app.config.properties=mockserver.initializationJsonPath=/config/initializerJson.json --set-string app.config.initializerJson=[{\"httpRequest\":{\"path\":\"/preset\"}\,\"httpResponse\":{\"body\":\"preset_response\"}}]"
+  # Pass the initialiser JSON via a --values file rather than inline --set-string:
+  # helm's --set parser splits the expectation JSON on its commas/braces, producing
+  # "key ... has no value". A values file (the chart's documented form) sets the
+  # string verbatim. See helm/mockserver/values.yaml app.config.* for the schema.
+  local VALUES_FILE
+  VALUES_FILE="$(mktemp)"
+  cat > "${VALUES_FILE}" <<'YAML'
+app:
+  config:
+    enabled: true
+    properties: |
+      mockserver.initializationJsonPath=/config/initializerJson.json
+    initializerJson: |
+      [{"httpRequest":{"path":"/preset"},"httpResponse":{"body":"preset_response"}}]
+YAML
+  start-up "--set image.repositoryNameAndTag=mockserver/mockserver:integration_testing --values ${VALUES_FILE}"
   TEST_EXIT_CODE=0
   sleep 3
   run-helm-test || TEST_EXIT_CODE=1
@@ -22,6 +37,7 @@ function integration_test() {
       TEST_EXIT_CODE=1
     fi
   fi
+  rm -f "${VALUES_FILE}"
   logTestResult "${TEST_EXIT_CODE}" "${TEST_CASE}"
   tear-down
   return ${TEST_EXIT_CODE}

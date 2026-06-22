@@ -46,6 +46,7 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("jsonPath".toLowerCase(), Body.Type.JSON_PATH);
         fieldNameToType.put("parameters".toLowerCase(), Body.Type.PARAMETERS);
         fieldNameToType.put("regex".toLowerCase(), Body.Type.REGEX);
+        fieldNameToType.put("fuzzy".toLowerCase(), Body.Type.FUZZY);
         fieldNameToType.put("string".toLowerCase(), Body.Type.STRING);
         fieldNameToType.put("xml".toLowerCase(), Body.Type.XML);
         fieldNameToType.put("xmlSchema".toLowerCase(), Body.Type.XML_SCHEMA);
@@ -54,6 +55,8 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("graphql".toLowerCase(), Body.Type.GRAPHQL);
         fieldNameToType.put("filePath".toLowerCase(), Body.Type.FILE);
         fieldNameToType.put("moduleName".toLowerCase(), Body.Type.WASM);
+        fieldNameToType.put("filenames".toLowerCase(), Body.Type.MULTIPART);
+        fieldNameToType.put("partContentTypes".toLowerCase(), Body.Type.MULTIPART);
     }
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(BodyDTODeserializer.class);
@@ -74,9 +77,14 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
         MediaType contentType = null;
         Charset charset = null;
         boolean subString = false;
+        double fuzzyThreshold = FuzzyBody.DEFAULT_THRESHOLD;
+        boolean fuzzyIgnoreCase = FuzzyBody.DEFAULT_IGNORE_CASE;
         MatchType matchType = JsonBody.DEFAULT_MATCH_TYPE;
         boolean matchNumbersAsStrings = false;
         Parameters parameters = null;
+        Parameters multipartFields = null;
+        Parameters multipartFilenames = null;
+        Parameters multipartPartContentTypes = null;
         Map<String, ParameterStyle> parameterStyles = null;
         Map<String, String> namespacePrefixes = null;
         String jsonRpcMethod = null;
@@ -89,12 +97,14 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
         SelectionSetMatchType graphQLSelectionSetMatchType = null;
         @SuppressWarnings("unchecked")
         List<String> graphQLFields = null;
+        String graphQLSchema = null;
         String queryFieldValue = null;
         String operationNameFieldValue = null;
         String variablesSchemaFieldValue = null;
         SelectionSetMatchType selectionSetMatchTypeFieldValue = null;
         @SuppressWarnings("unchecked")
         List<String> fieldsFieldValue = null;
+        String schemaFieldValue = null;
         if (currentToken == JsonToken.START_OBJECT) {
             @SuppressWarnings("unchecked") Map<Object, Object> body = (Map<Object, Object>) ctxt.readValue(jsonParser, Map.class);
             for (Map.Entry<Object, Object> entry : body.entrySet()) {
@@ -155,8 +165,19 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 .map(String::valueOf)
                                 .collect(java.util.stream.Collectors.toList());
                         }
+                        if (graphQLMap.containsKey("schema")) {
+                            Object schemaValue = graphQLMap.get("schema");
+                            if (schemaValue instanceof String) {
+                                graphQLSchema = String.valueOf(schemaValue);
+                            } else if (schemaValue != null) {
+                                if (jsonBodyObjectWriter == null) {
+                                    jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
+                                }
+                                graphQLSchema = jsonBodyObjectWriter.writeValueAsString(schemaValue);
+                            }
+                        }
                     }
-                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "filePath", "moduleName") && type != Body.Type.PARAMETERS) {
+                    if (containsIgnoreCase(key, "string", "regex", "fuzzy", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "filePath", "moduleName") && type != Body.Type.PARAMETERS) {
                         String fieldName = String.valueOf(entry.getKey()).toLowerCase();
                         if (fieldNameToType.containsKey(fieldName)) {
                             type = fieldNameToType.get(fieldName);
@@ -223,6 +244,23 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 );
                             }
                         }
+                    }
+                    if (key.equalsIgnoreCase("threshold")) {
+                        try {
+                            fuzzyThreshold = Double.parseDouble(String.valueOf(entry.getValue()));
+                        } catch (NumberFormatException nfe) {
+                            if (MockServerLogger.isEnabled(DEBUG)) {
+                                MOCK_SERVER_LOGGER.logEvent(
+                                    new LogEntry()
+                                        .setLogLevel(DEBUG)
+                                        .setMessageFormat("ignoring invalid fuzzy threshold with value \"" + entry.getValue() + "\"")
+                                        .setThrowable(nfe)
+                                );
+                            }
+                        }
+                    }
+                    if (key.equalsIgnoreCase("ignoreCase")) {
+                        fuzzyIgnoreCase = Boolean.parseBoolean(String.valueOf(entry.getValue()));
                     }
                     if (key.equalsIgnoreCase("parameterStyles") && entry.getValue() instanceof Map) {
                         try {
@@ -341,6 +379,16 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             .map(String::valueOf)
                             .collect(java.util.stream.Collectors.toList());
                     }
+                    if (key.equalsIgnoreCase("schema")) {
+                        if (entry.getValue() instanceof String) {
+                            schemaFieldValue = String.valueOf(entry.getValue());
+                        } else if (entry.getValue() != null) {
+                            if (jsonBodyObjectWriter == null) {
+                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
+                            }
+                            schemaFieldValue = jsonBodyObjectWriter.writeValueAsString(entry.getValue());
+                        }
+                    }
                     if (key.equalsIgnoreCase("parameters")) {
                         if (objectMapper == null) {
                             objectMapper = ObjectMapperFactory.createObjectMapper();
@@ -349,6 +397,36 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
                         }
                         parameters = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
+                    }
+                    if (key.equalsIgnoreCase("fields") && !(entry.getValue() instanceof List)) {
+                        if (objectMapper == null) {
+                            objectMapper = ObjectMapperFactory.createObjectMapper();
+                        }
+                        if (objectWriter == null) {
+                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+                        }
+                        type = Body.Type.MULTIPART;
+                        multipartFields = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
+                    }
+                    if (key.equalsIgnoreCase("filenames")) {
+                        if (objectMapper == null) {
+                            objectMapper = ObjectMapperFactory.createObjectMapper();
+                        }
+                        if (objectWriter == null) {
+                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+                        }
+                        type = Body.Type.MULTIPART;
+                        multipartFilenames = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
+                    }
+                    if (key.equalsIgnoreCase("partContentTypes")) {
+                        if (objectMapper == null) {
+                            objectMapper = ObjectMapperFactory.createObjectMapper();
+                        }
+                        if (objectWriter == null) {
+                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+                        }
+                        type = Body.Type.MULTIPART;
+                        multipartPartContentTypes = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
                     }
                 }
             }
@@ -382,8 +460,14 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                     case PARAMETERS:
                         result = new ParameterBodyDTO(new ParameterBody(parameters), not);
                         break;
+                    case MULTIPART:
+                        result = new MultipartBodyDTO(new MultipartBody(multipartFields, multipartFilenames, multipartPartContentTypes), not);
+                        break;
                     case REGEX:
                         result = new RegexBodyDTO(new RegexBody(valueJsonValue), not);
+                        break;
+                    case FUZZY:
+                        result = new FuzzyBodyDTO(new FuzzyBody(valueJsonValue, fuzzyThreshold, fuzzyIgnoreCase), not);
                         break;
                     case STRING:
                         if (contentType != null && isNotBlank(contentType.toString())) {
@@ -432,6 +516,10 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         List<String> resolvedFields = graphQLFields != null ? graphQLFields : fieldsFieldValue;
                         if (resolvedFields != null) {
                             graphQLBody.withFields(resolvedFields);
+                        }
+                        String resolvedSchema = graphQLSchema != null ? graphQLSchema : schemaFieldValue;
+                        if (resolvedSchema != null) {
+                            graphQLBody.withSchema(resolvedSchema);
                         }
                         result = new GraphQLBodyDTO(graphQLBody, not);
                         break;

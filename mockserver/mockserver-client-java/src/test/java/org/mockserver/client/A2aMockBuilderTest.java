@@ -279,4 +279,143 @@ public class A2aMockBuilderTest {
 
         assertThat(expectations.length, is(4));
     }
+
+    @Test
+    public void shouldAdvertiseStreamingCapabilityWhenEnabled() {
+        Expectation[] expectations = a2aMock()
+            .withStreaming()
+            .build();
+
+        String agentCard = expectations[0].getHttpResponse().getBodyAsString();
+        assertThat(agentCard, containsString("\"streaming\": true"));
+        assertThat(agentCard, containsString("\"pushNotifications\": false"));
+    }
+
+    @Test
+    public void shouldGenerateStreamingSseExpectation() {
+        Expectation[] expectations = a2aMock()
+            .withStreaming()
+            .withDefaultTaskResponse("streamed result")
+            .build();
+
+        // agent card + tasks/send + streaming + tasks/get + tasks/cancel
+        assertThat(expectations.length, is(5));
+
+        Expectation streamingExp = null;
+        for (Expectation expectation : expectations) {
+            if (expectation.getHttpSseResponse() != null) {
+                streamingExp = expectation;
+            }
+        }
+        assertNotNull("expected a streaming SSE expectation", streamingExp);
+        assertThat(streamingExp.getHttpSseResponse().getEvents().size(), is(3));
+
+        StringBuilder allData = new StringBuilder();
+        streamingExp.getHttpSseResponse().getEvents().forEach(e -> allData.append(e.getData()));
+        String data = allData.toString();
+        assertThat(data, containsString("status-update"));
+        assertThat(data, containsString("artifact-update"));
+        assertThat(data, containsString("\"state\": \"working\""));
+        assertThat(data, containsString("\"state\": \"completed\""));
+        assertThat(data, containsString("\"final\": true"));
+        assertThat(data, containsString("streamed result"));
+
+        HttpRequest streamingRequest = (HttpRequest) streamingExp.getHttpRequest();
+        assertThat(streamingRequest.getBody().toString(), containsString("message/stream"));
+    }
+
+    @Test
+    public void shouldUseCustomStreamingMethod() {
+        Expectation[] expectations = a2aMock()
+            .withStreamingMethod("tasks/sendSubscribe")
+            .build();
+
+        Expectation streamingExp = null;
+        for (Expectation expectation : expectations) {
+            if (expectation.getHttpSseResponse() != null) {
+                streamingExp = expectation;
+            }
+        }
+        assertNotNull(streamingExp);
+        HttpRequest streamingRequest = (HttpRequest) streamingExp.getHttpRequest();
+        assertThat(streamingRequest.getBody().toString(), containsString("tasks/sendSubscribe"));
+    }
+
+    @Test
+    public void shouldAdvertisePushNotificationsAndGenerateConfigAndDelivery() {
+        Expectation[] expectations = a2aMock()
+            .withPushNotifications("http://localhost:1234/callback")
+            .build();
+
+        // agent card + pushConfig + tasks/send delivery + tasks/get + tasks/cancel
+        assertThat(expectations.length, is(5));
+
+        String agentCard = expectations[0].getHttpResponse().getBodyAsString();
+        assertThat(agentCard, containsString("\"pushNotifications\": true"));
+
+        boolean hasConfigEcho = false;
+        boolean hasForwardDelivery = false;
+        for (Expectation expectation : expectations) {
+            HttpRequest req = (HttpRequest) expectation.getHttpRequest();
+            String body = req.getBody() != null ? req.getBody().toString() : "";
+            if (body.contains("tasks/pushNotificationConfig/set")) {
+                hasConfigEcho = true;
+            }
+            if (body.contains("tasks/send") && expectation.getHttpOverrideForwardedRequest() != null) {
+                hasForwardDelivery = true;
+                HttpRequest webhookRequest = expectation.getHttpOverrideForwardedRequest().getRequestOverride();
+                assertThat(webhookRequest.getMethod().getValue(), is("POST"));
+                assertThat(webhookRequest.getPath().getValue(), is("/callback"));
+                assertThat(webhookRequest.getSocketAddress().getHost(), is("localhost"));
+                assertThat(webhookRequest.getSocketAddress().getPort(), is(1234));
+                // caller response is a Velocity template that echoes the JSON-RPC request id
+                HttpTemplate responseTemplate = expectation.getHttpOverrideForwardedRequest().getResponseTemplate();
+                assertNotNull("expected a caller response template", responseTemplate);
+                assertThat(responseTemplate.getTemplateType(), is(HttpTemplate.TemplateType.VELOCITY));
+                assertThat(responseTemplate.getTemplate(), containsString("$!{request.jsonRpcRawId}"));
+            }
+        }
+        assertTrue("expected push-notification config echo expectation", hasConfigEcho);
+        assertTrue("expected push-notification delivery (forward) expectation", hasForwardDelivery);
+    }
+
+    @Test
+    public void shouldNotVelocityEscapeLiteralWebhookPushBody() {
+        Expectation[] expectations = a2aMock()
+            .withPushNotifications("http://localhost:1234/callback")
+            .withDefaultTaskResponse("$100 off #sale")
+            .build();
+
+        HttpRequest webhookRequest = null;
+        for (Expectation expectation : expectations) {
+            if (expectation.getHttpOverrideForwardedRequest() != null) {
+                webhookRequest = expectation.getHttpOverrideForwardedRequest().getRequestOverride();
+            }
+        }
+        assertNotNull(webhookRequest);
+        String pushBody = webhookRequest.getBody().toString();
+        // literal body (no Velocity engine) must NOT contain the Velocity escape sequences
+        assertThat(pushBody, containsString("$100 off #sale"));
+        assertThat(pushBody, not(containsString("esc.d")));
+        assertThat(pushBody, not(containsString("esc.h")));
+    }
+
+    @Test
+    public void shouldParseHttpsWebhookWithDefaultPort() {
+        Expectation[] expectations = a2aMock()
+            .withPushNotifications("https://example.com/a2a/push")
+            .build();
+
+        HttpRequest webhookRequest = null;
+        for (Expectation expectation : expectations) {
+            if (expectation.getHttpOverrideForwardedRequest() != null) {
+                webhookRequest = expectation.getHttpOverrideForwardedRequest().getRequestOverride();
+            }
+        }
+        assertNotNull(webhookRequest);
+        assertThat(webhookRequest.getSocketAddress().getHost(), is("example.com"));
+        assertThat(webhookRequest.getSocketAddress().getPort(), is(443));
+        assertThat(webhookRequest.getSocketAddress().getScheme(), is(org.mockserver.model.SocketAddress.Scheme.HTTPS));
+        assertThat(webhookRequest.getPath().getValue(), is("/a2a/push"));
+    }
 }

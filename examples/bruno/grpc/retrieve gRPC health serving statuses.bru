@@ -1,0 +1,17 @@
+meta {
+  name: retrieve gRPC health serving statuses
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/mockserver/grpc/health
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns the configured gRPC health serving status for each service (the default is reported under "_default")
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -74,6 +74,21 @@ public class InMemoryStateBackendTest {
     }
 
     @Test
+    public void shouldReportSingleNodeClusterInfo() {
+        ClusterInfo info = backend.clusterInfo();
+        assertNotNull(info);
+        assertFalse("in-memory backend is never clustered", info.clustered());
+        assertThat(info.nodeId(), is(backend.nodeId()));
+        // single-node: the local node is its own coordinator
+        assertThat(info.coordinator(), is(backend.nodeId()));
+        assertThat(info.members(), hasSize(1));
+        ClusterInfo.Member member = info.members().get(0);
+        assertThat(member.id(), is(backend.nodeId()));
+        assertTrue("the single member is the coordinator", member.coordinator());
+        assertTrue("the single member is local", member.local());
+    }
+
+    @Test
     public void shouldCloseWithoutError() {
         // close is no-op for in-memory, but should not throw
         backend.close();

@@ -7,6 +7,7 @@ public class GrpcStreamMessage extends ObjectWithJsonToString {
     private int hashCode;
     private String json;
     private Delay delay;
+    private HttpTemplate.TemplateType templateType;
 
     public static GrpcStreamMessage grpcStreamMessage() {
         return new GrpcStreamMessage();
@@ -24,6 +25,28 @@ public class GrpcStreamMessage extends ObjectWithJsonToString {
 
     public String getJson() {
         return json;
+    }
+
+    /**
+     * Opt-in response templating: when set (to {@link HttpTemplate.TemplateType#VELOCITY} or
+     * {@link HttpTemplate.TemplateType#MUSTACHE}), the {@link #getJson()} content is treated as
+     * a response template rendered against the matched inbound gRPC message (exposed as the
+     * request body, so {@code $!request.body}, {@code jsonPath}, the built-in helpers and the
+     * {@code scenario} helper are all available) rather than emitted verbatim.
+     * <p>
+     * When {@code null} (the default) the response is emitted byte-for-byte unchanged, exactly
+     * as before this field existed. {@link HttpTemplate.TemplateType#JAVASCRIPT} is not supported
+     * for bidi stream templating (JavaScript templates construct a full response object rather
+     * than a text fragment) and is rejected at render time.
+     */
+    public GrpcStreamMessage withTemplateType(HttpTemplate.TemplateType templateType) {
+        this.templateType = templateType;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public HttpTemplate.TemplateType getTemplateType() {
+        return templateType;
     }
 
     public GrpcStreamMessage withDelay(Delay delay) {
@@ -55,13 +78,14 @@ public class GrpcStreamMessage extends ObjectWithJsonToString {
         }
         GrpcStreamMessage that = (GrpcStreamMessage) o;
         return Objects.equals(json, that.json) &&
-            Objects.equals(delay, that.delay);
+            Objects.equals(delay, that.delay) &&
+            templateType == that.templateType;
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(json, delay);
+            hashCode = Objects.hash(json, delay, templateType);
         }
         return hashCode;
     }

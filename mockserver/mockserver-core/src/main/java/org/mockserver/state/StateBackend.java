@@ -64,6 +64,21 @@ public interface StateBackend extends Closeable {
     }
 
     /**
+     * Returns a snapshot of cluster membership and health for the
+     * {@code GET /mockserver/cluster} operability endpoint.
+     * <p>
+     * The default implementation returns a degenerate single-node snapshot
+     * ({@code clustered=false}, one local member equal to {@link #nodeId()},
+     * which is also the coordinator). A clustered backend overrides this to
+     * report the real fleet membership and the elected coordinator.
+     *
+     * @return a non-null {@link ClusterInfo} (always contains at least this node)
+     */
+    default ClusterInfo clusterInfo() {
+        return ClusterInfo.singleNode(nodeId());
+    }
+
+    /**
      * Closes the backend and releases any resources. No-op for the
      * in-memory backend.
      */

@@ -40,7 +40,6 @@ import static org.mockserver.openapi.OpenAPIParser.OPEN_API_LOAD_ERROR;
 import static org.mockserver.openapi.OpenAPIParser.buildOpenAPI;
 import static org.slf4j.event.Level.ERROR;
 import static org.slf4j.event.Level.TRACE;
-import static org.slf4j.event.Level.WARN;
 
 public class HttpRequestsPropertiesMatcher extends AbstractHttpRequestMatcher {
 
@@ -448,13 +447,15 @@ public class HttpRequestsPropertiesMatcher extends AbstractHttpRequestMatcher {
         return (contentType, mediaType) -> {
             HttpRequest httpRequest = createHttpRequest(openAPIDefinition, openAPI, path, methodOperationPair);
             if (contentType.equals("multipart/form-data")) {
-                logEntries.add(
-                    new LogEntry()
-                        .setLogLevel(WARN)
-                        .setMessageFormat("multipart form data is not supported on requestBody, matching on path and method only for operation:{}method:{}in open api:{}")
-                        .setArguments(methodOperationPair.getRight().getOperationId(), methodOperationPair.getLeft(), openAPIDefinition)
-                );
                 try {
+                    // No Content-Type header matcher is added here: the MultipartBody matcher itself
+                    // only matches genuine multipart/form-data bodies, and when the schema declares no
+                    // required fields we fall back to matching on path and method only (so a request to
+                    // the operation still matches even without a multipart body), preserving prior behaviour.
+                    org.mockserver.model.MultipartBody multipartBody = buildMultipartBody(mediaType);
+                    if (multipartBody != null) {
+                        httpRequest.withBody(multipartBody.withOptional(!required));
+                    }
                     addRequestMatcher(openAPIDefinition, methodOperationPair, httpRequest, contentType);
                 } catch (Throwable throwable) {
                     logEntries.add(
@@ -502,6 +503,30 @@ public class HttpRequestsPropertiesMatcher extends AbstractHttpRequestMatcher {
         };
     }
 
+    /**
+     * Builds a {@link org.mockserver.model.MultipartBody} matcher from a multipart/form-data
+     * media type schema. Each property declared as {@code required} on the schema becomes a
+     * field that must be present in the request (matched with a wildcard value); optional
+     * properties are not enforced. Returns {@code null} when no required fields can be derived
+     * (in which case matching falls back to path, method and content-type only).
+     */
+    private org.mockserver.model.MultipartBody buildMultipartBody(MediaType mediaType) {
+        if (mediaType == null || mediaType.getSchema() == null) {
+            return null;
+        }
+        Schema<?> schema = mediaType.getSchema();
+        List<String> requiredProperties = schema.getRequired();
+        if (requiredProperties == null || requiredProperties.isEmpty()) {
+            return null;
+        }
+        List<org.mockserver.model.Parameter> fields = new java.util.ArrayList<>();
+        for (String propertyName : requiredProperties) {
+            // require the field to be present with any value
+            fields.add(new org.mockserver.model.Parameter(string(propertyName), ".*"));
+        }
+        return new org.mockserver.model.MultipartBody(fields);
+    }
+
     private void addRequestMatcher(OpenAPIDefinition openAPIDefinition, Pair<String, Operation> methodOperationPair, HttpRequest httpRequest, String contentType) {
         httpRequests.add(httpRequest);
         HttpRequestPropertiesMatcher httpRequestPropertiesMatcher = new HttpRequestPropertiesMatcher(configuration, mockServerLogger);
@@ -531,6 +556,12 @@ public class HttpRequestsPropertiesMatcher extends AbstractHttpRequestMatcher {
                     result = httpRequestPropertiesMatcher.matches(context, requestDefinition);
                 } else {
                     MatchDifference singleMatchDifference = new MatchDifference(configuration.detailedMatchFailures(), context.getHttpRequest());
+                    // Carry the diagnostic log-suppression flag through to the delegate matcher so an
+                    // OpenAPI-backed expectation does not emit match-result events during explainUnmatched
+                    // / debugMismatch (the inner matcher would otherwise log against the fresh context).
+                    if (context.isSuppressMatchResultLogging()) {
+                        singleMatchDifference.suppressMatchResultLogging();
+                    }
                     result = httpRequestPropertiesMatcher.matches(singleMatchDifference, requestDefinition);
                     context.addDifferences(singleMatchDifference.getAllDifferences());
                 }

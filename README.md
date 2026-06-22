@@ -4,7 +4,13 @@ MockServer &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [![Build
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/mockserver)](https://artifacthub.io/packages/search?repo=mockserver)
 =====
 
-MockServer is an HTTP(S) **mock server** and **proxy** for testing, with support for HTTP/2, HTTP/3, gRPC, WebSockets, raw TCP, message brokers like Kafka and MQTT, and AI/LLM APIs such as OpenAI, Anthropic, and Gemini. Mock the APIs your application depends on to develop and test against systems that are unavailable, incomplete, or hard to reproduce; proxy real traffic to record, inspect, and modify requests in flight; and simulate dependencies both working normally and failing — injecting latency, dropped connections, and errors — to test how your application copes either way.
+MockServer is an HTTP(S) **mock server** and **proxy** for testing. It does three things:
+
+- **Mock** the APIs your application depends on, so you can develop and test against systems that are unavailable, incomplete, or hard to reproduce.
+- **Proxy** real traffic to record, inspect, and modify requests and responses in flight — and pause them at interactive **proxy breakpoints** to step through, edit, or abort each exchange like a debugger for network traffic.
+- **Chaos engineering** — make dependencies misbehave on demand, injecting latency, dropped connections, and errors to test how your application copes when the systems it relies on degrade or fail.
+
+**Speaks every protocol your stack uses.** HTTP/1.1 & HTTPS, HTTP/2, gRPC & gRPC-Web, WebSockets and raw TCP are auto-detected from the first bytes of each connection, so one MockServer port handles them all with no per-protocol configuration. Beyond that core: HTTP/3 (QUIC — experimental, on its own UDP port), JSON-RPC for MCP/A2A mocking, AsyncAPI-driven message-broker testing against external Kafka and MQTT brokers, and mocked AI/LLM chat-completion APIs (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI, Ollama).
 
 ### Main Features
 
@@ -63,6 +69,15 @@ curl http://localhost:1080/pets
 The same can be done from any client library or the dashboard at <http://localhost:1080/mockserver/dashboard>. For more configuration options see the [Docker documentation](https://www.mock-server.com/where/docker.html).
 
 For every way to run MockServer yourself — Docker, docker-compose recipes, the `mockserver` CLI, the JVM-less binary bundle, Helm/Kubernetes, the JAR, and Testcontainers — see the [Self-Hosting MockServer guide](https://www.mock-server.com/mock_server/self_hosting_mockserver.html).
+
+#### Drive it from Postman or Bruno
+
+Explore MockServer's REST control plane from an API client — create expectations, verify requests, and inspect recorded traffic:
+
+[![Run in Postman](https://run.pstmn.io/button.svg)](https://god.gw.postman.com/run-collection/3256712-63a2d67a-46d6-41fd-a544-0535e7393e7d?action=collection%2Ffork&source=rip_markdown&collection-url=entityId%3D3256712-63a2d67a-46d6-41fd-a544-0535e7393e7d%26entityType%3Dcollection%26workspaceId%3D1739eeee-5da1-4112-86a7-b6c094f2b527)
+
+- **Postman** — click the button above, or import [`examples/postman`](examples/postman) ([guide](https://www.mock-server.com/where/postman.html)).
+- **Bruno** (open-source, git-native) — open [`examples/bruno`](examples/bruno) in [Bruno](https://www.usebruno.com/) via **Open Collection** ([guide](https://www.mock-server.com/where/bruno.html)).
 
 ### Documentation
 
@@ -168,10 +183,10 @@ See the [Homebrew install page](https://www.mock-server.com/where/homebrew.html)
 * [MockServer Helm Chart](helm/mockserver/README.md) - installs MockServer into a Kubernetes cluster. The chart is published to the GitHub Container Registry as an OCI artifact (no `helm repo add` needed):
 
   ```bash
-  helm upgrade --install --create-namespace --namespace mockserver --version 7.0.0 mockserver oci://ghcr.io/mock-server/charts/mockserver
+  helm upgrade --install --create-namespace --namespace mockserver --version 7.1.0 mockserver oci://ghcr.io/mock-server/charts/mockserver
   ```
 
-  See the [Install MockServer Helm Chart](helm/mockserver/README.md) guide for all versions and configuration options. A legacy `.tgz` is also available from [www.mock-server.com](https://www.mock-server.com/mockserver-7.0.0.tgz).
+  See the [Install MockServer Helm Chart](helm/mockserver/README.md) guide for all versions and configuration options. A legacy `.tgz` is also available from [www.mock-server.com](https://www.mock-server.com/mockserver-7.1.0.tgz).
 
 ##### MockServer Clients
 
@@ -187,7 +202,7 @@ See the [Homebrew install page](https://www.mock-server.com/where/homebrew.html)
 ##### Previous Versions
 | Version        | Date        | Git & Docker Tag / Git Hash                                                                                                                                                                                   | Documentation                                 | Java API                                                               | REST API                                                                                  |
 |:---------------|:------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:----------------------------------------------|:-----------------------------------------------------------------------|:------------------------------------------------------------------------------------------|
-| 7.0.0 (latest) | 06 Jun 2026 | [mockserver-7.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-7.0.0)   / [9755e9](https://github.com/mock-server/mockserver-monorepo/commit/9755e9ccf4d3bcad1d1cc2dd218614f59441c0f3) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/7.0.0/apidocs/index.html)  | [7.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/7.0.x)   |
+| 7.1.0 (latest) | 06 Jun 2026 | [mockserver-7.1.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-7.1.0)   / [9755e9](https://github.com/mock-server/mockserver-monorepo/commit/9755e9ccf4d3bcad1d1cc2dd218614f59441c0f3) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/7.1.0/apidocs/index.html)  | [7.1.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/7.1.x)   |
 | 6.1.0          | 27 May 2026 | [mockserver-6.1.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.1.0)   / [33c273](https://github.com/mock-server/mockserver-monorepo/commit/33c2739febd07ce1bf1e3f31ed9d93a61ac871dc) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.1.0/apidocs/index.html)  | [6.1.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.1.x)   |
 | 6.0.0          | 20 May 2026 | [mockserver-6.0.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-6.0.0)   / [6a254e](https://github.com/mock-server/mockserver-monorepo/commit/6a254e2a5cb925c41bf8c0ef6a98e2c02712e3ab) | [Documentation](https://mock-server.com)      | [Java API](https://mock-server.com/versions/6.0.0/apidocs/index.html)  | [6.0.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/6.0.x)   |
 | 5.15.0         | 11 Jan 2023 | [mockserver-5.15.0](https://github.com/mock-server/mockserver-monorepo/tree/mockserver-5.15.0) / [7c071b](https://github.com/mock-server/mockserver-monorepo/commit/7c071b8be3608036f2a2ea45eee6970d2f2b8d02) | [Documentation](https://5-15.mock-server.com) | [Java API](https://mock-server.com/versions/5.15.0/apidocs/index.html) | [5.15.x REST API](https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/5.15.x) |
@@ -215,7 +230,7 @@ See the [Homebrew install page](https://www.mock-server.com/where/homebrew.html)
 ### Issues
 
 If you have any problems, please [check the project issues](https://github.com/mock-server/mockserver-monorepo/issues?state=open) and avoid opening issues that have already been fixed.  When you open an issue please provide the following information:
-- MockServer version (i.e. 7.0.0)
+- MockServer version (i.e. 7.1.0)
 - How your running the MockServer (i.e maven plugin, docker, etc)
 - MockServer log output, at INFO level (or higher)
 - What the error is

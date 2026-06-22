@@ -1,7 +1,8 @@
 ---
 name: review-final
 description: Authoritative final reviewer — issues binding PASS/BLOCK verdicts. Spawn this agent as the last gate before committing. Its verdict is definitive. It reviews the full change set independently, regardless of prior review passes.
-model: claude-opus-4-6
+model: claude-opus-4-8
+effort: high
 tools:
   - Read
   - Bash

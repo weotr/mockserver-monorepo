@@ -44,12 +44,16 @@ public class MainTest {
     @BeforeClass
     public static void startEventLoopGroup() {
         clientEventLoopGroup = new NioEventLoopGroup(3, new Scheduler.SchedulerThreadFactory(MainTest.class.getSimpleName() + "-eventLoop"));
+        // These tests invoke Main.main(...) in-process, including failure paths (invalid port/host/log-level,
+        // no port). Disable the JVM-terminating exit so a non-zero command does not kill the test JVM.
+        Main.exitOnNonZeroCode = false;
     }
 
     @AfterClass
     public static void stopEventLoopGroup() {
         clientEventLoopGroup.shutdownGracefully(0, 0, MILLISECONDS).syncUninterruptibly();
         Main.usageShown = false;
+        Main.exitOnNonZeroCode = true;
     }
 
     @After

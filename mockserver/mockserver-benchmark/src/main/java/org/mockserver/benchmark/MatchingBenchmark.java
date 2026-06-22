@@ -6,8 +6,10 @@ import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.RequestMatchers;
+import org.mockserver.model.Header;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.JsonBody;
+import org.mockserver.model.JsonSchemaBody;
 import org.mockserver.scheduler.Scheduler;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -58,8 +60,26 @@ public class MatchingBenchmark {
     @Param({"1", "10", "100", "1000"})
     public int expectationCount;
 
-    /** Shape of the registered matchers (exercises different matcher code). */
-    @Param({"EXACT", "REGEX", "JSON_BODY"})
+    /**
+     * Shape of the registered matchers (exercises different matcher code).
+     *
+     * <ul>
+     *   <li>{@code EXACT}/{@code REGEX} — fail fast on PATH; never reach body/headers.</li>
+     *   <li>{@code JSON_BODY} — a JSON body matcher against a JSON request body.</li>
+     *   <li>{@code HEADERS_MISS} — every expectation shares method+path (so the scan passes
+     *       method+path and reaches HEADERS) but carries a distinct header matcher; the request
+     *       has the same method+path plus several headers, missing on every expectation's header
+     *       matcher. Forces the request-side header map to be (re)built for ALL N expectations —
+     *       the path Unit C's request-side MAP memoization targets.</li>
+     *   <li>{@code XML_BODY} — every expectation carries a JSON-schema body matcher; the request
+     *       carries an {@code application/xml} body, so {@code bodyMatches} routes through
+     *       {@code JsonSchemaBodyDecoder.convertToJson}'s XML branch (XML DOM parse + ObjectMapper
+     *       serialisation) once per candidate expectation on baseline — the path Unit D's per-request
+     *       XML→JSON cache targets. BODY is matched before HEADERS in the field order, so a blank
+     *       method/path on each expectation reaches the body matcher for ALL N expectations.</li>
+     * </ul>
+     */
+    @Param({"EXACT", "REGEX", "JSON_BODY", "HEADERS_MISS", "XML_BODY"})
     public String matcherType;
 
     /**
@@ -90,11 +110,51 @@ public class MatchingBenchmark {
         for (int i = 0; i < expectationCount; i++) {
             requestMatchers.add(buildExpectation(i), API);
         }
-        // matches none of the registered expectations -> full scan of all N
-        noMatchRequest = request()
-            .withMethod("GET")
-            .withPath("/no-such-path-zzzzzz")
-            .withBody("{\"unmatched\":true}");
+        noMatchRequest = buildNoMatchRequest();
+    }
+
+    /**
+     * Builds the benchmarked request — it matches <em>no</em> registered expectation, forcing the
+     * full N-matcher scan, but is shaped so that for HEADERS_MISS / XML_BODY the scan actually
+     * reaches the header / body matcher of every expectation (rather than failing fast on PATH).
+     */
+    private HttpRequest buildNoMatchRequest() {
+        switch (matcherType) {
+            case "HEADERS_MISS": {
+                // same method+path as every expectation -> passes method+path, reaches HEADERS for
+                // all N; carries several headers incl. an X-Tenant that matches no expectation.
+                HttpRequest r = request()
+                    .withMethod("GET")
+                    .withPath("/headers/scan");
+                r.withHeader(new Header("X-Tenant", "tenant-none-zzzzzz"));
+                r.withHeader(new Header("Accept", "application/json"));
+                r.withHeader(new Header("Accept-Encoding", "gzip, deflate, br"));
+                r.withHeader(new Header("User-Agent", "benchmark-client/1.0"));
+                r.withHeader(new Header("Authorization", "Bearer abcdef0123456789"));
+                r.withHeader(new Header("X-Request-Id", "11111111-2222-3333-4444-555555555555"));
+                r.withHeader(new Header("X-Forwarded-For", "203.0.113.7"));
+                r.withHeader(new Header("Cache-Control", "no-cache"));
+                r.withHeader(new Header("Connection", "keep-alive"));
+                r.withHeader(new Header("Content-Type", "application/json"));
+                return r;
+            }
+            case "XML_BODY": {
+                // an application/xml body matched against JSON-schema body matchers -> bodyMatches
+                // routes through convertToJson's XML branch (DOM parse + ObjectMapper) per expectation
+                // on baseline. Body is matched before headers in the field order, so each expectation
+                // (blank method/path) reaches the body matcher; the converted JSON fails the schema.
+                HttpRequest r = request()
+                    .withBody(XML_BODY);
+                r.withHeader(new Header("Content-Type", "application/xml"));
+                return r;
+            }
+            default:
+                // matches none of the registered expectations -> full scan of all N
+                return request()
+                    .withMethod("GET")
+                    .withPath("/no-such-path-zzzzzz")
+                    .withBody("{\"unmatched\":true}");
+        }
     }
 
     private Expectation buildExpectation(int i) {
@@ -105,12 +165,72 @@ public class MatchingBenchmark {
             case "JSON_BODY":
                 return new Expectation(request().withBody(new JsonBody("{\"id\": " + i + "}")))
                     .thenRespond(response().withBody("j" + i));
+            case "HEADERS_MISS":
+                // shared method+path so the scan reaches HEADERS; a distinct header matcher per
+                // expectation that the request never satisfies (X-Tenant=tenant-{i})
+                return new Expectation(
+                    request()
+                        .withMethod("GET")
+                        .withPath("/headers/scan")
+                        .withHeader(new Header("X-Tenant", "tenant-" + i))
+                ).thenRespond(response().withBody("h" + i));
+            case "XML_BODY":
+                // blank method/path -> match-anything for those fields, so BODY is reached; a
+                // JSON-schema body matcher forces convertToJson (XML branch) against the XML request
+                return new Expectation(
+                    request().withBody(JsonSchemaBody.jsonSchema(
+                        "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\",\"minimum\":" + (1000000 + i) + "}},\"required\":[\"id\"]}"
+                    ))
+                ).thenRespond(response().withBody("x" + i));
             case "EXACT":
             default:
                 return new Expectation(request().withMethod("GET").withPath("/exact/path-" + i))
                     .thenRespond(response().withBody("e" + i));
         }
     }
+
+    /** A non-trivial (~1KB), nested XML document so the DOM parse cost is visible per conversion. */
+    private static final String XML_BODY =
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+        "<order id=\"42\">\n" +
+        "  <customer>\n" +
+        "    <name>Acme Corporation</name>\n" +
+        "    <contact>\n" +
+        "      <email>orders@acme.example.com</email>\n" +
+        "      <phone>+1-555-0100</phone>\n" +
+        "    </contact>\n" +
+        "    <address>\n" +
+        "      <street>123 Industrial Way</street>\n" +
+        "      <city>Springfield</city>\n" +
+        "      <region>IL</region>\n" +
+        "      <postcode>62704</postcode>\n" +
+        "      <country>US</country>\n" +
+        "    </address>\n" +
+        "  </customer>\n" +
+        "  <items>\n" +
+        "    <item sku=\"AAA-111\">\n" +
+        "      <description>Widget, large, blue</description>\n" +
+        "      <quantity>10</quantity>\n" +
+        "      <unitPrice>19.99</unitPrice>\n" +
+        "    </item>\n" +
+        "    <item sku=\"BBB-222\">\n" +
+        "      <description>Gadget, small, red</description>\n" +
+        "      <quantity>5</quantity>\n" +
+        "      <unitPrice>49.50</unitPrice>\n" +
+        "    </item>\n" +
+        "    <item sku=\"CCC-333\">\n" +
+        "      <description>Sprocket assembly, stainless</description>\n" +
+        "      <quantity>2</quantity>\n" +
+        "      <unitPrice>129.00</unitPrice>\n" +
+        "    </item>\n" +
+        "  </items>\n" +
+        "  <payment>\n" +
+        "    <method>invoice</method>\n" +
+        "    <terms>net30</terms>\n" +
+        "    <currency>USD</currency>\n" +
+        "  </payment>\n" +
+        "  <notes>Please deliver to the loading dock at the rear of the building before noon.</notes>\n" +
+        "</order>\n";
 
     @Benchmark
     public Expectation firstMatchingExpectation_noMatch() {

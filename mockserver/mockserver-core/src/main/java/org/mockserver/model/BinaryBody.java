@@ -3,7 +3,6 @@ package org.mockserver.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.mockserver.serialization.Base64Converter;
 
-import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.Objects;
 

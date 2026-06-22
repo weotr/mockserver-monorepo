@@ -1,0 +1,50 @@
+meta {
+  name: verify a service-level objective over a window
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/verifySLO
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "checkout-slo",
+    "window": {
+      "type": "LOOKBACK",
+      "lookbackMillis": 60000
+    },
+    "minimumSampleCount": 20,
+    "upstreamHosts": [
+      "payments.svc"
+    ],
+    "objectives": [
+      {
+        "sli": "LATENCY_P95",
+        "comparator": "LESS_THAN",
+        "threshold": 250.0,
+        "scope": "FORWARD"
+      },
+      {
+        "sli": "ERROR_RATE",
+        "comparator": "LESS_THAN_OR_EQUAL",
+        "threshold": 0.01
+      }
+    ]
+  }
+}
+
+docs {
+  Evaluates a named set of objectives (latency percentiles, error rate) over a time window against the recorded forward-path SLI samples and returns a PASS / FAIL / INCONCLUSIVE verdict. The HTTP status encodes the verdict so a CI or chaos gate can assert on the status code alone: 200 when the verdict is PASS or INCONCLUSIVE, 406 when it is FAIL. A criteria PASSes only when all objectives hold (logical AND); it is INCONCLUSIVE when an indicator cannot be computed or the window holds fewer than minimumSampleCount samples. Off by default — returns 400 until sloTrackingEnabled=true.
+  
+  the service-level objective criteria to evaluate
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

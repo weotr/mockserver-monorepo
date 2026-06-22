@@ -67,7 +67,7 @@ Images are published to two registries:
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver` | Avoids Docker Hub rate limits for AWS-based CI/CD |
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver-webhook` | Webhook image on ECR |
 
-Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, `-graaljs`, `clustered-*`, and webhook release variants. The `:latest` tag is pushed only by the release pipeline, not by the legacy Buildkite docker-push-release step. The `:latest` tag always points to the most recent official release, not the development branch.
+Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, `-graaljs`, `clustered-*`, and webhook release variants. The `:latest` tag is pushed only by the release pipeline, not by the per-merge snapshot step. The `:latest` tag always points to the most recent official release, not the development branch.
 
 Release images are cosign-signed by digest after push (see below). Snapshot images are not signed.
 
@@ -90,14 +90,14 @@ cosign verify \
 # Or verify the tag (resolves to digest internally)
 cosign verify \
   --key https://www.mock-server.com/mockserver-cosign.pub \
-  mockserver/mockserver:7.0.0
+  mockserver/mockserver:7.1.0
 ```
 
 The public key corresponding to `mockserver-release/cosign-key` is **published at `https://www.mock-server.com/mockserver-cosign.pub`** (source: `jekyll-www.mock-server.com/mockserver-cosign.pub`; an identical copy is at `helm/mockserver/cosign.pub`). It can also be re-derived from the private key with `cosign public-key --key cosign.key`. The same key signs the Helm chart.
 
 Signing is non-fatal in the release pipeline: if the key is absent (or the cosign binary cannot be downloaded), images are published unsigned and the release continues. The cosign binary itself is no longer a prerequisite — the release step downloads and checksum-verifies it on demand.
 
-> **IAM note:** the signing step is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`, so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret in addition to `GetSecretValue` — otherwise the probe fails and signing is silently skipped (this caused the 7.0.0 chart/images to publish unsigned until the grant was added to `read_release_secrets`).
+> **IAM note:** the signing step is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`, so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret in addition to `GetSecretValue` — otherwise the probe fails and signing is silently skipped (this caused the 7.1.0 chart/images to publish unsigned until the grant was added to `read_release_secrets`).
 
 ### Base Image CVE Baseline
 
@@ -163,6 +163,22 @@ Both modes download `netty-tcnative-boringssl-static` from Maven Central (`repo1
 
 **Entry point:** `java -Dfile.encoding=UTF-8 -cp /mockserver-netty-jar-with-dependencies.jar:/libs/* -Dmockserver.propertyFile=/config/mockserver.properties org.mockserver.cli.Main`
 
+### Building Behind a Corporate TLS-Inspecting Proxy
+
+**Outcome:** to build the image variants locally behind a corporate TLS proxy, point `MOCKSERVER_LOCAL_CA_BUNDLE` at your corporate root CA before building — CI and published images are byte-identical because the mechanism is a no-op when the variable is unset.
+
+```bash
+export MOCKSERVER_LOCAL_CA_BUNDLE=/path/to/corporate-root-ca.pem
+# then build any variant as usual, e.g.:
+docker build docker/            # base image (downloads from Maven Central via the proxy)
+```
+
+**How it works:** each variant's alpine download stage (`docker/`, `docker/root/`, `docker/snapshot/`, `docker/root-snapshot/`, `docker/clustered/`, `docker/graaljs/`) `COPY`s a `ca-bundle.pem` from the build context. When that file is non-empty, the stage trusts it before `apk add` and before the `wget` jar downloads from `repo1.maven.org`, so TLS interception does not break the build. When it is empty (the CI/published-image case), an `[ -s ]` guard skips all trust changes, so the build is identical to a no-CA build.
+
+The release/CI scripts and the container-integration-test harness stage this file automatically via the shared `docker/ensure-ca-bundle.sh` helper: it copies `MOCKSERVER_LOCAL_CA_BUNDLE` (or the `NODE_EXTRA_CA_CERTS` / `AWS_CA_BUNDLE` fallbacks) into the context when set, otherwise writes an empty placeholder. All `ca-bundle.pem` files are gitignored. The single-stage `docker/local` and `docker/webhook` images do not download anything and so do not use this mechanism.
+
+The same download stages also harden Maven Central downloads against transient DNS/connection blips by appending GNU-wget retry directives (`tries`, `timeout`, `waitretry`, `retry_on_host_error`, `retry_connrefused`) to `/etc/wgetrc`. BusyBox wget ignores `/etc/wgetrc`, so this is a safe no-op on images that fall back to it.
+
 ### Build Images
 
 | Image | Dockerfile | Base | Purpose |
@@ -203,8 +219,8 @@ Uses environment variables (`MOCKSERVER_*`) for configuration.
 Production images are built for both `linux/amd64` and `linux/arm64` using Buildkite with QEMU emulation on x86_64 agents:
 
 ```bash
-# Triggered via Buildkite docker-push-release pipeline
-# Set RELEASE_TAG=mockserver-X.Y.Z environment variable when triggering
+# Built and pushed by the release pipeline's Docker step
+# (scripts/release/components/docker.sh, via release-runner.sh docker)
 ```
 
 See [CI/CD](ci-cd.md) for full pipeline details.

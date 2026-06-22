@@ -202,6 +202,7 @@ public class GeminiCodec implements ProviderCodec {
                 String textContent = "";
                 List<ToolUse> toolCalls = new ArrayList<>();
                 Map<String, String> toolResults = new LinkedHashMap<>();
+                List<ParsedMessage.ImagePart> images = new ArrayList<>();
                 boolean hasToolResult = false;
 
                 if (partsNode != null && partsNode.isArray()) {
@@ -210,6 +211,15 @@ public class GeminiCodec implements ProviderCodec {
                     for (JsonNode part : partsNode) {
                         if (part.has("text")) {
                             textBuilder.append(part.get("text").asText(""));
+                        } else if (part.has("inline_data") || part.has("inlineData")) {
+                            // Gemini image part: {"inline_data":{"mime_type":"image/png","data":"..."}}
+                            // (REST snake_case or SDK camelCase). Recognise images only.
+                            JsonNode inline = part.has("inline_data") ? part.get("inline_data") : part.get("inlineData");
+                            String mimeType = inline.has("mime_type") ? inline.path("mime_type").asText(null)
+                                : (inline.has("mimeType") ? inline.path("mimeType").asText(null) : null);
+                            if (mimeType == null || mimeType.startsWith("image/")) {
+                                images.add(new ParsedMessage.ImagePart(mimeType));
+                            }
                         } else if (part.has("functionCall")) {
                             JsonNode fc = part.get("functionCall");
                             String name = fc.has("name") ? fc.get("name").asText("") : "";
@@ -257,7 +267,8 @@ public class GeminiCodec implements ProviderCodec {
                     role,
                     textContent,
                     toolCalls.isEmpty() ? null : toolCalls,
-                    toolResults.isEmpty() ? null : toolResults
+                    toolResults.isEmpty() ? null : toolResults,
+                    images.isEmpty() ? null : images
                 ));
             }
 
@@ -267,9 +278,33 @@ public class GeminiCodec implements ProviderCodec {
         }
     }
 
+    /**
+     * Encodes a Gemini {@code embedContent} response
+     * ({@code POST /v1beta/models/{model}:embedContent}). The response carries a
+     * single {@code embedding} object with a {@code values} array
+     * ({@code {"embedding":{"values":[...]}}}). The Gemini default dimensionality
+     * for {@code text-embedding-004} is 768.
+     */
     @Override
     public HttpResponse encodeEmbedding(EmbeddingResponse embedding, String input) {
-        throw new UnsupportedOperationException("Gemini embeddings use a different endpoint shape not yet supported");
+        double[] vector = EmbeddingVectors.build(embedding, input, 768);
+
+        ObjectNode root = OBJECT_MAPPER.createObjectNode();
+        ObjectNode embeddingObj = root.putObject("embedding");
+        ArrayNode values = embeddingObj.putArray("values");
+        for (double v : vector) {
+            values.add(v);
+        }
+
+        try {
+            String json = OBJECT_MAPPER.writeValueAsString(root);
+            return response()
+                .withStatusCode(200)
+                .withHeader("content-type", "application/json")
+                .withBody(json);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to encode Gemini embedding response", e);
+        }
     }
 
     private static ParsedMessage.Role mapGeminiRole(String rawRole) {

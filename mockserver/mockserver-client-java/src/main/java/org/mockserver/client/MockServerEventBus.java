@@ -15,8 +15,10 @@ final class MockServerEventBus {
     private final Multimap<EventType, SubscriberHandler> subscribers = LinkedListMultimap.create();
 
     void publish(EventType event) {
-        List<SubscriberHandler> handlers = new ArrayList<>(subscribers.get(event));
-        subscribers.clear();
+        // only remove the subscribers for the specific event type being published, so that
+        // publishing one event type (e.g. RESET) does not wipe subscribers of other event types
+        // (e.g. STOP) belonging to other MockServerClient instances sharing this per-port bus
+        List<SubscriberHandler> handlers = new ArrayList<>(subscribers.removeAll(event));
         for (SubscriberHandler subscriber : handlers) {
             subscriber.handle();
         }

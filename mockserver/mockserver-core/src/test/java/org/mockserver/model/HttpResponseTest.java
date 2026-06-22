@@ -310,4 +310,56 @@ public class HttpResponseTest {
                 )
         ));
     }
+
+    @Test
+    public void returnsTrailers() {
+        assertThat(new HttpResponse().withTrailers(new Header("name", "value")).getTrailerList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpResponse().withTrailers(Collections.singletonList(new Header("name", "value"))).getTrailerList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpResponse().withTrailer(new Header("name", "value")).getTrailerList().get(0), is(new Header("name", "value")));
+        assertThat(new HttpResponse().withTrailer("name", "value1", "value2").getTrailerList().get(0), is(new Header("name", "value1", "value2")));
+    }
+
+    @Test
+    public void returnsNoTrailersByDefault() {
+        assertThat(new HttpResponse().getTrailers(), is(nullValue()));
+        assertThat(new HttpResponse().getTrailerList(), hasSize(0));
+        assertThat(new HttpResponse().getTrailerMultimap(), is(nullValue()));
+    }
+
+    @Test
+    public void emptyTrailersAreTreatedAsNoTrailers() {
+        assertThat(new HttpResponse().withTrailers(new Headers()).getTrailers(), is(nullValue()));
+        assertThat(new HttpResponse().withTrailers((Headers) null).getTrailers(), is(nullValue()));
+    }
+
+    @Test
+    public void trailersAreIncludedInEqualsAndHashCode() {
+        HttpResponse withTrailer = response().withStatusCode(200).withTrailer("x-checksum", "abc123");
+        HttpResponse withoutTrailer = response().withStatusCode(200);
+        HttpResponse withSameTrailer = response().withStatusCode(200).withTrailer("x-checksum", "abc123");
+
+        assertThat(withTrailer, not(is(withoutTrailer)));
+        assertThat(withTrailer, is(withSameTrailer));
+        assertThat(withTrailer.hashCode(), is(withSameTrailer.hashCode()));
+    }
+
+    @Test
+    public void trailersAreCloned() {
+        // given
+        HttpResponse responseOne = response()
+            .withStatusCode(200)
+            .withHeader("some_header", "some_header_value")
+            .withTrailer("x-checksum", "abc123");
+
+        // when
+        HttpResponse responseTwo = responseOne.clone();
+
+        // then
+        assertThat(responseOne, not(sameInstance(responseTwo)));
+        assertThat(responseOne, is(responseTwo));
+        assertThat(responseTwo.getTrailerList().get(0), is(new Header("x-checksum", "abc123")));
+        // mutating the clone's trailers must not affect the original
+        responseTwo.withTrailer("x-extra", "extra");
+        assertThat(responseOne.getTrailerList(), hasSize(1));
+    }
 }

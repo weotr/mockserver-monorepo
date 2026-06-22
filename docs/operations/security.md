@@ -10,6 +10,17 @@ Users who need to lock down a MockServer deployment can harden these capabilitie
 
 See [SECURITY.md](../../SECURITY.md) for the full security policy, including intentional security behaviours and vulnerability reporting.
 
+## Control-plane audit logging
+
+When MockServer runs as shared infrastructure, an opt-in audit log records *who changed mock state* (control-plane mutations: who/what/when/where/outcome) so changes are accountable. It is off by default and is **not** data-plane traffic logging. Enable it with `controlPlaneAuditEnabled` and retrieve it via `GET /mockserver/audit`. See [event-system.md](../code/event-system.md#control-plane-audit-log) and [configuration-reference.md](../code/configuration-reference.md#controlplaneauditenabled-controlplaneauditmaxentries-controlplaneauditreads).
+
+Security-relevant properties of the audit log:
+
+- **Records no bodies and no headers.** Each entry stores only redacted, structural metadata (method, control-plane path with the query string dropped, logical operation, source address, best-effort principal, outcome). It can never become a sink for request payloads or credential headers.
+- **Redaction (by omission).** The path's query string is stripped, and no header or body is ever stored, so there is no credential-bearing free text to scrub; the `summary` field is unused (`null`) in v1. The best-effort principal parser reads only the JWT `sub` claim (or the mTLS subject CN) and never stores the raw bearer token. (If a non-null `summary` is added later it must be scrubbed via `FixtureRedactor`'s default sensitive set + `***REDACTED***` at that point.)
+- **Default-off and fail-soft.** When disabled, control-plane operations behave byte-for-byte identically. The audit emit is wrapped in `try/catch` and can never throw into the request path.
+- **Best-effort, UNVERIFIED principal (v1).** The principal is read from an unverified JWT `sub` (no signature verification) or the mTLS client-certificate CN, else `anonymous`. **Verified identity is a later unit (1.5-A)** — do not treat the v1 principal as an authenticated subject; treat it as a hint correlated with the (separately enforced) control-plane authentication.
+
 ## Static Analysis: CodeQL
 
 GitHub's CodeQL semantic analysis runs automatically on:
@@ -63,6 +74,7 @@ MockServer targets **Java 17** as the minimum supported runtime. Some dependenci
 |------------|---------|--------|
 | `com.puppycrawl.tools:checkstyle` | `< 13.0.0` (stay on 12.x) | checkstyle 13.x is compiled for Java 21 (class file version 65.0) and fails to load under Java 17 — see the CodeQL `Analyze (java)` build, which runs on Java 17 |
 | `org.infinispan:infinispan-core` | `< 15.0.0` (stay on 14.0.x) | Infinispan 15.x requires Java 21+. The 14.0.x line is the last to support Java 17. Used only by `mockserver-state-infinispan`. |
+| `com.graphql-java:graphql-java` | `< 25.0.0` (precautionary) | graphql-java 22.x–24.x ship Java 11 bytecode and run fine on Java 17 (verified by `mockserver-core` build/tests on the Java 17 target). The ceiling is precautionary: a future major (25.x) could raise the runtime floor, so it must be manually verified on Java 17 before adoption. Pulls in `com.graphql-java:java-dataloader` (3.3.x); ANTLR4 runtime and `reactive-streams` arrive transitively. Used by `org.mockserver.graphql.*` for schema-driven GraphQL response synthesis. |
 
 **When raising the Java floor:** remove the corresponding ceiling here and the matching ignore entries in `.github/dependabot.yml`, then let the dependency upgrade. The Dependabot ignore does not block **manual** version bumps in `pom.xml` — keep this table in mind when hand-editing dependency versions.
 
@@ -269,9 +281,9 @@ Container scanners (Trivy, Grype, the ArtifactHub Helm security report) will alw
 
 ### Recommendations for Consumers
 
-- **For maximum security:** Pin to a specific release version (e.g., `7.0.0`), not `latest` or `SNAPSHOT`
+- **For maximum security:** Pin to a specific release version (e.g., `7.1.0`), not `latest` or `SNAPSHOT`
 - **For Renovate/Dependabot users:** Configure version constraints to only match release versions, not SNAPSHOTs
-- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:7.0.0`) rather than `latest`
+- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:7.1.0`) rather than `latest`
 - **Subscribe to releases:** Watch the [GitHub releases page](https://github.com/mock-server/mockserver-monorepo/releases) for new versions with resolved security issues
 
 ## Vulnerability Reporting

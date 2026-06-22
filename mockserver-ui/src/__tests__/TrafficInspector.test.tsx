@@ -473,6 +473,113 @@ describe('TrafficInspector — compare two requests (diff)', () => {
   });
 });
 
+describe('TrafficInspector — Capture as mock for standard HTTP (WS5.2)', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the "Capture as mock" button when a standard (non-LLM) HTTP request is selected', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-plain-http',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/widgets',
+              headers: [{ name: 'host', values: ['example.com'] }],
+            },
+            httpResponse: {
+              statusCode: 200,
+              body: { type: 'JSON', json: '{"widgets":[]}' },
+            },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+
+    // Select the standard HTTP row
+    const row = screen.getByText(/\/api\/widgets/);
+    await user.click(row);
+
+    // The capture button must be offered for plain HTTP traffic, not just LLM traffic.
+    expect(
+      screen.getByRole('button', { name: /Capture as mock/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('opens the capture dialog and registers a generic expectation via PUT /mockserver/expectation', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-capture-http',
+          value: {
+            httpRequest: {
+              method: 'POST',
+              path: '/api/orders',
+              headers: [{ name: 'host', values: ['example.com'] }],
+              body: { type: 'JSON', json: '{"sku":"A1"}' },
+            },
+            httpResponse: {
+              statusCode: 201,
+              body: { type: 'JSON', json: '{"id":7}' },
+            },
+          },
+        },
+      ],
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderTrafficInspector();
+
+    const row = screen.getByText(/\/api\/orders/);
+    await user.click(row);
+
+    await user.click(screen.getByRole('button', { name: /Capture as mock/i }));
+
+    // Dialog opens in generic-HTTP mode pre-populated from the captured request.
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Capture as Mock')).toBeInTheDocument();
+
+    // Register the expectation.
+    await user.click(within(dialog).getByRole('button', { name: 'Register' }));
+
+    // The generic path uses PUT /mockserver/expectation with the captured method/path/status/body.
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/mockserver/expectation'),
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.httpRequest).toMatchObject({ method: 'POST', path: '/api/orders' });
+    expect(body.httpResponse).toMatchObject({ statusCode: 201 });
+    expect(body.httpResponse.body).toBe('{"id":7}');
+  });
+});
+
 describe('TrafficInspector — Replay button', () => {
   beforeEach(() => {
     useDashboardStore.setState({
@@ -622,14 +729,162 @@ describe('TrafficInspector — Replay button', () => {
     const dialogReplayBtn = within(dialog).getByRole('button', { name: /Replay/i });
     await user.click(dialogReplayBtn);
 
-    // An error Alert (severity="error") should appear with the status and message
+    // An error Alert (severity="error") should appear. The replay failure is now
+    // routed through humanizeError, so a 503 surfaces the friendly internal-error
+    // message (the raw "503: Service Unavailable" text is kept for a Details pane,
+    // not shown inline by this Alert).
     const errorAlert = await within(dialog).findByRole('alert');
     expect(errorAlert).toBeInTheDocument();
-    expect(errorAlert).toHaveTextContent('503');
-    expect(errorAlert).toHaveTextContent('Service Unavailable');
+    expect(errorAlert).toHaveTextContent(/internal error/i);
 
     // The loading spinner should be gone (dialog replay button should be re-enabled)
     expect(within(dialog).getByRole('button', { name: /Replay/i })).toBeEnabled();
     expect(within(dialog).queryByRole('progressbar')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Master/detail resize-divider tests.
+ *
+ * The vertical drag handle between the master list and the detail pane appears
+ * ONLY in the side-by-side case (not stacked, an entry selected, not comparing).
+ * jsdom has no layout, so we assert handle presence/absence and accessibility,
+ * not pixel widths — the default master width renders without measurement.
+ */
+function stubMatchMedia(matches: boolean) {
+  window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+const simpleRequest = {
+  key: 'req-resize',
+  value: {
+    httpRequest: {
+      method: 'GET',
+      path: '/api/widgets',
+      headers: [{ name: 'host', values: ['example.com'] }],
+    },
+    httpResponse: { statusCode: 200 },
+  },
+};
+
+describe('TrafficInspector — search filtering', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'req-users',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/users', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+        {
+          key: 'req-orders',
+          value: {
+            httpRequest: { method: 'POST', path: '/api/orders', headers: [{ name: 'host', values: ['shop.example.com'] }] },
+            httpResponse: { statusCode: 201, body: { type: 'JSON', json: '{"sku":"WIDGET-42"}' } },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  it('filters rows by a field match (path) as the user types', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    // Both rows visible initially.
+    expect(screen.getByText(/\/api\/users/)).toBeInTheDocument();
+    expect(screen.getByText(/\/api\/orders/)).toBeInTheDocument();
+
+    const search = screen.getByPlaceholderText('Search...');
+    await user.type(search, 'orders');
+
+    expect(screen.queryByText(/\/api\/users/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\/api\/orders/)).toBeInTheDocument();
+  });
+
+  it('filters rows by a full-text body match (the cached fallback path)', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    const search = screen.getByPlaceholderText('Search...');
+    // "WIDGET-42" only appears inside the response body, exercising the cached
+    // JSON.stringify fallback rather than the field-level match.
+    await user.type(search, 'widget-42');
+
+    expect(screen.getByText(/\/api\/orders/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/api\/users/)).not.toBeInTheDocument();
+  });
+
+  it('shows the empty-state message when nothing matches', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    const search = screen.getByPlaceholderText('Search...');
+    await user.type(search, 'nonexistent-term-xyz');
+
+    expect(screen.getByText('No matching requests')).toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — master/detail resize divider', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  afterEach(() => {
+    // @ts-expect-error allow deleting the optional stub
+    delete window.matchMedia;
+  });
+
+  it('renders the resize divider when an entry is selected side-by-side (desktop)', () => {
+    useDashboardStore.setState({
+      recordedRequests: [simpleRequest],
+      selectedTrafficKey: 'req-resize',
+    });
+    renderTrafficInspector();
+    const handle = screen.getByTestId('traffic-master-resizer');
+    expect(handle).toBeInTheDocument();
+    expect(handle).toHaveAttribute('role', 'separator');
+    expect(handle).toHaveAttribute('aria-orientation', 'vertical');
+  });
+
+  it('does NOT render the divider when nothing is selected', () => {
+    useDashboardStore.setState({
+      recordedRequests: [simpleRequest],
+      selectedTrafficKey: null,
+    });
+    renderTrafficInspector();
+    expect(screen.queryByTestId('traffic-master-resizer')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render the divider on a stacked (small-screen) viewport even with a selection', () => {
+    stubMatchMedia(true);
+    useDashboardStore.setState({
+      recordedRequests: [simpleRequest],
+      selectedTrafficKey: 'req-resize',
+    });
+    renderTrafficInspector();
+    expect(screen.queryByTestId('traffic-master-resizer')).not.toBeInTheDocument();
   });
 });

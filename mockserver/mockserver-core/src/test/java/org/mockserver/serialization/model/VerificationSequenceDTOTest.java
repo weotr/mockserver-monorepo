@@ -1,6 +1,7 @@
 package org.mockserver.serialization.model;
 
 import org.junit.Test;
+import org.mockserver.model.HttpResponse;
 import org.mockserver.verify.VerificationSequence;
 
 import java.util.Arrays;
@@ -9,6 +10,7 @@ import java.util.Collections;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
 
 public class VerificationSequenceDTOTest {
 
@@ -91,6 +93,60 @@ public class VerificationSequenceDTOTest {
 
         // then
         assertThat(verificationSequenceDTO.getHttpRequests(), is(Collections.<HttpRequestDTO>emptyList()));
+        assertThat(verificationSequenceDTO.getHttpResponses(), is(Collections.<HttpResponseDTO>emptyList()));
+    }
+
+    @Test
+    public void shouldReturnResponsesSetInConstructor() {
+        // given
+        HttpResponse response1 = response().withStatusCode(200);
+        HttpResponse response2 = response().withStatusCode(404);
+        VerificationSequence verification = new VerificationSequence()
+            .withRequests(request("one"))
+            .withResponses(response1, response2);
+
+        // when
+        VerificationSequenceDTO verificationSequenceDTO = new VerificationSequenceDTO(verification);
+
+        // then
+        assertThat(verificationSequenceDTO.getHttpResponses(), is(Arrays.asList(
+            new HttpResponseDTO(response1),
+            new HttpResponseDTO(response2)
+        )));
+    }
+
+    @Test
+    public void shouldBuildObjectWithResponses() {
+        // given
+        HttpResponse response1 = response().withStatusCode(200);
+        HttpResponse response2 = response().withStatusCode(404);
+        VerificationSequence verification = new VerificationSequence()
+            .withRequests(request("one"))
+            .withResponses(response1, response2);
+
+        // when
+        VerificationSequence builtVerification = new VerificationSequenceDTO(verification).buildObject();
+
+        // then
+        assertThat(builtVerification.getHttpResponses(), is(Arrays.asList(response1, response2)));
+    }
+
+    @Test
+    public void shouldReturnResponsesSetInSetter() {
+        // given
+        VerificationSequenceDTO verificationSequenceDTO = new VerificationSequenceDTO(new VerificationSequence());
+
+        // when
+        verificationSequenceDTO.setHttpResponses(Arrays.asList(
+            new HttpResponseDTO(response().withStatusCode(200)),
+            new HttpResponseDTO(response().withStatusCode(500))
+        ));
+
+        // then
+        assertThat(verificationSequenceDTO.getHttpResponses(), is(Arrays.asList(
+            new HttpResponseDTO(response().withStatusCode(200)),
+            new HttpResponseDTO(response().withStatusCode(500))
+        )));
     }
 
 }

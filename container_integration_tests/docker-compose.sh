@@ -81,7 +81,10 @@ function start-up() {
 
 function container-logs() {
   printMessage "mockserver logs"
-  docker-compose logs
+  # Scope to the test's compose project (otherwise the crashed project's logs
+  # are not found) and never fail — a missing/crashed project must not abort
+  # the caller under `set -e`.
+  docker-compose -p "${TEST_CASE}" logs || true
 }
 
 # Poll a MockServer instance (by docker-compose service name) via the client

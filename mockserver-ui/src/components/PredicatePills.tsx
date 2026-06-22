@@ -92,7 +92,7 @@ export default function PredicatePills({ predicates }: PredicatePillsProps) {
           size="small"
           color="info"
           variant="outlined"
-          sx={{ height: 22, fontSize: '0.7rem' }}
+          sx={{ height: 22 }}
         />
       ))}
     </Box>

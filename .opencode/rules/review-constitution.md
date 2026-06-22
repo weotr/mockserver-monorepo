@@ -13,6 +13,53 @@ These principles govern the adversarial review process for MockServer. The revie
 5. **Failure is the default.** Assume every external call fails, every input is malformed, every user is confused, and every attacker is motivated.
 6. **LLM-generated code has systematic blind spots.** The developer and reviewer may share training data and reasoning patterns — actively hunt for hallucinated names, plausible-but-incorrect logic, and incomplete error handling.
 
+## Review Constitutions — Baseline + Per-Artefact Profiles
+
+The **8 lenses below** (Ambiguity, Incompleteness, Inconsistency, Infeasibility,
+Insecurity, Inoperability, Incorrectness, Overcomplexity), the Core Axioms, and the
+MockServer-Specific Review Triggers are the **baseline** every review applies — the
+floor, never removed. A review is *also* driven by a **per-artefact-type profile**
+that **extends** the baseline with the focus areas, key evidence, and PASS criteria
+that matter most for that artefact (spec §14.3). This raises signal (probe what
+actually breaks this artefact type) and cuts noise (don't force-fit irrelevant
+generic concerns) — but a profile may never excuse skipping a baseline lens.
+
+**Profile set version: 1.0** (2026-06-15). Changes to the baseline or any profile
+require a version bump and a control-integrity review ([[control-integrity]]); the
+version applied is recorded in the decision log.
+
+Rules:
+
+- **Pick a profile per artefact** from its type — infer the type from the file
+  categories / paths (`.java` + tests → review-coding; `docs/**.md` →
+  review-documentation; `.tf` / Dockerfile / pipeline YAML → review-deployment; a
+  spec / plan / ADR doc → the matching profile). If **no profile matches**, apply
+  the **baseline only** and note why. Record which profile + version (and any
+  composition) was applied in the decision log ([[decision-log]]) for significant
+  or control-change reviews.
+- **Baseline always included** — a profile sharpens the lenses; it never removes one.
+- **Composition** — an artefact spanning types (code + its tests, an ADR inside a
+  plan) is reviewed under a composition of profiles; record the composition.
+
+| Profile | Governs | Sharpens (beyond the baseline lenses) | Key evidence | PASS emphasises |
+|---------|---------|----------------------------------------|--------------|------------------|
+| **review-coding** | code changes + tests | correctness vs intent, edge cases, concurrency/resource safety (ByteBuf, handlers), convention conformance, meaningful test coverage, diff security, observability of new paths | diff + test results + static analysis | behaviour matches intent and is covered by meaningful tests |
+| **review-specification** | specs, requirements | testability of each requirement, measurability of outcomes, scope/non-goal clarity, normative precision, internal contradiction, hidden assumptions | the spec + its source intent | every requirement is verifiable and unambiguous |
+| **review-plan** | implementation / migration plans | decomposition into independent units, dependency/sequencing, parallelisability & contention, rollback per step, blast radius, cancellation points | plan + repo/contention map | each unit is independently executable and reversible |
+| **review-adr** | architecture decision records | alternatives genuinely considered, trade-offs explicit, reversibility/lock-in, coupling impact, consistency with existing architecture, decay conditions | ADR + affected architecture | decision, alternatives, consequences explicit and justified |
+| **review-investigation** | diagnoses, RCAs, ops analyses | causal soundness (correlation vs causation), evidence completeness, alternatives ruled out, reproducible evidence trail, actionability | logs / metrics / traces + change records | conclusion is evidence-backed and the trail is reproducible |
+| **review-documentation** | docs, READMEs, runbooks | accuracy vs current behaviour, completeness, staleness, audience fit, runnable instructions, dead links/commands | doc + the code/system it describes | content is accurate, current, and executable as written |
+| **review-deployment** | deployment / infra changes | rollback characteristics, blast radius, progressive-delivery safety, observability/alerting, policy/security conformance, capacity impact | change + infra validation + policy checks | change is reversible, observable, and within policy |
+| **review-periodic** | scheduled health / drift / security sweeps | drift from standards, accumulating risk/debt, coverage gaps, regressions vs baseline, recurrence of known failure patterns | trend / baseline comparisons | no unflagged regression, drift, or recurring failure pattern |
+
+The **MockServer-Specific Review Triggers** section below applies to **all
+reviews as part of the baseline** (the floor) — e.g. a *spec* or *plan* that
+touches ByteBuf lifecycle, Netty pipeline order, or ring-buffer sizing must still
+fire those triggers. The **review-coding** profile additionally lists them as
+primary key evidence, because code changes are the most common context in which
+they fire. Every other profile shares the same lens machinery, sharpened per the
+table above.
+
 ## Lens 1 Principles: Ambiguity
 
 | ID | Principle | Anti-Pattern |
@@ -221,3 +268,25 @@ After applying all lenses and completing the checklist, return ONE of:
 - **BLOCK** — One or more CRITICAL or MAJOR findings exist; code/spec must not proceed until fixed
 
 Do NOT use "PASS with reservations" or similar hedging language. Either it passes or it blocks.
+
+## Iteration Protocol
+
+Adversarial review is **iterative** — the author fixes BLOCK findings and the
+artefact is re-reviewed on a fresh context until it converges. The loop is
+bounded. **One iteration = one review subagent invocation**: the initial review
+is iteration 1, and each re-review after a fix is the next iteration.
+
+- Each iteration **must** produce explicit findings (or an explicit PASS).
+- Each MAJOR/CRITICAL finding **must** be addressed or **consciously
+  dispositioned** (accepted with a recorded rationale) before the next iteration.
+  Dispositioning anything above MINOR **requires user approval** — an agent must
+  not self-approve findings to advance toward the cap.
+- After any material change, **re-verify** (re-run the affected validations)
+  before re-reviewing — fixes regress.
+- Terminate when **either** the review returns PASS (no new major findings)
+  **or** **8 review iterations** have completed — whichever comes first.
+- If the **8-iteration cap** is reached **without** a PASS, do **not** proceed as
+  if converged: **record the unresolved residual risk explicitly** — the
+  outstanding findings and why they remain, in `docs/plans/<task>.local.md` or
+  inline in the escalation message — and **escalate to the user**. The
+  8-iteration ceiling is a hard cap. (Spec: `docs/operations/ai-sdlc-integration-spec.md` §14.5.)

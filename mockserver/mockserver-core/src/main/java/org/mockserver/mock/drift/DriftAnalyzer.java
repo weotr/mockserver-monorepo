@@ -92,6 +92,7 @@ public class DriftAnalyzer {
         // Store all collected records
         for (DriftRecord record : collected) {
             store.add(record);
+            DriftAlertNotifier.getInstance().onDriftStored(record);
         }
     }
 
@@ -212,14 +213,16 @@ public class DriftAnalyzer {
         }
         long p95 = PercentileTracker.getInstance().p95(expectationId);
         if (p95 > threshold) {
-            store.add(new DriftRecord()
+            DriftRecord record = new DriftRecord()
                 .setExpectationId(expectationId)
                 .setDriftType(DriftType.PERFORMANCE)
                 .setField("p95_response_time_ms")
                 .setExpectedValue("<=" + threshold)
                 .setActualValue(String.valueOf(p95))
                 .setConfidence(0.8)
-                .setEpochTimeMs(now));
+                .setEpochTimeMs(now);
+            store.add(record);
+            DriftAlertNotifier.getInstance().onDriftStored(record);
         }
     }
 

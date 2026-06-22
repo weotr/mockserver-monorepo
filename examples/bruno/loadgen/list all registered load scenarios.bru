@@ -1,0 +1,17 @@
+meta {
+  name: list all registered load scenarios
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/mockserver/loadScenario
+  body: none
+  auth: inherit
+}
+
+docs {
+  Lists every registered load scenario with its lifecycle state (LOADED / PENDING / RUNNING / COMPLETED / STOPPED), startDelayMillis, full definition, and — when active or recently run — the live status fields (stage, virtual users, request counts, latency percentiles, run id, timestamps).
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

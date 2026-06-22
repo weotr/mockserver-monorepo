@@ -21,12 +21,15 @@ import org.slf4j.event.Level;
 
 import java.io.*;
 import java.lang.management.MemoryType;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -60,9 +63,26 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CHAOS_AUTO_HALT_ENABLED = "mockserver.chaosAutoHaltEnabled";
     private static final String MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD = "mockserver.chaosAutoHaltErrorThreshold";
     private static final String MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS = "mockserver.chaosAutoHaltWindowMillis";
+    private static final String MOCKSERVER_RATE_LIMIT_MAX_NAMED_QUOTAS = "mockserver.rateLimitMaxNamedQuotas";
+    private static final String MOCKSERVER_CONNECTION_LIFECYCLE_CHAOS_ENABLED = "mockserver.connectionLifecycleChaosEnabled";
+    private static final String MOCKSERVER_PREEMPTION_SIMULATION_MAX_DRAIN_MILLIS = "mockserver.preemptionSimulationMaxDrainMillis";
+    private static final String MOCKSERVER_CONNECTION_LIFECYCLE_AUTO_HALT_COUNTS_RST = "mockserver.connectionLifecycleAutoHaltCountsRst";
+    private static final String MOCKSERVER_SLO_TRACKING_ENABLED = "mockserver.sloTrackingEnabled";
+    private static final String MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS = "mockserver.sloWindowRetentionMillis";
+    private static final String MOCKSERVER_SLO_WINDOW_MAX_SAMPLES = "mockserver.sloWindowMaxSamples";
+    private static final String MOCKSERVER_LOAD_GENERATION_ENABLED = "mockserver.loadGenerationEnabled";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS = "mockserver.loadGenerationMaxVirtualUsers";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS = "mockserver.loadGenerationMaxInFlightRequests";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND = "mockserver.loadGenerationMaxRequestsPerSecond";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS = "mockserver.loadGenerationMaxDurationMillis";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_STEPS = "mockserver.loadGenerationMaxSteps";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_RATE = "mockserver.loadGenerationMaxRate";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_STAGES = "mockserver.loadGenerationMaxStages";
+    private static final String MOCKSERVER_LOAD_GENERATION_MAX_CONCURRENT_SCENARIOS = "mockserver.loadGenerationMaxConcurrentScenarios";
+    private static final String MOCKSERVER_LOAD_GENERATION_METRIC_LABELS = "mockserver.loadGenerationMetricLabels";
+    private static final String MOCKSERVER_LOAD_SCENARIO_INITIALIZATION_JSON_PATH = "mockserver.loadScenarioInitializationJsonPath";
     private static final String MOCKSERVER_MCP_ENABLED = "mockserver.mcpEnabled";
-    private static final String MOCKSERVER_BREAKPOINT_ENABLED = "mockserver.breakpointEnabled";
-    private static final String MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED = "mockserver.breakpointResponseEnabled";
+    private static final String MOCKSERVER_STOP_DRAIN_MILLIS = "mockserver.stopDrainMillis";
     private static final String MOCKSERVER_BREAKPOINT_TIMEOUT_MILLIS = "mockserver.breakpointTimeoutMillis";
     private static final String MOCKSERVER_BREAKPOINT_MAX_HELD = "mockserver.breakpointMaxHeld";
     private static final String MOCKSERVER_LOG_LEVEL_OVERRIDES = "mockserver.logLevelOverrides";
@@ -88,6 +108,17 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_WEB_SOCKET_CLIENT_EVENT_LOOP_THREAD_COUNT = "mockserver.webSocketClientEventLoopThreadCount";
     private static final String MOCKSERVER_MAX_FUTURE_TIMEOUT = "mockserver.maxFutureTimeout";
     private static final String MOCKSERVER_MATCHERS_FAIL_FAST = "mockserver.matchersFailFast";
+    private static final String MOCKSERVER_MATCH_EXACT_CASE = "mockserver.matchExactCase";
+    private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED = "mockserver.forwardConnectionPoolEnabled";
+    private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY = "mockserver.forwardConnectionPoolMaxIdlePerKey";
+    private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS = "mockserver.forwardConnectionPoolIdleTimeoutMillis";
+    private static final String MOCKSERVER_FORWARD_PROXY_RETRY_COUNT = "mockserver.forwardProxyRetryCount";
+    private static final String MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS = "mockserver.forwardProxyRetryBackoffMillis";
+    private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED = "mockserver.forwardProxyCircuitBreakerEnabled";
+    private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD = "mockserver.forwardProxyCircuitBreakerFailureThreshold";
+    private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS = "mockserver.forwardProxyCircuitBreakerWindowMillis";
+    private static final String MOCKSERVER_ENFORCE_RESPONSE_VALIDATION_FOR_MOCKS = "mockserver.enforceResponseValidationForMocks";
+    private static final String MOCKSERVER_VALIDATE_REQUESTS_AGAINST_OPENAPI_SPEC = "mockserver.validateRequestsAgainstOpenApiSpec";
 
     // socket
     private static final String MOCKSERVER_MAX_SOCKET_TIMEOUT = "mockserver.maxSocketTimeout";
@@ -111,8 +142,16 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS = "mockserver.llmRequestTimeoutMillis";
     private static final String MOCKSERVER_DRIFT_SEMANTIC_ANALYSIS_ENABLED = "mockserver.driftSemanticAnalysisEnabled";
     private static final String MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS = "mockserver.driftResponseTimeThresholdMs";
+    private static final String MOCKSERVER_DRIFT_ALERT_WEBHOOK_ENABLED = "mockserver.driftAlertWebhookEnabled";
+    private static final String MOCKSERVER_DRIFT_ALERT_WEBHOOK_URL = "mockserver.driftAlertWebhookUrl";
+    private static final String MOCKSERVER_DRIFT_ALERT_SEVERITY_THRESHOLD = "mockserver.driftAlertSeverityThreshold";
+    private static final String MOCKSERVER_DRIFT_ALERT_COOLDOWN_MILLIS = "mockserver.driftAlertCooldownMillis";
+    private static final String MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED = "mockserver.controlPlaneAuditEnabled";
+    private static final String MOCKSERVER_CONTROL_PLANE_AUDIT_MAX_ENTRIES = "mockserver.controlPlaneAuditMaxEntries";
+    private static final String MOCKSERVER_CONTROL_PLANE_AUDIT_READS = "mockserver.controlPlaneAuditReads";
     private static final String MOCKSERVER_FIXTURE_BODY_REDACT_FIELDS = "mockserver.fixtureBodyRedactFields";
     private static final String MOCKSERVER_LLM_VCR_STRICT = "mockserver.llmVcrStrict";
+    private static final String MOCKSERVER_LLM_OPTIMISATION_MAX_CALLS = "mockserver.llmOptimisationMaxCalls";
     private static final String MOCKSERVER_OTEL_METRICS_ENABLED = "mockserver.otelMetricsEnabled";
     private static final String MOCKSERVER_OTEL_TRACES_ENABLED = "mockserver.otelTracesEnabled";
     private static final String MOCKSERVER_OTEL_ENDPOINT = "mockserver.otelEndpoint";
@@ -120,6 +159,14 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_OTEL_PROPAGATE_TRACE_CONTEXT = "mockserver.otelPropagateTraceContext";
     private static final String MOCKSERVER_OTEL_GENERATE_TRACE_ID = "mockserver.otelGenerateTraceId";
     private static final String MOCKSERVER_LLM_SEMANTIC_MATCHING_ENABLED = "mockserver.llmSemanticMatchingEnabled";
+    private static final String MOCKSERVER_LLM_INFER_USAGE_ENABLED = "mockserver.llmInferUsageEnabled";
+    private static final String MOCKSERVER_LLM_METRICS_ENABLED = "mockserver.llmMetricsEnabled";
+    private static final String MOCKSERVER_PER_EXPECTATION_METRICS = "mockserver.perExpectationMetrics";
+    private static final String MOCKSERVER_DEDUPLICATE_RECORDED_EXPECTATIONS = "mockserver.deduplicateRecordedExpectations";
+    private static final String MOCKSERVER_TEMPLATIZE_RECORDED_VALUES = "mockserver.templatizeRecordedValues";
+    private static final String MOCKSERVER_REDACT_SECRETS_IN_RECORDED_EXPECTATIONS = "mockserver.redactSecretsInRecordedExpectations";
+    private static final String MOCKSERVER_REDACT_SECRETS_IN_LOG = "mockserver.redactSecretsInLog";
+    private static final String MOCKSERVER_LLM_COST_BUDGET_USD = "mockserver.llmCostBudgetUsd";
     private static final String MOCKSERVER_USE_SEMICOLON_AS_QUERY_PARAMETER_SEPARATOR = "mockserver.useSemicolonAsQueryParameterSeparator";
     private static final String MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP = "mockserver.assumeAllRequestsAreHttp";
     private static final String MOCKSERVER_HTTP2_ENABLED = "mockserver.http2Enabled";
@@ -170,6 +217,9 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CORS_ALLOW_CREDENTIALS = "mockserver.corsAllowCredentials";
     private static final String MOCKSERVER_CORS_MAX_AGE_IN_SECONDS = "mockserver.corsMaxAgeInSeconds";
 
+    // default response headers
+    private static final String MOCKSERVER_DEFAULT_RESPONSE_HEADERS = "mockserver.defaultResponseHeaders";
+
     // template restrictions
     private static final String MOCKSERVER_JAVASCRIPT_DISALLOWED_CLASSES = "mockserver.javascriptDisallowedClasses";
     private static final String MOCKSERVER_JAVASCRIPT_DISALLOWED_TEXT = "mockserver.javascriptDisallowedText";
@@ -187,6 +237,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_VALIDATE_PROXY_ENFORCE = "mockserver.validateProxyEnforce";
     private static final String MOCKSERVER_GENERATE_REALISTIC_EXAMPLE_VALUES = "mockserver.generateRealisticExampleValues";
     private static final String MOCKSERVER_WATCH_INITIALIZATION_JSON = "mockserver.watchInitializationJson";
+    private static final String MOCKSERVER_FAIL_ON_INITIALIZATION_ERROR = "mockserver.failOnInitializationError";
 
     // mock persistence
     private static final String MOCKSERVER_PERSIST_EXPECTATIONS = "mockserver.persistExpectations";
@@ -215,6 +266,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CLUSTER_ENABLED = "mockserver.clusterEnabled";
     private static final String MOCKSERVER_CLUSTER_NAME = "mockserver.clusterName";
     private static final String MOCKSERVER_CLUSTER_TRANSPORT_CONFIG = "mockserver.clusterTransportConfig";
+    private static final String MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED = "mockserver.clusterSharedTimesEnabled";
 
     // verification
     private static final String MOCKSERVER_MAXIMUM_NUMBER_OF_REQUESTS_TO_RETURN_IN_VERIFICATION_FAILURE = "mockserver.maximumNumberOfRequestToReturnInVerificationFailure";
@@ -242,6 +294,10 @@ public class ConfigurationProperties {
     // liveness
     private static final String MOCKSERVER_LIVENESS_HTTP_GET_PATH = "mockserver.livenessHttpGetPath";
 
+    // expectation namespacing / multi-tenancy
+    private static final String MOCKSERVER_MATCH_NAMESPACE_HEADER = "mockserver.matchNamespaceHeader";
+    private static final String DEFAULT_MATCH_NAMESPACE_HEADER = "X-MockServer-Namespace";
+
     // control plane authentication
     private static final String MOCKSERVER_CONTROL_PLANE_TLS_MUTUAL_AUTHENTICATION_REQUIRED = "mockserver.controlPlaneTLSMutualAuthenticationRequired";
     private static final String MOCKSERVER_CONTROL_PLANE_TLS_MUTUAL_AUTHENTICATION_CERTIFICATE_CHAIN = "mockserver.controlPlaneTLSMutualAuthenticationCAChain";
@@ -252,6 +308,14 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CONTROL_PLANE_JWT_AUTHENTICATION_EXPECTED_AUDIENCE = "mockserver.controlPlaneJWTAuthenticationExpectedAudience";
     private static final String MOCKSERVER_CONTROL_PLANE_JWT_AUTHENTICATION_MATCHING_CLAIMS = "mockserver.controlPlaneJWTAuthenticationMatchingClaims";
     private static final String MOCKSERVER_CONTROL_PLANE_JWT_AUTHENTICATION_REQUIRED_CLAIMS = "mockserver.controlPlaneJWTAuthenticationRequiredClaims";
+    private static final String MOCKSERVER_CONTROL_PLANE_OIDC_AUTHENTICATION_REQUIRED = "mockserver.controlPlaneOidcAuthenticationRequired";
+    private static final String MOCKSERVER_CONTROL_PLANE_OIDC_ISSUER = "mockserver.controlPlaneOidcIssuer";
+    private static final String MOCKSERVER_CONTROL_PLANE_OIDC_JWKS_URI = "mockserver.controlPlaneOidcJwksUri";
+    private static final String MOCKSERVER_CONTROL_PLANE_OIDC_AUDIENCE = "mockserver.controlPlaneOidcAudience";
+    private static final String MOCKSERVER_CONTROL_PLANE_OIDC_REQUIRED_SCOPES = "mockserver.controlPlaneOidcRequiredScopes";
+    private static final String MOCKSERVER_CONTROL_PLANE_OIDC_SCOPE_CLAIM = "mockserver.controlPlaneOidcScopeClaim";
+    private static final String MOCKSERVER_CONTROL_PLANE_AUTHORIZATION_ENABLED = "mockserver.controlPlaneAuthorizationEnabled";
+    private static final String MOCKSERVER_CONTROL_PLANE_SCOPE_MAPPING = "mockserver.controlPlaneScopeMapping";
 
     // TLS
     private static final String MOCKSERVER_PROACTIVELY_INITIALISE_TLS = "mockserver.proactivelyInitialiseTLS";
@@ -305,6 +369,7 @@ public class ConfigurationProperties {
     // async messaging defaults
     private static final String MOCKSERVER_ASYNC_KAFKA_BOOTSTRAP_SERVERS = "mockserver.asyncKafkaBootstrapServers";
     private static final String MOCKSERVER_ASYNC_MQTT_BROKER_URL = "mockserver.asyncMqttBrokerUrl";
+    private static final String MOCKSERVER_ASYNC_AMQP_URI = "mockserver.asyncAmqpUri";
     private static final String MOCKSERVER_ASYNC_RECORDED_MESSAGE_MAX_ENTRIES = "mockserver.asyncRecordedMessageMaxEntries";
 
     // properties file
@@ -335,6 +400,46 @@ public class ConfigurationProperties {
 
     public static final Properties PROPERTIES = readPropertyFile();
 
+    // --- Unknown-configuration-key detection state (see the section near the end of this class) ---
+    // Declared BEFORE the static initializer below because that block calls
+    // warnAboutUnknownConfigurationProperties(), which reads these fields during <clinit>; a later
+    // declaration would leave them null at that point (the previous primitive boolean tolerated
+    // that via its default value, an AtomicBoolean / Set.of(...) does not).
+
+    // Legitimate keys handled by the CLI launcher (org.mockserver.cli.Main / its Arguments enum)
+    // or exported by the binary-launcher scripts (scripts/build-binary-bundle.sh), NOT declared as
+    // MOCKSERVER_* String constants in this class. Without this allowlist these documented keys
+    // would be wrongly flagged as typos. Keep each entry — do not delete without re-checking the
+    // referenced source, because that would reintroduce a false-positive warning.
+    //
+    //   mockserver.serverPort     - Arguments.serverPort.systemPropertyName(); the primary documented
+    //                               port knob (-Dmockserver.serverPort / --env MOCKSERVER_SERVER_PORT);
+    //                               resolved in Main.startServer, never read via a constant here.
+    //   mockserver.mockServerPort - set by System.setProperty in mockserver-maven-plugin
+    //                               (MockServerAbstractMojo.mockServerPort) and read by MockServerPort.
+    //   mockserver.launcherName   - read by Main.launcherName() to label usage text; Main explicitly
+    //                               excludes it from the resolved-config dump.
+    private static final Set<String> EXTRA_RECOGNISED_SYSTEM_PROPERTY_KEYS = Set.of(
+        "mockserver.serverPort",
+        "mockserver.mockServerPort",
+        "mockserver.launcherName"
+    );
+
+    //   MOCKSERVER_SERVER_PORT - Arguments.serverPort.longEnvironmentVariableName(); the documented
+    //                            Docker port env var (the short form SERVER_PORT lacks the MOCKSERVER_
+    //                            prefix so is never flagged). Resolved in Main.startServer.
+    //   MOCKSERVER_LAUNCHER    - exported by the binary-launcher scripts (build-binary-bundle.sh) as an
+    //                            internal usage-text hint; Main.startServer explicitly excludes it.
+    //   MOCKSERVER_JAVA_OPTS   - read by the binary-launcher scripts to pass extra JVM options; it
+    //                            remains in the launched JVM's environment, so guard against flagging it.
+    private static final Set<String> EXTRA_RECOGNISED_ENV_KEYS = Set.of(
+        "MOCKSERVER_SERVER_PORT",
+        "MOCKSERVER_LAUNCHER",
+        "MOCKSERVER_JAVA_OPTS"
+    );
+
+    private static final AtomicBoolean unknownConfigurationPropertiesChecked = new AtomicBoolean(false);
+
     static {
         // Apply the configured log level to java.util.logging once PROPERTIES is loaded.
         // MockServerLogger.<clinit> installs only the default format (it no longer reads
@@ -343,6 +448,12 @@ public class ConfigurationProperties {
         // The dependency is one-way (ConfigurationProperties -> MockServerLogger), so there
         // is no class-init cycle.
         MockServerLogger.configureLogger();
+
+        // Warn about any mockserver.* system property, MOCKSERVER_* environment variable, or
+        // mockserver.* properties-file key that is not a recognised configuration property. This
+        // runs once here (during <clinit>, after PROPERTIES is loaded) so it fires regardless of
+        // whether a property file is present — env-only / -D-only deployments are checked too.
+        warnAboutUnknownConfigurationProperties();
     }
 
     private static Map<String, String> slf4jOrJavaLoggerToJavaLoggerLevelMapping;
@@ -573,6 +684,21 @@ public class ConfigurationProperties {
         return readLongProperty(MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD, "MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD", 50L);
     }
 
+    public static int rateLimitMaxNamedQuotas() {
+        return readIntegerProperty(MOCKSERVER_RATE_LIMIT_MAX_NAMED_QUOTAS, "MOCKSERVER_RATE_LIMIT_MAX_NAMED_QUOTAS", 10000);
+    }
+
+    /**
+     * The maximum number of distinct named rate-limit counters held in the in-process
+     * {@link org.mockserver.ratelimit.RateLimitRegistry}. Once this cap is reached a
+     * request for a new counter key fails open (is allowed). Default is 10000.
+     *
+     * @param maxNamedQuotas maximum number of distinct named rate-limit counters
+     */
+    public static void rateLimitMaxNamedQuotas(int maxNamedQuotas) {
+        setProperty(MOCKSERVER_RATE_LIMIT_MAX_NAMED_QUOTAS, "" + maxNamedQuotas);
+    }
+
     /**
      * The number of chaos-injected errors within the sliding window that triggers an
      * automatic halt of all active service-scoped chaos profiles. Default is 50.
@@ -597,6 +723,279 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS, "" + millis);
     }
 
+    public static boolean connectionLifecycleChaosEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONNECTION_LIFECYCLE_CHAOS_ENABLED, "MOCKSERVER_CONNECTION_LIFECYCLE_CHAOS_ENABLED", "" + true));
+    }
+
+    /**
+     * Master switch for connection-lifecycle / graceful-shutdown fault injection (mid-response RST,
+     * host-scoped slow close, HTTP/2 GOAWAY, and the preemption/SIGTERM simulator). Default true.
+     * The response-path lookups are gated on the active registration count, so when no
+     * connection-lifecycle faults and no preemption are configured the feature adds nothing to the
+     * hot path even when enabled — set this to false only to hard-disable the feature.
+     *
+     * @param enable enable connection-lifecycle chaos
+     */
+    public static void connectionLifecycleChaosEnabled(boolean enable) {
+        setProperty(MOCKSERVER_CONNECTION_LIFECYCLE_CHAOS_ENABLED, "" + enable);
+    }
+
+    public static long preemptionSimulationMaxDrainMillis() {
+        return Math.max(0L, readLongProperty(MOCKSERVER_PREEMPTION_SIMULATION_MAX_DRAIN_MILLIS, "MOCKSERVER_PREEMPTION_SIMULATION_MAX_DRAIN_MILLIS", 86_400_000L));
+    }
+
+    /**
+     * Hard upper bound (in milliseconds) on a preemption simulation's drain window and TTL. A
+     * {@code PUT /mockserver/preemption} request asking for a larger value is clamped to this cap, so
+     * a forgotten or runaway simulation cannot cordon the server indefinitely. Default is 86400000
+     * (24 hours).
+     *
+     * @param millis maximum drain/TTL milliseconds
+     */
+    public static void preemptionSimulationMaxDrainMillis(long millis) {
+        setProperty(MOCKSERVER_PREEMPTION_SIMULATION_MAX_DRAIN_MILLIS, "" + millis);
+    }
+
+    public static boolean connectionLifecycleAutoHaltCountsRst() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONNECTION_LIFECYCLE_AUTO_HALT_COUNTS_RST, "MOCKSERVER_CONNECTION_LIFECYCLE_AUTO_HALT_COUNTS_RST", "" + true));
+    }
+
+    /**
+     * When true, a connection-lifecycle RST (the mid-response RST) counts as a destructive "drop"
+     * fault for the chaos auto-halt circuit-breaker, so a RST storm trips the breaker and halts
+     * chaos. Default true.
+     *
+     * @param enable count lifecycle RSTs toward auto-halt
+     */
+    public static void connectionLifecycleAutoHaltCountsRst(boolean enable) {
+        setProperty(MOCKSERVER_CONNECTION_LIFECYCLE_AUTO_HALT_COUNTS_RST, "" + enable);
+    }
+
+    public static boolean sloTrackingEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_SLO_TRACKING_ENABLED, "MOCKSERVER_SLO_TRACKING_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable SLO sample tracking. When enabled, MockServer records a windowed
+     * sample (latency, error flag, scope, host) for each forwarded upstream
+     * round-trip so that {@code PUT /mockserver/verifySLO} can compute resilience
+     * verdicts. Default is false (feature off) — when disabled the forward path
+     * records nothing.
+     *
+     * @param enable enable SLO sample tracking
+     */
+    public static void sloTrackingEnabled(boolean enable) {
+        setProperty(MOCKSERVER_SLO_TRACKING_ENABLED, "" + enable);
+    }
+
+    public static long sloWindowRetentionMillis() {
+        return readLongProperty(MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS, "MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS", 600_000L);
+    }
+
+    /**
+     * The maximum age in milliseconds of SLO samples retained for verdict
+     * evaluation. Samples older than this (relative to the newest sample) are
+     * evicted. Default is 600000 (10 minutes).
+     *
+     * @param millis sample retention window in milliseconds
+     */
+    public static void sloWindowRetentionMillis(long millis) {
+        setProperty(MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS, "" + millis);
+    }
+
+    public static int sloWindowMaxSamples() {
+        return readIntegerProperty(MOCKSERVER_SLO_WINDOW_MAX_SAMPLES, "MOCKSERVER_SLO_WINDOW_MAX_SAMPLES", 50_000);
+    }
+
+    /**
+     * The maximum number of SLO samples retained for verdict evaluation. When the
+     * store is full the oldest sample is evicted. Default is 50000.
+     *
+     * @param maxSamples maximum number of retained samples
+     */
+    public static void sloWindowMaxSamples(int maxSamples) {
+        setProperty(MOCKSERVER_SLO_WINDOW_MAX_SAMPLES, "" + maxSamples);
+    }
+
+    public static boolean loadGenerationEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_LOAD_GENERATION_ENABLED, "MOCKSERVER_LOAD_GENERATION_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable API-driven load generation. When enabled, {@code PUT /mockserver/loadScenario}
+     * starts an in-process load scenario that drives templated request steps at a target
+     * concurrency, producing latency/error samples for the SLO verdict feature. Off by
+     * default — when disabled the endpoint returns 403 so MockServer never self-loads
+     * unless explicitly opted in.
+     *
+     * @param enable enable load generation
+     */
+    public static void loadGenerationEnabled(boolean enable) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_ENABLED, "" + enable);
+    }
+
+    public static int loadGenerationMaxVirtualUsers() {
+        return readIntegerProperty(MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS, "MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS", 50);
+    }
+
+    /**
+     * Hard cap on the number of concurrent virtual users a load scenario may drive. A
+     * scenario profile asking for more is rejected at validation. Default is 50.
+     *
+     * @param maxVirtualUsers maximum concurrent virtual users
+     */
+    public static void loadGenerationMaxVirtualUsers(int maxVirtualUsers) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS, "" + maxVirtualUsers);
+    }
+
+    public static int loadGenerationMaxInFlightRequests() {
+        return readIntegerProperty(MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS, "MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS", 200);
+    }
+
+    /**
+     * Hard cap on the number of in-flight (not-yet-completed) requests a load scenario may
+     * have outstanding at once. Enforced live by an in-flight semaphore so a slow target
+     * cannot let the scenario queue unbounded work. Default is 200.
+     *
+     * @param maxInFlightRequests maximum concurrent in-flight requests
+     */
+    public static void loadGenerationMaxInFlightRequests(int maxInFlightRequests) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS, "" + maxInFlightRequests);
+    }
+
+    public static int loadGenerationMaxRequestsPerSecond() {
+        return readIntegerProperty(MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND, "MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND", 500);
+    }
+
+    /**
+     * Hard cap on the request rate (requests per second) a load scenario may dispatch.
+     * Enforced live by a token bucket so a scenario cannot exceed this rate regardless of
+     * concurrency. Default is 500.
+     *
+     * @param maxRequestsPerSecond maximum requests dispatched per second
+     */
+    public static void loadGenerationMaxRequestsPerSecond(int maxRequestsPerSecond) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND, "" + maxRequestsPerSecond);
+    }
+
+    public static long loadGenerationMaxDurationMillis() {
+        return readLongProperty(MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS, "MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS", 3_600_000L);
+    }
+
+    /**
+     * Hard cap on the duration (in milliseconds) a load scenario may run. A profile asking
+     * for a longer run is rejected at validation, so a forgotten scenario cannot drive
+     * traffic indefinitely. Default is 3600000 (1 hour).
+     *
+     * @param millis maximum scenario duration in milliseconds
+     */
+    public static void loadGenerationMaxDurationMillis(long millis) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS, "" + millis);
+    }
+
+    public static int loadGenerationMaxSteps() {
+        return readIntegerProperty(MOCKSERVER_LOAD_GENERATION_MAX_STEPS, "MOCKSERVER_LOAD_GENERATION_MAX_STEPS", 50);
+    }
+
+    /**
+     * Hard cap on the number of request steps a single load scenario may define. A scenario
+     * with more steps is rejected at validation. Default is 50.
+     *
+     * @param maxSteps maximum number of steps per scenario
+     */
+    public static void loadGenerationMaxSteps(int maxSteps) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_STEPS, "" + maxSteps);
+    }
+
+    public static double loadGenerationMaxRate() {
+        return readDoubleProperty(MOCKSERVER_LOAD_GENERATION_MAX_RATE, "MOCKSERVER_LOAD_GENERATION_MAX_RATE", 5000.0);
+    }
+
+    /**
+     * Hard cap on the arrival rate (iterations per second) a {@code RATE} load stage may request.
+     * A stage asking for a higher rate is rejected at validation, so an open-model scenario cannot
+     * be told to start work faster than the server can safely sustain. Default is 5000.
+     *
+     * @param maxRate maximum arrival rate in iterations per second
+     */
+    public static void loadGenerationMaxRate(double maxRate) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_RATE, "" + maxRate);
+    }
+
+    public static int loadGenerationMaxStages() {
+        return readIntegerProperty(MOCKSERVER_LOAD_GENERATION_MAX_STAGES, "MOCKSERVER_LOAD_GENERATION_MAX_STAGES", 20);
+    }
+
+    /**
+     * Hard cap on the number of stages a single load profile may define. A profile with more stages
+     * is rejected at validation. Default is 20.
+     *
+     * @param maxStages maximum number of stages per profile
+     */
+    public static void loadGenerationMaxStages(int maxStages) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_STAGES, "" + maxStages);
+    }
+
+    public static int loadGenerationMaxConcurrentScenarios() {
+        return readIntegerProperty(MOCKSERVER_LOAD_GENERATION_MAX_CONCURRENT_SCENARIOS, "MOCKSERVER_LOAD_GENERATION_MAX_CONCURRENT_SCENARIOS", 10);
+    }
+
+    /**
+     * Hard cap on the number of load scenarios that may be concurrently <em>active</em> (PENDING or
+     * RUNNING) at once. A start trigger that would exceed this is rejected. Loading (registering)
+     * scenarios is not limited — only how many may run together. Default is 10.
+     *
+     * @param maxConcurrentScenarios maximum concurrently active load scenarios
+     */
+    public static void loadGenerationMaxConcurrentScenarios(int maxConcurrentScenarios) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_MAX_CONCURRENT_SCENARIOS, "" + maxConcurrentScenarios);
+    }
+
+    public static String loadScenarioInitializationJsonPath() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_LOAD_SCENARIO_INITIALIZATION_JSON_PATH, "MOCKSERVER_LOAD_SCENARIO_INITIALIZATION_JSON_PATH", "");
+    }
+
+    /**
+     * Path to a JSON file containing an array of load scenario definitions. At startup each is loaded
+     * (registered) into the load-scenario registry in the {@code LOADED} state — staged and ready to be
+     * triggered by name, but not running. Empty by default (no preloading). Mirrors
+     * {@code initializationJsonPath} for expectations.
+     *
+     * @param loadScenarioInitializationJsonPath path to the load scenario definitions JSON file
+     */
+    public static void loadScenarioInitializationJsonPath(String loadScenarioInitializationJsonPath) {
+        setProperty(MOCKSERVER_LOAD_SCENARIO_INITIALIZATION_JSON_PATH, loadScenarioInitializationJsonPath == null ? "" : loadScenarioInitializationJsonPath);
+    }
+
+    public static java.util.List<String> loadGenerationMetricLabels() {
+        String value = readPropertyHierarchically(PROPERTIES, MOCKSERVER_LOAD_GENERATION_METRIC_LABELS, "MOCKSERVER_LOAD_GENERATION_METRIC_LABELS", "");
+        if (value == null || value.isBlank()) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<String> labels = new java.util.ArrayList<>();
+        for (String name : value.split(",")) {
+            String trimmed = name.trim();
+            if (!trimmed.isEmpty()) {
+                labels.add(trimmed);
+            }
+        }
+        return labels;
+    }
+
+    /**
+     * Allowlist of custom load-scenario label names that are added as extra <em>fixed</em>
+     * Prometheus labels on the {@code mock_server_load_*} metrics (comma-separated, default empty).
+     * Prometheus requires a fixed label-name set, so only the keys named here are carried as
+     * Prometheus labels; every custom label is always attached as an OpenTelemetry attribute
+     * regardless. When empty, the Prometheus load metrics carry only the fixed structured labels
+     * ({@code scenario, run_id, step, route, method, status_class}).
+     *
+     * @param labels comma-separated custom label names to expose as Prometheus labels
+     */
+    public static void loadGenerationMetricLabels(String labels) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_METRIC_LABELS, labels == null ? "" : labels);
+    }
+
     public static boolean mcpEnabled() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_MCP_ENABLED, "MOCKSERVER_MCP_ENABLED", "" + true));
     }
@@ -610,35 +1009,22 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_MCP_ENABLED, "" + enable);
     }
 
-    public static boolean breakpointEnabled() {
-        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_BREAKPOINT_ENABLED, "MOCKSERVER_BREAKPOINT_ENABLED", "" + false));
+    public static long stopDrainMillis() {
+        return Math.max(0L, readLongProperty(MOCKSERVER_STOP_DRAIN_MILLIS, "MOCKSERVER_STOP_DRAIN_MILLIS", 15_000L));
     }
 
     /**
-     * Enable interactive request breakpoints for proxied/forwarded requests. When enabled,
-     * forwarded requests are paused (held) and can be inspected, modified, or aborted via
-     * the control-plane REST API before being sent to the upstream. Default is false (off).
+     * Maximum time in milliseconds to wait for in-flight requests to complete when the server is
+     * stopped (graceful shutdown connection drain). On stop, the server stops accepting new
+     * connections and then waits up to this timeout for any requests still being processed to
+     * finish before shutting down the event loops. If the timeout elapses a warning is logged with
+     * the number of remaining in-flight requests and shutdown proceeds anyway. Default is 15000
+     * (15 seconds). Set to 0 to disable draining (stop immediately, the pre-7.2 behaviour).
      *
-     * @param enable enable breakpoints
+     * @param millis drain timeout in milliseconds, 0 to disable draining
      */
-    public static void breakpointEnabled(boolean enable) {
-        setProperty(MOCKSERVER_BREAKPOINT_ENABLED, "" + enable);
-    }
-
-    public static boolean breakpointResponseEnabled() {
-        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED, "MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED", "" + false));
-    }
-
-    /**
-     * Enable interactive response breakpoints for proxied/forwarded requests. When enabled,
-     * the upstream response is held before being written to the client, and can be inspected,
-     * modified, or replaced via the control-plane REST API. Independent of
-     * {@link #breakpointEnabled()} (request breakpoints). Default is false (off).
-     *
-     * @param enable enable response breakpoints
-     */
-    public static void breakpointResponseEnabled(boolean enable) {
-        setProperty(MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED, "" + enable);
+    public static void stopDrainMillis(long millis) {
+        setProperty(MOCKSERVER_STOP_DRAIN_MILLIS, "" + millis);
     }
 
     public static long breakpointTimeoutMillis() {
@@ -961,6 +1347,20 @@ public class ConfigurationProperties {
 
     public static void asyncMqttBrokerUrl(String url) {
         setProperty(MOCKSERVER_ASYNC_MQTT_BROKER_URL, url);
+    }
+
+    /**
+     * Default AMQP (RabbitMQ) connection URI used when a {@code PUT /mockserver/asyncapi}
+     * request body does not include {@code brokerConfig.amqpUri}
+     * (e.g. {@code amqp://guest:guest@localhost:5672/}).
+     * Empty string means no default (broker must be specified per-request).
+     */
+    public static String asyncAmqpUri() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_ASYNC_AMQP_URI, "MOCKSERVER_ASYNC_AMQP_URI", "");
+    }
+
+    public static void asyncAmqpUri(String uri) {
+        setProperty(MOCKSERVER_ASYNC_AMQP_URI, uri);
     }
 
     /**
@@ -1312,6 +1712,218 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_MATCHERS_FAIL_FAST, "" + enable);
     }
 
+    public static boolean matchExactCase() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_MATCH_EXACT_CASE, "MOCKSERVER_MATCH_EXACT_CASE", "" + false));
+    }
+
+    /**
+     * If false (the default) request matching for the method, path and string body is case-insensitive,
+     * matching the historical behaviour. If true matching of those three fields becomes case-sensitive
+     * (exact case). Header names and values, cookie names and values, and query string parameters are
+     * always matched case-insensitively regardless of this setting.
+     *
+     * @param enable enabled exact-case (case-sensitive) matching of method, path and string body
+     */
+    public static void matchExactCase(boolean enable) {
+        setProperty(MOCKSERVER_MATCH_EXACT_CASE, "" + enable);
+    }
+
+    public static boolean forwardConnectionPoolEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED, "MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED", "" + true));
+    }
+
+    /**
+     * If true (the default) idle keep-alive HTTP/1.1 upstream connections are pooled (keyed by host,
+     * port and scheme) and reused for subsequent requests to the same upstream, eliminating repeated
+     * connection and TLS handshakes for proxy-heavy workloads and avoiding ephemeral-port exhaustion
+     * under sustained forward load. If false every forwarded or proxied request opens a fresh upstream
+     * TCP (and TLS) connection that is closed once the response is received, restoring the historical
+     * behaviour of a fresh upstream connection per request (the opt-out for unusual upstreams).
+     * <p>
+     * Pooling is safe to default on because two independent guards close the only ways a reused
+     * channel could be corrupt: (1) the outbound forward/proxy HTTP client runs on its own dedicated
+     * event-loop group, disjoint from the server worker group, so a pooled channel reused inside a
+     * synchronous local object-callback is never pinned to a server worker thread that is blocked in
+     * that callback (which would otherwise self-deadlock the event loop); and (2) a channel is only
+     * returned to the pool when its client codec is genuinely quiescent — a valid in-range status is
+     * necessary but not sufficient, so the decoder must also have zero leftover undecoded bytes. Any
+     * uncertainty fails closed (the channel is closed, not pooled). MockServer's {@code error()}
+     * action (HttpError), which writes raw non-HTTP bytes and/or drops the connection, is therefore
+     * never pooled.
+     * <p>
+     * Only plain HTTP/1.1 keep-alive connections are pooled. HTTP/2 and HTTP/3 (which multiplex
+     * differently), binary forwarding, streaming responses, proxy-tunnelled connections, any
+     * connection the upstream closed or that returned "Connection: close", and any reply that did not
+     * parse as a valid HTTP response are never pooled and fall back to a fresh connection.
+     *
+     * @param enable enable pooling and reuse of idle keep-alive upstream HTTP/1.1 connections
+     */
+    public static void forwardConnectionPoolEnabled(boolean enable) {
+        setProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED, "" + enable);
+    }
+
+    public static int forwardConnectionPoolMaxIdlePerKey() {
+        return Math.max(1, readIntegerProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY, "MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY", 8));
+    }
+
+    /**
+     * Maximum number of idle keep-alive upstream connections retained per upstream (host, port,
+     * scheme). Surplus connections are closed rather than pooled, so the pool degrades gracefully
+     * under saturation. Only relevant when {@code forwardConnectionPoolEnabled} is true.
+     * <p>
+     * Default is 8.
+     *
+     * @param maxIdlePerKey maximum idle connections retained per upstream
+     */
+    public static void forwardConnectionPoolMaxIdlePerKey(int maxIdlePerKey) {
+        setProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY, "" + maxIdlePerKey);
+    }
+
+    public static long forwardConnectionPoolIdleTimeoutMillis() {
+        return Math.max(0L, readLongProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS, "MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS", 30_000L));
+    }
+
+    /**
+     * How long in milliseconds an idle pooled upstream connection is retained before it is closed
+     * and evicted. Only relevant when {@code forwardConnectionPoolEnabled} is true.
+     * <p>
+     * Default is 30,000 ms. Set to 0 to disable idle eviction (connections are still discarded
+     * when the upstream closes them).
+     *
+     * @param idleTimeoutMillis idle retention time in milliseconds, 0 to disable eviction
+     */
+    public static void forwardConnectionPoolIdleTimeoutMillis(long idleTimeoutMillis) {
+        setProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS, "" + idleTimeoutMillis);
+    }
+
+    public static int forwardProxyRetryCount() {
+        return Math.max(0, readIntegerProperty(MOCKSERVER_FORWARD_PROXY_RETRY_COUNT, "MOCKSERVER_FORWARD_PROXY_RETRY_COUNT", 0));
+    }
+
+    /**
+     * The maximum number of times a forwarded or proxied request to an upstream is retried after a
+     * transient failure (connection refused, connection reset, timeout, or a 502/503/504 from the
+     * upstream). Only requests using an idempotent HTTP method (GET, HEAD, OPTIONS, PUT, DELETE,
+     * TRACE) are retried; non-idempotent methods (POST, PATCH) are never retried so a request is
+     * not silently executed twice.
+     * <p>
+     * Default is 0, which preserves the historical behaviour of forwarding each request exactly
+     * once with no retry. Negative values are treated as 0.
+     *
+     * @param retryCount maximum number of retries for idempotent forwarded/proxied requests, 0 to disable
+     */
+    public static void forwardProxyRetryCount(int retryCount) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_RETRY_COUNT, "" + retryCount);
+    }
+
+    public static long forwardProxyRetryBackoffMillis() {
+        return Math.max(0L, readLongProperty(MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS, "MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS", 100L));
+    }
+
+    /**
+     * The base back-off in milliseconds applied between forward/proxy retry attempts. The delay
+     * grows linearly with the attempt number (attempt 1 waits one base delay, attempt 2 waits two,
+     * and so on) so a flaky upstream is not hammered. Only relevant when
+     * {@code forwardProxyRetryCount} is greater than 0.
+     * <p>
+     * Default is 100 ms. Set to 0 to retry immediately with no back-off. Negative values are
+     * treated as 0.
+     *
+     * @param backoffMillis base linear back-off in milliseconds between retry attempts, 0 to disable
+     */
+    public static void forwardProxyRetryBackoffMillis(long backoffMillis) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS, "" + backoffMillis);
+    }
+
+    public static boolean forwardProxyCircuitBreakerEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED, "MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED", "" + false));
+    }
+
+    /**
+     * If false (the default) every forwarded or proxied request is attempted against its upstream
+     * regardless of how many previous requests to that upstream failed, matching the historical
+     * behaviour. If true a per-upstream circuit breaker (keyed by host and port) trips open after
+     * {@code forwardProxyCircuitBreakerFailureThreshold} consecutive failures, failing subsequent
+     * requests fast with a 503 for {@code forwardProxyCircuitBreakerWindowMillis} milliseconds
+     * before allowing a single trial (half-open) request through. A successful trial closes the
+     * breaker; a failed trial re-opens it for another window.
+     *
+     * @param enable enable the per-upstream forward/proxy circuit breaker
+     */
+    public static void forwardProxyCircuitBreakerEnabled(boolean enable) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED, "" + enable);
+    }
+
+    public static int forwardProxyCircuitBreakerFailureThreshold() {
+        return Math.max(1, readIntegerProperty(MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD, "MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5));
+    }
+
+    /**
+     * The number of consecutive failures to a single upstream (host and port) that trips the
+     * forward/proxy circuit breaker open. Only relevant when
+     * {@code forwardProxyCircuitBreakerEnabled} is true.
+     * <p>
+     * Default is 5. Values below 1 are treated as 1.
+     *
+     * @param failureThreshold consecutive failures that open the breaker for an upstream
+     */
+    public static void forwardProxyCircuitBreakerFailureThreshold(int failureThreshold) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD, "" + failureThreshold);
+    }
+
+    public static long forwardProxyCircuitBreakerWindowMillis() {
+        return Math.max(1L, readLongProperty(MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS, "MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS", 30_000L));
+    }
+
+    /**
+     * How long in milliseconds the forward/proxy circuit breaker stays open (failing requests fast
+     * with a 503) for an upstream before it transitions to half-open and lets a single trial
+     * request through. Only relevant when {@code forwardProxyCircuitBreakerEnabled} is true.
+     * <p>
+     * Default is 30,000 ms. Values below 1 are treated as 1.
+     *
+     * @param windowMillis open-state duration in milliseconds before a half-open trial
+     */
+    public static void forwardProxyCircuitBreakerWindowMillis(long windowMillis) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS, "" + windowMillis);
+    }
+
+    public static boolean enforceResponseValidationForMocks() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_ENFORCE_RESPONSE_VALIDATION_FOR_MOCKS, "MOCKSERVER_ENFORCE_RESPONSE_VALIDATION_FOR_MOCKS", "" + false));
+    }
+
+    /**
+     * If false (the default) OpenAPI response validation of mock responses is advisory only —
+     * validation failures are logged but the response is still returned to the client (matching the
+     * historical behaviour of {@code openAPIResponseValidation}). If true a mock response that fails
+     * OpenAPI response validation is replaced with a 502 error describing the violations, matching the
+     * enforcement already available on the validation-proxy path ({@code validateProxyEnforce}).
+     * <p>
+     * This flag only has any effect when {@code openAPIResponseValidation} is also enabled.
+     *
+     * @param enable enable enforcement (fail/replace) of OpenAPI response validation for mock responses
+     */
+    public static void enforceResponseValidationForMocks(boolean enable) {
+        setProperty(MOCKSERVER_ENFORCE_RESPONSE_VALIDATION_FOR_MOCKS, "" + enable);
+    }
+
+    public static boolean validateRequestsAgainstOpenApiSpec() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_VALIDATE_REQUESTS_AGAINST_OPENAPI_SPEC, "MOCKSERVER_VALIDATE_REQUESTS_AGAINST_OPENAPI_SPEC", "" + false));
+    }
+
+    /**
+     * If false (the default) incoming requests matched by an OpenAPI-backed mock expectation are not
+     * validated against the spec — behaviour is exactly as before. If true, when a request matches an
+     * expectation created from an OpenAPI spec ({@code specUrlOrPayload}), the incoming request is
+     * validated against that spec before the matched action is dispatched; a request that violates the
+     * spec is rejected with a 400 status code describing the violations instead of the mock response.
+     *
+     * @param enable enable OpenAPI request validation for requests matched by OpenAPI-backed mocks
+     */
+    public static void validateRequestsAgainstOpenApiSpec(boolean enable) {
+        setProperty(MOCKSERVER_VALIDATE_REQUESTS_AGAINST_OPENAPI_SPEC, "" + enable);
+    }
+
     // socket
 
     public static long maxSocketTimeout() {
@@ -1650,6 +2262,52 @@ public class ConfigurationProperties {
     }
 
     /**
+     * Whether to record an append-only, bounded, in-memory audit log of
+     * control-plane mutations (who/what/when/where/outcome). Off by default. When
+     * disabled, control-plane operations behave byte-for-byte identically and no
+     * audit entries are stored. The audit log never stores request headers or
+     * bodies — only redacted, structural metadata. Retrieve via
+     * {@code GET /mockserver/audit}.
+     */
+    public static boolean controlPlaneAuditEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED, "MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED", "false"));
+    }
+
+    public static void controlPlaneAuditEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED, "" + enabled);
+    }
+
+    /**
+     * Maximum number of control-plane audit entries retained in the bounded
+     * in-memory ring buffer. Once full, the oldest entry is evicted on each new
+     * record. Default 1000. The {@code AuditStore} singleton reads this value
+     * once at construction (fixed capacity, like the drift store).
+     */
+    public static int controlPlaneAuditMaxEntries() {
+        return readIntegerProperty(MOCKSERVER_CONTROL_PLANE_AUDIT_MAX_ENTRIES, "MOCKSERVER_CONTROL_PLANE_AUDIT_MAX_ENTRIES", 1000);
+    }
+
+    public static void controlPlaneAuditMaxEntries(int maxEntries) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_AUDIT_MAX_ENTRIES, "" + maxEntries);
+    }
+
+    /**
+     * Whether to also audit control-plane READ operations (e.g. GET requests and
+     * read-only PUTs such as {@code /retrieve} and {@code /verify}). Default
+     * false — only mutations (and {@code reset}) are audited. Has no effect
+     * unless control-plane audit logging is enabled.
+     */
+    public static boolean controlPlaneAuditReads() {
+        return Boolean.parseBoolean(readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_CONTROL_PLANE_AUDIT_READS, "MOCKSERVER_CONTROL_PLANE_AUDIT_READS", "false"));
+    }
+
+    public static void controlPlaneAuditReads(boolean enabled) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_AUDIT_READS, "" + enabled);
+    }
+
+    /**
      * p95 response time threshold (in milliseconds) for performance drift detection.
      * When set to a positive value, a PERFORMANCE drift record is emitted whenever
      * the p95 response time for an expectation exceeds this threshold. Default 0
@@ -1661,6 +2319,59 @@ public class ConfigurationProperties {
 
     public static void driftResponseTimeThresholdMs(long thresholdMs) {
         setProperty(MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS, "" + thresholdMs);
+    }
+
+    /**
+     * Whether to fire a fire-and-forget HTTP POST webhook when a drift record of sufficient
+     * severity is stored. Off by default (opt-in). A webhook failure never affects drift
+     * analysis or the served response.
+     */
+    public static boolean driftAlertWebhookEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_DRIFT_ALERT_WEBHOOK_ENABLED, "MOCKSERVER_DRIFT_ALERT_WEBHOOK_ENABLED", "false"));
+    }
+
+    public static void driftAlertWebhookEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_DRIFT_ALERT_WEBHOOK_ENABLED, "" + enabled);
+    }
+
+    /**
+     * The URL the drift-alert webhook POSTs to. Empty by default; an empty URL leaves the webhook
+     * disabled even when enabled is true.
+     */
+    public static String driftAlertWebhookUrl() {
+        return readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_DRIFT_ALERT_WEBHOOK_URL, "MOCKSERVER_DRIFT_ALERT_WEBHOOK_URL", "");
+    }
+
+    public static void driftAlertWebhookUrl(String url) {
+        setProperty(MOCKSERVER_DRIFT_ALERT_WEBHOOK_URL, url == null ? "" : url);
+    }
+
+    /**
+     * Minimum effective severity (BREAKING, WARNING or INFORMATIONAL) at which a stored drift record
+     * fires the webhook. BREAKING is the most severe; INFORMATIONAL fires on every drift. Default
+     * BREAKING.
+     */
+    public static String driftAlertSeverityThreshold() {
+        return readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_DRIFT_ALERT_SEVERITY_THRESHOLD, "MOCKSERVER_DRIFT_ALERT_SEVERITY_THRESHOLD", "BREAKING");
+    }
+
+    public static void driftAlertSeverityThreshold(String severity) {
+        setProperty(MOCKSERVER_DRIFT_ALERT_SEVERITY_THRESHOLD, severity == null ? "BREAKING" : severity);
+    }
+
+    /**
+     * De-dup cooldown window in milliseconds: a webhook fires at most once per
+     * expectation/driftType/field signature within this window. Default 60000 (60s).
+     */
+    public static long driftAlertCooldownMillis() {
+        return readLongProperty(MOCKSERVER_DRIFT_ALERT_COOLDOWN_MILLIS, "MOCKSERVER_DRIFT_ALERT_COOLDOWN_MILLIS", 60000L);
+    }
+
+    public static void driftAlertCooldownMillis(long cooldownMillis) {
+        setProperty(MOCKSERVER_DRIFT_ALERT_COOLDOWN_MILLIS, "" + cooldownMillis);
     }
 
     /**
@@ -1687,6 +2398,20 @@ public class ConfigurationProperties {
 
     public static void llmVcrStrict(boolean strict) {
         setProperty(MOCKSERVER_LLM_VCR_STRICT, "" + strict);
+    }
+
+    /**
+     * Upper bound on the number of captured LLM calls included in an
+     * optimisation report / brief ({@code GET /mockserver/llm/optimisationReport}
+     * and the {@code export_optimisation_report} MCP tool). Bounds the report
+     * size for very long sessions; the most recent calls are kept. Default 200.
+     */
+    public static int llmOptimisationMaxCalls() {
+        return readIntegerProperty(MOCKSERVER_LLM_OPTIMISATION_MAX_CALLS, "MOCKSERVER_LLM_OPTIMISATION_MAX_CALLS", 200);
+    }
+
+    public static void llmOptimisationMaxCalls(int maxCalls) {
+        setProperty(MOCKSERVER_LLM_OPTIMISATION_MAX_CALLS, "" + maxCalls);
     }
 
     /**
@@ -1781,6 +2506,183 @@ public class ConfigurationProperties {
 
     public static void llmSemanticMatchingEnabled(boolean enabled) {
         setProperty(MOCKSERVER_LLM_SEMANTIC_MATCHING_ENABLED, "" + enabled);
+    }
+
+    /**
+     * Opt-in switch for approximate LLM token-usage inference. When {@code true},
+     * a mocked completion ({@code httpLlmResponse}) that does not declare
+     * {@code usage} has approximate {@code prompt_tokens} / {@code completion_tokens}
+     * filled in from the request and response text via
+     * {@link org.mockserver.llm.TokenCounter} before the response is encoded. The
+     * counts are an <strong>estimate</strong> (a character/word heuristic, not a real
+     * tokenizer), not a provider's exact billing. Off by default, so existing
+     * responses are unchanged (an absent {@code usage} continues to encode as zeros)
+     * unless a user opts in. A completion that already declares {@code usage} is never
+     * altered.
+     */
+    public static boolean llmInferUsageEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_INFER_USAGE_ENABLED, "MOCKSERVER_LLM_INFER_USAGE_ENABLED", "" + false));
+    }
+
+    public static void llmInferUsageEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_LLM_INFER_USAGE_ENABLED, "" + enabled);
+    }
+
+    public static boolean llmMetricsEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_METRICS_ENABLED, "MOCKSERVER_LLM_METRICS_ENABLED", "" + false));
+    }
+
+    /**
+     * Enable LLM token and cost metrics. When enabled, MockServer parses forwarded LLM responses
+     * to extract token usage and estimated cost, incrementing Prometheus counters labeled by provider
+     * and model. The parse is the same one used for GenAI span export; enabling this property
+     * activates the forward-path response parse even when OTLP tracing is off.
+     * <p>
+     * Default is false (off) to avoid parsing forwarded response bodies unless asked.
+     *
+     * @param enabled enable LLM metrics
+     */
+    public static void llmMetricsEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_LLM_METRICS_ENABLED, "" + enabled);
+    }
+
+    public static boolean perExpectationMetricsEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PER_EXPECTATION_METRICS, "MOCKSERVER_PER_EXPECTATION_METRICS", "" + false));
+    }
+
+    /**
+     * Enable the opt-in per-expectation Prometheus match counter
+     * ({@code mock_server_expectation_matched}), labeled by the stable expectation id.
+     * When enabled, MockServer registers one Prometheus time series per distinct
+     * matched expectation id and increments it on every match. OFF by default because
+     * per-expectation labels can explode Prometheus cardinality on large or churning
+     * expectation sets; using the stable expectation id (not the request path) bounds
+     * cardinality to the number of expectations. See docs/code/metrics.md.
+     * <p>
+     * Default is false (off) so the default scrape output is byte-for-byte unchanged.
+     *
+     * @param enabled enable per-expectation metrics
+     */
+    public static void perExpectationMetricsEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_PER_EXPECTATION_METRICS, "" + enabled);
+    }
+
+    public static boolean deduplicateRecordedExpectations() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DEDUPLICATE_RECORDED_EXPECTATIONS, "MOCKSERVER_DEDUPLICATE_RECORDED_EXPECTATIONS", "" + false));
+    }
+
+    /**
+     * Enable opt-in post-processing of retrieved recorded (proxy SPY/CAPTURE) expectations
+     * that deduplicates structurally-identical recorded request/response pairs and
+     * templatizes variable id path segments (so that recorded calls to {@code /users/1},
+     * {@code /users/2}, {@code /users/3} collapse into a single {@code /users/{id}}
+     * expectation). The post-processor is conservative: it never merges differing
+     * responses, never over-widens a single recorded id, and preserves order.
+     * <p>
+     * Default is false (off) so retrieved recorded expectations are byte-for-byte unchanged.
+     *
+     * @param enable enable deduplication and templatization of recorded expectations
+     */
+    public static void deduplicateRecordedExpectations(boolean enable) {
+        setProperty(MOCKSERVER_DEDUPLICATE_RECORDED_EXPECTATIONS, "" + enable);
+    }
+
+    public static boolean templatizeRecordedValues() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_TEMPLATIZE_RECORDED_VALUES, "MOCKSERVER_TEMPLATIZE_RECORDED_VALUES", "" + false));
+    }
+
+    /**
+     * Enable opt-in generalization of volatile-looking query parameter, header and JSON
+     * body leaf values in retrieved recorded (proxy SPY/CAPTURE) expectations. When enabled,
+     * values that look like ids, UUIDs, ISO-8601 / epoch-millis timestamps, JWTs or long
+     * opaque tokens are replaced with regex matchers (query/header values become {@code .+};
+     * JSON body leaves become a {@code ${json-unit.regex}} placeholder) so the recorded
+     * expectation is reusable rather than pinned to one captured value. Stable values
+     * (short strings, words, booleans, small numbers) are preserved verbatim.
+     * <p>
+     * Only takes effect when {@link #deduplicateRecordedExpectations()} is also enabled,
+     * because the post-processor only runs then. Default is false (off) so retrieved
+     * recorded expectations are byte-for-byte unchanged unless explicitly enabled.
+     *
+     * @param enable enable value templatization of recorded expectations
+     */
+    public static void templatizeRecordedValues(boolean enable) {
+        setProperty(MOCKSERVER_TEMPLATIZE_RECORDED_VALUES, "" + enable);
+    }
+
+    public static boolean redactSecretsInRecordedExpectations() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_REDACT_SECRETS_IN_RECORDED_EXPECTATIONS, "MOCKSERVER_REDACT_SECRETS_IN_RECORDED_EXPECTATIONS", "" + false));
+    }
+
+    /**
+     * Enable opt-in redaction of secrets in retrieved recorded (proxy SPY/CAPTURE) expectations.
+     * When enabled, sensitive header values ({@code Authorization}, {@code Proxy-Authorization},
+     * {@code Cookie}, {@code Set-Cookie}, {@code x-api-key}, {@code api-key} — which also covers
+     * bearer/token credentials carried in those headers) are masked with a placeholder before the
+     * recorded expectations are returned, generated as client code, or persisted to JSON. This
+     * prevents proxied credentials leaking into shared recordings.
+     * <p>
+     * Trade-off: a redacted recorded expectation can no longer replay against an upstream that
+     * requires that credential, so redaction is opt-in and off by default.
+     * <p>
+     * Default is false (off) so retrieved recorded expectations are byte-for-byte unchanged.
+     *
+     * @param enable enable redaction of secrets in recorded expectations
+     */
+    public static void redactSecretsInRecordedExpectations(boolean enable) {
+        setProperty(MOCKSERVER_REDACT_SECRETS_IN_RECORDED_EXPECTATIONS, "" + enable);
+    }
+
+    public static boolean redactSecretsInLog() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_REDACT_SECRETS_IN_LOG, "MOCKSERVER_REDACT_SECRETS_IN_LOG", "" + false));
+    }
+
+    /**
+     * Enable opt-in redaction of secrets in the live event log and dashboard. When enabled,
+     * sensitive request/response header values ({@code Authorization}, {@code Proxy-Authorization},
+     * {@code Cookie}, {@code Set-Cookie}, {@code x-api-key}, {@code api-key} — which also covers
+     * bearer/token credentials carried in those headers) are masked with a placeholder in the
+     * logged requests shown by {@code retrieveLogMessages}/{@code retrieveRecordedRequests} and in
+     * the dashboard event view. JSON body fields named in {@link #fixtureBodyRedactFields()} are
+     * masked too. This prevents proxied or received credentials leaking into a shared dashboard or
+     * exported log.
+     * <p>
+     * Redaction is applied only to the copies that are serialised for display/retrieval — request
+     * matching and verification continue to see the original, unredacted values, so enabling this
+     * does not change matching behaviour.
+     * <p>
+     * Default is false (off) so the event log and dashboard are byte-for-byte unchanged.
+     *
+     * @param enable enable redaction of secrets in the event log and dashboard
+     */
+    public static void redactSecretsInLog(boolean enable) {
+        setProperty(MOCKSERVER_REDACT_SECRETS_IN_LOG, "" + enable);
+    }
+
+    /**
+     * Return the configured LLM cost budget in USD, or a negative value (the default)
+     * when no budget is set (disabled).
+     */
+    public static double llmCostBudgetUsd() {
+        String raw = readPropertyHierarchically(PROPERTIES, MOCKSERVER_LLM_COST_BUDGET_USD, "MOCKSERVER_LLM_COST_BUDGET_USD", "-1.0");
+        try {
+            return Double.parseDouble(raw);
+        } catch (NumberFormatException e) {
+            return -1.0;
+        }
+    }
+
+    /**
+     * Set a cumulative LLM cost budget in USD. When the cumulative cost of all LLM completions
+     * (mocked and forwarded) exceeds this budget, further LLM forwarding is halted with a 429
+     * response. Set to a negative value or leave unset to disable the budget (the default).
+     * <p>
+     * The budget resets on {@code HttpState.reset()}.
+     *
+     * @param budgetUsd the budget in USD, or negative to disable
+     */
+    public static void llmCostBudgetUsd(double budgetUsd) {
+        setProperty(MOCKSERVER_LLM_COST_BUDGET_USD, "" + budgetUsd);
     }
 
     public static long regexMatchingTimeoutMillis() {
@@ -2014,6 +2916,23 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_CORS_MAX_AGE_IN_SECONDS, "" + ageInSeconds);
     }
 
+    // default response headers
+
+    public static String defaultResponseHeaders() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DEFAULT_RESPONSE_HEADERS, "MOCKSERVER_DEFAULT_RESPONSE_HEADERS", "");
+    }
+
+    /**
+     * <p>Default response headers that MockServer stamps onto every response it returns (mock responses, control-plane / dashboard responses, and forwarded / proxied responses) using add-if-absent semantics, so a header explicitly set on the matched response always wins.</p>
+     * <p>The format is a pipe (<code>|</code>) separated list of <code>name=value</code> pairs, e.g. <code>Server=MockServer|X-Trace-Id=abc123</code>. A header value may itself contain commas (e.g. <code>Cache-Control=no-cache, no-store</code>); only <code>|</code> separates headers and only the first <code>=</code> in each pair separates the name from the value.</p>
+     * <p>The default is "" (no default response headers are added, so behaviour is unchanged).</p>
+     *
+     * @param defaultResponseHeaders pipe separated list of name=value header pairs added to responses if not already present
+     */
+    public static void defaultResponseHeaders(String defaultResponseHeaders) {
+        setProperty(MOCKSERVER_DEFAULT_RESPONSE_HEADERS, defaultResponseHeaders);
+    }
+
     // template restrictions
 
     public static String javascriptDisallowedClasses() {
@@ -2234,6 +3153,21 @@ public class ConfigurationProperties {
      */
     public static void watchInitializationJson(boolean enable) {
         setProperty(MOCKSERVER_WATCH_INITIALIZATION_JSON, "" + enable);
+    }
+
+    public static boolean failOnInitializationError() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FAIL_ON_INITIALIZATION_ERROR, "MOCKSERVER_FAIL_ON_INITIALIZATION_ERROR", "" + false));
+    }
+
+    /**
+     * <p>If enabled a failure to load any expectation initializer (a malformed initialization JSON / OpenAPI file or a broken initialization class) will fail server startup with an exception rather than logging a warning and continuing with zero expectations from that source.</p>
+     *
+     * <p>The default is false (a failed initializer is logged at WARN and startup continues).</p>
+     *
+     * @param enable if enabled a failed expectation initializer load fails server startup
+     */
+    public static void failOnInitializationError(boolean enable) {
+        setProperty(MOCKSERVER_FAIL_ON_INITIALIZATION_ERROR, "" + enable);
     }
 
     // mock persistence
@@ -2493,6 +3427,36 @@ public class ConfigurationProperties {
         // throws NPE for null values. Store empty string to mirror other
         // nullable string properties.
         setProperty(MOCKSERVER_CLUSTER_TRANSPORT_CONFIG, clusterTransportConfig != null ? clusterTransportConfig : "");
+    }
+
+    /**
+     * Returns whether per-expectation {@code Times} limits are enforced
+     * cluster-wide via a shared backend compare-and-set (CAS). Default is
+     * {@code true} (a {@code Times.exactly(N)} expectation serves exactly N
+     * times across the whole fleet).
+     * <p>
+     * Only relevant when a clustered backend is active. When set to
+     * {@code false}, limited-{@code Times} matching falls back to the
+     * node-local fast path: each node enforces {@code Times} independently
+     * (no synchronous backend round-trip on the request worker thread).
+     * This trades the fleet-wide exactly-N guarantee for lower, more
+     * predictable matching latency in latency-sensitive clustered
+     * deployments. See {@code RequestMatchers.consumeTimesViaBackendCas}.
+     */
+    public static boolean clusterSharedTimesEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED, "MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED", "true"));
+    }
+
+    /**
+     * Enables or disables cluster-wide shared-{@code Times} CAS enforcement.
+     *
+     * @param clusterSharedTimesEnabled {@code true} (default) to enforce
+     *                                  {@code Times} limits fleet-wide via
+     *                                  backend CAS; {@code false} to fall
+     *                                  back to node-local {@code Times}
+     */
+    public static void clusterSharedTimesEnabled(boolean clusterSharedTimesEnabled) {
+        setProperty(MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED, String.valueOf(clusterSharedTimesEnabled));
     }
 
     // verification
@@ -2887,6 +3851,30 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_LIVENESS_HTTP_GET_PATH, livenessPath);
     }
 
+    // expectation namespacing / multi-tenancy
+
+    public static String matchNamespaceHeader() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_MATCH_NAMESPACE_HEADER, "MOCKSERVER_MATCH_NAMESPACE_HEADER", DEFAULT_MATCH_NAMESPACE_HEADER);
+    }
+
+    /**
+     * The name of the request header used to scope expectation matching to a namespace (tenant),
+     * enabling multiple teams or test-suites to share a single MockServer instance without their
+     * expectations colliding.
+     * <p>
+     * When a request carries this header with value {@code T}, matching considers expectations whose
+     * {@code namespace} equals {@code T} <em>plus</em> all global (no-namespace) expectations — and
+     * never expectations belonging to other namespaces. A request with no namespace header matches
+     * only global (no-namespace) expectations.
+     * <p>
+     * The default is {@code X-MockServer-Namespace}.
+     *
+     * @param matchNamespaceHeader the request header name carrying the namespace
+     */
+    public static void matchNamespaceHeader(String matchNamespaceHeader) {
+        setProperty(MOCKSERVER_MATCH_NAMESPACE_HEADER, matchNamespaceHeader);
+    }
+
     // control plane authentication
 
     public static boolean controlPlaneTLSMutualAuthenticationRequired() {
@@ -3056,6 +4044,175 @@ public class ConfigurationProperties {
      */
     public static void controlPlaneJWTAuthenticationRequiredClaims(Set<String> controlPlaneJWTAuthenticationRequiredClaims) {
         setProperty(MOCKSERVER_CONTROL_PLANE_JWT_AUTHENTICATION_REQUIRED_CLAIMS, Joiner.on(",").join(controlPlaneJWTAuthenticationRequiredClaims));
+    }
+
+    public static boolean controlPlaneOidcAuthenticationRequired() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_OIDC_AUTHENTICATION_REQUIRED, "MOCKSERVER_CONTROL_PLANE_OIDC_AUTHENTICATION_REQUIRED", "false"));
+    }
+
+    /**
+     * <p>
+     * Require verified OIDC bearer-token authentication for all control plane requests, validating tokens issued by an external OIDC IdP
+     * </p>
+     *
+     * @param enable verified OIDC authentication for all control plane requests
+     */
+    public static void controlPlaneOidcAuthenticationRequired(boolean enable) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_OIDC_AUTHENTICATION_REQUIRED, "" + enable);
+    }
+
+    public static String controlPlaneOidcIssuer() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_OIDC_ISSUER, "MOCKSERVER_CONTROL_PLANE_OIDC_ISSUER", "");
+    }
+
+    /**
+     * <p>
+     * OIDC issuer (i.e. iss) required on control plane tokens; also used to discover the JWKS URI via {issuer}/.well-known/openid-configuration when controlPlaneOidcJwksUri is not set
+     * </p>
+     *
+     * @param controlPlaneOidcIssuer required value for issuer claim (i.e. iss)
+     */
+    public static void controlPlaneOidcIssuer(String controlPlaneOidcIssuer) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_OIDC_ISSUER, "" + controlPlaneOidcIssuer);
+    }
+
+    public static String controlPlaneOidcJwksUri() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_OIDC_JWKS_URI, "MOCKSERVER_CONTROL_PLANE_OIDC_JWKS_URI", "");
+    }
+
+    /**
+     * <p>
+     * JWKS URI used to verify control plane OIDC token signatures; if not set it is discovered from the issuer's OIDC discovery document
+     * </p>
+     *
+     * @param controlPlaneOidcJwksUri URL (or file/classpath path) of the JWK source
+     */
+    public static void controlPlaneOidcJwksUri(String controlPlaneOidcJwksUri) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_OIDC_JWKS_URI, "" + controlPlaneOidcJwksUri);
+    }
+
+    public static String controlPlaneOidcAudience() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_OIDC_AUDIENCE, "MOCKSERVER_CONTROL_PLANE_OIDC_AUDIENCE", "");
+    }
+
+    /**
+     * <p>
+     * Audience claim (i.e. aud) required on control plane OIDC tokens
+     * </p>
+     *
+     * @param controlPlaneOidcAudience required value for audience claim (i.e. aud)
+     */
+    public static void controlPlaneOidcAudience(String controlPlaneOidcAudience) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_OIDC_AUDIENCE, "" + controlPlaneOidcAudience);
+    }
+
+    public static Set<String> controlPlaneOidcRequiredScopes() {
+        String requiredScopes = readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_OIDC_REQUIRED_SCOPES, "MOCKSERVER_CONTROL_PLANE_OIDC_REQUIRED_SCOPES", "");
+        if (isNotBlank(requiredScopes)) {
+            return Sets.newConcurrentHashSet(Arrays.asList(requiredScopes.split(",")));
+        } else {
+            return ImmutableSet.of();
+        }
+    }
+
+    /**
+     * <p>
+     * Scopes that must all be present in a control plane OIDC token before it is accepted
+     * </p>
+     * <p>
+     * Value should be a string with comma separated values, for example: mockserver.read,mockserver.write
+     * </p>
+     *
+     * @param controlPlaneOidcRequiredScopes required scopes
+     */
+    public static void controlPlaneOidcRequiredScopes(Set<String> controlPlaneOidcRequiredScopes) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_OIDC_REQUIRED_SCOPES, Joiner.on(",").join(controlPlaneOidcRequiredScopes));
+    }
+
+    public static String controlPlaneOidcScopeClaim() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_OIDC_SCOPE_CLAIM, "MOCKSERVER_CONTROL_PLANE_OIDC_SCOPE_CLAIM", "scope");
+    }
+
+    /**
+     * <p>
+     * Name of the claim holding granted scopes on a control plane OIDC token, default "scope" (space-delimited); array claims such as scp, roles or groups are also supported
+     * </p>
+     *
+     * @param controlPlaneOidcScopeClaim name of the scope claim
+     */
+    public static void controlPlaneOidcScopeClaim(String controlPlaneOidcScopeClaim) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_OIDC_SCOPE_CLAIM, "" + controlPlaneOidcScopeClaim);
+    }
+
+    public static boolean controlPlaneAuthorizationEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_AUTHORIZATION_ENABLED, "MOCKSERVER_CONTROL_PLANE_AUTHORIZATION_ENABLED", "false"));
+    }
+
+    /**
+     * <p>
+     * Enable coarse role-based authorization of control plane requests, mapping a verified principal's scopes/groups to read/mutate/admin roles via controlPlaneScopeMapping
+     * </p>
+     *
+     * @param enable enforce control plane authorization
+     */
+    public static void controlPlaneAuthorizationEnabled(boolean enable) {
+        setProperty(MOCKSERVER_CONTROL_PLANE_AUTHORIZATION_ENABLED, "" + enable);
+    }
+
+    public static Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping() {
+        String mapping = readPropertyHierarchically(PROPERTIES, MOCKSERVER_CONTROL_PLANE_SCOPE_MAPPING, "MOCKSERVER_CONTROL_PLANE_SCOPE_MAPPING", "");
+        return parseScopeMapping(mapping);
+    }
+
+    /**
+     * Parses a comma-separated list of {@code value=role} pairs into a scope-to-role map.
+     * Unrecognised roles (anything other than read/mutate/admin, case-insensitive) and
+     * malformed pairs (missing {@code =} or a blank key/value) are skipped so a typo can
+     * never silently widen access. Returns an empty (never null) map for a blank value.
+     */
+    static Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> parseScopeMapping(String mapping) {
+        Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> result = new LinkedHashMap<>();
+        if (isNotBlank(mapping)) {
+            for (String pair : mapping.split(",")) {
+                int eq = pair.indexOf('=');
+                if (eq <= 0 || eq >= pair.length() - 1) {
+                    continue;
+                }
+                String value = pair.substring(0, eq).trim();
+                org.mockserver.authentication.authorization.ControlPlaneRole role =
+                    org.mockserver.authentication.authorization.ControlPlaneRole.parse(pair.substring(eq + 1));
+                if (isNotBlank(value) && role != null) {
+                    result.put(value, role);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * <p>
+     * Mapping from a verified scope/group value to a coarse control plane role (read, mutate or admin)
+     * </p>
+     * <p>
+     * Value should be a comma separated list of value=role pairs, for example: platform-admins=admin,qa-team=mutate,viewers=read
+     * </p>
+     *
+     * @param controlPlaneScopeMapping mapping from scope/group value to role
+     */
+    public static void controlPlaneScopeMapping(Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping) {
+        StringBuilder serialized = new StringBuilder();
+        if (controlPlaneScopeMapping != null) {
+            for (Map.Entry<String, org.mockserver.authentication.authorization.ControlPlaneRole> entry : controlPlaneScopeMapping.entrySet()) {
+                if (entry.getValue() == null) {
+                    continue;
+                }
+                if (serialized.length() > 0) {
+                    serialized.append(",");
+                }
+                serialized.append(entry.getKey()).append("=").append(entry.getValue().name().toLowerCase());
+            }
+        }
+        setProperty(MOCKSERVER_CONTROL_PLANE_SCOPE_MAPPING, serialized.toString());
     }
 
     // TLS
@@ -3488,6 +4645,20 @@ public class ConfigurationProperties {
         }
     }
 
+    private static double readDoubleProperty(String key, String environmentVariableKey, double defaultValue) {
+        try {
+            return Double.parseDouble(readPropertyHierarchically(PROPERTIES, key, environmentVariableKey, "" + defaultValue));
+        } catch (NumberFormatException nfe) {
+            LoggerHolder.LOGGER.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setMessageFormat("NumberFormatException converting " + key + " with value [" + readPropertyHierarchically(PROPERTIES, key, environmentVariableKey, "" + defaultValue) + "]")
+                    .setThrowable(nfe)
+            );
+            return defaultValue;
+        }
+    }
+
     /**
      * Returns {@code true} when the property name (with or without the
      * {@code mockserver.} prefix) contains a substring that indicates the
@@ -3523,7 +4694,6 @@ public class ConfigurationProperties {
                     try {
                         properties.load(inputStream);
                     } catch (IOException e) {
-                        e.printStackTrace();
                         if (LoggerHolder.LOGGER != null) {
                             LoggerHolder.LOGGER.logEvent(
                                 new LogEntry()
@@ -3555,7 +4725,6 @@ public class ConfigurationProperties {
                             );
                         }
                     } catch (IOException e) {
-                        e.printStackTrace();
                         if (LoggerHolder.LOGGER != null) {
                             LoggerHolder.LOGGER.logEvent(
                                 new LogEntry()
@@ -3637,7 +4806,6 @@ public class ConfigurationProperties {
                 }
             }
         } catch (IOException e) {
-            e.printStackTrace();
             if (LoggerHolder.LOGGER != null) {
                 LoggerHolder.LOGGER.logEvent(
                     new LogEntry()
@@ -3661,6 +4829,12 @@ public class ConfigurationProperties {
 
     private static Map<String, String> propertyCache;
 
+    // Keys written via a programmatic setter (setProperty). Used ONLY by the effective-configuration
+    // diagnostic to distinguish a genuine runtime override from a value that was merely cached by a
+    // first read (readPropertyHierarchically caches every value it resolves, including built-in
+    // defaults). It never affects how any value resolves.
+    private static Set<String> programmaticallySetKeys;
+
     private static Map<String, String> getPropertyCache() {
         if (propertyCache == null) {
             propertyCache = new ConcurrentHashMap<>();
@@ -3668,13 +4842,22 @@ public class ConfigurationProperties {
         return propertyCache;
     }
 
+    private static Set<String> getProgrammaticallySetKeys() {
+        if (programmaticallySetKeys == null) {
+            programmaticallySetKeys = ConcurrentHashMap.newKeySet();
+        }
+        return programmaticallySetKeys;
+    }
+
     private static void setProperty(String systemPropertyKey, String value) {
         getPropertyCache().put(systemPropertyKey, value);
+        getProgrammaticallySetKeys().add(systemPropertyKey);
         System.setProperty(systemPropertyKey, value);
     }
 
     private static void clearProperty(String systemPropertyKey) {
         getPropertyCache().remove(systemPropertyKey);
+        getProgrammaticallySetKeys().remove(systemPropertyKey);
         System.clearProperty(systemPropertyKey);
     }
 
@@ -3694,5 +4877,448 @@ public class ConfigurationProperties {
             getPropertyCache().put(systemPropertyKey, propertyValue);
             return propertyValue;
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // Unknown-configuration-key detection
+    //
+    // Every recognised configuration property is declared in this class as a
+    // "private static final String MOCKSERVER_XXX = "mockserver.xxx";" constant.
+    // Two facts make the constants the single source of truth (no second list to
+    // drift):
+    //   * the constant VALUE (e.g. "mockserver.maxExpectations") is the
+    //     mockserver.* system-property / properties-file key, and
+    //   * the constant NAME  (e.g. MOCKSERVER_MAX_EXPECTATIONS) is, verbatim, the
+    //     MOCKSERVER_* environment-variable key passed at every read site (the
+    //     env-var resolution does not transform the property name — it looks up a
+    //     literal MOCKSERVER_* string that equals the field name).
+    // We therefore enumerate the constants reflectively to build both authoritative
+    // sets, so adding a new property automatically extends recognition.
+    // ------------------------------------------------------------------------
+
+    private static volatile Set<String> recognisedSystemPropertyKeys;
+    private static volatile Set<String> recognisedEnvironmentVariableKeys;
+
+    private static void enumerateRecognisedKeys() {
+        if (recognisedSystemPropertyKeys != null) {
+            return;
+        }
+        Set<String> systemPropertyKeys = new HashSet<>();
+        Set<String> environmentVariableKeys = new HashSet<>();
+        for (Field field : ConfigurationProperties.class.getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers())
+                && Modifier.isFinal(field.getModifiers())
+                && field.getType() == String.class
+                && field.getName().startsWith("MOCKSERVER_")) {
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(null);
+                    if (value instanceof String && ((String) value).startsWith("mockserver.")) {
+                        systemPropertyKeys.add((String) value);
+                        // The field NAME is the literal MOCKSERVER_* environment-variable key.
+                        environmentVariableKeys.add(field.getName());
+                    }
+                } catch (Throwable throwable) {
+                    // Ignore a single inaccessible constant rather than failing the whole scan.
+                }
+            }
+        }
+        // Union in the keys handled by the CLI launcher / launcher scripts rather than by a
+        // MOCKSERVER_* constant here (see the allowlist declarations above for why each belongs).
+        systemPropertyKeys.addAll(EXTRA_RECOGNISED_SYSTEM_PROPERTY_KEYS);
+        environmentVariableKeys.addAll(EXTRA_RECOGNISED_ENV_KEYS);
+        recognisedSystemPropertyKeys = systemPropertyKeys;
+        recognisedEnvironmentVariableKeys = environmentVariableKeys;
+    }
+
+    /**
+     * Recognised {@code mockserver.*} system-property / properties-file keys, derived
+     * reflectively from the {@code MOCKSERVER_*} constants declared in this class.
+     */
+    static Set<String> recognisedSystemPropertyKeys() {
+        enumerateRecognisedKeys();
+        return Collections.unmodifiableSet(recognisedSystemPropertyKeys);
+    }
+
+    /**
+     * Recognised {@code MOCKSERVER_*} environment-variable keys, derived reflectively
+     * from the {@code MOCKSERVER_*} constant field names declared in this class.
+     */
+    static Set<String> recognisedEnvironmentVariableKeys() {
+        enumerateRecognisedKeys();
+        return Collections.unmodifiableSet(recognisedEnvironmentVariableKeys);
+    }
+
+    /**
+     * Pure detection helper (no I/O, no global-state reads) used by both the startup
+     * warning and the tests: returns, sorted, the description of every supplied key that
+     * is in the {@code mockserver.}/{@code MOCKSERVER_} namespace but is not recognised.
+     *
+     * @param systemPropertyNames     names of JVM system properties (e.g. {@code System.getProperties()} keys)
+     * @param environmentVariableNames names of environment variables (e.g. {@code System.getenv()} keys)
+     * @param propertiesFile          loaded properties file (may be {@code null})
+     */
+    static List<String> findUnknownConfigurationKeys(Set<String> systemPropertyNames, Set<String> environmentVariableNames, Properties propertiesFile) {
+        enumerateRecognisedKeys();
+        Set<String> warnings = new TreeSet<>();
+
+        if (systemPropertyNames != null) {
+            for (String name : systemPropertyNames) {
+                if (name != null && name.startsWith("mockserver.") && !recognisedSystemPropertyKeys.contains(name)) {
+                    warnings.add("system property [" + name + "]");
+                }
+            }
+        }
+
+        if (environmentVariableNames != null) {
+            for (String name : environmentVariableNames) {
+                if (name != null && name.startsWith("MOCKSERVER_") && !recognisedEnvironmentVariableKeys.contains(name)) {
+                    warnings.add("environment variable [" + name + "]");
+                }
+            }
+        }
+
+        if (propertiesFile != null) {
+            Enumeration<?> propertyNames = propertiesFile.propertyNames();
+            while (propertyNames.hasMoreElements()) {
+                String name = String.valueOf(propertyNames.nextElement());
+                if (name.startsWith("mockserver.")
+                    && !recognisedSystemPropertyKeys.contains(name)
+                    // mockserver.propertyFile itself can legitimately be set in a file; it is a recognised key,
+                    // so this is covered by the recognised-set check above. No extra exclusions are needed.
+                    && !warnings.contains("system property [" + name + "]")) {
+                    warnings.add("properties-file key [" + name + "]");
+                }
+            }
+        }
+
+        return new ArrayList<>(warnings);
+    }
+
+    /**
+     * Logs a WARN for every {@code mockserver.*} system property, {@code MOCKSERVER_*}
+     * environment variable, or {@code mockserver.*} properties-file key that is not a
+     * recognised configuration property — the common "I set it but nothing happened"
+     * typo (e.g. {@code -Dmockserver.maxExpectatons=...}). Runs at most once and can
+     * never throw, so it cannot break startup.
+     */
+    static void warnAboutUnknownConfigurationProperties() {
+        // compareAndSet ensures the check runs at most once even under concurrent callers, so two
+        // threads racing here can never both emit the same warning.
+        if (!unknownConfigurationPropertiesChecked.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            Set<String> systemPropertyNames = System.getProperties().stringPropertyNames();
+            Set<String> environmentVariableNames = System.getenv().keySet();
+            List<String> unknownKeys = findUnknownConfigurationKeys(systemPropertyNames, environmentVariableNames, PROPERTIES);
+            if (!unknownKeys.isEmpty() && LoggerHolder.LOGGER != null) {
+                for (String unknownKey : unknownKeys) {
+                    LoggerHolder.LOGGER.logEvent(
+                        new LogEntry()
+                            .setAlwaysLog(true)
+                            .setType(SERVER_CONFIGURATION)
+                            .setLogLevel(Level.WARN)
+                            .setMessageFormat("unrecognised MockServer configuration " + unknownKey + " - it is not a known configuration property and will be ignored (check for a typo)")
+                    );
+                }
+            }
+        } catch (Throwable throwable) {
+            // Never let configuration validation break startup.
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Effective-configuration diagnostic (--print-config / GET /mockserver/config)
+    //
+    // Reports, for every recognised configuration property, the resolved value
+    // together with the tier that supplied it. The reporting is PURELY OBSERVATIONAL:
+    // it inspects the same three tiers in the same precedence order as
+    // readPropertyHierarchically(...) (system property > properties file > env var,
+    // then the built-in default) but NEVER mutates the property cache or changes how
+    // any value resolves. Sensitive values are redacted via isSensitivePropertyName(...).
+    // ------------------------------------------------------------------------
+
+    /** Source-tier labels for a resolved configuration property. */
+    public static final String SOURCE_SYSTEM_PROPERTY = "system-property";
+    public static final String SOURCE_PROPERTIES_FILE = "properties-file";
+    public static final String SOURCE_ENVIRONMENT_VARIABLE = "environment-variable";
+    public static final String SOURCE_DEFAULT = "default";
+    /**
+     * The value was set at runtime (a programmatic {@code ConfigurationProperties} setter) and is
+     * held in the in-memory property cache — which {@link #readPropertyHierarchically} consults
+     * FIRST, so it is what MockServer actually uses regardless of the underlying tiers. Reported
+     * only when the cached value does not also resolve from one of the static tiers.
+     */
+    public static final String SOURCE_RUNTIME_SET = "runtime-set";
+
+    /**
+     * A single resolved configuration property: its {@code mockserver.*} key, the value
+     * actually in effect (already redacted when sensitive), and the {@link #source} tier
+     * that supplied it (one of the {@code SOURCE_*} constants).
+     */
+    public static final class ResolvedProperty {
+        private final String name;
+        private final String value;
+        private final String source;
+
+        ResolvedProperty(String name, String value, String source) {
+            this.name = name;
+            this.value = value;
+            this.source = source;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getValue() {
+            return value;
+        }
+
+        public String getSource() {
+            return source;
+        }
+    }
+
+    /**
+     * Reports which tier currently supplies the value for the given property WITHOUT
+     * changing resolution. Mirrors the precedence in
+     * {@link #readPropertyHierarchically(Properties, String, String, String)}:
+     * system property &gt; properties file &gt; environment variable &gt; default.
+     *
+     * @param systemPropertyKey      the {@code mockserver.*} key
+     * @param environmentVariableKey the {@code MOCKSERVER_*} environment-variable key
+     * @return one of the {@code SOURCE_*} constants
+     */
+    static String resolveEffectiveSource(String systemPropertyKey, String environmentVariableKey) {
+        return resolveEffectiveSource(
+            System.getProperty(systemPropertyKey),
+            PROPERTIES != null ? PROPERTIES.getProperty(systemPropertyKey) : null,
+            isNotBlank(environmentVariableKey) ? System.getenv(environmentVariableKey) : null
+        );
+    }
+
+    /**
+     * Pure source-resolution: given the raw value found in each tier (any may be
+     * {@code null}/blank), returns the tier that wins, in the SAME precedence order as
+     * {@link #readPropertyHierarchically}: system property &gt; properties file &gt;
+     * environment variable &gt; default. No I/O or global-state reads — used by both the
+     * live {@link #resolveEffectiveSource(String, String)} and the tests.
+     */
+    static String resolveEffectiveSource(String systemPropertyValue, String propertiesFileValue, String environmentVariableValue) {
+        if (isNotBlank(systemPropertyValue)) {
+            return SOURCE_SYSTEM_PROPERTY;
+        }
+        if (isNotBlank(propertiesFileValue)) {
+            return SOURCE_PROPERTIES_FILE;
+        }
+        if (isNotBlank(environmentVariableValue)) {
+            return SOURCE_ENVIRONMENT_VARIABLE;
+        }
+        return SOURCE_DEFAULT;
+    }
+
+    /**
+     * Returns the value an explicitly-set property would resolve to, reading the SAME
+     * tiers in the SAME order as {@link #readPropertyHierarchically} but without touching
+     * the property cache. Returns {@code null} when the key is at its built-in default
+     * (the typed default is computed at the individual read sites, so it is reported as
+     * {@code (default)} rather than guessed here).
+     */
+    private static String resolveExplicitValue(String systemPropertyKey, String environmentVariableKey) {
+        return resolveExplicitValue(
+            System.getProperty(systemPropertyKey),
+            PROPERTIES != null ? PROPERTIES.getProperty(systemPropertyKey) : null,
+            isNotBlank(environmentVariableKey) ? System.getenv(environmentVariableKey) : null
+        );
+    }
+
+    /**
+     * Pure value-resolution mirroring {@link #resolveEffectiveSource(String, String, String)}:
+     * returns the first non-blank tier value (system property &gt; properties file &gt;
+     * environment variable), or {@code null} for a default. Strips surrounding quotes exactly
+     * as {@link #readPropertyHierarchically} does so the reported value matches what MockServer
+     * actually uses.
+     */
+    static String resolveExplicitValue(String systemPropertyValue, String propertiesFileValue, String environmentVariableValue) {
+        String value = null;
+        if (isNotBlank(systemPropertyValue)) {
+            value = systemPropertyValue;
+        } else if (isNotBlank(propertiesFileValue)) {
+            value = propertiesFileValue;
+        } else if (isNotBlank(environmentVariableValue)) {
+            value = environmentVariableValue;
+        }
+        if (value == null) {
+            return null;
+        }
+        if (value.startsWith("\"") && value.endsWith("\"")) {
+            value = value.replaceAll("^\"|\"$", "");
+        }
+        return value;
+    }
+
+    /**
+     * The effective configuration: one {@link ResolvedProperty} per recognised
+     * {@code mockserver.*} property, sorted by name, with sensitive values redacted.
+     * Properties at their built-in default report a {@code (default)} value and the
+     * {@link #SOURCE_DEFAULT} source.
+     *
+     * <p>Cache-first, exactly like {@link #readPropertyHierarchically}: if the in-memory property
+     * cache holds a value for a key (populated by a programmatic setter or by a first read), that
+     * is the value MockServer actually uses and is what is reported. When that cached value also
+     * resolves from one of the static tiers, the originating tier is reported; otherwise it is a
+     * runtime override ({@link #SOURCE_RUNTIME_SET}). Purely observational — reads the cache and
+     * the tiers but never mutates them and never changes how any value resolves.</p>
+     */
+    public static List<ResolvedProperty> effectiveConfiguration() {
+        Map<String, String> cache = getPropertyCache();
+        // Build (systemPropertyKey -> environmentVariableKey) pairs from the MOCKSERVER_*
+        // constants: the constant VALUE is the mockserver.* key and the constant NAME is
+        // the literal MOCKSERVER_* environment-variable key (see enumerateRecognisedKeys()).
+        Map<String, String> systemPropertyKeyToEnvKey = new TreeMap<>();
+        for (Field field : ConfigurationProperties.class.getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers())
+                && Modifier.isFinal(field.getModifiers())
+                && field.getType() == String.class
+                && field.getName().startsWith("MOCKSERVER_")) {
+                try {
+                    field.setAccessible(true);
+                    Object value = field.get(null);
+                    if (value instanceof String && ((String) value).startsWith("mockserver.")) {
+                        systemPropertyKeyToEnvKey.put((String) value, field.getName());
+                    }
+                } catch (Throwable throwable) {
+                    // Skip a single inaccessible constant rather than failing the whole report.
+                }
+            }
+        }
+
+        Set<String> programmaticKeys = getProgrammaticallySetKeys();
+        List<ResolvedProperty> resolved = new ArrayList<>();
+        for (Map.Entry<String, String> entry : systemPropertyKeyToEnvKey.entrySet()) {
+            String systemPropertyKey = entry.getKey();
+            String environmentVariableKey = entry.getValue();
+
+            // The cache is what readPropertyHierarchically returns first, so it is authoritative.
+            String cachedValue = cache.get(systemPropertyKey);
+            String tierSource = resolveEffectiveSource(systemPropertyKey, environmentVariableKey);
+            String tierValue = resolveExplicitValue(systemPropertyKey, environmentVariableKey);
+
+            String source;
+            String resolvedValue;
+            if (cachedValue != null && programmaticKeys.contains(systemPropertyKey) && !cachedValue.equals(tierValue)) {
+                // A programmatic setter changed the value to something none of the static tiers
+                // supply: this is a genuine runtime override. (When the cached value DOES equal the
+                // tier value, the setter agreed with the tier — fall through and attribute it to the
+                // tier so e.g. a setter that also writes the system property reports system-property.)
+                resolvedValue = cachedValue;
+                source = SOURCE_RUNTIME_SET;
+            } else if (!SOURCE_DEFAULT.equals(tierSource)) {
+                // A static tier (system property > properties file > environment variable) supplies a
+                // value. readPropertyHierarchically caches that same value on first read, so whether or
+                // not it is cached the reported value and source are the tier's.
+                resolvedValue = tierValue;
+                source = tierSource;
+            } else {
+                // No tier supplies a value. A cached value here is the built-in default that
+                // readPropertyHierarchically memoised on first read (it caches every value it resolves,
+                // including defaults) — NOT a runtime override. Report it as the default.
+                resolvedValue = null;
+                source = SOURCE_DEFAULT;
+            }
+
+            String value;
+            if (resolvedValue == null) {
+                value = "(default)";
+            } else if (isSensitivePropertyName(systemPropertyKey)) {
+                value = REDACTED_VALUE;
+            } else {
+                value = resolvedValue;
+            }
+            resolved.add(new ResolvedProperty(systemPropertyKey, value, source));
+        }
+        return resolved;
+    }
+
+    /**
+     * Renders the effective configuration as plain text — one
+     * {@code name = value   [source]} line per property — suitable for the
+     * {@code --print-config} CLI flag.
+     */
+    public static String effectiveConfigurationAsText() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("MockServer effective configuration (value and the source that supplied it):").append(NEW_LINE);
+        for (ResolvedProperty property : effectiveConfiguration()) {
+            builder.append("  ")
+                .append(property.getName())
+                .append(" = ")
+                .append(property.getValue())
+                .append("   [")
+                .append(property.getSource())
+                .append("]")
+                .append(NEW_LINE);
+        }
+        return builder.toString();
+    }
+
+    /**
+     * Renders the effective configuration as a JSON array of
+     * {@code {"name":..,"value":..,"source":..}} objects, suitable for the
+     * {@code GET /mockserver/config} control-plane endpoint. Hand-built (rather than via
+     * Jackson) to keep this diagnostic free of serialization-configuration coupling and
+     * usable from the lowest module layers.
+     */
+    public static String effectiveConfigurationAsJson() {
+        StringBuilder builder = new StringBuilder();
+        builder.append("[");
+        List<ResolvedProperty> properties = effectiveConfiguration();
+        for (int i = 0; i < properties.size(); i++) {
+            ResolvedProperty property = properties.get(i);
+            if (i > 0) {
+                builder.append(",");
+            }
+            builder.append("{\"name\":\"").append(jsonEscape(property.getName()))
+                .append("\",\"value\":\"").append(jsonEscape(property.getValue()))
+                .append("\",\"source\":\"").append(jsonEscape(property.getSource()))
+                .append("\"}");
+        }
+        builder.append("]");
+        return builder.toString();
+    }
+
+    private static String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+        StringBuilder escaped = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char character = value.charAt(i);
+            switch (character) {
+                case '"':
+                    escaped.append("\\\"");
+                    break;
+                case '\\':
+                    escaped.append("\\\\");
+                    break;
+                case '\n':
+                    escaped.append("\\n");
+                    break;
+                case '\r':
+                    escaped.append("\\r");
+                    break;
+                case '\t':
+                    escaped.append("\\t");
+                    break;
+                default:
+                    if (character < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) character));
+                    } else {
+                        escaped.append(character);
+                    }
+            }
+        }
+        return escaped.toString();
     }
 }

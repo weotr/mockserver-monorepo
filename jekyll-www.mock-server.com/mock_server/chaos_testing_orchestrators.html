@@ -22,6 +22,41 @@ schema_faq:
 
 <p>MockServer is a controllable fault-injection point: its <a href="/mock_server/chaos_testing.html#service_scoped_chaos">service-scoped chaos</a> control plane lets you break an upstream host with a single HTTP call and revert it with another. That makes it straightforward to drive from any chaos-engineering orchestrator — the orchestrator owns the experiment timeline, MockServer applies the fault.</p>
 
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>The universal inject / verify / revert pattern, then ready-to-use recipes for each major orchestrator:</p>
+
+<table class="comparison_table">
+    <thead>
+        <tr>
+            <th>Integration recipes</th>
+            <th>Observability &amp; reference</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#the_pattern">The integration pattern</a> &mdash; inject, verify, revert — always set ttlMillis</li>
+                    <li><a href="#chaos_toolkit">Chaos Toolkit</a> &mdash; built-in http provider, no extension needed</li>
+                    <li><a href="#aws_fis">AWS Fault Injection Service (FIS)</a> &mdash; SSM RunShellScript wrapper</li>
+                    <li><a href="#azure_chaos_studio">Azure Chaos Studio</a> &mdash; Automation runbook / pipeline step</li>
+                    <li><a href="#litmuschaos">LitmusChaos</a> &mdash; cmdProbe SOT/EOT + httpProbe continuous verify</li>
+                    <li><a href="#generic">Any scheduler or pipeline</a> &mdash; cron, CI, k6, Step Functions, Gremlin</li>
+                </ul>
+            </td>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#observability">Observing the experiment</a> &mdash; GET /serviceChaos TTL countdown, Prometheus gauge</li>
+                    <li><a href="#faq">FAQ</a> &mdash; driving from external tools, crash-safe TTL, auth</li>
+                </ul>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
 <a id="the_pattern" class="anchor" href="#the_pattern">&nbsp;</a>
 
 <h2>The integration pattern</h2>

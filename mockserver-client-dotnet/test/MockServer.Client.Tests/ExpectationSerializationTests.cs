@@ -153,4 +153,146 @@ public class ExpectationSerializationTests
         exactly.Value.Should().Be(30);
         exactly.Unlimited.Should().BeFalse();
     }
+
+    [Fact]
+    public void Expectation_WithResponseTemplate_SerializesCorrectly()
+    {
+        var expectation = new Expectation
+        {
+            HttpRequest = HttpRequest.Request().WithPath("/template").Build(),
+            HttpResponseTemplate = HttpTemplate.OfType(TemplateType.VELOCITY)
+                .WithTemplate("{ \"statusCode\": 200, \"body\": \"hello $!request.path\" }")
+                .Build()
+        };
+
+        var json = JsonSerializer.Serialize(expectation, JsonOptions);
+        var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.TryGetProperty("httpResponse", out _).Should().BeFalse();
+        var tmpl = doc.RootElement.GetProperty("httpResponseTemplate");
+        tmpl.GetProperty("templateType").GetString().Should().Be("VELOCITY");
+        tmpl.GetProperty("template").GetString().Should().Contain("$!request.path");
+        tmpl.TryGetProperty("templateFile", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Expectation_WithResponseTemplate_TemplateFile_SerializesCorrectly()
+    {
+        var expectation = new Expectation
+        {
+            HttpRequest = HttpRequest.Request().WithPath("/template-file").Build(),
+            HttpResponseTemplate = HttpTemplate.OfType(TemplateType.MUSTACHE)
+                .WithTemplateFile("/templates/response.mustache")
+                .Build()
+        };
+
+        var json = JsonSerializer.Serialize(expectation, JsonOptions);
+        var doc = JsonDocument.Parse(json);
+
+        var tmpl = doc.RootElement.GetProperty("httpResponseTemplate");
+        tmpl.GetProperty("templateType").GetString().Should().Be("MUSTACHE");
+        tmpl.GetProperty("templateFile").GetString().Should().Be("/templates/response.mustache");
+        tmpl.TryGetProperty("template", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Expectation_WithForwardTemplate_SerializesCorrectly()
+    {
+        var expectation = new Expectation
+        {
+            HttpRequest = HttpRequest.Request().WithPath("/forward-template").Build(),
+            HttpForwardTemplate = HttpTemplate.OfType(TemplateType.JAVASCRIPT)
+                .WithTemplate("return { 'httpRequest': { 'path': '/forwarded' } };")
+                .Build()
+        };
+
+        var json = JsonSerializer.Serialize(expectation, JsonOptions);
+        var doc = JsonDocument.Parse(json);
+
+        doc.RootElement.TryGetProperty("httpForward", out _).Should().BeFalse();
+        var tmpl = doc.RootElement.GetProperty("httpForwardTemplate");
+        tmpl.GetProperty("templateType").GetString().Should().Be("JAVASCRIPT");
+        tmpl.GetProperty("template").GetString().Should().Contain("/forwarded");
+    }
+
+    [Fact]
+    public void HttpTemplate_RoundTrips_ThroughJson()
+    {
+        var original = HttpTemplate.OfType(TemplateType.VELOCITY)
+            .WithTemplate("inline template")
+            .WithTemplateFile("fallback.vm")
+            .Build();
+
+        var json = JsonSerializer.Serialize(original, JsonOptions);
+        var deserialized = JsonSerializer.Deserialize<HttpTemplate>(json, JsonOptions);
+
+        deserialized.Should().NotBeNull();
+        deserialized!.TemplateType.Should().Be(TemplateType.VELOCITY);
+        deserialized.Template.Should().Be("inline template");
+        deserialized.TemplateFile.Should().Be("fallback.vm");
+    }
+
+    [Fact]
+    public void FileBody_WithTemplateType_SerializesCorrectly()
+    {
+        var expectation = new Expectation
+        {
+            HttpRequest = HttpRequest.Request().WithPath("/file").Build(),
+            HttpResponse = HttpResponse.Response()
+                .WithStatusCode(200)
+                .WithFileBody("/data/response.vm", "application/json", FileTemplateType.VELOCITY)
+                .Build()
+        };
+
+        var json = JsonSerializer.Serialize(expectation, JsonOptions);
+        var doc = JsonDocument.Parse(json);
+
+        var body = doc.RootElement.GetProperty("httpResponse").GetProperty("body");
+        body.GetProperty("type").GetString().Should().Be("FILE");
+        body.GetProperty("filePath").GetString().Should().Be("/data/response.vm");
+        body.GetProperty("contentType").GetString().Should().Be("application/json");
+        body.GetProperty("templateType").GetString().Should().Be("VELOCITY");
+    }
+
+    [Fact]
+    public void FileBody_WithoutTemplateType_OmitsTemplateType()
+    {
+        var expectation = new Expectation
+        {
+            HttpRequest = HttpRequest.Request().WithPath("/file-plain").Build(),
+            HttpResponse = HttpResponse.Response()
+                .WithStatusCode(200)
+                .WithFileBody("/data/response.json", "application/json")
+                .Build()
+        };
+
+        var json = JsonSerializer.Serialize(expectation, JsonOptions);
+        var doc = JsonDocument.Parse(json);
+
+        var body = doc.RootElement.GetProperty("httpResponse").GetProperty("body");
+        body.GetProperty("type").GetString().Should().Be("FILE");
+        body.GetProperty("filePath").GetString().Should().Be("/data/response.json");
+        body.GetProperty("contentType").GetString().Should().Be("application/json");
+        body.TryGetProperty("templateType", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void FileBody_RoundTrips_ThroughJson()
+    {
+        var original = new FileBody
+        {
+            FilePath = "/templates/body.mustache",
+            ContentType = "text/html",
+            TemplateType = FileTemplateType.MUSTACHE
+        };
+
+        var json = JsonSerializer.Serialize(original, JsonOptions);
+        var deserialized = JsonSerializer.Deserialize<FileBody>(json, JsonOptions);
+
+        deserialized.Should().NotBeNull();
+        deserialized!.Type.Should().Be("FILE");
+        deserialized.FilePath.Should().Be("/templates/body.mustache");
+        deserialized.ContentType.Should().Be("text/html");
+        deserialized.TemplateType.Should().Be(FileTemplateType.MUSTACHE);
+    }
 }

@@ -2256,6 +2256,220 @@ public class NottableStringMultiMapContainAllTest {
         );
     }
 
+    // NOTTED KEY IN MATCHING_KEY MODE (edge case W3-3b)
+    //
+    // In KeyMatchStyle.MATCHING_KEY a notted matcher key "!X" must mean "no actual key equals X"
+    // (the key must be ABSENT), consistent with the SUB_SET nottedAndPresent semantic — NOT
+    // "aggregate the values of every actual key that is not named X".
+
+    @Test
+    public void shouldMatchNottedKeyInMatchingKeyModeWhenKeyAbsent() {
+        // given - matcher requires key "absentKey" to be ABSENT, and it is absent
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!absentKey"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("keyTwo"), string("valueTwo")}
+        );
+
+        // then - the key is absent so the assertion holds, regardless of the unrelated keys' values
+        assertThat(matched.containsAll(null, null, matcher), is(true));
+    }
+
+    @Test
+    public void shouldNotMatchNottedKeyInMatchingKeyModeWhenKeyPresent() {
+        // given - matcher requires key "keyOne" to be ABSENT, but it is present
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!keyOne"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("keyTwo"), string("valueTwo")}
+        );
+
+        // then - the notted key is present so the absence assertion fails
+        assertThat(matched.containsAll(null, null, matcher), is(false));
+    }
+
+    @Test
+    public void shouldNotMatchNottedKeyInMatchingKeyModeWhenKeyPresentAsSoleEntry() {
+        // given - matcher requires key "keyOne" to be ABSENT, and it is the only actual key
+        // (previously getAll("!keyOne") returned an empty bag here, which the
+        //  empty-and-not-optional guard already rejected; assert it still fails for the right reason)
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!keyOne"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")}
+        );
+
+        // then
+        assertThat(matched.containsAll(null, null, matcher), is(false));
+    }
+
+    @Test
+    public void shouldNotMatchNottedKeyInMatchingKeyModeEvenWhenAggregatedValueWouldHaveMatched() {
+        // This is the decisive regression test for W3-3b. The notted key "!keyOne" must be present
+        // (keyOne IS in the actual map) so the match must FAIL. Crucially the matcher's value
+        // ("valueTwo") is chosen so that it DOES equal the value of the unrelated key keyTwo. Under
+        // the old code, getAll("!keyOne") aggregated keyTwo's value ["valueTwo"], which matched, so
+        // the old code wrongly returned true. The fixed code asserts key absence and returns false.
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!keyOne"), string("valueTwo")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("keyTwo"), string("valueTwo")}
+        );
+
+        // then - present-key assertion fails regardless of any aggregated value coincidence
+        assertThat(matched.containsAll(null, null, matcher), is(false));
+    }
+
+    @Test
+    public void shouldMatchNottedKeyInMatchingKeyModeAgainstEmptyActualMap() {
+        // given - matcher asserts a key is absent; the actual map is empty so it is trivially absent
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!absentKey"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY
+        );
+
+        // then
+        assertThat(matched.containsAll(null, null, matcher), is(true));
+    }
+
+    @Test
+    public void shouldHandleNottedOptionalKeyInMatchingKeyModeAsAbsenceAssertion() {
+        // given - a notted+optional key: the notted (absence) semantic takes precedence, matching the
+        // SUB_SET path where nottedAndPresent fires regardless of optionality
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("?!keyOne"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matchedWithKey = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")}
+        );
+        NottableStringMultiMap matchedWithoutKey = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyTwo"), string("valueTwo")}
+        );
+
+        // then - present => fail (absence assertion violated); absent => pass
+        assertThat(matchedWithKey.containsAll(null, null, matcher), is(false));
+        assertThat(matchedWithoutKey.containsAll(null, null, matcher), is(true));
+    }
+
+    @Test
+    public void shouldMatchNottedRegexKeyInMatchingKeyModeWhenNoActualKeyMatches() {
+        // given - "!key.*" asserts no actual key matches the regex key.*; none do
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!key.*"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("headerOne"), string("valueOne")},
+            new NottableString[]{string("headerTwo"), string("valueTwo")}
+        );
+
+        // then
+        assertThat(matched.containsAll(null, null, matcher), is(true));
+    }
+
+    @Test
+    public void shouldNotMatchNottedRegexKeyInMatchingKeyModeWhenAnActualKeyMatches() {
+        // given - "!key.*" asserts no actual key matches the regex key.*; keyOne does
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("!key.*"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matched = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("headerTwo"), string("valueTwo")}
+        );
+
+        // then
+        assertThat(matched.containsAll(null, null, matcher), is(false));
+    }
+
+    @Test
+    public void shouldMatchMixedNottedAndPlainKeysInMatchingKeyMode() {
+        // given - keyOne must be present with valueOne, and absentKey must be absent
+        NottableStringMultiMap matcher = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("!absentKey"), string("ignoredValue")}
+        );
+        NottableStringMultiMap matchedPresentAndAbsent = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("keyTwo"), string("valueTwo")}
+        );
+        NottableStringMultiMap matchedPresentButAlsoNottedKey = new NottableStringMultiMap(
+            new MockServerLogger(),
+            false,
+            KeyMatchStyle.MATCHING_KEY,
+            new NottableString[]{string("keyOne"), string("valueOne")},
+            new NottableString[]{string("absentKey"), string("valueTwo")}
+        );
+
+        // then
+        assertThat(matchedPresentAndAbsent.containsAll(null, null, matcher), is(true));
+        assertThat(matchedPresentButAlsoNottedKey.containsAll(null, null, matcher), is(false));
+    }
+
     public static class TestScenario {
 
         final NottableString[][] matcher;

@@ -1,0 +1,31 @@
+meta {
+  name: create expectations from a GraphQL schema
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}/mockserver/graphql
+  body: text
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/graphql
+}
+
+params:query {
+  ~path: 
+}
+
+body:text {
+  type Query { hello: String } type Mutation { ping: String }
+}
+
+docs {
+  Generates expectations from a GraphQL schema (the request body is a GraphQL SDL document or an introspection JSON result) and adds them. One expectation is created per root operation type (query / mutation / subscription); each matches any operation of that kind and synthesizes a schema-valid response per request. The optional "path" query parameter overrides the default "/graphql" request path the generated expectations match.
+  
+  GraphQL schema to generate expectations from
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

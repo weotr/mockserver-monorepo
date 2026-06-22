@@ -5,6 +5,7 @@ import org.mockserver.model.Delay;
 import org.mockserver.model.GrpcBidiResponse;
 import org.mockserver.model.GrpcBidiRule;
 import org.mockserver.model.GrpcStreamMessage;
+import org.mockserver.model.HttpTemplate;
 import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.util.concurrent.TimeUnit;
@@ -152,6 +153,30 @@ public class GrpcBidiResponseDTOTest {
 
         GrpcBidiResponse rebuilt = dto.buildObject();
         assertThat(rebuilt.isPrimary(), is(true));
+    }
+
+    @Test
+    public void shouldRoundTripTemplateTypeOnResponseMessage() throws Exception {
+        // WS2.6: a templated bidi response message preserves its templateType through serialization,
+        // while a sibling static message keeps a null templateType (opt-in, no default applied).
+        GrpcBidiResponse original = GrpcBidiResponse.grpcBidiResponse()
+            .withStatusName("OK")
+            .withRule(GrpcBidiRule.grpcBidiRule(".*Alice.*")
+                .withResponse(GrpcStreamMessage.grpcStreamMessage("{\"greeting\": \"Hi $jsonPath(\\\"$.name\\\")\"}")
+                    .withTemplateType(HttpTemplate.TemplateType.VELOCITY))
+                .withResponse("{\"greeting\": \"static reply\"}"));
+
+        GrpcBidiResponseDTO dto = new GrpcBidiResponseDTO(original);
+        String json = ObjectMapperFactory.createObjectMapper().writeValueAsString(dto);
+        GrpcBidiResponseDTO deserialized = ObjectMapperFactory.createObjectMapper().readValue(json, GrpcBidiResponseDTO.class);
+        GrpcBidiResponse rebuilt = deserialized.buildObject();
+
+        GrpcStreamMessage templated = rebuilt.getRules().get(0).getResponses().get(0);
+        GrpcStreamMessage staticMessage = rebuilt.getRules().get(0).getResponses().get(1);
+        assertThat(templated.getTemplateType(), is(HttpTemplate.TemplateType.VELOCITY));
+        assertThat(staticMessage.getTemplateType(), nullValue());
+        // round-tripped JSON serializes templateType only for the templated message
+        assertThat(json, org.hamcrest.Matchers.containsString("VELOCITY"));
     }
 
     @Test

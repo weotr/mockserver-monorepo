@@ -55,6 +55,10 @@ function stubFetch(status: number, body: unknown) {
 }
 
 function renderComposer() {
+  // The composer now defaults to a minimal "Quick mock" view; these tests need
+  // the full Advanced form (kind selector incl. Import). Seed the session
+  // preference read by getInitialMode on mount.
+  try { globalThis.sessionStorage?.setItem('mockserver-composer-mode', 'advanced'); } catch { /* noop */ }
   return render(
     <ThemeProvider theme={buildTheme('dark')}>
       <ComposerView connectionParams={params} />
@@ -293,6 +297,23 @@ describe('Import success and error feedback', () => {
     await waitFor(() => {
       expect(screen.getByText('Imported 2 expectations')).toBeInTheDocument();
     });
+  });
+
+  it('shows an honest "Import succeeded" when the server returns no created list', async () => {
+    // A 2xx body that is not a JSON array of created expectations — the import
+    // helpers normalise this to [], which previously rendered "Imported 0
+    // expectations". It should now report success without a misleading count.
+    stubFetch(200, { status: 'ok' });
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByLabelText('Import'));
+    const textarea = screen.getByLabelText('Expectation JSON content');
+    await pasteInto(user, textarea, '[{"httpRequest":{"path":"/test"}}]');
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => {
+      expect(screen.getByText('Import succeeded')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Imported 0 expectations')).not.toBeInTheDocument();
   });
 
   it('shows error alert on failure', async () => {

@@ -260,13 +260,264 @@ module MockServer
       response_body && !response_body.empty? ? JSON.parse(response_body) : {}
     end
 
-    # Verify that a request was received.
-    # @param request [HttpRequest]
+    # -------------------------------------------------------------------
+    # Load scenario registry (load injection)
+    # -------------------------------------------------------------------
+    #
+    # The load scenario registry decouples *registering* a scenario from
+    # *running* it:
+    #
+    #   * registering (load_scenario) only stores the definition keyed by its
+    #     unique +name+ and is allowed even when +loadGenerationEnabled+ is off;
+    #   * starting (start_load_scenarios) is what actually drives traffic and
+    #     requires +loadGenerationEnabled+ on the server (otherwise a 403).
+    #
+    # Scenario states are: LOADED, PENDING, RUNNING, COMPLETED, STOPPED.
+
+    # Register (load) a scenario into the registry without running it.
+    #
+    # +scenario+ may be a {LoadScenario} model (which responds to +to_h+) or a
+    # plain Hash already shaped to the +LoadScenario+ JSON contract. It must
+    # carry a unique +name+. Registering is permitted even when load generation
+    # is disabled on the server.
+    #
+    # @param scenario [LoadScenario, Hash] the scenario to register
+    # @return [Hash] parsed response of the form { "name" => ..., "state" => ... }
+    def load_scenario(scenario)
+      payload = scenario.respond_to?(:to_h) ? scenario.to_h : scenario
+      body = JSON.generate(payload)
+      status, response_body = request('PUT', '/mockserver/loadScenario', body)
+      if status >= 400
+        raise Error, "Failed to register load scenario (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # List all registered load scenarios.
+    #
+    # @return [Hash] parsed response of the form
+    #   { "scenarios" => [ { "name" => ..., "state" => ..., "definition" => ..., "status" => ... }, ... ] }
+    def load_scenarios
+      status, response_body = request('GET', '/mockserver/loadScenario')
+      if status >= 400
+        raise Error, "Failed to list load scenarios (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Fetch a single registered load scenario by name.
+    #
+    # @param name [String] the unique scenario name
+    # @return [Hash] parsed scenario entry { "name" => ..., "state" => ..., "definition" => ..., "status" => ... }
+    # @raise [Error] if the scenario does not exist (404) or another failure occurs
+    def get_load_scenario(name)
+      status, response_body = request('GET', "/mockserver/loadScenario/#{encode_path_segment(name)}")
+      if status == 404
+        raise Error, "Load scenario not found (status=404): #{name}"
+      end
+      if status >= 400
+        raise Error, "Failed to get load scenario (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Remove a single registered load scenario by name.
+    #
+    # @param name [String] the unique scenario name
+    # @return [Hash] parsed response (may be empty)
+    def delete_load_scenario(name)
+      status, response_body = request('DELETE', "/mockserver/loadScenario/#{encode_path_segment(name)}")
+      if status >= 400
+        raise Error, "Failed to delete load scenario (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Clear all registered load scenarios.
+    #
+    # @return [Hash] parsed response (may be empty)
+    def clear_load_scenarios
+      status, response_body = request('DELETE', '/mockserver/loadScenario')
+      if status >= 400
+        raise Error, "Failed to clear load scenarios (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Start one or more registered scenarios.
+    #
+    # +names+ may be a single scenario name (String) or an Array of names; it is
+    # always sent as { "names" => [...] }. Honours each scenario's
+    # +startDelayMillis+. Requires +loadGenerationEnabled+ on the server; a 403
+    # response raises a clear error explaining the feature is disabled.
+    #
+    # @param names [String, Array<String>] scenario name(s) to start
+    # @return [Hash] parsed response of the form
+    #   { "started" => [ { "name" => ..., "state" => ... }, ... ], "status" => ... }
+    def start_load_scenarios(names)
+      payload = { 'names' => Array(names) }
+      body = JSON.generate(payload)
+      status, response_body = request('PUT', '/mockserver/loadScenario/start', body)
+      if status == 403
+        raise Error, 'Load scenario start rejected (status=403): load generation is disabled ' \
+                     '(set loadGenerationEnabled=true on the server to enable it)'
+      end
+      if status == 404
+        raise Error, "Load scenario not found (status=404): #{response_body}"
+      end
+      if status >= 400
+        raise Error, "Failed to start load scenarios (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Stop running scenarios.
+    #
+    # +names+ may be:
+    #   * a single scenario name (String) -> { "names" => ["a"] }
+    #   * an Array of names                -> { "names" => ["a", "b"] }
+    #   * nil (the default)                -> empty body, which stops all running scenarios
+    #
+    # @param names [String, Array<String>, nil] scenario name(s) to stop, or nil for all
+    # @return [Hash] parsed response of the form
+    #   { "stopped" => [ ... ], "status" => ... }
+    def stop_load_scenarios(names = nil)
+      body = names.nil? ? nil : JSON.generate({ 'names' => Array(names) })
+      status, response_body = request('PUT', '/mockserver/loadScenario/stop', body)
+      if status >= 400
+        raise Error, "Failed to stop load scenarios (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Convenience: register a scenario then immediately start it.
+    #
+    # Equivalent to calling {#load_scenario} followed by {#start_load_scenarios}
+    # for the scenario's name. Requires +loadGenerationEnabled+ on the server for
+    # the start step.
+    #
+    # @param scenario [LoadScenario, Hash] the scenario to register and run
+    # @return [Hash] parsed response from the start call
+    def run_load_scenario(scenario)
+      payload = scenario.respond_to?(:to_h) ? scenario.to_h : scenario
+      name = payload.respond_to?(:[]) ? (payload['name'] || payload[:name]) : nil
+      if name.nil? || name.to_s.empty?
+        raise ArgumentError, 'scenario must carry a non-empty name to run'
+      end
+
+      load_scenario(payload)
+      start_load_scenarios(name)
+    end
+
+    # -------------------------------------------------------------------
+    # Stateful scenarios (state machine control plane)
+    # -------------------------------------------------------------------
+
+    # Return a handle to the named stateful scenario, wrapping the
+    # +/mockserver/scenario/{name}+ control-plane endpoints.
+    #
+    # @param name [String] the scenario (state-machine) name
+    # @return [ScenarioHandle]
+    def scenario(name)
+      ScenarioHandle.new(self, name)
+    end
+
+    # List every known scenario and its current state.
+    #
+    # @return [Array<ScenarioState>] each with +scenario_name+ and +current_state+
+    def scenarios
+      result = scenario_request('GET', '/mockserver/scenario')
+      list = result.is_a?(Hash) ? (result['scenarios'] || []) : []
+      list.map { |s| ScenarioState.from_hash(s) }
+    end
+
+    # @api private
+    # Issue a control-plane scenario request, parsing the JSON response and
+    # raising {Error} on any >= 400 status. Reuses the same transport
+    # (+request+) as the other +/mockserver/...+ control endpoints.
+    def scenario_request(method, path, body = nil)
+      status, response_body = request(method, path, body)
+      if status >= 400
+        raise Error, "Scenario request failed (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # -------------------------------------------------------------------
+    # gRPC descriptor management
+    # -------------------------------------------------------------------
+
+    # Upload a compiled protobuf descriptor set so gRPC requests can be matched.
+    #
+    # +descriptor_bytes+ must be the raw bytes of a +FileDescriptorSet+ (e.g. the
+    # output of +protoc --descriptor_set_out=... --include_imports+). The bytes are
+    # sent verbatim as +application/octet-stream+ (NOT base64-encoded).
+    #
+    # @param descriptor_bytes [String] raw descriptor set bytes (binary string)
+    # @return [nil]
+    def upload_grpc_descriptor(descriptor_bytes)
+      if descriptor_bytes.nil? || descriptor_bytes.empty?
+        raise ArgumentError, 'descriptor bytes must not be empty'
+      end
+
+      status, response_body = request(
+        'PUT', '/mockserver/grpc/descriptors', descriptor_bytes,
+        content_type: 'application/octet-stream'
+      )
+      if status >= 400
+        raise Error, "Failed to upload gRPC descriptor (status=#{status}): #{response_body}"
+      end
+
+      nil
+    end
+
+    # Retrieve the gRPC services registered from uploaded descriptor sets.
+    #
+    # Returns an array of service hashes, each with a +"name"+ and a list of
+    # +"methods"+ (+"name"+, +"inputType"+, +"outputType"+, +"clientStreaming"+,
+    # +"serverStreaming"+).
+    #
+    # @return [Array<Hash>]
+    def retrieve_grpc_services
+      status, response_body = request('PUT', '/mockserver/grpc/services')
+      if status >= 400
+        raise Error, "Failed to retrieve gRPC services (status=#{status}): #{response_body}"
+      end
+
+      if response_body && !response_body.empty?
+        parsed = JSON.parse(response_body)
+        return parsed if parsed.is_a?(Array)
+      end
+      []
+    end
+
+    # Clear all uploaded gRPC descriptor sets and registered services.
+    # @return [nil]
+    def clear_grpc_descriptors
+      status, response_body = request('PUT', '/mockserver/grpc/clear')
+      if status >= 400
+        raise Error, "Failed to clear gRPC descriptors (status=#{status}): #{response_body}"
+      end
+
+      nil
+    end
+
+    # Verify that a request (and optionally a response) was received.
+    # @param request [HttpRequest, nil]
     # @param times [VerificationTimes, nil]
+    # @param response [HttpResponse, nil]
     # @return [nil]
     # @raise [VerificationError] if verification fails (HTTP 406)
-    def verify(request, times: nil)
-      verification = Verification.new(http_request: request, times: times)
+    def verify(request = nil, times: nil, response: nil)
+      verification = Verification.new(http_request: request, http_response: response, times: times)
       body = JSON.generate(verification.to_h)
       status, response_body = do_request('PUT', '/mockserver/verify', body)
       if status == 406
@@ -282,10 +533,14 @@ module MockServer
 
     # Verify that requests were received in sequence.
     # @param requests [Array<HttpRequest>]
+    # @param responses [Array<HttpResponse>, nil] index-aligned response matchers
     # @return [nil]
     # @raise [VerificationError] if verification fails (HTTP 406)
-    def verify_sequence(*requests)
-      verification = VerificationSequence.new(http_requests: requests.to_a)
+    def verify_sequence(*requests, responses: nil)
+      verification = VerificationSequence.new(
+        http_requests: requests.empty? ? nil : requests.to_a,
+        http_responses: responses
+      )
       body = JSON.generate(verification.to_h)
       status, response_body = request('PUT', '/mockserver/verifySequence', body)
       if status == 406
@@ -363,6 +618,44 @@ module MockServer
         return parsed.map { |e| Expectation.from_hash(e) } if parsed.is_a?(Array)
       end
       []
+    end
+
+    # Retrieve the active expectations as MockServer SDK setup code (the builder
+    # code that recreates the expectations) in the requested language.
+    # @param format [String] one of "java", "javascript", "python", "go",
+    #   "csharp", "ruby", "rust" or "php" (case-insensitive)
+    # @param request [HttpRequest, nil]
+    # @return [String] the generated code
+    def retrieve_expectations_as_code(format: 'java', request: nil)
+      body = request ? JSON.generate(request.to_h) : ''
+      status, response_body = do_request(
+        'PUT', '/mockserver/retrieve', body,
+        { 'type' => 'ACTIVE_EXPECTATIONS', 'format' => format.to_s.upcase }
+      )
+      if status >= 400
+        raise Error, "Failed to retrieve expectations as code (status=#{status}): #{response_body}"
+      end
+
+      response_body || ''
+    end
+
+    # Retrieve the recorded (proxied) request/response pairs as MockServer SDK
+    # setup code in the requested language.
+    # @param format [String] one of "java", "javascript", "python", "go",
+    #   "csharp", "ruby", "rust" or "php" (case-insensitive)
+    # @param request [HttpRequest, nil]
+    # @return [String] the generated code
+    def retrieve_recorded_expectations_as_code(format: 'java', request: nil)
+      body = request ? JSON.generate(request.to_h) : ''
+      status, response_body = do_request(
+        'PUT', '/mockserver/retrieve', body,
+        { 'type' => 'RECORDED_EXPECTATIONS', 'format' => format.to_s.upcase }
+      )
+      if status >= 400
+        raise Error, "Failed to retrieve recorded expectations as code (status=#{status}): #{response_body}"
+      end
+
+      response_body || ''
     end
 
     # Retrieve recorded requests and responses.
@@ -477,6 +770,120 @@ module MockServer
     end
 
     # -------------------------------------------------------------------
+    # Breakpoint matcher management
+    # -------------------------------------------------------------------
+
+    # Register a breakpoint matcher with callback handlers.
+    # The callback WebSocket is opened lazily and reused.
+    #
+    # @param matcher [HttpRequest] the request definition to match
+    # @param phases [Array<String>] e.g. ["REQUEST", "RESPONSE"]
+    # @param request_handler [Proc, nil] handler for REQUEST phase
+    # @param response_handler [Proc, nil] handler for RESPONSE phase
+    # @param stream_frame_handler [Proc, nil] handler for streaming phases
+    # @return [String] the server-assigned breakpoint matcher id
+    def add_breakpoint(matcher, phases,
+                       request_handler: nil, response_handler: nil,
+                       stream_frame_handler: nil)
+      raise ArgumentError, 'add_breakpoint requires a non-nil matcher' if matcher.nil?
+      raise ArgumentError, 'add_breakpoint requires a non-empty phases array' if phases.nil? || phases.empty?
+
+      ws_client = ensure_breakpoint_websocket
+      client_id = ws_client.client_id
+
+      body = JSON.generate({
+        'httpRequest' => matcher.to_h,
+        'phases' => phases,
+        'clientId' => client_id
+      })
+      status, response_body = request('PUT', '/mockserver/breakpoint/matcher', body)
+      if status >= 400
+        raise Error, "Failed to register breakpoint matcher (status=#{status}): #{response_body}"
+      end
+
+      parsed = response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+      breakpoint_id = parsed['id']
+      raise Error, 'Server did not return a breakpoint id' unless breakpoint_id
+
+      # Install per-breakpoint-id handlers
+      ws_client.set_breakpoint_request_handler(breakpoint_id, request_handler) if request_handler
+      ws_client.set_breakpoint_response_handler(breakpoint_id, response_handler) if response_handler
+      ws_client.set_breakpoint_stream_frame_handler(breakpoint_id, stream_frame_handler) if stream_frame_handler
+
+      breakpoint_id
+    end
+
+    # Convenience: register a REQUEST-only breakpoint.
+    # @param matcher [HttpRequest]
+    # @param request_handler [Proc]
+    # @return [String]
+    def add_request_breakpoint(matcher, request_handler)
+      add_breakpoint(matcher, ['REQUEST'], request_handler: request_handler)
+    end
+
+    # Convenience: register a REQUEST+RESPONSE breakpoint.
+    # @param matcher [HttpRequest]
+    # @param request_handler [Proc]
+    # @param response_handler [Proc]
+    # @return [String]
+    def add_request_and_response_breakpoint(matcher, request_handler, response_handler)
+      add_breakpoint(matcher, %w[REQUEST RESPONSE],
+                     request_handler: request_handler,
+                     response_handler: response_handler)
+    end
+
+    # List all registered breakpoint matchers.
+    # @return [Hash] e.g. {"matchers" => [{...}, ...]}
+    def list_breakpoint_matchers
+      status, response_body = request('GET', '/mockserver/breakpoint/matchers')
+      if status >= 400
+        raise Error, "Failed to list breakpoint matchers (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Remove a breakpoint matcher by id.
+    # @param breakpoint_id [String]
+    # @return [Hash]
+    def remove_breakpoint_matcher(breakpoint_id)
+      raise ArgumentError, 'remove_breakpoint_matcher requires a non-empty id' if breakpoint_id.nil? || breakpoint_id.empty?
+
+      body = JSON.generate({ 'id' => breakpoint_id })
+      status, response_body = request('PUT', '/mockserver/breakpoint/matcher/remove', body)
+      if status >= 400
+        raise Error, "Failed to remove breakpoint matcher (status=#{status}): #{response_body}"
+      end
+
+      # Remove client-side handlers
+      @websocket_mutex.synchronize do
+        @websocket_clients.each do |ws|
+          ws.remove_breakpoint_handlers(breakpoint_id) if ws.respond_to?(:remove_breakpoint_handlers)
+        end
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Clear all registered breakpoint matchers.
+    # @return [Hash]
+    def clear_breakpoint_matchers
+      status, response_body = request('PUT', '/mockserver/breakpoint/matcher/clear')
+      if status >= 400
+        raise Error, "Failed to clear breakpoint matchers (status=#{status}): #{response_body}"
+      end
+
+      # Clear client-side handlers
+      @websocket_mutex.synchronize do
+        @websocket_clients.each do |ws|
+          ws.clear_breakpoint_handlers if ws.respond_to?(:clear_breakpoint_handlers)
+        end
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # -------------------------------------------------------------------
     # Callback methods
     # -------------------------------------------------------------------
 
@@ -531,6 +938,32 @@ module MockServer
     private
 
     # @api private
+    # Ensure a callback WS is connected for breakpoint use, returning it.
+    def ensure_breakpoint_websocket
+      # Hold the mutex for the whole check-create-append so two concurrent
+      # add_breakpoint calls cannot both create a breakpoint WS (TOCTOU).
+      # Breakpoint WS creation is rare, so blocking on connect under the lock
+      # is acceptable.
+      @websocket_mutex.synchronize do
+        existing = @websocket_clients.find { |ws| ws.instance_variable_get(:@is_breakpoint_ws) }
+        return existing if existing
+
+        ws_client = WebSocketClient.new
+        ws_client.connect(
+          @host, @port,
+          context_path: @context_path,
+          secure: @secure,
+          ca_cert_path: @ca_cert_path,
+          tls_verify: @tls_verify
+        )
+        ws_client.instance_variable_set(:@is_breakpoint_ws, true)
+        ws_client.listen
+        @websocket_clients << ws_client
+        ws_client
+      end
+    end
+
+    # @api private
     def register_websocket_callback(callback_type, callback_fn, forward_response_fn = nil)
       ws_client = WebSocketClient.new
       ws_client.connect(
@@ -555,7 +988,8 @@ module MockServer
 
     # Perform an HTTP request with optional query parameters.
     # @api private
-    def do_request(method, path, body = nil, query_params = nil)
+    def do_request(method, path, body = nil, query_params = nil,
+                   content_type: 'application/json; charset=utf-8')
       url = "#{@base_url}#{path}"
       if query_params && !query_params.empty?
         url = "#{url}?#{URI.encode_www_form(query_params)}"
@@ -564,14 +998,24 @@ module MockServer
       uri = URI.parse(url)
       http = build_http(uri)
 
-      req = build_request(method, uri, body)
+      req = build_request(method, uri, body, content_type)
       execute_request(http, req)
     end
 
     # Perform an HTTP request (no query params).
     # @api private
-    def request(method, path, body = nil)
-      do_request(method, path, body, nil)
+    def request(method, path, body = nil,
+                content_type: 'application/json; charset=utf-8')
+      do_request(method, path, body, nil, content_type: content_type)
+    end
+
+    # @api private
+    # Percent-encode a single URL path segment (e.g. a scenario name) so that
+    # spaces, slashes, and other reserved characters are transmitted safely.
+    def encode_path_segment(value)
+      raise ArgumentError, 'name must not be nil or empty' if value.nil? || value.to_s.empty?
+
+      URI.encode_www_form_component(value.to_s).gsub('+', '%20')
     end
 
     # @api private
@@ -596,7 +1040,7 @@ module MockServer
     end
 
     # @api private
-    def build_request(method, uri, body)
+    def build_request(method, uri, body, content_type = 'application/json; charset=utf-8')
       request_path = uri.request_uri
       case method.upcase
       when 'PUT'
@@ -610,14 +1054,19 @@ module MockServer
       else
         req = Net::HTTP::Put.new(request_path)
       end
-      req['Content-Type'] = 'application/json; charset=utf-8'
+      req['Content-Type'] = content_type
       req.body = body if body
       req
     end
 
     # @api private
     def execute_request(http, req)
-      response = http.request(req)
+      # Use the block form of #start so the underlying TCP/TLS connection is
+      # always closed (#finish) when the request completes, rather than being
+      # left open until garbage collection. All connection options (use_ssl,
+      # ca_file, verify_mode, read_timeout, open_timeout) configured on +http+
+      # by #build_http are preserved because #start operates on this instance.
+      response = http.start { |conn| conn.request(req) }
       [response.code.to_i, response.body || '']
     rescue Net::OpenTimeout, Net::ReadTimeout => e
       raise ConnectionError, "Request to MockServer at #{@base_url} timed out: #{e.message}"

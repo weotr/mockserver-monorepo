@@ -72,3 +72,123 @@ mockServerClient("localhost", 1080)
             console.log(error);
         }
     );</code></pre>
+
+<p><strong>Python</strong></p>
+
+<pre class="prettyprint lang-python code"><code class="code">import uuid
+from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, HttpResponse
+
+session_id = str(uuid.uuid4())
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request(
+        method="GET",
+        path="/somePath"
+    ).with_cookie("sessionId", session_id)
+).respond(
+    HttpResponse.response(body='{ "name": "value" }', status_code=200)
+)</code></pre>
+
+<p><strong>Ruby</strong></p>
+
+<pre class="prettyprint lang-ruby code"><code class="code">require 'securerandom'
+require 'mockserver-client'
+
+session_id = SecureRandom.uuid
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.new(
+        method: 'GET',
+        path: '/somePath',
+        cookies: [MockServer::KeyToMultiValue.new(
+            name: 'sessionId', values: [session_id]
+        )]
+    )
+).respond(
+    MockServer::HttpResponse.new(
+        status_code: 200,
+        body: '{ "name": "value" }'
+    )
+)</code></pre>
+
+<p><strong>Go</strong></p>
+
+<pre class="prettyprint lang-go code"><code class="code">import (
+    "github.com/google/uuid"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+sessionId := uuid.New().String()
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().
+        Method("GET").
+        Path("/somePath").
+        Cookie("sessionId", sessionId),
+).Respond(
+    mockserver.Response().
+        StatusCode(200).
+        Body(`{ "name": "value" }`),
+)</code></pre>
+
+<p><strong>.NET</strong></p>
+
+<pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+var sessionId = Guid.NewGuid().ToString();
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request()
+        .WithMethod("GET")
+        .WithPath("/somePath")
+        .WithCookie("sessionId", sessionId)
+).Respond(
+    HttpResponse.Response()
+        .WithStatusCode(200)
+        .WithBody("{ \"name\": \"value\" }")
+);</code></pre>
+
+<p><strong>Rust</strong></p>
+
+<pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+use uuid::Uuid;
+
+let session_id = Uuid::new_v4().to_string();
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(
+    HttpRequest::new()
+        .method("GET")
+        .path("/somePath")
+        .cookie("sessionId", &amp;session_id)
+).respond(
+    HttpResponse::new()
+        .status_code(200)
+        .body("{ \"name\": \"value\" }")
+).unwrap();</code></pre>
+
+<p><strong>PHP</strong></p>
+
+<pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$sessionId = bin2hex(random_bytes(16));
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;method('GET')
+        -&gt;path('/somePath')
+        -&gt;cookie('sessionId', $sessionId)
+)-&gt;respond(
+    HttpResponse::response()
+        -&gt;statusCode(200)
+        -&gt;body('{ "name": "value" }')
+);</code></pre>

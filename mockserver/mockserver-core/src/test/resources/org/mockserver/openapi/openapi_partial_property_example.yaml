@@ -1,0 +1,41 @@
+---
+openapi: 3.0.0
+info:
+  version: 1.0.0
+  title: Partial Property Example
+paths:
+  /widget:
+    get:
+      operationId: getWidget
+      responses:
+        '200':
+          description: a widget
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+components:
+  schemas:
+    Widget:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 42
+        name:
+          type: string
+          example: gadget
+        # 'colour', 'tags' and 'status' deliberately have NO example, so resolveSchemaExample yields null
+        # for them. The generated example must still be COMPLETE — these properties must appear with a
+        # generated sample (a scalar, an array, the first enum value) rather than being silently dropped.
+        colour:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+          enum:
+            - available
+            - pending

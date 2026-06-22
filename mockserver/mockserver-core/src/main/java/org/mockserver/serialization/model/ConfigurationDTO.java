@@ -24,8 +24,6 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Long chaosAutoHaltErrorThreshold;
     private Long chaosAutoHaltWindowMillis;
     private Boolean mcpEnabled;
-    private Boolean breakpointEnabled;
-    private Boolean breakpointResponseEnabled;
     private Long breakpointTimeoutMillis;
     private Integer breakpointMaxHeld;
     private Map<String, String> logLevelOverrides;
@@ -45,6 +43,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Integer webSocketClientEventLoopThreadCount;
     private Long maxFutureTimeoutInMillis;
     private Boolean matchersFailFast;
+    private Boolean matchExactCase;
 
     private Long maxSocketTimeoutInMillis;
     private Long socketConnectionTimeoutInMillis;
@@ -68,6 +67,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean corsAllowCredentials;
     private Integer corsMaxAgeInSeconds;
 
+    private String defaultResponseHeaders;
+
     private String javascriptDisallowedClasses;
     private String javascriptDisallowedText;
     private Boolean velocityDisallowClassLoading;
@@ -83,6 +84,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean validateProxyEnforce;
     private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
+    private Boolean failOnInitializationError;
 
     private Boolean persistExpectations;
     private String persistedExpectationsPath;
@@ -105,6 +107,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String noProxyHosts;
 
     private String livenessHttpGetPath;
+
+    private String matchNamespaceHeader;
 
     private Boolean controlPlaneTLSMutualAuthenticationRequired;
     private String controlPlaneTLSMutualAuthenticationCAChain;
@@ -136,6 +140,117 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String forwardProxyPrivateKey;
     private String forwardProxyCertificateChain;
 
+    private Long slowRequestThresholdMillis;
+    private Boolean metricsRequestDurationRouteLabels;
+    private Integer rateLimitMaxNamedQuotas;
+    private Boolean connectionLifecycleChaosEnabled;
+    private Long preemptionSimulationMaxDrainMillis;
+    private Boolean connectionLifecycleAutoHaltCountsRst;
+    private Boolean sloTrackingEnabled;
+    private Long sloWindowRetentionMillis;
+    private Integer sloWindowMaxSamples;
+    private Boolean loadGenerationEnabled;
+    private Integer loadGenerationMaxVirtualUsers;
+    private Integer loadGenerationMaxInFlightRequests;
+    private Integer loadGenerationMaxRequestsPerSecond;
+    private Long loadGenerationMaxDurationMillis;
+    private Integer loadGenerationMaxSteps;
+    private Double loadGenerationMaxRate;
+    private Integer loadGenerationMaxStages;
+    private Integer loadGenerationMaxConcurrentScenarios;
+    private String loadScenarioInitializationJsonPath;
+    private java.util.List<String> loadGenerationMetricLabels;
+    private Boolean llmMetricsEnabled;
+    private Boolean perExpectationMetricsEnabled;
+    private Boolean deduplicateRecordedExpectations;
+    private Boolean templatizeRecordedValues;
+    private Boolean redactSecretsInRecordedExpectations;
+    private Boolean redactSecretsInLog;
+    private Double llmCostBudgetUsd;
+    private Boolean otelPropagateTraceContext;
+    private Boolean otelGenerateTraceId;
+    private Boolean wasmEnabled;
+    private Integer wasmMaxMemoryPages;
+    private String grpcDescriptorDirectory;
+    private String grpcProtoDirectory;
+    private Boolean grpcEnabled;
+    private String grpcProtocPath;
+    private Boolean grpcBidiStreamingEnabled;
+    private Boolean dnsEnabled;
+    private Integer dnsPort;
+    private Integer http3Port;
+    private Long http3MaxIdleTimeout;
+    private Long http3InitialMaxData;
+    private Long http3InitialMaxStreamDataBidirectional;
+    private Long http3InitialMaxStreamsBidirectional;
+    private Long http3QpackMaxTableCapacity;
+    private Boolean http3ConnectUdpEnabled;
+    private Long http3AltSvcMaxAge;
+    private Boolean http3AdvertiseAltSvc;
+    private Boolean useNativeTransport;
+    private Boolean forwardConnectionPoolEnabled;
+    private Integer forwardConnectionPoolMaxIdlePerKey;
+    private Long forwardConnectionPoolIdleTimeoutMillis;
+    private Integer forwardProxyRetryCount;
+    private Long forwardProxyRetryBackoffMillis;
+    private Boolean forwardProxyCircuitBreakerEnabled;
+    private Integer forwardProxyCircuitBreakerFailureThreshold;
+    private Long forwardProxyCircuitBreakerWindowMillis;
+    private Boolean enforceResponseValidationForMocks;
+    private Integer maxRequestBodySize;
+    private Integer maxResponseBodySize;
+    private Integer maxLlmConversationBodySize;
+    private Boolean driftSemanticAnalysisEnabled;
+    private Long driftResponseTimeThresholdMs;
+    private Boolean driftAlertWebhookEnabled;
+    private String driftAlertWebhookUrl;
+    private String driftAlertSeverityThreshold;
+    private Long driftAlertCooldownMillis;
+    private Boolean controlPlaneAuditEnabled;
+    private Integer controlPlaneAuditMaxEntries;
+    private Boolean controlPlaneAuditReads;
+    private Boolean http2Enabled;
+    private Boolean streamingResponsesEnabled;
+    private Integer maxStreamingCaptureBytes;
+    private Integer streamIdleTimeoutSeconds;
+    private Boolean validateRequestsAgainstOpenApiSpec;
+    private Boolean detailedVerificationFailures;
+    private Long globalResponseDelayMillis;
+    private Boolean forwardAdjustHostHeader;
+    private String forwardDefaultHostHeader;
+    private Boolean forwardProxyBlockPrivateNetworks;
+    private Boolean tlsAllowInsecureProtocols;
+    private String stateBackend;
+    private String blobStoreType;
+    private String blobStoreBucket;
+    private String blobStoreRegion;
+    private String blobStoreEndpoint;
+    private String blobStoreKeyPrefix;
+    private String blobStoreAccessKeyId;
+    private String blobStoreSecretAccessKey;
+    private String blobStoreContainer;
+    private String blobStoreConnectionString;
+    private String blobStoreProjectId;
+    private Boolean clusterEnabled;
+    private String clusterName;
+    private String clusterTransportConfig;
+    private Boolean clusterSharedTimesEnabled;
+    private Boolean controlPlaneOidcAuthenticationRequired;
+    private String controlPlaneOidcIssuer;
+    private String controlPlaneOidcJwksUri;
+    private String controlPlaneOidcAudience;
+    private Set<String> controlPlaneOidcRequiredScopes;
+    private String controlPlaneOidcScopeClaim;
+    private Boolean controlPlaneAuthorizationEnabled;
+    private Boolean transparentProxyEnabled;
+    private Boolean transparentProxyTproxy;
+    private Boolean transparentProxyEbpf;
+    private String transparentProxyEbpfMapPath;
+    private String asyncKafkaBootstrapServers;
+    private String asyncMqttBrokerUrl;
+    private String asyncAmqpUri;
+    private Integer asyncRecordedMessageMaxEntries;
+
     public ConfigurationDTO() {
     }
 
@@ -154,8 +269,6 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.chaosAutoHaltErrorThreshold = configuration.chaosAutoHaltErrorThreshold();
             this.chaosAutoHaltWindowMillis = configuration.chaosAutoHaltWindowMillis();
             this.mcpEnabled = configuration.mcpEnabled();
-            this.breakpointEnabled = configuration.breakpointEnabled();
-            this.breakpointResponseEnabled = configuration.breakpointResponseEnabled();
             this.breakpointTimeoutMillis = configuration.breakpointTimeoutMillis();
             this.breakpointMaxHeld = configuration.breakpointMaxHeld();
             Map<String, String> overrides = configuration.logLevelOverrides();
@@ -176,6 +289,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.webSocketClientEventLoopThreadCount = configuration.webSocketClientEventLoopThreadCount();
             this.maxFutureTimeoutInMillis = configuration.maxFutureTimeoutInMillis();
             this.matchersFailFast = configuration.matchersFailFast();
+            this.matchExactCase = configuration.matchExactCase();
 
             this.maxSocketTimeoutInMillis = configuration.maxSocketTimeoutInMillis();
             this.socketConnectionTimeoutInMillis = configuration.socketConnectionTimeoutInMillis();
@@ -200,6 +314,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.corsAllowHeaders = configuration.corsAllowHeaders();
             this.corsAllowCredentials = configuration.corsAllowCredentials();
             this.corsMaxAgeInSeconds = configuration.corsMaxAgeInSeconds();
+            this.defaultResponseHeaders = configuration.defaultResponseHeaders();
 
             this.javascriptDisallowedClasses = configuration.javascriptDisallowedClasses();
             this.javascriptDisallowedText = configuration.javascriptDisallowedText();
@@ -216,6 +331,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.validateProxyEnforce = configuration.validateProxyEnforce();
             this.generateRealisticExampleValues = configuration.generateRealisticExampleValues();
             this.watchInitializationJson = configuration.watchInitializationJson();
+            this.failOnInitializationError = configuration.failOnInitializationError();
 
             this.persistExpectations = configuration.persistExpectations();
             this.persistedExpectationsPath = configuration.persistedExpectationsPath();
@@ -247,6 +363,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.noProxyHosts = configuration.noProxyHosts();
 
             this.livenessHttpGetPath = configuration.livenessHttpGetPath();
+            this.matchNamespaceHeader = configuration.matchNamespaceHeader();
 
             this.controlPlaneTLSMutualAuthenticationRequired = configuration.controlPlaneTLSMutualAuthenticationRequired();
             this.controlPlaneTLSMutualAuthenticationCAChain = configuration.controlPlaneTLSMutualAuthenticationCAChain();
@@ -280,6 +397,117 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.forwardProxyTLSCustomTrustX509Certificates = configuration.forwardProxyTLSCustomTrustX509Certificates();
             this.forwardProxyPrivateKey = configuration.forwardProxyPrivateKey();
             this.forwardProxyCertificateChain = configuration.forwardProxyCertificateChain();
+
+            this.slowRequestThresholdMillis = configuration.slowRequestThresholdMillis();
+            this.metricsRequestDurationRouteLabels = configuration.metricsRequestDurationRouteLabels();
+            this.rateLimitMaxNamedQuotas = configuration.rateLimitMaxNamedQuotas();
+            this.connectionLifecycleChaosEnabled = configuration.connectionLifecycleChaosEnabled();
+            this.preemptionSimulationMaxDrainMillis = configuration.preemptionSimulationMaxDrainMillis();
+            this.connectionLifecycleAutoHaltCountsRst = configuration.connectionLifecycleAutoHaltCountsRst();
+            this.sloTrackingEnabled = configuration.sloTrackingEnabled();
+            this.sloWindowRetentionMillis = configuration.sloWindowRetentionMillis();
+            this.sloWindowMaxSamples = configuration.sloWindowMaxSamples();
+            this.loadGenerationEnabled = configuration.loadGenerationEnabled();
+            this.loadGenerationMaxVirtualUsers = configuration.loadGenerationMaxVirtualUsers();
+            this.loadGenerationMaxInFlightRequests = configuration.loadGenerationMaxInFlightRequests();
+            this.loadGenerationMaxRequestsPerSecond = configuration.loadGenerationMaxRequestsPerSecond();
+            this.loadGenerationMaxDurationMillis = configuration.loadGenerationMaxDurationMillis();
+            this.loadGenerationMaxSteps = configuration.loadGenerationMaxSteps();
+            this.loadGenerationMaxRate = configuration.loadGenerationMaxRate();
+            this.loadGenerationMaxStages = configuration.loadGenerationMaxStages();
+            this.loadGenerationMaxConcurrentScenarios = configuration.loadGenerationMaxConcurrentScenarios();
+            this.loadScenarioInitializationJsonPath = configuration.loadScenarioInitializationJsonPath();
+            this.loadGenerationMetricLabels = configuration.loadGenerationMetricLabels();
+            this.llmMetricsEnabled = configuration.llmMetricsEnabled();
+            this.perExpectationMetricsEnabled = configuration.perExpectationMetricsEnabled();
+            this.deduplicateRecordedExpectations = configuration.deduplicateRecordedExpectations();
+            this.templatizeRecordedValues = configuration.templatizeRecordedValues();
+            this.redactSecretsInRecordedExpectations = configuration.redactSecretsInRecordedExpectations();
+            this.redactSecretsInLog = configuration.redactSecretsInLog();
+            this.llmCostBudgetUsd = configuration.llmCostBudgetUsd();
+            this.otelPropagateTraceContext = configuration.otelPropagateTraceContext();
+            this.otelGenerateTraceId = configuration.otelGenerateTraceId();
+            this.wasmEnabled = configuration.wasmEnabled();
+            this.wasmMaxMemoryPages = configuration.wasmMaxMemoryPages();
+            this.grpcDescriptorDirectory = configuration.grpcDescriptorDirectory();
+            this.grpcProtoDirectory = configuration.grpcProtoDirectory();
+            this.grpcEnabled = configuration.grpcEnabled();
+            this.grpcProtocPath = configuration.grpcProtocPath();
+            this.grpcBidiStreamingEnabled = configuration.grpcBidiStreamingEnabled();
+            this.dnsEnabled = configuration.dnsEnabled();
+            this.dnsPort = configuration.dnsPort();
+            this.http3Port = configuration.http3Port();
+            this.http3MaxIdleTimeout = configuration.http3MaxIdleTimeout();
+            this.http3InitialMaxData = configuration.http3InitialMaxData();
+            this.http3InitialMaxStreamDataBidirectional = configuration.http3InitialMaxStreamDataBidirectional();
+            this.http3InitialMaxStreamsBidirectional = configuration.http3InitialMaxStreamsBidirectional();
+            this.http3QpackMaxTableCapacity = configuration.http3QpackMaxTableCapacity();
+            this.http3ConnectUdpEnabled = configuration.http3ConnectUdpEnabled();
+            this.http3AltSvcMaxAge = configuration.http3AltSvcMaxAge();
+            this.http3AdvertiseAltSvc = configuration.http3AdvertiseAltSvc();
+            this.useNativeTransport = configuration.useNativeTransport();
+            this.forwardConnectionPoolEnabled = configuration.forwardConnectionPoolEnabled();
+            this.forwardConnectionPoolMaxIdlePerKey = configuration.forwardConnectionPoolMaxIdlePerKey();
+            this.forwardConnectionPoolIdleTimeoutMillis = configuration.forwardConnectionPoolIdleTimeoutMillis();
+            this.forwardProxyRetryCount = configuration.forwardProxyRetryCount();
+            this.forwardProxyRetryBackoffMillis = configuration.forwardProxyRetryBackoffMillis();
+            this.forwardProxyCircuitBreakerEnabled = configuration.forwardProxyCircuitBreakerEnabled();
+            this.forwardProxyCircuitBreakerFailureThreshold = configuration.forwardProxyCircuitBreakerFailureThreshold();
+            this.forwardProxyCircuitBreakerWindowMillis = configuration.forwardProxyCircuitBreakerWindowMillis();
+            this.enforceResponseValidationForMocks = configuration.enforceResponseValidationForMocks();
+            this.maxRequestBodySize = configuration.maxRequestBodySize();
+            this.maxResponseBodySize = configuration.maxResponseBodySize();
+            this.maxLlmConversationBodySize = configuration.maxLlmConversationBodySize();
+            this.driftSemanticAnalysisEnabled = configuration.driftSemanticAnalysisEnabled();
+            this.driftResponseTimeThresholdMs = configuration.driftResponseTimeThresholdMs();
+            this.driftAlertWebhookEnabled = configuration.driftAlertWebhookEnabled();
+            this.driftAlertWebhookUrl = configuration.driftAlertWebhookUrl();
+            this.driftAlertSeverityThreshold = configuration.driftAlertSeverityThreshold();
+            this.driftAlertCooldownMillis = configuration.driftAlertCooldownMillis();
+            this.controlPlaneAuditEnabled = configuration.controlPlaneAuditEnabled();
+            this.controlPlaneAuditMaxEntries = configuration.controlPlaneAuditMaxEntries();
+            this.controlPlaneAuditReads = configuration.controlPlaneAuditReads();
+            this.http2Enabled = configuration.http2Enabled();
+            this.streamingResponsesEnabled = configuration.streamingResponsesEnabled();
+            this.maxStreamingCaptureBytes = configuration.maxStreamingCaptureBytes();
+            this.streamIdleTimeoutSeconds = configuration.streamIdleTimeoutSeconds();
+            this.validateRequestsAgainstOpenApiSpec = configuration.validateRequestsAgainstOpenApiSpec();
+            this.detailedVerificationFailures = configuration.detailedVerificationFailures();
+            this.globalResponseDelayMillis = configuration.globalResponseDelayMillis();
+            this.forwardAdjustHostHeader = configuration.forwardAdjustHostHeader();
+            this.forwardDefaultHostHeader = configuration.forwardDefaultHostHeader();
+            this.forwardProxyBlockPrivateNetworks = configuration.forwardProxyBlockPrivateNetworks();
+            this.tlsAllowInsecureProtocols = configuration.tlsAllowInsecureProtocols();
+            this.stateBackend = configuration.stateBackend();
+            this.blobStoreType = configuration.blobStoreType();
+            this.blobStoreBucket = configuration.blobStoreBucket();
+            this.blobStoreRegion = configuration.blobStoreRegion();
+            this.blobStoreEndpoint = configuration.blobStoreEndpoint();
+            this.blobStoreKeyPrefix = configuration.blobStoreKeyPrefix();
+            this.blobStoreAccessKeyId = configuration.blobStoreAccessKeyId();
+            this.blobStoreSecretAccessKey = configuration.blobStoreSecretAccessKey();
+            this.blobStoreContainer = configuration.blobStoreContainer();
+            this.blobStoreConnectionString = configuration.blobStoreConnectionString();
+            this.blobStoreProjectId = configuration.blobStoreProjectId();
+            this.clusterEnabled = configuration.clusterEnabled();
+            this.clusterName = configuration.clusterName();
+            this.clusterTransportConfig = configuration.clusterTransportConfig();
+            this.clusterSharedTimesEnabled = configuration.clusterSharedTimesEnabled();
+            this.controlPlaneOidcAuthenticationRequired = configuration.controlPlaneOidcAuthenticationRequired();
+            this.controlPlaneOidcIssuer = configuration.controlPlaneOidcIssuer();
+            this.controlPlaneOidcJwksUri = configuration.controlPlaneOidcJwksUri();
+            this.controlPlaneOidcAudience = configuration.controlPlaneOidcAudience();
+            this.controlPlaneOidcRequiredScopes = configuration.controlPlaneOidcRequiredScopes();
+            this.controlPlaneOidcScopeClaim = configuration.controlPlaneOidcScopeClaim();
+            this.controlPlaneAuthorizationEnabled = configuration.controlPlaneAuthorizationEnabled();
+            this.transparentProxyEnabled = configuration.transparentProxyEnabled();
+            this.transparentProxyTproxy = configuration.transparentProxyTproxy();
+            this.transparentProxyEbpf = configuration.transparentProxyEbpf();
+            this.transparentProxyEbpfMapPath = configuration.transparentProxyEbpfMapPath();
+            this.asyncKafkaBootstrapServers = configuration.asyncKafkaBootstrapServers();
+            this.asyncMqttBrokerUrl = configuration.asyncMqttBrokerUrl();
+            this.asyncAmqpUri = configuration.asyncAmqpUri();
+            this.asyncRecordedMessageMaxEntries = configuration.asyncRecordedMessageMaxEntries();
         }
     }
 
@@ -334,8 +562,6 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
         configuration.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
         configuration.mcpEnabled(mcpEnabled);
-        configuration.breakpointEnabled(breakpointEnabled);
-        configuration.breakpointResponseEnabled(breakpointResponseEnabled);
         configuration.breakpointTimeoutMillis(breakpointTimeoutMillis);
         configuration.breakpointMaxHeld(breakpointMaxHeld);
         configuration.logLevelOverrides(logLevelOverrides);
@@ -355,6 +581,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.webSocketClientEventLoopThreadCount(webSocketClientEventLoopThreadCount);
         configuration.maxFutureTimeoutInMillis(maxFutureTimeoutInMillis);
         configuration.matchersFailFast(matchersFailFast);
+        configuration.matchExactCase(matchExactCase);
 
         configuration.maxSocketTimeoutInMillis(maxSocketTimeoutInMillis);
         configuration.socketConnectionTimeoutInMillis(socketConnectionTimeoutInMillis);
@@ -380,6 +607,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.corsAllowCredentials(corsAllowCredentials);
         configuration.corsMaxAgeInSeconds(corsMaxAgeInSeconds);
 
+        configuration.defaultResponseHeaders(defaultResponseHeaders);
+
         configuration.javascriptDisallowedClasses(javascriptDisallowedClasses);
         configuration.javascriptDisallowedText(javascriptDisallowedText);
         configuration.velocityDisallowClassLoading(velocityDisallowClassLoading);
@@ -395,6 +624,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.validateProxyEnforce(validateProxyEnforce);
         configuration.generateRealisticExampleValues(generateRealisticExampleValues);
         configuration.watchInitializationJson(watchInitializationJson);
+        configuration.failOnInitializationError(failOnInitializationError);
 
         configuration.persistExpectations(persistExpectations);
         configuration.persistedExpectationsPath(persistedExpectationsPath);
@@ -423,6 +653,10 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.noProxyHosts(noProxyHosts);
 
         configuration.livenessHttpGetPath(livenessHttpGetPath);
+
+        if (matchNamespaceHeader != null) {
+            configuration.matchNamespaceHeader(matchNamespaceHeader);
+        }
 
         configuration.controlPlaneTLSMutualAuthenticationRequired(controlPlaneTLSMutualAuthenticationRequired);
         configuration.controlPlaneTLSMutualAuthenticationCAChain(controlPlaneTLSMutualAuthenticationCAChain);
@@ -460,6 +694,123 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.forwardProxyPrivateKey(forwardProxyPrivateKey);
         configuration.forwardProxyCertificateChain(forwardProxyCertificateChain);
 
+        configuration.slowRequestThresholdMillis(slowRequestThresholdMillis);
+        configuration.metricsRequestDurationRouteLabels(metricsRequestDurationRouteLabels);
+        configuration.rateLimitMaxNamedQuotas(rateLimitMaxNamedQuotas);
+        configuration.connectionLifecycleChaosEnabled(connectionLifecycleChaosEnabled);
+        configuration.preemptionSimulationMaxDrainMillis(preemptionSimulationMaxDrainMillis);
+        configuration.connectionLifecycleAutoHaltCountsRst(connectionLifecycleAutoHaltCountsRst);
+        configuration.sloTrackingEnabled(sloTrackingEnabled);
+        configuration.sloWindowRetentionMillis(sloWindowRetentionMillis);
+        configuration.sloWindowMaxSamples(sloWindowMaxSamples);
+        configuration.loadGenerationEnabled(loadGenerationEnabled);
+        configuration.loadGenerationMaxVirtualUsers(loadGenerationMaxVirtualUsers);
+        configuration.loadGenerationMaxInFlightRequests(loadGenerationMaxInFlightRequests);
+        configuration.loadGenerationMaxRequestsPerSecond(loadGenerationMaxRequestsPerSecond);
+        configuration.loadGenerationMaxDurationMillis(loadGenerationMaxDurationMillis);
+        configuration.loadGenerationMaxSteps(loadGenerationMaxSteps);
+        configuration.loadGenerationMaxRate(loadGenerationMaxRate);
+        configuration.loadGenerationMaxStages(loadGenerationMaxStages);
+        configuration.loadGenerationMaxConcurrentScenarios(loadGenerationMaxConcurrentScenarios);
+        configuration.loadScenarioInitializationJsonPath(loadScenarioInitializationJsonPath);
+        configuration.loadGenerationMetricLabels(loadGenerationMetricLabels);
+        configuration.llmMetricsEnabled(llmMetricsEnabled);
+        configuration.perExpectationMetricsEnabled(perExpectationMetricsEnabled);
+        configuration.deduplicateRecordedExpectations(deduplicateRecordedExpectations);
+        configuration.templatizeRecordedValues(templatizeRecordedValues);
+        configuration.redactSecretsInRecordedExpectations(redactSecretsInRecordedExpectations);
+        configuration.redactSecretsInLog(redactSecretsInLog);
+        configuration.llmCostBudgetUsd(llmCostBudgetUsd);
+        configuration.otelPropagateTraceContext(otelPropagateTraceContext);
+        configuration.otelGenerateTraceId(otelGenerateTraceId);
+        configuration.wasmEnabled(wasmEnabled);
+        configuration.wasmMaxMemoryPages(wasmMaxMemoryPages);
+        configuration.grpcDescriptorDirectory(grpcDescriptorDirectory);
+        configuration.grpcProtoDirectory(grpcProtoDirectory);
+        configuration.grpcEnabled(grpcEnabled);
+        configuration.grpcProtocPath(grpcProtocPath);
+        configuration.grpcBidiStreamingEnabled(grpcBidiStreamingEnabled);
+        configuration.dnsEnabled(dnsEnabled);
+        configuration.dnsPort(dnsPort);
+        configuration.http3Port(http3Port);
+        configuration.http3MaxIdleTimeout(http3MaxIdleTimeout);
+        configuration.http3InitialMaxData(http3InitialMaxData);
+        configuration.http3InitialMaxStreamDataBidirectional(http3InitialMaxStreamDataBidirectional);
+        configuration.http3InitialMaxStreamsBidirectional(http3InitialMaxStreamsBidirectional);
+        configuration.http3QpackMaxTableCapacity(http3QpackMaxTableCapacity);
+        configuration.http3ConnectUdpEnabled(http3ConnectUdpEnabled);
+        configuration.http3AltSvcMaxAge(http3AltSvcMaxAge);
+        configuration.http3AdvertiseAltSvc(http3AdvertiseAltSvc);
+        configuration.useNativeTransport(useNativeTransport);
+        configuration.forwardConnectionPoolEnabled(forwardConnectionPoolEnabled);
+        configuration.forwardConnectionPoolMaxIdlePerKey(forwardConnectionPoolMaxIdlePerKey);
+        configuration.forwardConnectionPoolIdleTimeoutMillis(forwardConnectionPoolIdleTimeoutMillis);
+        configuration.forwardProxyRetryCount(forwardProxyRetryCount);
+        configuration.forwardProxyRetryBackoffMillis(forwardProxyRetryBackoffMillis);
+        configuration.forwardProxyCircuitBreakerEnabled(forwardProxyCircuitBreakerEnabled);
+        configuration.forwardProxyCircuitBreakerFailureThreshold(forwardProxyCircuitBreakerFailureThreshold);
+        configuration.forwardProxyCircuitBreakerWindowMillis(forwardProxyCircuitBreakerWindowMillis);
+        configuration.enforceResponseValidationForMocks(enforceResponseValidationForMocks);
+        configuration.maxRequestBodySize(maxRequestBodySize);
+        configuration.maxResponseBodySize(maxResponseBodySize);
+        configuration.maxLlmConversationBodySize(maxLlmConversationBodySize);
+        configuration.driftSemanticAnalysisEnabled(driftSemanticAnalysisEnabled);
+        configuration.driftResponseTimeThresholdMs(driftResponseTimeThresholdMs);
+        configuration.driftAlertWebhookEnabled(driftAlertWebhookEnabled);
+        configuration.driftAlertWebhookUrl(driftAlertWebhookUrl);
+        configuration.driftAlertSeverityThreshold(driftAlertSeverityThreshold);
+        configuration.driftAlertCooldownMillis(driftAlertCooldownMillis);
+        configuration.controlPlaneAuditEnabled(controlPlaneAuditEnabled);
+        configuration.controlPlaneAuditMaxEntries(controlPlaneAuditMaxEntries);
+        configuration.controlPlaneAuditReads(controlPlaneAuditReads);
+        configuration.http2Enabled(http2Enabled);
+        configuration.streamingResponsesEnabled(streamingResponsesEnabled);
+        configuration.maxStreamingCaptureBytes(maxStreamingCaptureBytes);
+        configuration.streamIdleTimeoutSeconds(streamIdleTimeoutSeconds);
+        configuration.validateRequestsAgainstOpenApiSpec(validateRequestsAgainstOpenApiSpec);
+        configuration.detailedVerificationFailures(detailedVerificationFailures);
+        configuration.globalResponseDelayMillis(globalResponseDelayMillis);
+        configuration.forwardAdjustHostHeader(forwardAdjustHostHeader);
+        configuration.forwardDefaultHostHeader(forwardDefaultHostHeader);
+        configuration.forwardProxyBlockPrivateNetworks(forwardProxyBlockPrivateNetworks);
+        configuration.tlsAllowInsecureProtocols(tlsAllowInsecureProtocols);
+        configuration.stateBackend(stateBackend);
+        configuration.blobStoreType(blobStoreType);
+        configuration.blobStoreBucket(blobStoreBucket);
+        configuration.blobStoreRegion(blobStoreRegion);
+        configuration.blobStoreEndpoint(blobStoreEndpoint);
+        configuration.blobStoreKeyPrefix(blobStoreKeyPrefix);
+        configuration.blobStoreAccessKeyId(blobStoreAccessKeyId);
+        configuration.blobStoreSecretAccessKey(blobStoreSecretAccessKey);
+        configuration.blobStoreContainer(blobStoreContainer);
+        configuration.blobStoreConnectionString(blobStoreConnectionString);
+        configuration.blobStoreProjectId(blobStoreProjectId);
+        if (clusterEnabled != null) {
+            configuration.clusterEnabled(clusterEnabled);
+        }
+        configuration.clusterName(clusterName);
+        configuration.clusterTransportConfig(clusterTransportConfig);
+        if (clusterSharedTimesEnabled != null) {
+            configuration.clusterSharedTimesEnabled(clusterSharedTimesEnabled);
+        }
+        configuration.controlPlaneOidcAuthenticationRequired(controlPlaneOidcAuthenticationRequired);
+        configuration.controlPlaneOidcIssuer(controlPlaneOidcIssuer);
+        configuration.controlPlaneOidcJwksUri(controlPlaneOidcJwksUri);
+        configuration.controlPlaneOidcAudience(controlPlaneOidcAudience);
+        if (controlPlaneOidcRequiredScopes != null) {
+            configuration.controlPlaneOidcRequiredScopes(controlPlaneOidcRequiredScopes);
+        }
+        configuration.controlPlaneOidcScopeClaim(controlPlaneOidcScopeClaim);
+        configuration.controlPlaneAuthorizationEnabled(controlPlaneAuthorizationEnabled);
+        configuration.transparentProxyEnabled(transparentProxyEnabled);
+        configuration.transparentProxyTproxy(transparentProxyTproxy);
+        configuration.transparentProxyEbpf(transparentProxyEbpf);
+        configuration.transparentProxyEbpfMapPath(transparentProxyEbpfMapPath);
+        configuration.asyncKafkaBootstrapServers(asyncKafkaBootstrapServers);
+        configuration.asyncMqttBrokerUrl(asyncMqttBrokerUrl);
+        configuration.asyncAmqpUri(asyncAmqpUri);
+        configuration.asyncRecordedMessageMaxEntries(asyncRecordedMessageMaxEntries);
+
         return configuration;
     }
 
@@ -494,12 +845,6 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (mcpEnabled != null) {
             target.mcpEnabled(mcpEnabled);
-        }
-        if (breakpointEnabled != null) {
-            target.breakpointEnabled(breakpointEnabled);
-        }
-        if (breakpointResponseEnabled != null) {
-            target.breakpointResponseEnabled(breakpointResponseEnabled);
         }
         if (breakpointTimeoutMillis != null) {
             target.breakpointTimeoutMillis(breakpointTimeoutMillis);
@@ -548,6 +893,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (matchersFailFast != null) {
             target.matchersFailFast(matchersFailFast);
+        }
+        if (matchExactCase != null) {
+            target.matchExactCase(matchExactCase);
         }
         if (maxSocketTimeoutInMillis != null) {
             target.maxSocketTimeoutInMillis(maxSocketTimeoutInMillis);
@@ -603,6 +951,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (corsMaxAgeInSeconds != null) {
             target.corsMaxAgeInSeconds(corsMaxAgeInSeconds);
         }
+        if (defaultResponseHeaders != null) {
+            target.defaultResponseHeaders(defaultResponseHeaders);
+        }
         if (javascriptDisallowedClasses != null) {
             target.javascriptDisallowedClasses(javascriptDisallowedClasses);
         }
@@ -644,6 +995,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (watchInitializationJson != null) {
             target.watchInitializationJson(watchInitializationJson);
+        }
+        if (failOnInitializationError != null) {
+            target.failOnInitializationError(failOnInitializationError);
         }
         if (persistExpectations != null) {
             target.persistExpectations(persistExpectations);
@@ -695,6 +1049,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (livenessHttpGetPath != null) {
             target.livenessHttpGetPath(livenessHttpGetPath);
+        }
+        if (matchNamespaceHeader != null) {
+            target.matchNamespaceHeader(matchNamespaceHeader);
         }
         if (controlPlaneTLSMutualAuthenticationRequired != null) {
             target.controlPlaneTLSMutualAuthenticationRequired(controlPlaneTLSMutualAuthenticationRequired);
@@ -776,6 +1133,336 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (forwardProxyCertificateChain != null) {
             target.forwardProxyCertificateChain(forwardProxyCertificateChain);
+        }
+        if (slowRequestThresholdMillis != null) {
+            target.slowRequestThresholdMillis(slowRequestThresholdMillis);
+        }
+        if (metricsRequestDurationRouteLabels != null) {
+            target.metricsRequestDurationRouteLabels(metricsRequestDurationRouteLabels);
+        }
+        if (rateLimitMaxNamedQuotas != null) {
+            target.rateLimitMaxNamedQuotas(rateLimitMaxNamedQuotas);
+        }
+        if (connectionLifecycleChaosEnabled != null) {
+            target.connectionLifecycleChaosEnabled(connectionLifecycleChaosEnabled);
+        }
+        if (preemptionSimulationMaxDrainMillis != null) {
+            target.preemptionSimulationMaxDrainMillis(preemptionSimulationMaxDrainMillis);
+        }
+        if (connectionLifecycleAutoHaltCountsRst != null) {
+            target.connectionLifecycleAutoHaltCountsRst(connectionLifecycleAutoHaltCountsRst);
+        }
+        if (sloTrackingEnabled != null) {
+            target.sloTrackingEnabled(sloTrackingEnabled);
+        }
+        if (sloWindowRetentionMillis != null) {
+            target.sloWindowRetentionMillis(sloWindowRetentionMillis);
+        }
+        if (sloWindowMaxSamples != null) {
+            target.sloWindowMaxSamples(sloWindowMaxSamples);
+        }
+        if (loadGenerationEnabled != null) {
+            target.loadGenerationEnabled(loadGenerationEnabled);
+        }
+        if (loadGenerationMaxVirtualUsers != null) {
+            target.loadGenerationMaxVirtualUsers(loadGenerationMaxVirtualUsers);
+        }
+        if (loadGenerationMaxInFlightRequests != null) {
+            target.loadGenerationMaxInFlightRequests(loadGenerationMaxInFlightRequests);
+        }
+        if (loadGenerationMaxRequestsPerSecond != null) {
+            target.loadGenerationMaxRequestsPerSecond(loadGenerationMaxRequestsPerSecond);
+        }
+        if (loadGenerationMaxDurationMillis != null) {
+            target.loadGenerationMaxDurationMillis(loadGenerationMaxDurationMillis);
+        }
+        if (loadGenerationMaxSteps != null) {
+            target.loadGenerationMaxSteps(loadGenerationMaxSteps);
+        }
+        if (loadGenerationMaxRate != null) {
+            target.loadGenerationMaxRate(loadGenerationMaxRate);
+        }
+        if (loadGenerationMaxStages != null) {
+            target.loadGenerationMaxStages(loadGenerationMaxStages);
+        }
+        if (loadGenerationMaxConcurrentScenarios != null) {
+            target.loadGenerationMaxConcurrentScenarios(loadGenerationMaxConcurrentScenarios);
+        }
+        if (loadScenarioInitializationJsonPath != null) {
+            target.loadScenarioInitializationJsonPath(loadScenarioInitializationJsonPath);
+        }
+        if (loadGenerationMetricLabels != null) {
+            target.loadGenerationMetricLabels(loadGenerationMetricLabels);
+        }
+        if (llmMetricsEnabled != null) {
+            target.llmMetricsEnabled(llmMetricsEnabled);
+        }
+        if (perExpectationMetricsEnabled != null) {
+            target.perExpectationMetricsEnabled(perExpectationMetricsEnabled);
+        }
+        if (deduplicateRecordedExpectations != null) {
+            target.deduplicateRecordedExpectations(deduplicateRecordedExpectations);
+        }
+        if (templatizeRecordedValues != null) {
+            target.templatizeRecordedValues(templatizeRecordedValues);
+        }
+        if (redactSecretsInRecordedExpectations != null) {
+            target.redactSecretsInRecordedExpectations(redactSecretsInRecordedExpectations);
+        }
+        if (redactSecretsInLog != null) {
+            target.redactSecretsInLog(redactSecretsInLog);
+        }
+        if (llmCostBudgetUsd != null) {
+            target.llmCostBudgetUsd(llmCostBudgetUsd);
+        }
+        if (otelPropagateTraceContext != null) {
+            target.otelPropagateTraceContext(otelPropagateTraceContext);
+        }
+        if (otelGenerateTraceId != null) {
+            target.otelGenerateTraceId(otelGenerateTraceId);
+        }
+        if (wasmEnabled != null) {
+            target.wasmEnabled(wasmEnabled);
+        }
+        if (wasmMaxMemoryPages != null) {
+            target.wasmMaxMemoryPages(wasmMaxMemoryPages);
+        }
+        if (grpcDescriptorDirectory != null) {
+            target.grpcDescriptorDirectory(grpcDescriptorDirectory);
+        }
+        if (grpcProtoDirectory != null) {
+            target.grpcProtoDirectory(grpcProtoDirectory);
+        }
+        if (grpcEnabled != null) {
+            target.grpcEnabled(grpcEnabled);
+        }
+        if (grpcProtocPath != null) {
+            target.grpcProtocPath(grpcProtocPath);
+        }
+        if (grpcBidiStreamingEnabled != null) {
+            target.grpcBidiStreamingEnabled(grpcBidiStreamingEnabled);
+        }
+        if (dnsEnabled != null) {
+            target.dnsEnabled(dnsEnabled);
+        }
+        if (dnsPort != null) {
+            target.dnsPort(dnsPort);
+        }
+        if (http3Port != null) {
+            target.http3Port(http3Port);
+        }
+        if (http3MaxIdleTimeout != null) {
+            target.http3MaxIdleTimeout(http3MaxIdleTimeout);
+        }
+        if (http3InitialMaxData != null) {
+            target.http3InitialMaxData(http3InitialMaxData);
+        }
+        if (http3InitialMaxStreamDataBidirectional != null) {
+            target.http3InitialMaxStreamDataBidirectional(http3InitialMaxStreamDataBidirectional);
+        }
+        if (http3InitialMaxStreamsBidirectional != null) {
+            target.http3InitialMaxStreamsBidirectional(http3InitialMaxStreamsBidirectional);
+        }
+        if (http3QpackMaxTableCapacity != null) {
+            target.http3QpackMaxTableCapacity(http3QpackMaxTableCapacity);
+        }
+        if (http3ConnectUdpEnabled != null) {
+            target.http3ConnectUdpEnabled(http3ConnectUdpEnabled);
+        }
+        if (http3AltSvcMaxAge != null) {
+            target.http3AltSvcMaxAge(http3AltSvcMaxAge);
+        }
+        if (http3AdvertiseAltSvc != null) {
+            target.http3AdvertiseAltSvc(http3AdvertiseAltSvc);
+        }
+        if (useNativeTransport != null) {
+            target.useNativeTransport(useNativeTransport);
+        }
+        if (forwardConnectionPoolEnabled != null) {
+            target.forwardConnectionPoolEnabled(forwardConnectionPoolEnabled);
+        }
+        if (forwardConnectionPoolMaxIdlePerKey != null) {
+            target.forwardConnectionPoolMaxIdlePerKey(forwardConnectionPoolMaxIdlePerKey);
+        }
+        if (forwardConnectionPoolIdleTimeoutMillis != null) {
+            target.forwardConnectionPoolIdleTimeoutMillis(forwardConnectionPoolIdleTimeoutMillis);
+        }
+        if (forwardProxyRetryCount != null) {
+            target.forwardProxyRetryCount(forwardProxyRetryCount);
+        }
+        if (forwardProxyRetryBackoffMillis != null) {
+            target.forwardProxyRetryBackoffMillis(forwardProxyRetryBackoffMillis);
+        }
+        if (forwardProxyCircuitBreakerEnabled != null) {
+            target.forwardProxyCircuitBreakerEnabled(forwardProxyCircuitBreakerEnabled);
+        }
+        if (forwardProxyCircuitBreakerFailureThreshold != null) {
+            target.forwardProxyCircuitBreakerFailureThreshold(forwardProxyCircuitBreakerFailureThreshold);
+        }
+        if (forwardProxyCircuitBreakerWindowMillis != null) {
+            target.forwardProxyCircuitBreakerWindowMillis(forwardProxyCircuitBreakerWindowMillis);
+        }
+        if (enforceResponseValidationForMocks != null) {
+            target.enforceResponseValidationForMocks(enforceResponseValidationForMocks);
+        }
+        if (maxRequestBodySize != null) {
+            target.maxRequestBodySize(maxRequestBodySize);
+        }
+        if (maxResponseBodySize != null) {
+            target.maxResponseBodySize(maxResponseBodySize);
+        }
+        if (maxLlmConversationBodySize != null) {
+            target.maxLlmConversationBodySize(maxLlmConversationBodySize);
+        }
+        if (driftSemanticAnalysisEnabled != null) {
+            target.driftSemanticAnalysisEnabled(driftSemanticAnalysisEnabled);
+        }
+        if (driftResponseTimeThresholdMs != null) {
+            target.driftResponseTimeThresholdMs(driftResponseTimeThresholdMs);
+        }
+        if (driftAlertWebhookEnabled != null) {
+            target.driftAlertWebhookEnabled(driftAlertWebhookEnabled);
+        }
+        if (driftAlertWebhookUrl != null) {
+            target.driftAlertWebhookUrl(driftAlertWebhookUrl);
+        }
+        if (driftAlertSeverityThreshold != null) {
+            target.driftAlertSeverityThreshold(driftAlertSeverityThreshold);
+        }
+        if (driftAlertCooldownMillis != null) {
+            target.driftAlertCooldownMillis(driftAlertCooldownMillis);
+        }
+        if (controlPlaneAuditEnabled != null) {
+            target.controlPlaneAuditEnabled(controlPlaneAuditEnabled);
+        }
+        if (controlPlaneAuditMaxEntries != null) {
+            target.controlPlaneAuditMaxEntries(controlPlaneAuditMaxEntries);
+        }
+        if (controlPlaneAuditReads != null) {
+            target.controlPlaneAuditReads(controlPlaneAuditReads);
+        }
+        if (http2Enabled != null) {
+            target.http2Enabled(http2Enabled);
+        }
+        if (streamingResponsesEnabled != null) {
+            target.streamingResponsesEnabled(streamingResponsesEnabled);
+        }
+        if (maxStreamingCaptureBytes != null) {
+            target.maxStreamingCaptureBytes(maxStreamingCaptureBytes);
+        }
+        if (streamIdleTimeoutSeconds != null) {
+            target.streamIdleTimeoutSeconds(streamIdleTimeoutSeconds);
+        }
+        if (validateRequestsAgainstOpenApiSpec != null) {
+            target.validateRequestsAgainstOpenApiSpec(validateRequestsAgainstOpenApiSpec);
+        }
+        if (detailedVerificationFailures != null) {
+            target.detailedVerificationFailures(detailedVerificationFailures);
+        }
+        if (globalResponseDelayMillis != null) {
+            target.globalResponseDelayMillis(globalResponseDelayMillis);
+        }
+        if (forwardAdjustHostHeader != null) {
+            target.forwardAdjustHostHeader(forwardAdjustHostHeader);
+        }
+        if (forwardDefaultHostHeader != null) {
+            target.forwardDefaultHostHeader(forwardDefaultHostHeader);
+        }
+        if (forwardProxyBlockPrivateNetworks != null) {
+            target.forwardProxyBlockPrivateNetworks(forwardProxyBlockPrivateNetworks);
+        }
+        if (tlsAllowInsecureProtocols != null) {
+            target.tlsAllowInsecureProtocols(tlsAllowInsecureProtocols);
+        }
+        if (stateBackend != null) {
+            target.stateBackend(stateBackend);
+        }
+        if (blobStoreType != null) {
+            target.blobStoreType(blobStoreType);
+        }
+        if (blobStoreBucket != null) {
+            target.blobStoreBucket(blobStoreBucket);
+        }
+        if (blobStoreRegion != null) {
+            target.blobStoreRegion(blobStoreRegion);
+        }
+        if (blobStoreEndpoint != null) {
+            target.blobStoreEndpoint(blobStoreEndpoint);
+        }
+        if (blobStoreKeyPrefix != null) {
+            target.blobStoreKeyPrefix(blobStoreKeyPrefix);
+        }
+        if (blobStoreAccessKeyId != null) {
+            target.blobStoreAccessKeyId(blobStoreAccessKeyId);
+        }
+        if (blobStoreSecretAccessKey != null) {
+            target.blobStoreSecretAccessKey(blobStoreSecretAccessKey);
+        }
+        if (blobStoreContainer != null) {
+            target.blobStoreContainer(blobStoreContainer);
+        }
+        if (blobStoreConnectionString != null) {
+            target.blobStoreConnectionString(blobStoreConnectionString);
+        }
+        if (blobStoreProjectId != null) {
+            target.blobStoreProjectId(blobStoreProjectId);
+        }
+        if (clusterEnabled != null) {
+            target.clusterEnabled(clusterEnabled);
+        }
+        if (clusterName != null) {
+            target.clusterName(clusterName);
+        }
+        if (clusterTransportConfig != null) {
+            target.clusterTransportConfig(clusterTransportConfig);
+        }
+        if (clusterSharedTimesEnabled != null) {
+            target.clusterSharedTimesEnabled(clusterSharedTimesEnabled);
+        }
+        if (controlPlaneOidcAuthenticationRequired != null) {
+            target.controlPlaneOidcAuthenticationRequired(controlPlaneOidcAuthenticationRequired);
+        }
+        if (controlPlaneOidcIssuer != null) {
+            target.controlPlaneOidcIssuer(controlPlaneOidcIssuer);
+        }
+        if (controlPlaneOidcJwksUri != null) {
+            target.controlPlaneOidcJwksUri(controlPlaneOidcJwksUri);
+        }
+        if (controlPlaneOidcAudience != null) {
+            target.controlPlaneOidcAudience(controlPlaneOidcAudience);
+        }
+        if (controlPlaneOidcRequiredScopes != null) {
+            target.controlPlaneOidcRequiredScopes(controlPlaneOidcRequiredScopes);
+        }
+        if (controlPlaneOidcScopeClaim != null) {
+            target.controlPlaneOidcScopeClaim(controlPlaneOidcScopeClaim);
+        }
+        if (controlPlaneAuthorizationEnabled != null) {
+            target.controlPlaneAuthorizationEnabled(controlPlaneAuthorizationEnabled);
+        }
+        if (transparentProxyEnabled != null) {
+            target.transparentProxyEnabled(transparentProxyEnabled);
+        }
+        if (transparentProxyTproxy != null) {
+            target.transparentProxyTproxy(transparentProxyTproxy);
+        }
+        if (transparentProxyEbpf != null) {
+            target.transparentProxyEbpf(transparentProxyEbpf);
+        }
+        if (transparentProxyEbpfMapPath != null) {
+            target.transparentProxyEbpfMapPath(transparentProxyEbpfMapPath);
+        }
+        if (asyncKafkaBootstrapServers != null) {
+            target.asyncKafkaBootstrapServers(asyncKafkaBootstrapServers);
+        }
+        if (asyncMqttBrokerUrl != null) {
+            target.asyncMqttBrokerUrl(asyncMqttBrokerUrl);
+        }
+        if (asyncAmqpUri != null) {
+            target.asyncAmqpUri(asyncAmqpUri);
+        }
+        if (asyncRecordedMessageMaxEntries != null) {
+            target.asyncRecordedMessageMaxEntries(asyncRecordedMessageMaxEntries);
         }
     }
 
@@ -880,24 +1567,6 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMcpEnabled(Boolean mcpEnabled) {
         this.mcpEnabled = mcpEnabled;
-        return this;
-    }
-
-    public Boolean getBreakpointEnabled() {
-        return breakpointEnabled;
-    }
-
-    public ConfigurationDTO setBreakpointEnabled(Boolean breakpointEnabled) {
-        this.breakpointEnabled = breakpointEnabled;
-        return this;
-    }
-
-    public Boolean getBreakpointResponseEnabled() {
-        return breakpointResponseEnabled;
-    }
-
-    public ConfigurationDTO setBreakpointResponseEnabled(Boolean breakpointResponseEnabled) {
-        this.breakpointResponseEnabled = breakpointResponseEnabled;
         return this;
     }
 
@@ -1042,6 +1711,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMatchersFailFast(Boolean matchersFailFast) {
         this.matchersFailFast = matchersFailFast;
+        return this;
+    }
+
+    public Boolean getMatchExactCase() {
+        return matchExactCase;
+    }
+
+    public ConfigurationDTO setMatchExactCase(Boolean matchExactCase) {
+        this.matchExactCase = matchExactCase;
         return this;
     }
 
@@ -1207,6 +1885,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public String getDefaultResponseHeaders() {
+        return defaultResponseHeaders;
+    }
+
+    public ConfigurationDTO setDefaultResponseHeaders(String defaultResponseHeaders) {
+        this.defaultResponseHeaders = defaultResponseHeaders;
+        return this;
+    }
+
     public String getJavascriptDisallowedClasses() {
         return javascriptDisallowedClasses;
     }
@@ -1330,6 +2017,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setWatchInitializationJson(Boolean watchInitializationJson) {
         this.watchInitializationJson = watchInitializationJson;
+        return this;
+    }
+
+    public Boolean getFailOnInitializationError() {
+        return failOnInitializationError;
+    }
+
+    public ConfigurationDTO setFailOnInitializationError(Boolean failOnInitializationError) {
+        this.failOnInitializationError = failOnInitializationError;
         return this;
     }
 
@@ -1487,6 +2183,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setLivenessHttpGetPath(String livenessHttpGetPath) {
         this.livenessHttpGetPath = livenessHttpGetPath;
+        return this;
+    }
+
+    public String getMatchNamespaceHeader() {
+        return matchNamespaceHeader;
+    }
+
+    public ConfigurationDTO setMatchNamespaceHeader(String matchNamespaceHeader) {
+        this.matchNamespaceHeader = matchNamespaceHeader;
         return this;
     }
 
@@ -1734,6 +2439,1002 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setForwardProxyCertificateChain(String forwardProxyCertificateChain) {
         this.forwardProxyCertificateChain = forwardProxyCertificateChain;
+        return this;
+    }
+
+    public Long getSlowRequestThresholdMillis() {
+        return slowRequestThresholdMillis;
+    }
+
+    public ConfigurationDTO setSlowRequestThresholdMillis(Long slowRequestThresholdMillis) {
+        this.slowRequestThresholdMillis = slowRequestThresholdMillis;
+        return this;
+    }
+
+    public Boolean getMetricsRequestDurationRouteLabels() {
+        return metricsRequestDurationRouteLabels;
+    }
+
+    public ConfigurationDTO setMetricsRequestDurationRouteLabels(Boolean metricsRequestDurationRouteLabels) {
+        this.metricsRequestDurationRouteLabels = metricsRequestDurationRouteLabels;
+        return this;
+    }
+
+    public Integer getRateLimitMaxNamedQuotas() {
+        return rateLimitMaxNamedQuotas;
+    }
+
+    public ConfigurationDTO setRateLimitMaxNamedQuotas(Integer rateLimitMaxNamedQuotas) {
+        this.rateLimitMaxNamedQuotas = rateLimitMaxNamedQuotas;
+        return this;
+    }
+
+    public Boolean getConnectionLifecycleChaosEnabled() {
+        return connectionLifecycleChaosEnabled;
+    }
+
+    public ConfigurationDTO setConnectionLifecycleChaosEnabled(Boolean connectionLifecycleChaosEnabled) {
+        this.connectionLifecycleChaosEnabled = connectionLifecycleChaosEnabled;
+        return this;
+    }
+
+    public Long getPreemptionSimulationMaxDrainMillis() {
+        return preemptionSimulationMaxDrainMillis;
+    }
+
+    public ConfigurationDTO setPreemptionSimulationMaxDrainMillis(Long preemptionSimulationMaxDrainMillis) {
+        this.preemptionSimulationMaxDrainMillis = preemptionSimulationMaxDrainMillis;
+        return this;
+    }
+
+    public Boolean getConnectionLifecycleAutoHaltCountsRst() {
+        return connectionLifecycleAutoHaltCountsRst;
+    }
+
+    public ConfigurationDTO setConnectionLifecycleAutoHaltCountsRst(Boolean connectionLifecycleAutoHaltCountsRst) {
+        this.connectionLifecycleAutoHaltCountsRst = connectionLifecycleAutoHaltCountsRst;
+        return this;
+    }
+
+    public Boolean getSloTrackingEnabled() {
+        return sloTrackingEnabled;
+    }
+
+    public ConfigurationDTO setSloTrackingEnabled(Boolean sloTrackingEnabled) {
+        this.sloTrackingEnabled = sloTrackingEnabled;
+        return this;
+    }
+
+    public Long getSloWindowRetentionMillis() {
+        return sloWindowRetentionMillis;
+    }
+
+    public ConfigurationDTO setSloWindowRetentionMillis(Long sloWindowRetentionMillis) {
+        this.sloWindowRetentionMillis = sloWindowRetentionMillis;
+        return this;
+    }
+
+    public Integer getSloWindowMaxSamples() {
+        return sloWindowMaxSamples;
+    }
+
+    public ConfigurationDTO setSloWindowMaxSamples(Integer sloWindowMaxSamples) {
+        this.sloWindowMaxSamples = sloWindowMaxSamples;
+        return this;
+    }
+
+    public Boolean getLoadGenerationEnabled() {
+        return loadGenerationEnabled;
+    }
+
+    public ConfigurationDTO setLoadGenerationEnabled(Boolean loadGenerationEnabled) {
+        this.loadGenerationEnabled = loadGenerationEnabled;
+        return this;
+    }
+
+    public Integer getLoadGenerationMaxVirtualUsers() {
+        return loadGenerationMaxVirtualUsers;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxVirtualUsers(Integer loadGenerationMaxVirtualUsers) {
+        this.loadGenerationMaxVirtualUsers = loadGenerationMaxVirtualUsers;
+        return this;
+    }
+
+    public Integer getLoadGenerationMaxInFlightRequests() {
+        return loadGenerationMaxInFlightRequests;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxInFlightRequests(Integer loadGenerationMaxInFlightRequests) {
+        this.loadGenerationMaxInFlightRequests = loadGenerationMaxInFlightRequests;
+        return this;
+    }
+
+    public Integer getLoadGenerationMaxRequestsPerSecond() {
+        return loadGenerationMaxRequestsPerSecond;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxRequestsPerSecond(Integer loadGenerationMaxRequestsPerSecond) {
+        this.loadGenerationMaxRequestsPerSecond = loadGenerationMaxRequestsPerSecond;
+        return this;
+    }
+
+    public Long getLoadGenerationMaxDurationMillis() {
+        return loadGenerationMaxDurationMillis;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxDurationMillis(Long loadGenerationMaxDurationMillis) {
+        this.loadGenerationMaxDurationMillis = loadGenerationMaxDurationMillis;
+        return this;
+    }
+
+    public Integer getLoadGenerationMaxSteps() {
+        return loadGenerationMaxSteps;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxSteps(Integer loadGenerationMaxSteps) {
+        this.loadGenerationMaxSteps = loadGenerationMaxSteps;
+        return this;
+    }
+
+    public Double getLoadGenerationMaxRate() {
+        return loadGenerationMaxRate;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxRate(Double loadGenerationMaxRate) {
+        this.loadGenerationMaxRate = loadGenerationMaxRate;
+        return this;
+    }
+
+    public Integer getLoadGenerationMaxStages() {
+        return loadGenerationMaxStages;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxStages(Integer loadGenerationMaxStages) {
+        this.loadGenerationMaxStages = loadGenerationMaxStages;
+        return this;
+    }
+
+    public Integer getLoadGenerationMaxConcurrentScenarios() {
+        return loadGenerationMaxConcurrentScenarios;
+    }
+
+    public ConfigurationDTO setLoadGenerationMaxConcurrentScenarios(Integer loadGenerationMaxConcurrentScenarios) {
+        this.loadGenerationMaxConcurrentScenarios = loadGenerationMaxConcurrentScenarios;
+        return this;
+    }
+
+    public String getLoadScenarioInitializationJsonPath() {
+        return loadScenarioInitializationJsonPath;
+    }
+
+    public ConfigurationDTO setLoadScenarioInitializationJsonPath(String loadScenarioInitializationJsonPath) {
+        this.loadScenarioInitializationJsonPath = loadScenarioInitializationJsonPath;
+        return this;
+    }
+
+    public java.util.List<String> getLoadGenerationMetricLabels() {
+        return loadGenerationMetricLabels;
+    }
+
+    public ConfigurationDTO setLoadGenerationMetricLabels(java.util.List<String> loadGenerationMetricLabels) {
+        this.loadGenerationMetricLabels = loadGenerationMetricLabels;
+        return this;
+    }
+
+    public Boolean getLlmMetricsEnabled() {
+        return llmMetricsEnabled;
+    }
+
+    public ConfigurationDTO setLlmMetricsEnabled(Boolean llmMetricsEnabled) {
+        this.llmMetricsEnabled = llmMetricsEnabled;
+        return this;
+    }
+
+    public Boolean getPerExpectationMetricsEnabled() {
+        return perExpectationMetricsEnabled;
+    }
+
+    public ConfigurationDTO setPerExpectationMetricsEnabled(Boolean perExpectationMetricsEnabled) {
+        this.perExpectationMetricsEnabled = perExpectationMetricsEnabled;
+        return this;
+    }
+
+    public Boolean getDeduplicateRecordedExpectations() {
+        return deduplicateRecordedExpectations;
+    }
+
+    public ConfigurationDTO setDeduplicateRecordedExpectations(Boolean deduplicateRecordedExpectations) {
+        this.deduplicateRecordedExpectations = deduplicateRecordedExpectations;
+        return this;
+    }
+
+    public Boolean getTemplatizeRecordedValues() {
+        return templatizeRecordedValues;
+    }
+
+    public ConfigurationDTO setTemplatizeRecordedValues(Boolean templatizeRecordedValues) {
+        this.templatizeRecordedValues = templatizeRecordedValues;
+        return this;
+    }
+
+    public Boolean getRedactSecretsInRecordedExpectations() {
+        return redactSecretsInRecordedExpectations;
+    }
+
+    public ConfigurationDTO setRedactSecretsInRecordedExpectations(Boolean redactSecretsInRecordedExpectations) {
+        this.redactSecretsInRecordedExpectations = redactSecretsInRecordedExpectations;
+        return this;
+    }
+
+    public Boolean getRedactSecretsInLog() {
+        return redactSecretsInLog;
+    }
+
+    public ConfigurationDTO setRedactSecretsInLog(Boolean redactSecretsInLog) {
+        this.redactSecretsInLog = redactSecretsInLog;
+        return this;
+    }
+
+    public Double getLlmCostBudgetUsd() {
+        return llmCostBudgetUsd;
+    }
+
+    public ConfigurationDTO setLlmCostBudgetUsd(Double llmCostBudgetUsd) {
+        this.llmCostBudgetUsd = llmCostBudgetUsd;
+        return this;
+    }
+
+    public Boolean getOtelPropagateTraceContext() {
+        return otelPropagateTraceContext;
+    }
+
+    public ConfigurationDTO setOtelPropagateTraceContext(Boolean otelPropagateTraceContext) {
+        this.otelPropagateTraceContext = otelPropagateTraceContext;
+        return this;
+    }
+
+    public Boolean getOtelGenerateTraceId() {
+        return otelGenerateTraceId;
+    }
+
+    public ConfigurationDTO setOtelGenerateTraceId(Boolean otelGenerateTraceId) {
+        this.otelGenerateTraceId = otelGenerateTraceId;
+        return this;
+    }
+
+    public Boolean getWasmEnabled() {
+        return wasmEnabled;
+    }
+
+    public ConfigurationDTO setWasmEnabled(Boolean wasmEnabled) {
+        this.wasmEnabled = wasmEnabled;
+        return this;
+    }
+
+    public Integer getWasmMaxMemoryPages() {
+        return wasmMaxMemoryPages;
+    }
+
+    public ConfigurationDTO setWasmMaxMemoryPages(Integer wasmMaxMemoryPages) {
+        this.wasmMaxMemoryPages = wasmMaxMemoryPages;
+        return this;
+    }
+
+    public String getGrpcDescriptorDirectory() {
+        return grpcDescriptorDirectory;
+    }
+
+    public ConfigurationDTO setGrpcDescriptorDirectory(String grpcDescriptorDirectory) {
+        this.grpcDescriptorDirectory = grpcDescriptorDirectory;
+        return this;
+    }
+
+    public String getGrpcProtoDirectory() {
+        return grpcProtoDirectory;
+    }
+
+    public ConfigurationDTO setGrpcProtoDirectory(String grpcProtoDirectory) {
+        this.grpcProtoDirectory = grpcProtoDirectory;
+        return this;
+    }
+
+    public Boolean getGrpcEnabled() {
+        return grpcEnabled;
+    }
+
+    public ConfigurationDTO setGrpcEnabled(Boolean grpcEnabled) {
+        this.grpcEnabled = grpcEnabled;
+        return this;
+    }
+
+    public String getGrpcProtocPath() {
+        return grpcProtocPath;
+    }
+
+    public ConfigurationDTO setGrpcProtocPath(String grpcProtocPath) {
+        this.grpcProtocPath = grpcProtocPath;
+        return this;
+    }
+
+    public Boolean getGrpcBidiStreamingEnabled() {
+        return grpcBidiStreamingEnabled;
+    }
+
+    public ConfigurationDTO setGrpcBidiStreamingEnabled(Boolean grpcBidiStreamingEnabled) {
+        this.grpcBidiStreamingEnabled = grpcBidiStreamingEnabled;
+        return this;
+    }
+
+    public Boolean getDnsEnabled() {
+        return dnsEnabled;
+    }
+
+    public ConfigurationDTO setDnsEnabled(Boolean dnsEnabled) {
+        this.dnsEnabled = dnsEnabled;
+        return this;
+    }
+
+    public Integer getDnsPort() {
+        return dnsPort;
+    }
+
+    public ConfigurationDTO setDnsPort(Integer dnsPort) {
+        this.dnsPort = dnsPort;
+        return this;
+    }
+
+    public Integer getHttp3Port() {
+        return http3Port;
+    }
+
+    public ConfigurationDTO setHttp3Port(Integer http3Port) {
+        this.http3Port = http3Port;
+        return this;
+    }
+
+    public Long getHttp3MaxIdleTimeout() {
+        return http3MaxIdleTimeout;
+    }
+
+    public ConfigurationDTO setHttp3MaxIdleTimeout(Long http3MaxIdleTimeout) {
+        this.http3MaxIdleTimeout = http3MaxIdleTimeout;
+        return this;
+    }
+
+    public Long getHttp3InitialMaxData() {
+        return http3InitialMaxData;
+    }
+
+    public ConfigurationDTO setHttp3InitialMaxData(Long http3InitialMaxData) {
+        this.http3InitialMaxData = http3InitialMaxData;
+        return this;
+    }
+
+    public Long getHttp3InitialMaxStreamDataBidirectional() {
+        return http3InitialMaxStreamDataBidirectional;
+    }
+
+    public ConfigurationDTO setHttp3InitialMaxStreamDataBidirectional(Long http3InitialMaxStreamDataBidirectional) {
+        this.http3InitialMaxStreamDataBidirectional = http3InitialMaxStreamDataBidirectional;
+        return this;
+    }
+
+    public Long getHttp3InitialMaxStreamsBidirectional() {
+        return http3InitialMaxStreamsBidirectional;
+    }
+
+    public ConfigurationDTO setHttp3InitialMaxStreamsBidirectional(Long http3InitialMaxStreamsBidirectional) {
+        this.http3InitialMaxStreamsBidirectional = http3InitialMaxStreamsBidirectional;
+        return this;
+    }
+
+    public Long getHttp3QpackMaxTableCapacity() {
+        return http3QpackMaxTableCapacity;
+    }
+
+    public ConfigurationDTO setHttp3QpackMaxTableCapacity(Long http3QpackMaxTableCapacity) {
+        this.http3QpackMaxTableCapacity = http3QpackMaxTableCapacity;
+        return this;
+    }
+
+    public Boolean getHttp3ConnectUdpEnabled() {
+        return http3ConnectUdpEnabled;
+    }
+
+    public ConfigurationDTO setHttp3ConnectUdpEnabled(Boolean http3ConnectUdpEnabled) {
+        this.http3ConnectUdpEnabled = http3ConnectUdpEnabled;
+        return this;
+    }
+
+    public Long getHttp3AltSvcMaxAge() {
+        return http3AltSvcMaxAge;
+    }
+
+    public ConfigurationDTO setHttp3AltSvcMaxAge(Long http3AltSvcMaxAge) {
+        this.http3AltSvcMaxAge = http3AltSvcMaxAge;
+        return this;
+    }
+
+    public Boolean getHttp3AdvertiseAltSvc() {
+        return http3AdvertiseAltSvc;
+    }
+
+    public ConfigurationDTO setHttp3AdvertiseAltSvc(Boolean http3AdvertiseAltSvc) {
+        this.http3AdvertiseAltSvc = http3AdvertiseAltSvc;
+        return this;
+    }
+
+    public Boolean getUseNativeTransport() {
+        return useNativeTransport;
+    }
+
+    public ConfigurationDTO setUseNativeTransport(Boolean useNativeTransport) {
+        this.useNativeTransport = useNativeTransport;
+        return this;
+    }
+
+    public Boolean getForwardConnectionPoolEnabled() {
+        return forwardConnectionPoolEnabled;
+    }
+
+    public ConfigurationDTO setForwardConnectionPoolEnabled(Boolean forwardConnectionPoolEnabled) {
+        this.forwardConnectionPoolEnabled = forwardConnectionPoolEnabled;
+        return this;
+    }
+
+    public Integer getForwardConnectionPoolMaxIdlePerKey() {
+        return forwardConnectionPoolMaxIdlePerKey;
+    }
+
+    public ConfigurationDTO setForwardConnectionPoolMaxIdlePerKey(Integer forwardConnectionPoolMaxIdlePerKey) {
+        this.forwardConnectionPoolMaxIdlePerKey = forwardConnectionPoolMaxIdlePerKey;
+        return this;
+    }
+
+    public Long getForwardConnectionPoolIdleTimeoutMillis() {
+        return forwardConnectionPoolIdleTimeoutMillis;
+    }
+
+    public ConfigurationDTO setForwardConnectionPoolIdleTimeoutMillis(Long forwardConnectionPoolIdleTimeoutMillis) {
+        this.forwardConnectionPoolIdleTimeoutMillis = forwardConnectionPoolIdleTimeoutMillis;
+        return this;
+    }
+
+    public Integer getForwardProxyRetryCount() {
+        return forwardProxyRetryCount;
+    }
+
+    public ConfigurationDTO setForwardProxyRetryCount(Integer forwardProxyRetryCount) {
+        this.forwardProxyRetryCount = forwardProxyRetryCount;
+        return this;
+    }
+
+    public Long getForwardProxyRetryBackoffMillis() {
+        return forwardProxyRetryBackoffMillis;
+    }
+
+    public ConfigurationDTO setForwardProxyRetryBackoffMillis(Long forwardProxyRetryBackoffMillis) {
+        this.forwardProxyRetryBackoffMillis = forwardProxyRetryBackoffMillis;
+        return this;
+    }
+
+    public Boolean getForwardProxyCircuitBreakerEnabled() {
+        return forwardProxyCircuitBreakerEnabled;
+    }
+
+    public ConfigurationDTO setForwardProxyCircuitBreakerEnabled(Boolean forwardProxyCircuitBreakerEnabled) {
+        this.forwardProxyCircuitBreakerEnabled = forwardProxyCircuitBreakerEnabled;
+        return this;
+    }
+
+    public Integer getForwardProxyCircuitBreakerFailureThreshold() {
+        return forwardProxyCircuitBreakerFailureThreshold;
+    }
+
+    public ConfigurationDTO setForwardProxyCircuitBreakerFailureThreshold(Integer forwardProxyCircuitBreakerFailureThreshold) {
+        this.forwardProxyCircuitBreakerFailureThreshold = forwardProxyCircuitBreakerFailureThreshold;
+        return this;
+    }
+
+    public Long getForwardProxyCircuitBreakerWindowMillis() {
+        return forwardProxyCircuitBreakerWindowMillis;
+    }
+
+    public ConfigurationDTO setForwardProxyCircuitBreakerWindowMillis(Long forwardProxyCircuitBreakerWindowMillis) {
+        this.forwardProxyCircuitBreakerWindowMillis = forwardProxyCircuitBreakerWindowMillis;
+        return this;
+    }
+
+    public Boolean getEnforceResponseValidationForMocks() {
+        return enforceResponseValidationForMocks;
+    }
+
+    public ConfigurationDTO setEnforceResponseValidationForMocks(Boolean enforceResponseValidationForMocks) {
+        this.enforceResponseValidationForMocks = enforceResponseValidationForMocks;
+        return this;
+    }
+
+    public Integer getMaxRequestBodySize() {
+        return maxRequestBodySize;
+    }
+
+    public ConfigurationDTO setMaxRequestBodySize(Integer maxRequestBodySize) {
+        this.maxRequestBodySize = maxRequestBodySize;
+        return this;
+    }
+
+    public Integer getMaxResponseBodySize() {
+        return maxResponseBodySize;
+    }
+
+    public ConfigurationDTO setMaxResponseBodySize(Integer maxResponseBodySize) {
+        this.maxResponseBodySize = maxResponseBodySize;
+        return this;
+    }
+
+    public Integer getMaxLlmConversationBodySize() {
+        return maxLlmConversationBodySize;
+    }
+
+    public ConfigurationDTO setMaxLlmConversationBodySize(Integer maxLlmConversationBodySize) {
+        this.maxLlmConversationBodySize = maxLlmConversationBodySize;
+        return this;
+    }
+
+    public Boolean getDriftSemanticAnalysisEnabled() {
+        return driftSemanticAnalysisEnabled;
+    }
+
+    public ConfigurationDTO setDriftSemanticAnalysisEnabled(Boolean driftSemanticAnalysisEnabled) {
+        this.driftSemanticAnalysisEnabled = driftSemanticAnalysisEnabled;
+        return this;
+    }
+
+    public Long getDriftResponseTimeThresholdMs() {
+        return driftResponseTimeThresholdMs;
+    }
+
+    public ConfigurationDTO setDriftResponseTimeThresholdMs(Long driftResponseTimeThresholdMs) {
+        this.driftResponseTimeThresholdMs = driftResponseTimeThresholdMs;
+        return this;
+    }
+
+    public Boolean getDriftAlertWebhookEnabled() {
+        return driftAlertWebhookEnabled;
+    }
+
+    public ConfigurationDTO setDriftAlertWebhookEnabled(Boolean driftAlertWebhookEnabled) {
+        this.driftAlertWebhookEnabled = driftAlertWebhookEnabled;
+        return this;
+    }
+
+    public String getDriftAlertWebhookUrl() {
+        return driftAlertWebhookUrl;
+    }
+
+    public ConfigurationDTO setDriftAlertWebhookUrl(String driftAlertWebhookUrl) {
+        this.driftAlertWebhookUrl = driftAlertWebhookUrl;
+        return this;
+    }
+
+    public String getDriftAlertSeverityThreshold() {
+        return driftAlertSeverityThreshold;
+    }
+
+    public ConfigurationDTO setDriftAlertSeverityThreshold(String driftAlertSeverityThreshold) {
+        this.driftAlertSeverityThreshold = driftAlertSeverityThreshold;
+        return this;
+    }
+
+    public Long getDriftAlertCooldownMillis() {
+        return driftAlertCooldownMillis;
+    }
+
+    public ConfigurationDTO setDriftAlertCooldownMillis(Long driftAlertCooldownMillis) {
+        this.driftAlertCooldownMillis = driftAlertCooldownMillis;
+        return this;
+    }
+
+    public Boolean getControlPlaneAuditEnabled() {
+        return controlPlaneAuditEnabled;
+    }
+
+    public ConfigurationDTO setControlPlaneAuditEnabled(Boolean controlPlaneAuditEnabled) {
+        this.controlPlaneAuditEnabled = controlPlaneAuditEnabled;
+        return this;
+    }
+
+    public Integer getControlPlaneAuditMaxEntries() {
+        return controlPlaneAuditMaxEntries;
+    }
+
+    public ConfigurationDTO setControlPlaneAuditMaxEntries(Integer controlPlaneAuditMaxEntries) {
+        this.controlPlaneAuditMaxEntries = controlPlaneAuditMaxEntries;
+        return this;
+    }
+
+    public Boolean getControlPlaneAuditReads() {
+        return controlPlaneAuditReads;
+    }
+
+    public ConfigurationDTO setControlPlaneAuditReads(Boolean controlPlaneAuditReads) {
+        this.controlPlaneAuditReads = controlPlaneAuditReads;
+        return this;
+    }
+
+    public Boolean getHttp2Enabled() {
+        return http2Enabled;
+    }
+
+    public ConfigurationDTO setHttp2Enabled(Boolean http2Enabled) {
+        this.http2Enabled = http2Enabled;
+        return this;
+    }
+
+    public Boolean getStreamingResponsesEnabled() {
+        return streamingResponsesEnabled;
+    }
+
+    public ConfigurationDTO setStreamingResponsesEnabled(Boolean streamingResponsesEnabled) {
+        this.streamingResponsesEnabled = streamingResponsesEnabled;
+        return this;
+    }
+
+    public Integer getMaxStreamingCaptureBytes() {
+        return maxStreamingCaptureBytes;
+    }
+
+    public ConfigurationDTO setMaxStreamingCaptureBytes(Integer maxStreamingCaptureBytes) {
+        this.maxStreamingCaptureBytes = maxStreamingCaptureBytes;
+        return this;
+    }
+
+    public Integer getStreamIdleTimeoutSeconds() {
+        return streamIdleTimeoutSeconds;
+    }
+
+    public ConfigurationDTO setStreamIdleTimeoutSeconds(Integer streamIdleTimeoutSeconds) {
+        this.streamIdleTimeoutSeconds = streamIdleTimeoutSeconds;
+        return this;
+    }
+
+    public Boolean getValidateRequestsAgainstOpenApiSpec() {
+        return validateRequestsAgainstOpenApiSpec;
+    }
+
+    public ConfigurationDTO setValidateRequestsAgainstOpenApiSpec(Boolean validateRequestsAgainstOpenApiSpec) {
+        this.validateRequestsAgainstOpenApiSpec = validateRequestsAgainstOpenApiSpec;
+        return this;
+    }
+
+    public Boolean getDetailedVerificationFailures() {
+        return detailedVerificationFailures;
+    }
+
+    public ConfigurationDTO setDetailedVerificationFailures(Boolean detailedVerificationFailures) {
+        this.detailedVerificationFailures = detailedVerificationFailures;
+        return this;
+    }
+
+    public Long getGlobalResponseDelayMillis() {
+        return globalResponseDelayMillis;
+    }
+
+    public ConfigurationDTO setGlobalResponseDelayMillis(Long globalResponseDelayMillis) {
+        this.globalResponseDelayMillis = globalResponseDelayMillis;
+        return this;
+    }
+
+    public Boolean getForwardAdjustHostHeader() {
+        return forwardAdjustHostHeader;
+    }
+
+    public ConfigurationDTO setForwardAdjustHostHeader(Boolean forwardAdjustHostHeader) {
+        this.forwardAdjustHostHeader = forwardAdjustHostHeader;
+        return this;
+    }
+
+    public String getForwardDefaultHostHeader() {
+        return forwardDefaultHostHeader;
+    }
+
+    public ConfigurationDTO setForwardDefaultHostHeader(String forwardDefaultHostHeader) {
+        this.forwardDefaultHostHeader = forwardDefaultHostHeader;
+        return this;
+    }
+
+    public Boolean getForwardProxyBlockPrivateNetworks() {
+        return forwardProxyBlockPrivateNetworks;
+    }
+
+    public ConfigurationDTO setForwardProxyBlockPrivateNetworks(Boolean forwardProxyBlockPrivateNetworks) {
+        this.forwardProxyBlockPrivateNetworks = forwardProxyBlockPrivateNetworks;
+        return this;
+    }
+
+    public Boolean getTlsAllowInsecureProtocols() {
+        return tlsAllowInsecureProtocols;
+    }
+
+    public ConfigurationDTO setTlsAllowInsecureProtocols(Boolean tlsAllowInsecureProtocols) {
+        this.tlsAllowInsecureProtocols = tlsAllowInsecureProtocols;
+        return this;
+    }
+
+    public String getStateBackend() {
+        return stateBackend;
+    }
+
+    public ConfigurationDTO setStateBackend(String stateBackend) {
+        this.stateBackend = stateBackend;
+        return this;
+    }
+
+    public String getBlobStoreType() {
+        return blobStoreType;
+    }
+
+    public ConfigurationDTO setBlobStoreType(String blobStoreType) {
+        this.blobStoreType = blobStoreType;
+        return this;
+    }
+
+    public String getBlobStoreBucket() {
+        return blobStoreBucket;
+    }
+
+    public ConfigurationDTO setBlobStoreBucket(String blobStoreBucket) {
+        this.blobStoreBucket = blobStoreBucket;
+        return this;
+    }
+
+    public String getBlobStoreRegion() {
+        return blobStoreRegion;
+    }
+
+    public ConfigurationDTO setBlobStoreRegion(String blobStoreRegion) {
+        this.blobStoreRegion = blobStoreRegion;
+        return this;
+    }
+
+    public String getBlobStoreEndpoint() {
+        return blobStoreEndpoint;
+    }
+
+    public ConfigurationDTO setBlobStoreEndpoint(String blobStoreEndpoint) {
+        this.blobStoreEndpoint = blobStoreEndpoint;
+        return this;
+    }
+
+    public String getBlobStoreKeyPrefix() {
+        return blobStoreKeyPrefix;
+    }
+
+    public ConfigurationDTO setBlobStoreKeyPrefix(String blobStoreKeyPrefix) {
+        this.blobStoreKeyPrefix = blobStoreKeyPrefix;
+        return this;
+    }
+
+    @JsonIgnore
+    public String getBlobStoreAccessKeyId() {
+        return blobStoreAccessKeyId;
+    }
+
+    @JsonProperty
+    public ConfigurationDTO setBlobStoreAccessKeyId(String blobStoreAccessKeyId) {
+        this.blobStoreAccessKeyId = blobStoreAccessKeyId;
+        return this;
+    }
+
+    @JsonIgnore
+    public String getBlobStoreSecretAccessKey() {
+        return blobStoreSecretAccessKey;
+    }
+
+    @JsonProperty
+    public ConfigurationDTO setBlobStoreSecretAccessKey(String blobStoreSecretAccessKey) {
+        this.blobStoreSecretAccessKey = blobStoreSecretAccessKey;
+        return this;
+    }
+
+    public String getBlobStoreContainer() {
+        return blobStoreContainer;
+    }
+
+    public ConfigurationDTO setBlobStoreContainer(String blobStoreContainer) {
+        this.blobStoreContainer = blobStoreContainer;
+        return this;
+    }
+
+    @JsonIgnore
+    public String getBlobStoreConnectionString() {
+        return blobStoreConnectionString;
+    }
+
+    @JsonProperty
+    public ConfigurationDTO setBlobStoreConnectionString(String blobStoreConnectionString) {
+        this.blobStoreConnectionString = blobStoreConnectionString;
+        return this;
+    }
+
+    public String getBlobStoreProjectId() {
+        return blobStoreProjectId;
+    }
+
+    public ConfigurationDTO setBlobStoreProjectId(String blobStoreProjectId) {
+        this.blobStoreProjectId = blobStoreProjectId;
+        return this;
+    }
+
+    public Boolean getClusterEnabled() {
+        return clusterEnabled;
+    }
+
+    public ConfigurationDTO setClusterEnabled(Boolean clusterEnabled) {
+        this.clusterEnabled = clusterEnabled;
+        return this;
+    }
+
+    public String getClusterName() {
+        return clusterName;
+    }
+
+    public ConfigurationDTO setClusterName(String clusterName) {
+        this.clusterName = clusterName;
+        return this;
+    }
+
+    public String getClusterTransportConfig() {
+        return clusterTransportConfig;
+    }
+
+    public ConfigurationDTO setClusterTransportConfig(String clusterTransportConfig) {
+        this.clusterTransportConfig = clusterTransportConfig;
+        return this;
+    }
+
+    public Boolean getClusterSharedTimesEnabled() {
+        return clusterSharedTimesEnabled;
+    }
+
+    public ConfigurationDTO setClusterSharedTimesEnabled(Boolean clusterSharedTimesEnabled) {
+        this.clusterSharedTimesEnabled = clusterSharedTimesEnabled;
+        return this;
+    }
+
+    public Boolean getControlPlaneOidcAuthenticationRequired() {
+        return controlPlaneOidcAuthenticationRequired;
+    }
+
+    public ConfigurationDTO setControlPlaneOidcAuthenticationRequired(Boolean controlPlaneOidcAuthenticationRequired) {
+        this.controlPlaneOidcAuthenticationRequired = controlPlaneOidcAuthenticationRequired;
+        return this;
+    }
+
+    public String getControlPlaneOidcIssuer() {
+        return controlPlaneOidcIssuer;
+    }
+
+    public ConfigurationDTO setControlPlaneOidcIssuer(String controlPlaneOidcIssuer) {
+        this.controlPlaneOidcIssuer = controlPlaneOidcIssuer;
+        return this;
+    }
+
+    public String getControlPlaneOidcJwksUri() {
+        return controlPlaneOidcJwksUri;
+    }
+
+    public ConfigurationDTO setControlPlaneOidcJwksUri(String controlPlaneOidcJwksUri) {
+        this.controlPlaneOidcJwksUri = controlPlaneOidcJwksUri;
+        return this;
+    }
+
+    public String getControlPlaneOidcAudience() {
+        return controlPlaneOidcAudience;
+    }
+
+    public ConfigurationDTO setControlPlaneOidcAudience(String controlPlaneOidcAudience) {
+        this.controlPlaneOidcAudience = controlPlaneOidcAudience;
+        return this;
+    }
+
+    public Set<String> getControlPlaneOidcRequiredScopes() {
+        return controlPlaneOidcRequiredScopes;
+    }
+
+    public ConfigurationDTO setControlPlaneOidcRequiredScopes(Set<String> controlPlaneOidcRequiredScopes) {
+        this.controlPlaneOidcRequiredScopes = controlPlaneOidcRequiredScopes;
+        return this;
+    }
+
+    public String getControlPlaneOidcScopeClaim() {
+        return controlPlaneOidcScopeClaim;
+    }
+
+    public ConfigurationDTO setControlPlaneOidcScopeClaim(String controlPlaneOidcScopeClaim) {
+        this.controlPlaneOidcScopeClaim = controlPlaneOidcScopeClaim;
+        return this;
+    }
+
+    public Boolean getControlPlaneAuthorizationEnabled() {
+        return controlPlaneAuthorizationEnabled;
+    }
+
+    public ConfigurationDTO setControlPlaneAuthorizationEnabled(Boolean controlPlaneAuthorizationEnabled) {
+        this.controlPlaneAuthorizationEnabled = controlPlaneAuthorizationEnabled;
+        return this;
+    }
+
+    public Boolean getTransparentProxyEnabled() {
+        return transparentProxyEnabled;
+    }
+
+    public ConfigurationDTO setTransparentProxyEnabled(Boolean transparentProxyEnabled) {
+        this.transparentProxyEnabled = transparentProxyEnabled;
+        return this;
+    }
+
+    public Boolean getTransparentProxyTproxy() {
+        return transparentProxyTproxy;
+    }
+
+    public ConfigurationDTO setTransparentProxyTproxy(Boolean transparentProxyTproxy) {
+        this.transparentProxyTproxy = transparentProxyTproxy;
+        return this;
+    }
+
+    public Boolean getTransparentProxyEbpf() {
+        return transparentProxyEbpf;
+    }
+
+    public ConfigurationDTO setTransparentProxyEbpf(Boolean transparentProxyEbpf) {
+        this.transparentProxyEbpf = transparentProxyEbpf;
+        return this;
+    }
+
+    public String getTransparentProxyEbpfMapPath() {
+        return transparentProxyEbpfMapPath;
+    }
+
+    public ConfigurationDTO setTransparentProxyEbpfMapPath(String transparentProxyEbpfMapPath) {
+        this.transparentProxyEbpfMapPath = transparentProxyEbpfMapPath;
+        return this;
+    }
+
+    public String getAsyncKafkaBootstrapServers() {
+        return asyncKafkaBootstrapServers;
+    }
+
+    public ConfigurationDTO setAsyncKafkaBootstrapServers(String asyncKafkaBootstrapServers) {
+        this.asyncKafkaBootstrapServers = asyncKafkaBootstrapServers;
+        return this;
+    }
+
+    public String getAsyncMqttBrokerUrl() {
+        return asyncMqttBrokerUrl;
+    }
+
+    public ConfigurationDTO setAsyncMqttBrokerUrl(String asyncMqttBrokerUrl) {
+        this.asyncMqttBrokerUrl = asyncMqttBrokerUrl;
+        return this;
+    }
+
+    public String getAsyncAmqpUri() {
+        return asyncAmqpUri;
+    }
+
+    public ConfigurationDTO setAsyncAmqpUri(String asyncAmqpUri) {
+        this.asyncAmqpUri = asyncAmqpUri;
+        return this;
+    }
+
+    public Integer getAsyncRecordedMessageMaxEntries() {
+        return asyncRecordedMessageMaxEntries;
+    }
+
+    public ConfigurationDTO setAsyncRecordedMessageMaxEntries(Integer asyncRecordedMessageMaxEntries) {
+        this.asyncRecordedMessageMaxEntries = asyncRecordedMessageMaxEntries;
         return this;
     }
 }

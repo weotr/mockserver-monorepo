@@ -46,9 +46,19 @@ public final class GenAiSpans {
         if (current == null) {
             return;
         }
+        recordCompletion(current, provider, model, completion);
+    }
+
+    /**
+     * Record a GenAI completion span using the given tracer. Package-private to
+     * allow tests to call this with a per-test tracer, avoiding the shared
+     * process-wide static and the cross-contamination that causes when test
+     * classes run in parallel.
+     */
+    static void recordCompletion(Tracer explicitTracer, Provider provider, String model, Completion completion) {
         try {
             String resolvedModel = model != null && !model.isEmpty() ? model : "unknown";
-            Span span = current.spanBuilder("chat " + resolvedModel)
+            Span span = explicitTracer.spanBuilder("chat " + resolvedModel)
                 .setSpanKind(SpanKind.CLIENT)
                 .startSpan();
             try {
@@ -70,6 +80,19 @@ public final class GenAiSpans {
                         }
                         if (usage.getOutputTokens() != null) {
                             span.setAttribute("gen_ai.usage.output_tokens", usage.getOutputTokens().longValue());
+                        }
+                        // Cached-input and reasoning token counts have no GenAI semconv
+                        // attribute yet — emit under the mockserver namespace (like the
+                        // tool-call count) so cost dashboards can split cached/reasoning
+                        // spend. Omitted entirely when the provider didn't report them.
+                        if (usage.getCachedInputTokens() != null) {
+                            span.setAttribute("mockserver.gen_ai.usage.cached_input_tokens", usage.getCachedInputTokens().longValue());
+                        }
+                        if (usage.getCacheCreationTokens() != null) {
+                            span.setAttribute("mockserver.gen_ai.usage.cache_creation_tokens", usage.getCacheCreationTokens().longValue());
+                        }
+                        if (usage.getReasoningTokens() != null) {
+                            span.setAttribute("mockserver.gen_ai.usage.reasoning_tokens", usage.getReasoningTokens().longValue());
                         }
                     }
                     if (completion.getToolCalls() != null && !completion.getToolCalls().isEmpty()) {

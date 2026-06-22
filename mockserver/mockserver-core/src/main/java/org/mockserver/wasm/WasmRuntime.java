@@ -5,23 +5,83 @@ import com.dylibso.chicory.runtime.Instance;
 import com.dylibso.chicory.wasm.Parser;
 import com.dylibso.chicory.wasm.WasmModule;
 import com.dylibso.chicory.wasm.types.MemoryLimits;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Thin wrapper around a compiled chicory WASM instance.
  * <p>
- * Thread-safety: chicory {@link Instance} is NOT thread-safe, so the stored WASM
- * bytes are parsed into a {@link WasmModule} and a fresh {@link Instance} is
- * created for each invocation.
+ * Thread-safety: chicory {@link Instance} is NOT thread-safe, so a fresh
+ * {@link Instance} is created for each invocation. The parsed {@link WasmModule},
+ * by contrast, is immutable and freely reusable across threads, so it is
+ * <strong>cached</strong> (see {@link #MODULE_CACHE}) keyed by a content hash of
+ * the module bytes — parsing/validating the binary is chicory's most expensive
+ * step and is pure given the bytes, so it is done at most once per distinct module.
  * <p>
- * The WASM module must export a function {@code match(i32 ptr, i32 len) -> i32}
- * that reads {@code len} bytes from linear memory starting at {@code ptr} and
- * returns non-zero for a match.
+ * <strong>ABI.</strong> Two export shapes are supported, both returning non-zero
+ * for a match:
+ * <ul>
+ *   <li><strong>Legacy body-only</strong> — {@code match(i32 ptr, i32 len) -> i32}.
+ *       The request body is written into linear memory at offset 0 and the function
+ *       is called with {@code (0, bodyLength)}.</li>
+ *   <li><strong>Richer request envelope</strong> — {@code match_request(i32 ptr, i32 len) -> i32}.
+ *       A JSON envelope {@code {"method","path","headers","body"}} is written into
+ *       linear memory at offset 0 and the function is called with {@code (0, jsonLength)}.
+ *       This lets a module read the method, path and headers in addition to the body.</li>
+ * </ul>
+ * If the module exports {@code match_request} it is preferred; otherwise the runtime
+ * falls back to {@code match} with the body only, so existing body-only modules keep
+ * working unchanged.
  * <p>
  * This class <strong>fails closed</strong>: any error returns {@code false}.
  */
 public class WasmRuntime {
+
+    /** Legacy body-only export name. */
+    static final String MATCH = "match";
+    /** Richer request-envelope export name. */
+    static final String MATCH_REQUEST = "match_request";
+
+    private static final ObjectMapper OBJECT_MAPPER = ObjectMapperFactory.createObjectMapper();
+
+    /**
+     * Maximum number of distinct parsed modules retained in {@link #MODULE_CACHE}. Distinct
+     * modules are bounded in practice by how many WASM modules a user loads, but this cap keeps
+     * memory bounded even if a client uploads an unbounded stream of distinct modules. Eviction is
+     * least-recently-inserted (access-ordered) and never affects correctness — entries are keyed by
+     * a content hash, so the worst case of eviction is a re-parse, not a wrong result.
+     */
+    static final int MODULE_CACHE_MAX = 256;
+
+    /**
+     * Cache of parsed {@link WasmModule}s keyed by a hex SHA-256 of the module bytes. The parsed
+     * module is immutable and reusable, so the same bytes are parsed/validated at most once. A
+     * content hash (rather than the user-chosen module name) is the key so that re-uploading
+     * identical bytes — or two names pointing at the same module — share a single parsed entry, and
+     * so a stale entry can never be wrong (the same hash always means the same bytes). Wrapped in a
+     * synchronized access-ordered LRU bounded at {@link #MODULE_CACHE_MAX}.
+     * <p>
+     * The cache is keyed by content, so correctness does not depend on invalidation; it is cleared
+     * via {@link #invalidate(byte[])}/{@link #invalidateAll()} from {@link WasmStore} remove/reset
+     * purely to release memory promptly when modules are unloaded.
+     */
+    static final Map<String, WasmModule> MODULE_CACHE = Collections.synchronizedMap(
+        new LinkedHashMap<String, WasmModule>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, WasmModule> eldest) {
+                return size() > MODULE_CACHE_MAX;
+            }
+        });
 
     private final byte[] wasmBytes;
     private final int maxMemoryPages;
@@ -46,15 +106,30 @@ public class WasmRuntime {
     }
 
     /**
-     * Call the WASM module's {@code match()} function with the request body
-     * written into linear memory at offset 0.
+     * Call the WASM module with just the request body (legacy body-only ABI).
+     * <p>
+     * Retained for back-compat; equivalent to {@code callMatch(WasmRequest.ofBody(requestBody))}.
      *
      * @param requestBody the HTTP request body (may be null)
-     * @return {@code true} if the module's {@code match} function returns non-zero
+     * @return {@code true} if the module reports a match
      */
     public boolean callMatch(String requestBody) {
+        return callMatch(WasmRequest.ofBody(requestBody));
+    }
+
+    /**
+     * Call the WASM module with the full request envelope (method, path, headers, body).
+     * <p>
+     * If the module exports {@link #MATCH_REQUEST} the JSON envelope is passed and that
+     * function is invoked; otherwise the runtime falls back to the legacy {@link #MATCH}
+     * export with only the body, preserving back-compat for body-only modules.
+     *
+     * @param request the request parts to expose to the module (must not be null)
+     * @return {@code true} if the module reports a match
+     */
+    public boolean callMatch(WasmRequest request) {
         try {
-            WasmModule module = Parser.parse(wasmBytes);
+            WasmModule module = parseModule(wasmBytes);
             Instance.Builder builder = Instance.builder(module);
 
             // Cap the WASM module's linear memory at maxMemoryPages while preserving
@@ -68,20 +143,123 @@ public class WasmRuntime {
             }
 
             Instance instance = builder.build();
-            byte[] input = requestBody != null
-                ? requestBody.getBytes(StandardCharsets.UTF_8)
-                : new byte[0];
+
+            byte[] input;
+            ExportFunction matchFn = tryExport(instance, MATCH_REQUEST);
+            if (matchFn != null) {
+                // richer ABI: pass the full request envelope as JSON
+                input = buildEnvelope(request).getBytes(StandardCharsets.UTF_8);
+            } else {
+                // legacy ABI: pass only the body
+                matchFn = instance.export(MATCH);
+                input = request.getBody() != null
+                    ? request.getBody().getBytes(StandardCharsets.UTF_8)
+                    : new byte[0];
+            }
 
             // Write input into the WASM module's linear memory at offset 0
             instance.memory().write(0, input);
 
-            // Call: i32 match(i32 ptr, i32 len)
-            ExportFunction matchFn = instance.export("match");
             long[] result = matchFn.apply(0L, input.length);
             return result.length > 0 && result[0] != 0;
         } catch (Exception e) {
             // fail closed
             return false;
         }
+    }
+
+    /**
+     * Resolve an exported function by name, returning {@code null} if the module does
+     * not export it (chicory throws rather than returning null for a missing export).
+     */
+    private static ExportFunction tryExport(Instance instance, String name) {
+        try {
+            return instance.export(name);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Serialise the request parts into the JSON envelope passed to {@code match_request}.
+     * Shape: {@code {"method":string,"path":string,"headers":{name:[values]},"body":string|null}}.
+     */
+    static String buildEnvelope(WasmRequest request) {
+        ObjectNode root = OBJECT_MAPPER.createObjectNode();
+        root.put("method", request.getMethod());
+        root.put("path", request.getPath());
+        ObjectNode headers = root.putObject("headers");
+        for (Map.Entry<String, List<String>> entry : request.getHeaders().entrySet()) {
+            ArrayNode values = headers.putArray(entry.getKey());
+            if (entry.getValue() != null) {
+                for (String value : entry.getValue()) {
+                    values.add(value);
+                }
+            }
+        }
+        if (request.getBody() == null) {
+            root.putNull("body");
+        } else {
+            root.put("body", request.getBody());
+        }
+        return root.toString();
+    }
+
+    /**
+     * Return the parsed {@link WasmModule} for the given bytes, parsing/validating at most once per
+     * distinct module. Parsing is pure given the bytes and is chicory's most expensive step, so the
+     * result is cached in {@link #MODULE_CACHE} keyed by a content hash. The returned module is
+     * immutable and is shared across calls/threads; each call still builds its own {@link Instance}.
+     */
+    private static WasmModule parseModule(byte[] wasmBytes) {
+        String key = contentKey(wasmBytes);
+        if (key == null) {
+            // hashing unavailable (should not happen for SHA-256) — fall back to parsing every call
+            return Parser.parse(wasmBytes);
+        }
+        // computeIfAbsent on a synchronizedMap holds the map lock for the whole parse; modules are
+        // few and parsed at most once each, so the brief contention is acceptable and far cheaper
+        // than re-parsing on every request.
+        return MODULE_CACHE.computeIfAbsent(key, k -> Parser.parse(wasmBytes));
+    }
+
+    /**
+     * Compute the cache key for a module: a lowercase hex SHA-256 of its bytes, or {@code null} if
+     * SHA-256 is unavailable (in which case the caller parses without caching).
+     */
+    private static String contentKey(byte[] wasmBytes) {
+        if (wasmBytes == null) {
+            return null;
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(wasmBytes);
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Drop the cached parsed module for the given bytes, if present. Called when a module is unloaded
+     * so its parsed form is released promptly. A no-op when the bytes were never cached. Correctness
+     * never depends on this (the cache is content-keyed); it only bounds memory.
+     */
+    public static void invalidate(byte[] wasmBytes) {
+        String key = contentKey(wasmBytes);
+        if (key != null) {
+            MODULE_CACHE.remove(key);
+        }
+    }
+
+    /**
+     * Clear all cached parsed modules. Called on a full WASM store reset.
+     */
+    public static void invalidateAll() {
+        MODULE_CACHE.clear();
     }
 }

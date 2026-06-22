@@ -30,15 +30,19 @@ done
 require_release_inputs
 skip_unless_release_type "binary" full,post-maven
 require_cmd docker
-require_cmd jlink
 require_cmd curl
 require_cmd tar
 require_cmd unzip
-# Bundles are built with the host jlink against same-major target jmods, so the
-# release agent must provide a JDK 21 jlink. Fail with an actionable message (the
-# step is soft_fail, so this surfaces in the logs rather than blocking the release).
-JLINK_MAJOR="$(jlink --version 2>&1 | grep -oE '^[0-9]+' | head -1 || true)"
-[[ "$JLINK_MAJOR" == "21" ]] || { log_error "binary bundles require a JDK 21 jlink on the release agent (found '${JLINK_MAJOR:-none}'); install Temurin 21"; exit 1; }
+# Bundles are built with the host jlink against same-major target jmods, so this
+# build needs a JDK 21 jlink. The release-queue agent's AMI may only ship the
+# Maven build JDK (17), so we bootstrap Temurin 21 on demand (jlink only — the
+# Maven build is untouched) rather than hard-failing when 21 is absent. This
+# mirrors the snapshot bundle CI step and is why 7.0.0 shipped with no bundle
+# assets: the old hard `exit 1` here, under a soft_fail step, silently dropped
+# every asset and the launchers 404'd at runtime.
+source "$REPO_ROOT/scripts/lib/ensure-host-jdk21.sh"
+JDK21_HOME="$(ensure_host_jdk21 "$REPO_ROOT/.tmp/jdks")" || { log_error "could not provision a JDK 21 jlink for binary bundles"; exit 1; }
+log_info "Using JDK 21 for jlink (Maven build unaffected): $JDK21_HOME"
 
 log_step "Build & publish binary bundles $RELEASE_VERSION (dry-run=$DRY_RUN)"
 sync_to_origin_master
@@ -77,8 +81,10 @@ BUNDLE_OUT="$REPO_ROOT/.tmp/bundles"
 rm -rf "$BUNDLE_OUT"
 TARGETS_ARG=()
 [[ -n "${BINARY_TARGETS:-}" ]] && TARGETS_ARG=(--targets "$BINARY_TARGETS")
-"$REPO_ROOT/scripts/build-all-bundles.sh" \
-  --jar "$SHADED_JAR" --version "$RELEASE_VERSION" \
+# JAVA_HOME points build-all-bundles.sh at the JDK 21 jlink resolved above for
+# THIS invocation only (a subshell env), so the Maven 17 build is never affected.
+JAVA_HOME="$JDK21_HOME" "$REPO_ROOT/scripts/build-all-bundles.sh" \
+  --jar "$SHADED_JAR" --version "$RELEASE_VERSION" --jdk-version 21 \
   --cache "$REPO_ROOT/.tmp/jdks" --output "$BUNDLE_OUT" \
   "${TARGETS_ARG[@]+"${TARGETS_ARG[@]}"}"
 

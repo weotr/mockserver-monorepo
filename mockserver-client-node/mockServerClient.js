@@ -10,6 +10,181 @@ var mockServerClient;
 (function () {
     "use strict";
 
+    // ------------------------------------------------------------------
+    // Inline breakpoint/callback message routing (browser-safe, no deps)
+    // ------------------------------------------------------------------
+    // These are pure functions duplicated from webSocketClient.js so they
+    // are available in the browser path where require() does not exist.
+    // The Node path (webSocketClient.js) keeps its own copy.
+    //
+    // Defined at IIFE scope (not inside the factory function) so they can
+    // be exported for unit testing without changing runtime behaviour.
+
+    /**
+     * Extract the breakpoint id and correlation id from a headers map.
+     * Headers may use canonical or lowercase names and values may be
+     * arrays or plain strings.
+     */
+    var _extractBreakpointHeaders = function (headers) {
+        var breakpointId = null;
+        var correlationId = null;
+        if (headers) {
+            for (var hk in headers) {
+                if (headers.hasOwnProperty(hk)) {
+                    if (hk === "X-MockServer-BreakpointId" || hk === "x-mockserver-breakpointid") {
+                        breakpointId = Array.isArray(headers[hk]) ? headers[hk][0] : headers[hk];
+                    }
+                    if (hk === "WebSocketCorrelationId" || hk === "websocketcorrelationid") {
+                        correlationId = Array.isArray(headers[hk]) ? headers[hk][0] : headers[hk];
+                    }
+                }
+            }
+        }
+        return { breakpointId: breakpointId, correlationId: correlationId };
+    };
+
+    /**
+     * Pure function that routes a WebSocket breakpoint/callback message to
+     * the appropriate handler and produces the reply envelope.
+     *
+     * @param {Object} payload  { type: string, value: string (JSON) }
+     * @param {Object} handlers map of handler collections
+     * @return {Object|null}  reply envelope or null
+     */
+    var _routeBreakpointMessage = function (payload, handlers) {
+        handlers = handlers || {};
+        var breakpointRequestHandlers = handlers.breakpointRequestHandlers || {};
+        var breakpointResponseHandlers = handlers.breakpointResponseHandlers || {};
+        var breakpointStreamFrameHandlers = handlers.breakpointStreamFrameHandlers || {};
+        var requestHandler = handlers.requestHandler || null;
+        var requestAndResponseHandler = handlers.requestAndResponseHandler || null;
+
+        if (payload.type === "org.mockserver.model.HttpRequest") {
+            var request = JSON.parse(payload.value);
+            var reqHeaders = _extractBreakpointHeaders(request.headers);
+            var breakpointId = reqHeaders.breakpointId;
+            var correlationId = reqHeaders.correlationId;
+
+            var bpReqHandler = breakpointId ? breakpointRequestHandlers[breakpointId] : null;
+            if (bpReqHandler) {
+                try {
+                    var bpResult = bpReqHandler(request);
+                    if (bpResult === null || bpResult === undefined) {
+                        bpResult = request; // auto-continue
+                    }
+                    if (correlationId) {
+                        if (!bpResult.headers) { bpResult.headers = {}; }
+                        bpResult.headers["WebSocketCorrelationId"] = Array.isArray(correlationId) ? correlationId : [correlationId];
+                    }
+                    var bpResultType = bpResult.statusCode !== undefined
+                        ? "org.mockserver.model.HttpResponse"
+                        : "org.mockserver.model.HttpRequest";
+                    return {
+                        type: bpResultType,
+                        value: JSON.stringify(bpResult)
+                    };
+                } catch (e) {
+                    // auto-continue on error
+                    if (!request.headers) { request.headers = {}; }
+                    if (correlationId) {
+                        request.headers["WebSocketCorrelationId"] = Array.isArray(correlationId) ? correlationId : [correlationId];
+                    }
+                    return {
+                        type: "org.mockserver.model.HttpRequest",
+                        value: JSON.stringify(request)
+                    };
+                }
+            } else if (requestHandler) {
+                return requestHandler(request);
+            }
+            // breakpoint message with no matching handler — auto-continue
+            if (correlationId) {
+                if (!request.headers) { request.headers = {}; }
+                request.headers["WebSocketCorrelationId"] = Array.isArray(correlationId) ? correlationId : [correlationId];
+                return {
+                    type: "org.mockserver.model.HttpRequest",
+                    value: JSON.stringify(request)
+                };
+            }
+            return null;
+        } else if (payload.type === "org.mockserver.model.HttpRequestAndHttpResponse") {
+            var requestAndResponse = JSON.parse(payload.value);
+            var respHeaders = _extractBreakpointHeaders(
+                requestAndResponse.httpRequest ? requestAndResponse.httpRequest.headers : null
+            );
+            var bpId2 = respHeaders.breakpointId;
+            var corrId2 = respHeaders.correlationId;
+
+            var bpRespHandler = bpId2 ? breakpointResponseHandlers[bpId2] : null;
+            if (bpRespHandler) {
+                try {
+                    var bpResp = bpRespHandler(requestAndResponse.httpRequest, requestAndResponse.httpResponse);
+                    if (bpResp === null || bpResp === undefined) {
+                        bpResp = requestAndResponse.httpResponse; // auto-continue
+                    }
+                    if (corrId2) {
+                        if (!bpResp.headers) { bpResp.headers = {}; }
+                        bpResp.headers["WebSocketCorrelationId"] = Array.isArray(corrId2) ? corrId2 : [corrId2];
+                    }
+                    return {
+                        type: "org.mockserver.model.HttpResponse",
+                        value: JSON.stringify(bpResp)
+                    };
+                } catch (e) {
+                    // auto-continue on error
+                    var origResp = requestAndResponse.httpResponse || {};
+                    if (corrId2) {
+                        if (!origResp.headers) { origResp.headers = {}; }
+                        origResp.headers["WebSocketCorrelationId"] = Array.isArray(corrId2) ? corrId2 : [corrId2];
+                    }
+                    return {
+                        type: "org.mockserver.model.HttpResponse",
+                        value: JSON.stringify(origResp)
+                    };
+                }
+            } else if (requestAndResponseHandler) {
+                return requestAndResponseHandler(requestAndResponse);
+            }
+            // auto-continue with original response
+            if (corrId2) {
+                var origResp2 = requestAndResponse.httpResponse || {};
+                if (!origResp2.headers) { origResp2.headers = {}; }
+                origResp2.headers["WebSocketCorrelationId"] = Array.isArray(corrId2) ? corrId2 : [corrId2];
+                return {
+                    type: "org.mockserver.model.HttpResponse",
+                    value: JSON.stringify(origResp2)
+                };
+            }
+            return null;
+        } else if (payload.type === "org.mockserver.serialization.model.PausedStreamFrameDTO") {
+            var pausedFrame = JSON.parse(payload.value);
+            var sfBpId = pausedFrame.breakpointId;
+            var sfHandler = sfBpId ? breakpointStreamFrameHandlers[sfBpId] : null;
+            var decision;
+            if (sfHandler) {
+                try {
+                    decision = sfHandler(pausedFrame);
+                    if (decision === null || decision === undefined) {
+                        decision = { correlationId: pausedFrame.correlationId, action: "CONTINUE" };
+                    } else {
+                        decision.correlationId = pausedFrame.correlationId; // ensure echoed
+                    }
+                } catch (e) {
+                    decision = { correlationId: pausedFrame.correlationId, action: "CONTINUE" };
+                }
+            } else {
+                // auto-continue for unknown breakpoint id
+                decision = { correlationId: pausedFrame.correlationId, action: "CONTINUE" };
+            }
+            return {
+                type: "org.mockserver.serialization.model.StreamFrameDecisionDTO",
+                value: JSON.stringify(decision)
+            };
+        }
+        // WebSocketClientIdDTO or unknown types — not routed
+        return null;
+    };
+
     /**
      * Start the client communicating at the specified host and port
      *, for example:
@@ -21,14 +196,55 @@ var mockServerClient;
      * @param contextPath the context path if server was deployed as a war i.e. '/myContextPath'
      * @param tls enable TLS (i.e. HTTPS) for communication to server
      * @param caCertPemFilePath provide custom CA Certificate (defaults to MockServer CA Certificate)
+     * @param options optional control-plane auth + mTLS settings:
+     *        {
+     *            bearerToken,            // static control-plane JWT attached as `Authorization: Bearer <token>`
+     *            bearerTokenSupplier,    // function() => string, evaluated per-request (overrides bearerToken)
+     *            clientCertPemFilePath,  // PEM client certificate for mutual TLS
+     *            clientKeyPemFilePath    // PEM private key for mutual TLS
+     *        }
      */
-    mockServerClient = function (host, port, contextPath, tls, caCertPemFilePath) {
+    mockServerClient = function (host, port, contextPath, tls, caCertPemFilePath, options) {
 
         var runningInNode = function () {
             return (typeof require !== 'undefined') && require('browser-or-node').isNode;
         };
 
-        var makeRequest = (runningInNode() ? require('./sendRequest').sendRequest(tls, caCertPemFilePath) : function (host, port, path, jsonBody) {
+        // LLM mocking builder factories (browser-safe): in Node use require,
+        // in the browser fall back to the global set by llm.js.
+        var _llm = (typeof require !== 'undefined') ? require('./llm') : (typeof window !== 'undefined' ? window.mockServerLlm : undefined);
+
+        // MCP (Model Context Protocol) mock builder factory (browser-safe): in
+        // Node use require, in the browser fall back to the global set by
+        // mcpMockBuilder.js.
+        var _mcpMock = (typeof require !== 'undefined') ? require('./mcpMockBuilder').mcpMock : (typeof window !== 'undefined' ? (window.mockServerMcp && window.mockServerMcp.mcpMock) : undefined);
+
+        // Resolve the control-plane bearer token (static or supplier) for the
+        // browser (XMLHttpRequest) transport path. The Node transport resolves
+        // it per-request inside sendRequest.js.
+        var _resolveBrowserBearerToken = function () {
+            if (!options) {
+                return null;
+            }
+            var token = null;
+            if (typeof options.bearerTokenSupplier === 'function') {
+                token = options.bearerTokenSupplier();
+            } else if (options.bearerToken !== undefined && options.bearerToken !== null) {
+                token = options.bearerToken;
+            }
+            if (token === undefined || token === null || token === '') {
+                return null;
+            }
+            return String(token);
+        };
+        var _setBrowserAuthHeader = function (xmlhttp) {
+            var token = _resolveBrowserBearerToken();
+            if (token) {
+                xmlhttp.setRequestHeader("Authorization", "Bearer " + token);
+            }
+        };
+
+        var makeRequest = (runningInNode() ? require('./sendRequest').sendRequest(tls, caCertPemFilePath, options) : function (host, port, path, jsonBody) {
             var body = (typeof jsonBody === "string" ? jsonBody : JSON.stringify(jsonBody || ""));
             var url = (tls ? 'https' : 'http') + '://' + host + ':' + port + (contextPath ? (contextPath.indexOf("/") === 0 ? contextPath : "/" + contextPath) : "") + path;
 
@@ -56,6 +272,7 @@ var mockServerClient;
                         })(sucess, error));
                         xmlhttp.open('PUT', url);
                         xmlhttp.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+                        _setBrowserAuthHeader(xmlhttp);
                         xmlhttp.send(body);
                     } catch (e) {
                         if (error) {
@@ -66,7 +283,7 @@ var mockServerClient;
             };
         });
 
-        var makeGetRequest = (runningInNode() ? require('./sendRequest').sendGetRequest(tls, caCertPemFilePath) : function (host, port, path) {
+        var makeGetRequest = (runningInNode() ? require('./sendRequest').sendGetRequest(tls, caCertPemFilePath, options) : function (host, port, path) {
             var url = (tls ? 'https' : 'http') + '://' + host + ':' + port + (contextPath ? (contextPath.indexOf("/") === 0 ? contextPath : "/" + contextPath) : "") + path;
 
             return {
@@ -92,6 +309,82 @@ var mockServerClient;
                             };
                         })(sucess, error));
                         xmlhttp.open('GET', url);
+                        _setBrowserAuthHeader(xmlhttp);
+                        xmlhttp.send();
+                    } catch (e) {
+                        if (error) {
+                            error(e);
+                        }
+                    }
+                }
+            };
+        });
+
+        var makeBinaryRequest = (runningInNode() ? require('./sendRequest').sendBinaryRequest(tls, caCertPemFilePath, options) : function (host, port, path, bodyBuffer, contentType) {
+            var url = (tls ? 'https' : 'http') + '://' + host + ':' + port + (contextPath ? (contextPath.indexOf("/") === 0 ? contextPath : "/" + contextPath) : "") + path;
+
+            return {
+                then: function (sucess, error) {
+                    try {
+                        var xmlhttp = new XMLHttpRequest();
+                        xmlhttp.addEventListener("load", (function (sucess, error) {
+                            return function () {
+                                if (error && this.status >= 400 && this.status < 600) {
+                                    if (this.statusCode === 404) {
+                                        error("404 Not Found");
+                                    } else {
+                                        error(this.responseText);
+                                    }
+                                } else {
+                                    if (sucess) {
+                                        sucess({
+                                            statusCode: this.status,
+                                            body: this.responseText
+                                        });
+                                    }
+                                }
+                            };
+                        })(sucess, error));
+                        xmlhttp.open('PUT', url);
+                        xmlhttp.setRequestHeader("Content-Type", contentType || "application/octet-stream");
+                        _setBrowserAuthHeader(xmlhttp);
+                        xmlhttp.send(bodyBuffer);
+                    } catch (e) {
+                        if (error) {
+                            error(e);
+                        }
+                    }
+                }
+            };
+        });
+
+        var makeDeleteRequest = (runningInNode() ? require('./sendRequest').sendDeleteRequest(tls, caCertPemFilePath, options) : function (host, port, path) {
+            var url = (tls ? 'https' : 'http') + '://' + host + ':' + port + (contextPath ? (contextPath.indexOf("/") === 0 ? contextPath : "/" + contextPath) : "") + path;
+
+            return {
+                then: function (sucess, error) {
+                    try {
+                        var xmlhttp = new XMLHttpRequest();
+                        xmlhttp.addEventListener("load", (function (sucess, error) {
+                            return function () {
+                                if (error && this.status >= 400 && this.status < 600) {
+                                    if (this.statusCode === 404) {
+                                        error("404 Not Found");
+                                    } else {
+                                        error(this.responseText);
+                                    }
+                                } else {
+                                    if (sucess) {
+                                        sucess({
+                                            statusCode: this.status,
+                                            body: this.responseText
+                                        });
+                                    }
+                                }
+                            };
+                        })(sucess, error));
+                        xmlhttp.open('DELETE', url);
+                        _setBrowserAuthHeader(xmlhttp);
                         xmlhttp.send();
                     } catch (e) {
                         if (error) {
@@ -277,6 +570,9 @@ var mockServerClient;
             var clientIdHandler;
             var requestHandler;
             var requestAndResponseHandler;
+            var breakpointRequestHandlers = {};
+            var breakpointResponseHandlers = {};
+            var breakpointStreamFrameHandlers = {};
             var browserWebSocket;
 
             return {
@@ -298,25 +594,9 @@ var mockServerClient;
                             var socket = new WebSocket(webSocketLocation);
                             socket.onmessage = function (event) {
                                 var message = JSON.parse(event.data);
-                                if (message.type === "org.mockserver.model.HttpRequest") {
-                                    var request = JSON.parse(message.value);
-                                    var response = requestHandler(request);
-                                    if (socket.readyState === WebSocket.OPEN) {
-                                        socket.send(JSON.stringify(response));
-                                    } else {
-                                        throw "The socket is not open.";
-                                    }
-                                } else if (message.type === "org.mockserver.model.HttpRequestAndHttpResponse") {
-                                    var requestAndResponse = JSON.parse(message.value);
-                                    if (requestAndResponseHandler) {
-                                        var responseResult = requestAndResponseHandler(requestAndResponse);
-                                        if (socket.readyState === WebSocket.OPEN) {
-                                            socket.send(JSON.stringify(responseResult));
-                                        } else {
-                                            throw "The socket is not open.";
-                                        }
-                                    }
-                                } else if (message.type === "org.mockserver.serialization.model.WebSocketClientIdDTO") {
+
+                                // Handle client-id registration directly
+                                if (message.type === "org.mockserver.serialization.model.WebSocketClientIdDTO") {
                                     var registration = JSON.parse(message.value);
                                     if (registration.clientId) {
                                         clientId = registration.clientId;
@@ -324,6 +604,19 @@ var mockServerClient;
                                             clientIdHandler(clientId);
                                         }
                                     }
+                                    return;
+                                }
+
+                                // Route breakpoint / callback messages via the shared pure function
+                                var reply = _routeBreakpointMessage(message, {
+                                    breakpointRequestHandlers: breakpointRequestHandlers,
+                                    breakpointResponseHandlers: breakpointResponseHandlers,
+                                    breakpointStreamFrameHandlers: breakpointStreamFrameHandlers,
+                                    requestHandler: requestHandler,
+                                    requestAndResponseHandler: requestAndResponseHandler
+                                });
+                                if (reply && socket.readyState === WebSocket.OPEN) {
+                                    socket.send(JSON.stringify(reply));
                                 }
                             };
                             socket.onopen = function (event) {
@@ -344,6 +637,27 @@ var mockServerClient;
                                 if (clientId) {
                                     clientIdHandler(clientId);
                                 }
+                            },
+                            setBreakpointRequestHandler: function (breakpointId, handler) {
+                                if (breakpointId && handler) { breakpointRequestHandlers[breakpointId] = handler; }
+                            },
+                            setBreakpointResponseHandler: function (breakpointId, handler) {
+                                if (breakpointId && handler) { breakpointResponseHandlers[breakpointId] = handler; }
+                            },
+                            setBreakpointStreamFrameHandler: function (breakpointId, handler) {
+                                if (breakpointId && handler) { breakpointStreamFrameHandlers[breakpointId] = handler; }
+                            },
+                            removeBreakpointHandlers: function (breakpointId) {
+                                if (breakpointId) {
+                                    delete breakpointRequestHandlers[breakpointId];
+                                    delete breakpointResponseHandlers[breakpointId];
+                                    delete breakpointStreamFrameHandlers[breakpointId];
+                                }
+                            },
+                            clearBreakpointHandlers: function () {
+                                breakpointRequestHandlers = {};
+                                breakpointResponseHandlers = {};
+                                breakpointStreamFrameHandlers = {};
                             }
                         });
                     } catch (e) {
@@ -426,13 +740,13 @@ var mockServerClient;
             if (Array.isArray(expectation)) {
                 for (var i = 0; i < expectation.length; i++) {
                     expectation[i].httpRequest = addDefaultRequestMatcherHeaders(expectation[i].httpRequest);
-                    if (!expectation[i].httpResponseTemplate && !expectation[i].httpResponseClassCallback && !expectation[i].httpResponseObjectCallback && !expectation[i].httpForward && !expectation[i].httpForwardTemplate && !expectation[i].httpForwardClassCallback && !expectation[i].httpForwardObjectCallback && !expectation[i].httpOverrideForwardedRequest && !expectation[i].httpError && !expectation[i].httpSseResponse && !expectation[i].httpWebSocketResponse) {
+                    if (!expectation[i].httpResponseTemplate && !expectation[i].httpResponseClassCallback && !expectation[i].httpResponseObjectCallback && !expectation[i].httpForward && !expectation[i].httpForwardTemplate && !expectation[i].httpForwardClassCallback && !expectation[i].httpForwardObjectCallback && !expectation[i].httpOverrideForwardedRequest && !expectation[i].httpError && !expectation[i].httpSseResponse && !expectation[i].httpWebSocketResponse && !expectation[i].grpcStreamResponse && !expectation[i].binaryResponse && !expectation[i].dnsResponse && !expectation[i].httpLlmResponse) {
                         expectation[i].httpResponse = addDefaultResponseMatcherHeaders(expectation[i].httpResponse);
                     }
                 }
             } else {
                 expectation.httpRequest = addDefaultRequestMatcherHeaders(expectation.httpRequest);
-                if (!expectation.httpResponseTemplate && !expectation.httpResponseClassCallback && !expectation.httpResponseObjectCallback && !expectation.httpForward && !expectation.httpForwardTemplate && !expectation.httpForwardClassCallback && !expectation.httpForwardObjectCallback && !expectation.httpOverrideForwardedRequest && !expectation.httpError && !expectation.httpSseResponse && !expectation.httpWebSocketResponse) {
+                if (!expectation.httpResponseTemplate && !expectation.httpResponseClassCallback && !expectation.httpResponseObjectCallback && !expectation.httpForward && !expectation.httpForwardTemplate && !expectation.httpForwardClassCallback && !expectation.httpForwardObjectCallback && !expectation.httpOverrideForwardedRequest && !expectation.httpError && !expectation.httpSseResponse && !expectation.httpWebSocketResponse && !expectation.grpcStreamResponse && !expectation.binaryResponse && !expectation.dnsResponse && !expectation.httpLlmResponse) {
                     expectation.httpResponse = addDefaultResponseMatcherHeaders(expectation.httpResponse);
                 }
             }
@@ -469,6 +783,32 @@ var mockServerClient;
          * @param expectation the expectation to setup on the MockServer
          */
         var mockAnyResponse = function (expectation) {
+            return makeRequest(host, port, "/mockserver/expectation", addDefaultExpectationHeaders(expectation));
+        };
+        /**
+         * Setup one or more LLM mock expectations. Accepts a single expectation
+         * object, an array of expectations, or an LLM builder (the result of
+         * client.llm.llmMock(...), .conversation(), or .llmFailover()); builders
+         * are built via their .build() method. Equivalent to the Java client's
+         * builder.applyTo(mockServerClient).
+         *
+         *, for example:
+         *
+         *   client.mockWithLLM(
+         *       client.llm.llmMock("/v1/messages")
+         *           .withProvider(client.llm.Provider.ANTHROPIC)
+         *           .withModel("claude-sonnet-4")
+         *           .respondingWith(
+         *               client.llm.completion().withText("Paris.")
+         *           )
+         *   );
+         *
+         * @param expectationOrBuilder an expectation, array of expectations, or LLM builder
+         */
+        var mockWithLLM = function (expectationOrBuilder) {
+            var expectation = (expectationOrBuilder && typeof expectationOrBuilder.build === "function")
+                ? expectationOrBuilder.build()
+                : expectationOrBuilder;
             return makeRequest(host, port, "/mockserver/expectation", addDefaultExpectationHeaders(expectation));
         };
         /**
@@ -638,6 +978,67 @@ var mockServerClient;
             };
         };
         /**
+         * Normalise the class-callback argument accepted by
+         * respondWithClassCallback / forwardWithClassCallback into the wire
+         * action object { callbackClass, delay?, primary? }. The argument may be
+         * a plain class-name string or a full HttpClassCallback object.
+         */
+        var createClassCallbackAction = function (callbackClassOrAction) {
+            if (typeof callbackClassOrAction === "string") {
+                return {callbackClass: callbackClassOrAction};
+            }
+            return callbackClassOrAction;
+        };
+        /**
+         * Setup an expectation that delegates the response to a server-side
+         * class implementing the MockServer ExpectationResponseCallback
+         * interface (a "class callback"). This is a pure-JSON, REST-only
+         * mechanism - no callback WebSocket is opened. The referenced class is
+         * resolved and run inside the MockServer JVM, so it must be on the
+         * server's classpath.
+         *, for example:
+         *
+         *   client.respondWithClassCallback('/somePath', 'com.example.MyResponseCallback');
+         *
+         *   // or with delay / primary, pass the full action object:
+         *   client.respondWithClassCallback('/somePath', {
+         *       callbackClass: 'com.example.MyResponseCallback',
+         *       delay: { timeUnit: 'MILLISECONDS', value: 100 }
+         *   });
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param callbackClass  the fully-qualified server-side callback class name, or a full
+         *                       httpResponseClassCallback action object ({ callbackClass, delay?, primary? })
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var respondWithClassCallback = function (requestMatcher, callbackClass, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("httpResponseClassCallback", requestMatcher, createClassCallbackAction(callbackClass), times, priority, timeToLive, id));
+        };
+        /**
+         * Setup an expectation that delegates request forwarding to a server-side
+         * class implementing the MockServer ExpectationForwardCallback interface
+         * (a forward "class callback"). Like respondWithClassCallback this is a
+         * pure-JSON, REST-only mechanism and the referenced class must be on the
+         * MockServer classpath.
+         *, for example:
+         *
+         *   client.forwardWithClassCallback('/somePath', 'com.example.MyForwardCallback');
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param callbackClass  the fully-qualified server-side callback class name, or a full
+         *                       httpForwardClassCallback action object ({ callbackClass, delay?, primary? })
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var forwardWithClassCallback = function (requestMatcher, callbackClass, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("httpForwardClassCallback", requestMatcher, createClassCallbackAction(callbackClass), times, priority, timeToLive, id));
+        };
+        /**
          * Setup an expectation without having to specify the full expectation object
          *, for example:
          *
@@ -649,6 +1050,143 @@ var mockServerClient;
          */
         var mockSimpleResponse = function (path, responseBody, statusCode) {
             return mockAnyResponse(createExpectation(path, responseBody, statusCode));
+        };
+        /**
+         * Build the expectation object shared by all advanced response builders.
+         * The requestMatcher may be a path string or a full request matcher object.
+         * The supplied responseAction is set on the expectation under the given
+         * top-level action property name (matching the MockServer JSON model).
+         */
+        var createAdvancedResponseExpectation = function (responseActionProperty, requestMatcher, responseAction, times, priority, timeToLive, id) {
+            var request = (typeof requestMatcher === "string") ? createRequestMatcher(requestMatcher) : requestMatcher;
+            var timesObject;
+            if (typeof times === "number") {
+                timesObject = {
+                    remainingTimes: times,
+                    unlimited: false
+                };
+            } else if (typeof times === "object" && times !== null) {
+                timesObject = times;
+            } else {
+                timesObject = {
+                    remainingTimes: 1,
+                    unlimited: false
+                };
+            }
+            var expectation = {
+                id: typeof id === "string" ? id : undefined,
+                priority: typeof priority === "number" ? priority : undefined,
+                httpRequest: request,
+                times: timesObject,
+                timeToLive: (typeof timeToLive === "object" && timeToLive !== null) ? timeToLive : undefined
+            };
+            expectation[responseActionProperty] = responseAction;
+            return expectation;
+        };
+        /**
+         * Setup an expectation that responds with a Server-Sent Events (SSE) stream
+         *, for example:
+         *
+         *   client.respondWithSse('/events', {
+         *       events: [
+         *           { event: 'message', data: 'first' },
+         *           { event: 'message', data: 'second' }
+         *       ],
+         *       closeConnection: true
+         *   });
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param sseResponse the SSE response action (httpSseResponse), with events/headers/statusCode/closeConnection
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var respondWithSse = function (requestMatcher, sseResponse, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("httpSseResponse", requestMatcher, sseResponse, times, priority, timeToLive, id));
+        };
+        /**
+         * Setup an expectation that responds over a WebSocket connection
+         *, for example:
+         *
+         *   client.respondWithWebSocket('/ws', {
+         *       messages: [
+         *           { text: 'hello' }
+         *       ],
+         *       closeConnection: false
+         *   });
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param webSocketResponse the WebSocket response action (httpWebSocketResponse), with messages/matchers/subprotocol/closeConnection
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var respondWithWebSocket = function (requestMatcher, webSocketResponse, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("httpWebSocketResponse", requestMatcher, webSocketResponse, times, priority, timeToLive, id));
+        };
+        /**
+         * Setup an expectation that responds to a DNS query
+         *, for example:
+         *
+         *   client.respondWithDns('example.com', {
+         *       answerRecords: [
+         *           { name: 'example.com', type: 'A', ttl: 300, value: '127.0.0.1' }
+         *       ],
+         *       responseCode: 'NOERROR'
+         *   });
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param dnsResponse the DNS response action (dnsResponse), with answerRecords/authorityRecords/additionalRecords/responseCode
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var respondWithDns = function (requestMatcher, dnsResponse, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("dnsResponse", requestMatcher, dnsResponse, times, priority, timeToLive, id));
+        };
+        /**
+         * Setup an expectation that responds with raw binary data
+         *, for example:
+         *
+         *   client.respondWithBinary('/binary', {
+         *       binaryData: Buffer.from('hello').toString('base64')
+         *   });
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param binaryResponse the binary response action (binaryResponse), with binaryData (base64-encoded) and optional delay
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var respondWithBinary = function (requestMatcher, binaryResponse, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("binaryResponse", requestMatcher, binaryResponse, times, priority, timeToLive, id));
+        };
+        /**
+         * Setup an expectation that responds with a gRPC server-streaming response
+         *, for example:
+         *
+         *   client.respondWithGrpcStream('/my.Service/StreamItems', {
+         *       statusName: 'OK',
+         *       messages: [
+         *           { json: '{"value":"first"}' },
+         *           { json: '{"value":"second"}' }
+         *       ],
+         *       closeConnection: true
+         *   });
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param grpcStreamResponse the gRPC stream response action (grpcStreamResponse), with messages/statusName/statusMessage/headers/closeConnection
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param priority the priority with which this expectation is used to match requests (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param id the unique expectation id (optional)
+         */
+        var respondWithGrpcStream = function (requestMatcher, grpcStreamResponse, times, priority, timeToLive, id) {
+            return mockAnyResponse(createAdvancedResponseExpectation("grpcStreamResponse", requestMatcher, grpcStreamResponse, times, priority, timeToLive, id));
         };
         var simplifyVerificationError = function (message) {
             if (typeof message === "string") {
@@ -851,6 +1389,143 @@ var mockServerClient;
             };
         };
         /**
+         * Verify a response has been received, for example:
+         *
+         *   await client.verifyResponse({ 'statusCode': 200 }, 1, 1);
+         *
+         * @param responseMatcher the http response matcher that must be matched for this verification to pass
+         * @param atLeast the minimum number of times this response must be matched
+         * @param atMost  the maximum number of times this response must be matched
+         */
+        var verifyResponse = function (responseMatcher, atLeast, atMost) {
+            if (atLeast === undefined && atMost === undefined) {
+                atLeast = 1;
+            }
+            return {
+                then: function (sucess, error) {
+                    return makeRequest(host, port, "/mockserver/verify", {
+                        "httpResponse": responseMatcher,
+                        "times": {
+                            "atLeast": atLeast,
+                            "atMost": atMost
+                        }
+                    }).then(
+                        function () {
+                            if (sucess) {
+                                sucess();
+                            }
+                        },
+                        function (result) {
+                            if (!result.statusCode || result.statusCode !== 202) {
+                                if (error) {
+                                    error(simplifyVerificationError(result));
+                                }
+                            } else {
+                                if (error) {
+                                    sucess(result);
+                                }
+                            }
+                        }
+                    );
+                }
+            };
+        };
+        /**
+         * Verify a request and response pair has been exchanged, for example:
+         *
+         *   await client.verifyRequestAndResponse(
+         *       { 'method': 'POST', 'path': '/somePath' },
+         *       { 'statusCode': 200 },
+         *       1, 1
+         *   );
+         *
+         * @param requestMatcher the http request matcher that must be matched for this verification to pass
+         * @param responseMatcher the http response matcher that must be matched for this verification to pass
+         * @param atLeast the minimum number of times this request/response pair must be matched
+         * @param atMost  the maximum number of times this request/response pair must be matched
+         */
+        var verifyRequestAndResponse = function (requestMatcher, responseMatcher, atLeast, atMost) {
+            if (atLeast === undefined && atMost === undefined) {
+                atLeast = 1;
+            }
+            return {
+                then: function (sucess, error) {
+                    requestMatcher.headers = headersUniqueConcatenate(requestMatcher.headers, defaultRequestHeaders);
+                    return makeRequest(host, port, "/mockserver/verify", {
+                        "httpRequest": requestMatcher,
+                        "httpResponse": responseMatcher,
+                        "times": {
+                            "atLeast": atLeast,
+                            "atMost": atMost
+                        }
+                    }).then(
+                        function () {
+                            if (sucess) {
+                                sucess();
+                            }
+                        },
+                        function (result) {
+                            if (!result.statusCode || result.statusCode !== 202) {
+                                if (error) {
+                                    error(simplifyVerificationError(result));
+                                }
+                            } else {
+                                if (error) {
+                                    sucess(result);
+                                }
+                            }
+                        }
+                    );
+                }
+            };
+        };
+        /**
+         * Verify a sequence of request and response pairs has been exchanged, for example:
+         *
+         *   await client.verifySequenceWithResponses([
+         *       { request: { 'method': 'POST', 'path': '/first' }, response: { 'statusCode': 201 } },
+         *       { request: { 'method': 'GET', 'path': '/second' }, response: { 'statusCode': 200 } }
+         *   ]);
+         *
+         * @param requestsAndResponses array of {request, response} objects, index-aligned
+         */
+        var verifySequenceWithResponses = function (requestsAndResponses) {
+            var requestSequence = [];
+            var responseSequence = [];
+            for (var i = 0; i < requestsAndResponses.length; i++) {
+                var pair = requestsAndResponses[i];
+                var requestMatcher = pair.request || {};
+                requestMatcher.headers = headersUniqueConcatenate(requestMatcher.headers, defaultRequestHeaders);
+                requestSequence.push(requestMatcher);
+                responseSequence.push(pair.response || {});
+            }
+            return {
+                then: function (sucess, error) {
+                    return makeRequest(host, port, "/mockserver/verifySequence", {
+                        "httpRequests": requestSequence,
+                        "httpResponses": responseSequence
+                    }).then(
+                        function () {
+                            if (sucess) {
+                                sucess();
+                            }
+                        },
+                        function (result) {
+                            if (!result.statusCode || result.statusCode !== 202) {
+                                if (error) {
+                                    error(simplifyVerificationError(result));
+                                }
+                            } else {
+                                if (error) {
+                                    sucess(result);
+                                }
+                            }
+                        }
+                    );
+                }
+            };
+        };
+        /**
          * Verify that no requests have been received by the MockServer
          */
         var verifyZeroInteractions = function () {
@@ -1010,6 +1685,55 @@ var mockServerClient;
             };
         };
         /**
+         * Retrieve the active expectations as MockServer SDK setup code (the
+         * builder code that recreates the expectations) in the requested
+         * language, instead of as JSON. The result is the generated code string.
+         *
+         * @param format                the code-generation language, one of "java",
+         *                              "javascript", "python", "go", "csharp",
+         *                              "ruby", "rust" or "php" (case-insensitive)
+         * @param pathOrRequestMatcher  if a string is passed in the value will be treated as the path, however
+         *                              if an object is passed in the value will be treated as a full request
+         *                              matcher object, if null is passed in it will be treated as match all
+         */
+        var retrieveExpectationsAsCode = function (format, pathOrRequestMatcher) {
+            return {
+                then: function (sucess, error) {
+                    return makeRequest(host, port, "/mockserver/retrieve?type=ACTIVE_EXPECTATIONS&format=" + encodeURIComponent((format || "JAVA").toUpperCase()), addDefaultRequestMatcherHeaders(pathOrRequestMatcher))
+                        .then(function (result) {
+                            sucess(result.body);
+                        }, function (err) {
+                            error(err);
+                        });
+                }
+            };
+        };
+        /**
+         * Retrieve the recorded (proxied) request-response pairs as MockServer
+         * SDK setup code (the builder code that recreates the expectations) in
+         * the requested language, instead of as JSON. The result is the
+         * generated code string.
+         *
+         * @param format                the code-generation language, one of "java",
+         *                              "javascript", "python", "go", "csharp",
+         *                              "ruby", "rust" or "php" (case-insensitive)
+         * @param pathOrRequestMatcher  if a string is passed in the value will be treated as the path, however
+         *                              if an object is passed in the value will be treated as a full request
+         *                              matcher object, if null is passed in it will be treated as match all
+         */
+        var retrieveRecordedExpectationsAsCode = function (format, pathOrRequestMatcher) {
+            return {
+                then: function (sucess, error) {
+                    return makeRequest(host, port, "/mockserver/retrieve?type=RECORDED_EXPECTATIONS&format=" + encodeURIComponent((format || "JAVA").toUpperCase()), addDefaultRequestMatcherHeaders(pathOrRequestMatcher))
+                        .then(function (result) {
+                            sucess(result.body);
+                        }, function (err) {
+                            error(err);
+                        });
+                }
+            };
+        };
+        /**
          * Retrieve logs messages for expectation matching, verification, clearing, etc,
          * log messages are filtered by request matcher as follows:
          * - use a string value to match on path,
@@ -1127,18 +1851,554 @@ var mockServerClient;
             };
         };
 
+        // -------------------------------------------------------------------
+        // Load scenario (load injection) management
+        // -------------------------------------------------------------------
+
+        // Normalise a name-or-array argument into an array of scenario names.
+        var toNamesArray = function (names) {
+            if (names === undefined || names === null) {
+                return [];
+            }
+            return Array.isArray(names) ? names : [names];
+        };
+
+        /**
+         * Register (load) a load scenario in the MockServer's scenario registry.
+         * This does NOT run the scenario - call startLoadScenarios(name) to run
+         * it. Registration is allowed even when the server was started without
+         * `loadGenerationEnabled=true` (only starting requires that flag).
+         *
+         * @param scenario the LoadScenario definition ({name, profile, steps, ...})
+         * @return promise resolving to the parsed registration JSON ({name, state})
+         */
+        var loadScenario = function (scenario) {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/loadScenario", scenario)
+                        .then(function (result) {
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
+        /**
+         * List all registered load scenarios.
+         *
+         * @return promise resolving to the parsed JSON
+         *         ({scenarios: [{name, state, definition, status?}, ...]})
+         */
+        var loadScenarios = function () {
+            return {
+                then: function (sucess, error) {
+                    makeGetRequest(host, port, "/mockserver/loadScenario")
+                        .then(function (result) {
+                            sucess(result.body && JSON.parse(result.body));
+                        }, function (err) {
+                            error(err);
+                        });
+                }
+            };
+        };
+        /**
+         * Retrieve a single registered load scenario by name.
+         *
+         * @param name the unique scenario name
+         * @return promise resolving to the parsed scenario JSON
+         *         ({name, state, definition, status?}), or rejecting 404 if absent
+         */
+        var getLoadScenario = function (name) {
+            return {
+                then: function (sucess, error) {
+                    makeGetRequest(host, port, "/mockserver/loadScenario/" + encodeURIComponent(name))
+                        .then(function (result) {
+                            sucess(result.body && JSON.parse(result.body));
+                        }, function (err) {
+                            error(err);
+                        });
+                }
+            };
+        };
+        /**
+         * Remove a single registered load scenario by name (stopping it first if
+         * it is currently running).
+         *
+         * @param name the unique scenario name
+         * @return promise resolving to the request response
+         */
+        var deleteLoadScenario = function (name) {
+            return makeDeleteRequest(host, port, "/mockserver/loadScenario/" + encodeURIComponent(name));
+        };
+        /**
+         * Clear (remove) all registered load scenarios.
+         *
+         * @return promise resolving to the request response
+         */
+        var clearLoadScenarios = function () {
+            return makeDeleteRequest(host, port, "/mockserver/loadScenario");
+        };
+        /**
+         * Start one or more registered load scenarios. Each scenario must already
+         * be registered (404 otherwise). Each scenario's `startDelayMillis` is
+         * honoured by the server.
+         *
+         * Requires the server to be started with `loadGenerationEnabled=true`;
+         * otherwise the server responds 403 and this promise rejects with a clear
+         * message explaining how to enable it.
+         *
+         * @param names a single scenario name or an array of scenario names
+         * @return promise resolving to the parsed JSON
+         *         ({started: [{name, state}, ...], status: "started"})
+         */
+        var startLoadScenarios = function (names) {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/loadScenario/start", {names: toNamesArray(names)})
+                        .then(function (result) {
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (error) {
+                                var message = (typeof err === "string") ? err : "";
+                                if (message.toLowerCase().indexOf("load generation not enabled") !== -1) {
+                                    error("load generation is not enabled on this MockServer - start it with loadGenerationEnabled=true to use load scenarios");
+                                } else {
+                                    error(err);
+                                }
+                            }
+                        });
+                }
+            };
+        };
+        /**
+         * Stop running load scenarios. Pass a single name, an array of names, or
+         * nothing to stop all currently running scenarios.
+         *
+         * @param names a single scenario name, an array of names, or undefined
+         *        (stop all running scenarios)
+         * @return promise resolving to the parsed JSON
+         *         ({stopped: [...], status: "stopped"})
+         */
+        var stopLoadScenarios = function (names) {
+            var scenarioNames = toNamesArray(names);
+            var body = scenarioNames.length > 0 ? {names: scenarioNames} : {};
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/loadScenario/stop", body)
+                        .then(function (result) {
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
+        /**
+         * Convenience: register a scenario then immediately start it.
+         *
+         * Requires the server to be started with `loadGenerationEnabled=true`.
+         *
+         * @param scenario the LoadScenario definition (must carry a unique `name`)
+         * @return promise resolving to the parsed start JSON
+         *         ({started: [{name, state}, ...], status: "started"})
+         */
+        var runLoadScenario = function (scenario) {
+            return {
+                then: function (sucess, error) {
+                    loadScenario(scenario)
+                        .then(function () {
+                            startLoadScenarios(scenario.name).then(sucess, error);
+                        }, error);
+                }
+            };
+        };
+
+        // -------------------------------------------------------------------
+        // Stateful scenario (state-machine) management
+        // -------------------------------------------------------------------
+
+        /**
+         * Obtain a handle to a named stateful scenario, exposing typed helpers
+         * over the /mockserver/scenario REST endpoints:
+         *
+         *   client.scenario("Deploy").set("Deploying", { transitionAfterMs: 5000, nextState: "Deployed" });
+         *   client.scenario("Deploy").trigger("Failed");
+         *   client.scenario("Deploy").state();
+         *
+         * @param name the scenario name
+         * @return a handle with state(), set(state, options) and trigger(newState)
+         */
+        var scenario = function (name) {
+            var scenarioPath = "/mockserver/scenario/" + encodeURIComponent(name);
+            return {
+                /**
+                 * GET /mockserver/scenario/{name} — the scenario's current state.
+                 *
+                 * @return promise resolving to {scenarioName, currentState}
+                 */
+                state: function () {
+                    return {
+                        then: function (sucess, error) {
+                            makeGetRequest(host, port, scenarioPath)
+                                .then(function (result) {
+                                    sucess(result.body && JSON.parse(result.body));
+                                }, function (err) {
+                                    error(err);
+                                });
+                        }
+                    };
+                },
+                /**
+                 * PUT /mockserver/scenario/{name} — set the scenario's state,
+                 * optionally scheduling a timed transition.
+                 *
+                 * @param state    the state to set immediately
+                 * @param options  optional {transitionAfterMs, nextState} to schedule a timed transition
+                 * @return promise resolving to {scenarioName, currentState, nextState?, transitionAfterMs?}
+                 */
+                set: function (state, options) {
+                    options = options || {};
+                    var body = {state: state};
+                    if (options.transitionAfterMs !== undefined && options.transitionAfterMs !== null) {
+                        body.transitionAfterMs = options.transitionAfterMs;
+                    }
+                    if (options.nextState !== undefined && options.nextState !== null) {
+                        body.nextState = options.nextState;
+                    }
+                    return {
+                        then: function (sucess, error) {
+                            makeRequest(host, port, scenarioPath, body)
+                                .then(function (result) {
+                                    sucess(result.body ? JSON.parse(result.body) : result);
+                                }, function (err) {
+                                    error(err);
+                                });
+                        }
+                    };
+                },
+                /**
+                 * PUT /mockserver/scenario/{name}/trigger — set the state to
+                 * newState immediately.
+                 *
+                 * @param newState the state to transition to
+                 * @return promise resolving to {scenarioName, currentState}
+                 */
+                trigger: function (newState) {
+                    return {
+                        then: function (sucess, error) {
+                            makeRequest(host, port, scenarioPath + "/trigger", {newState: newState})
+                                .then(function (result) {
+                                    sucess(result.body ? JSON.parse(result.body) : result);
+                                }, function (err) {
+                                    error(err);
+                                });
+                        }
+                    };
+                }
+            };
+        };
+        /**
+         * List every known scenario and its current state.
+         *
+         * @return promise resolving to {scenarios: [{scenarioName, currentState}, ...]}
+         */
+        var scenarios = function () {
+            return {
+                then: function (sucess, error) {
+                    makeGetRequest(host, port, "/mockserver/scenario")
+                        .then(function (result) {
+                            sucess(result.body && JSON.parse(result.body));
+                        }, function (err) {
+                            error(err);
+                        });
+                }
+            };
+        };
+
+        // -------------------------------------------------------------------
+        // Breakpoint matcher management
+        // -------------------------------------------------------------------
+
+        var _breakpointWebSocketClient = null;
+        var _breakpointWebSocketClientId = null;
+
+        /**
+         * Ensure the breakpoint callback WebSocket is connected.
+         * The WS connection is opened lazily on the first addBreakpoint call
+         * and reused for all subsequent breakpoints.
+         *
+         * @return promise resolving to the webSocketClient
+         */
+        var ensureBreakpointWebSocket = function () {
+            if (_breakpointWebSocketClient) {
+                return {
+                    then: function (success) {
+                        success(_breakpointWebSocketClient);
+                    }
+                };
+            }
+            var webSocketClientPromise = new WebSocketClient(host, port, cleanedContextPath);
+            return {
+                then: function (success, error) {
+                    webSocketClientPromise.then(function (webSocketClient) {
+                        webSocketClient.clientIdCallback(function (clientId) {
+                            _breakpointWebSocketClient = webSocketClient;
+                            _breakpointWebSocketClientId = clientId;
+                            success(webSocketClient);
+                        });
+                    }, error);
+                }
+            };
+        };
+
+        /**
+         * Register a breakpoint matcher with handlers for request, response, and/or
+         * stream frame phases. Mirrors the Java client's addBreakpoint API.
+         *
+         * @param requestMatcher  the request definition to match (same as expectation matcher)
+         * @param phases          array of phase strings: "REQUEST", "RESPONSE", "RESPONSE_STREAM", "INBOUND_STREAM"
+         * @param requestHandler  function(request) => request|response for REQUEST phase (optional)
+         * @param responseHandler function(request, response) => response for RESPONSE phase (optional)
+         * @param streamFrameHandler function(pausedFrame) => {action, body?} for streaming phases (optional)
+         */
+        var addBreakpoint = function (requestMatcher, phases, requestHandler, responseHandler, streamFrameHandler) {
+            if (!requestMatcher) {
+                throw new Error("addBreakpoint requires a non-null requestMatcher");
+            }
+            if (!phases || !Array.isArray(phases) || phases.length === 0) {
+                throw new Error("addBreakpoint requires a non-empty phases array");
+            }
+            return {
+                then: function (success, error) {
+                    try {
+                        ensureBreakpointWebSocket().then(function (webSocketClient) {
+                            var body = {
+                                httpRequest: requestMatcher,
+                                phases: phases,
+                                clientId: _breakpointWebSocketClientId
+                            };
+                            makeRequest(host, port, "/mockserver/breakpoint/matcher", body)
+                                .then(function (result) {
+                                    var responseBody = typeof result === "string" ? result : (result && result.body ? result.body : "");
+                                    var parsed = JSON.parse(responseBody);
+                                    var breakpointId = parsed.id;
+                                    if (!breakpointId) {
+                                        if (error) {
+                                            error("Server did not return a breakpoint id");
+                                        }
+                                        return;
+                                    }
+                                    // Install handlers keyed by breakpoint id
+                                    if (requestHandler) {
+                                        webSocketClient.setBreakpointRequestHandler(breakpointId, requestHandler);
+                                    }
+                                    if (responseHandler) {
+                                        webSocketClient.setBreakpointResponseHandler(breakpointId, responseHandler);
+                                    }
+                                    if (streamFrameHandler) {
+                                        webSocketClient.setBreakpointStreamFrameHandler(breakpointId, streamFrameHandler);
+                                    }
+                                    if (success) {
+                                        success(breakpointId);
+                                    }
+                                }, error);
+                        }, error);
+                    } catch (e) {
+                        if (error) {
+                            error(e);
+                        }
+                    }
+                }
+            };
+        };
+
+        /**
+         * Register a request-only breakpoint (convenience overload).
+         *
+         * @param requestMatcher  the request definition to match
+         * @param requestHandler  function(request) => request|response
+         */
+        var addRequestBreakpoint = function (requestMatcher, requestHandler) {
+            return addBreakpoint(requestMatcher, ["REQUEST"], requestHandler, null, null);
+        };
+
+        /**
+         * Register a request+response breakpoint (convenience overload).
+         *
+         * @param requestMatcher   the request definition to match
+         * @param requestHandler   function(request) => request|response
+         * @param responseHandler  function(request, response) => response
+         */
+        var addRequestAndResponseBreakpoint = function (requestMatcher, requestHandler, responseHandler) {
+            return addBreakpoint(requestMatcher, ["REQUEST", "RESPONSE"], requestHandler, responseHandler, null);
+        };
+
+        /**
+         * List all registered breakpoint matchers.
+         * Returns a promise resolving to {matchers: [{id, httpRequest, phases, clientId}, ...]}.
+         */
+        var listBreakpointMatchers = function () {
+            return {
+                then: function (success, error) {
+                    makeGetRequest(host, port, "/mockserver/breakpoint/matchers")
+                        .then(function (result) {
+                            success(result.body && JSON.parse(result.body));
+                        }, function (err) {
+                            error(err);
+                        });
+                }
+            };
+        };
+
+        /**
+         * Remove a breakpoint matcher by id.
+         *
+         * @param breakpointId the id of the breakpoint matcher to remove
+         */
+        var removeBreakpointMatcher = function (breakpointId) {
+            if (!breakpointId) {
+                throw new Error("removeBreakpointMatcher requires a breakpointId");
+            }
+            var result = makeRequest(host, port, "/mockserver/breakpoint/matcher/remove", {id: breakpointId});
+            // Remove client-side handlers
+            if (_breakpointWebSocketClient) {
+                _breakpointWebSocketClient.removeBreakpointHandlers(breakpointId);
+            }
+            return result;
+        };
+
+        /**
+         * Clear all registered breakpoint matchers.
+         */
+        var clearBreakpointMatchers = function () {
+            var result = makeRequest(host, port, "/mockserver/breakpoint/matcher/clear");
+            // Clear client-side handlers
+            if (_breakpointWebSocketClient) {
+                _breakpointWebSocketClient.clearBreakpointHandlers();
+            }
+            return result;
+        };
+
+        /**
+         * Upload a compiled gRPC proto descriptor set (a FileDescriptorSet, as
+         * produced by `protoc --descriptor_set_out`).  Registered services then
+         * become available for gRPC mocking and can be queried with
+         * retrieveGrpcServices().
+         *
+         * @param descriptorSetBytes the raw bytes of the compiled descriptor
+         *        set, as a Buffer, Uint8Array or ArrayBuffer
+         * @returns a promise that is resolved once the descriptor set is loaded
+         */
+        var uploadGrpcDescriptor = function (descriptorSetBytes) {
+            if (!descriptorSetBytes) {
+                throw new Error("uploadGrpcDescriptor requires the descriptor set bytes");
+            }
+            var buffer;
+            if (typeof Buffer !== 'undefined' && Buffer.isBuffer(descriptorSetBytes)) {
+                buffer = descriptorSetBytes;
+            } else if (typeof Buffer !== 'undefined') {
+                buffer = Buffer.from(descriptorSetBytes);
+            } else {
+                buffer = descriptorSetBytes;
+            }
+            return makeBinaryRequest(host, port, "/mockserver/grpc/descriptors", buffer, "application/octet-stream");
+        };
+
+        /**
+         * Retrieve the gRPC services registered from uploaded descriptor sets.
+         *
+         * @returns a promise resolved with the array of registered services,
+         *          each with its name and methods (inputType, outputType,
+         *          clientStreaming and serverStreaming flags)
+         */
+        var retrieveGrpcServices = function () {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/grpc/services")
+                        .then(function (response) {
+                            sucess(JSON.parse((response && response.body) || "[]"));
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
+
+        /**
+         * Clear all registered gRPC descriptor sets and services.
+         *
+         * @returns a promise that is resolved once the descriptors are cleared
+         */
+        var clearGrpcDescriptors = function () {
+            return makeRequest(host, port, "/mockserver/grpc/clear");
+        };
+
+        /**
+         * Start building a mock MCP (Model Context Protocol) server that
+         * speaks JSON-RPC 2.0 over the Streamable HTTP transport.  Returns a
+         * fluent builder; call .applyTo() (with no arguments — this client is
+         * used) to register the generated expectations, or .build() to obtain
+         * the raw expectation array.  Mirrors the Java client McpMockBuilder.
+         *
+         * for example:
+         *
+         *   client.mcpMock("/mcp")
+         *       .withServerName("MyServer")
+         *       .withTool("get_weather")
+         *           .withDescription("Get the weather for a city")
+         *           .respondingWith("sunny")
+         *       .and()
+         *       .applyTo();
+         *
+         * @param path the HTTP path the MCP server is mounted on (default "/mcp")
+         */
+        var mcpMock = function (path) {
+            var builder = _mcpMock(path);
+            var applyTo = builder.applyTo;
+            // Default applyTo() to this client when none is supplied.
+            builder.applyTo = function (client) {
+                return applyTo(client || _this);
+            };
+            return builder;
+        };
+
         /* jshint -W003 */
         var _this = {
             openAPIExpectation: openAPIExpectation,
             mockAnyResponse: mockAnyResponse,
+            mockWithLLM: mockWithLLM,
+            llm: _llm,
             mockWithCallback: mockWithCallback,
             mockWithForwardCallback: mockWithForwardCallback,
             mockWithForwardAndResponseCallback: mockWithForwardAndResponseCallback,
+            respondWithClassCallback: respondWithClassCallback,
+            forwardWithClassCallback: forwardWithClassCallback,
             mockSimpleResponse: mockSimpleResponse,
+            respondWithSse: respondWithSse,
+            respondWithWebSocket: respondWithWebSocket,
+            respondWithDns: respondWithDns,
+            respondWithBinary: respondWithBinary,
+            respondWithGrpcStream: respondWithGrpcStream,
             setDefaultHeaders: setDefaultHeaders,
             verify: verify,
+            verifyResponse: verifyResponse,
+            verifyRequestAndResponse: verifyRequestAndResponse,
             verifyById: verifyById,
             verifySequence: verifySequence,
+            verifySequenceWithResponses: verifySequenceWithResponses,
             verifySequenceById: verifySequenceById,
             verifyZeroInteractions: verifyZeroInteractions,
             reset: reset,
@@ -1152,20 +2412,72 @@ var mockServerClient;
             removeServiceChaos: removeServiceChaos,
             clearServiceChaos: clearServiceChaos,
             serviceChaosStatus: serviceChaosStatus,
+            loadScenario: loadScenario,
+            scenario: scenario,
+            scenarios: scenarios,
+            loadScenarios: loadScenarios,
+            getLoadScenario: getLoadScenario,
+            deleteLoadScenario: deleteLoadScenario,
+            clearLoadScenarios: clearLoadScenarios,
+            startLoadScenarios: startLoadScenarios,
+            stopLoadScenarios: stopLoadScenarios,
+            runLoadScenario: runLoadScenario,
             bind: bind,
             retrieveRecordedRequests: retrieveRecordedRequests,
             retrieveRecordedRequestsAndResponses: retrieveRecordedRequestsAndResponses,
             retrieveRecordedRequestsAndResponsesAsHar: retrieveRecordedRequestsAndResponsesAsHar,
             retrieveActiveExpectations: retrieveActiveExpectations,
             retrieveRecordedExpectations: retrieveRecordedExpectations,
-            retrieveLogMessages: retrieveLogMessages
+            retrieveExpectationsAsCode: retrieveExpectationsAsCode,
+            retrieveRecordedExpectationsAsCode: retrieveRecordedExpectationsAsCode,
+            retrieveLogMessages: retrieveLogMessages,
+            addBreakpoint: addBreakpoint,
+            addRequestBreakpoint: addRequestBreakpoint,
+            addRequestAndResponseBreakpoint: addRequestAndResponseBreakpoint,
+            listBreakpointMatchers: listBreakpointMatchers,
+            removeBreakpointMatcher: removeBreakpointMatcher,
+            clearBreakpointMatchers: clearBreakpointMatchers,
+            uploadGrpcDescriptor: uploadGrpcDescriptor,
+            retrieveGrpcServices: retrieveGrpcServices,
+            clearGrpcDescriptors: clearGrpcDescriptors,
+            mcpMock: mcpMock
         };
+        // Explicit resource management support (TC39 `using`/`await using`).
+        // Calling `await using client = mockServerClient(...)` will reset the
+        // MockServer when the client goes out of scope, so tests do not need a
+        // manual `afterEach(() => client.reset())`. Symbols are guarded so the
+        // client still works on runtimes that predate explicit resource
+        // management.
+        if (typeof Symbol !== 'undefined') {
+            if (Symbol.asyncDispose) {
+                _this[Symbol.asyncDispose] = function () {
+                    return reset();
+                };
+            }
+            if (Symbol.dispose) {
+                _this[Symbol.dispose] = function () {
+                    // Best-effort synchronous disposal: fire the reset request
+                    // without awaiting it. Prefer `await using` (asyncDispose)
+                    // when the reset must complete before the next test. The
+                    // returned promise is swallowed so a connection/HTTP error
+                    // during teardown does not surface as an unhandled rejection.
+                    var p = reset();
+                    if (p && typeof p.catch === 'function') {
+                        p.catch(function () { });
+                    }
+                };
+            }
+        }
         return _this;
     };
 
     if (typeof module !== 'undefined') {
         module.exports = {
-            mockServerClient: mockServerClient
+            mockServerClient: mockServerClient,
+            llm: require('./llm'),
+            mcpMock: require('./mcpMockBuilder').mcpMock,
+            routeBreakpointMessage: _routeBreakpointMessage,
+            extractBreakpointHeaders: _extractBreakpointHeaders
         };
     }
 })();

@@ -8,14 +8,26 @@ import TextField from '@mui/material/TextField';
 import InputAdornment from '@mui/material/InputAdornment';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
+import Tooltip from '@mui/material/Tooltip';
+import Button from '@mui/material/Button';
+import Collapse from '@mui/material/Collapse';
 import SearchIcon from '@mui/icons-material/Search';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { useDashboardStore } from '../store';
-import { groupBySession, shortenScenarioName, type Session, type SessionRequest } from '../lib/sessionGrouping';
-import { getModelLabel, getTokenSummary } from '../lib/llmTraffic';
-import { AnthropicConversationView, OpenAiConversationView } from './ConversationView';
+import { groupBySession, parseIsolationSource, shortenScenarioName, type Session, type SessionRequest } from '../lib/sessionGrouping';
+import { getModelLabel, getTokenSummary, getNumericTokens } from '../lib/llmTraffic';
+import { estimateCostUsd } from '../lib/llmPricing';
+import {
+  AnthropicConversationView,
+  OpenAiConversationView,
+  OpenAiResponsesConversationView,
+  GeminiConversationView,
+  OllamaConversationView,
+} from './ConversationView';
 import AgentRunGraph from './AgentRunGraph';
 import { CompareRunsBody } from './CompareRunsDialog';
-import ScenarioPanel from './ScenarioPanel';
+import { monospaceFontFamily, transitions } from '../theme';
 
 // ---------------------------------------------------------------------------
 // Status colour for request chips
@@ -43,20 +55,24 @@ interface RequestChipProps {
 function RequestChip({ request, turnIndex, selected, onClick }: RequestChipProps) {
   const label = `[${turnIndex}] ${request.method ?? '?'} ${request.path ?? '/'} → ${request.statusCode ?? '?'}`;
   return (
-    <Chip
-      label={label}
-      size="small"
-      color={statusColor(request.statusCode)}
-      variant={selected ? 'filled' : 'outlined'}
-      onClick={onClick}
-      sx={{
-        height: 22,
-        fontSize: '0.65rem',
-        fontFamily: 'monospace',
-        cursor: 'pointer',
-        '& .MuiChip-label': { px: 0.75 },
-      }}
-    />
+    <Tooltip title={label}>
+      <Chip
+        label={label}
+        size="small"
+        color={statusColor(request.statusCode)}
+        variant={selected ? 'filled' : 'outlined'}
+        onClick={onClick}
+        sx={{
+          height: 22,
+          fontSize: '0.65rem',
+          fontFamily: monospaceFontFamily,
+          cursor: 'pointer',
+          maxWidth: 220,
+          transition: transitions.forProps(['background-color', 'border-color', 'box-shadow']),
+          '& .MuiChip-label': { px: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+        }}
+      />
+    </Tooltip>
   );
 }
 
@@ -94,7 +110,7 @@ function RequestDetail({ request }: { request: SessionRequest }) {
       <Box
         component="pre"
         sx={{
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           fontSize: '0.65rem',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -110,6 +126,147 @@ function RequestDetail({ request }: { request: SessionRequest }) {
       </Box>
     </Box>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Session conversation — full chat transcript for the whole session, rendered
+// with the same provider-specific Conversation views used in the Traffic tab.
+// ---------------------------------------------------------------------------
+
+const CONVERSATION_KINDS = new Set(['anthropic', 'openai', 'openai_responses', 'gemini', 'ollama']);
+
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  openai_responses: 'OpenAI Responses',
+  gemini: 'Gemini',
+  ollama: 'Ollama',
+};
+const providerLabel = (kind: string): string => PROVIDER_LABELS[kind] ?? kind;
+
+/** Renders a single parsed request with the matching Traffic-tab conversation view. */
+function ConversationByKind({ parsed }: { parsed: SessionRequest['parsed'] }) {
+  switch (parsed.kind) {
+    case 'anthropic': return <AnthropicConversationView parsed={parsed} />;
+    case 'openai': return <OpenAiConversationView parsed={parsed} />;
+    case 'openai_responses': return <OpenAiResponsesConversationView parsed={parsed} />;
+    case 'gemini': return <GeminiConversationView parsed={parsed} />;
+    case 'ollama': return <OllamaConversationView parsed={parsed} />;
+    default: return null;
+  }
+}
+
+/**
+ * Session-level conversation view (replaces the old call-graph visualisation).
+ * In an agent run each successive request resends the full accumulated message
+ * history, so the *last* conversation-capable request carries the complete
+ * transcript — rendering its provider Conversation view shows the whole session
+ * as chat bubbles, matching the Traffic tab's Conversation view. Collapsed by
+ * default to keep the lanes compact.
+ */
+function SessionConversation({ requests, isUnscoped }: { requests: SessionRequest[]; isUnscoped: boolean }) {
+  const [open, setOpen] = useState(false);
+  const convRequests = useMemo(
+    () => requests.filter((r) => CONVERSATION_KINDS.has(r.parsed.kind)),
+    [requests],
+  );
+  const primary = useMemo(
+    () => (convRequests.length > 0 ? convRequests[convRequests.length - 1] : undefined),
+    [convRequests],
+  );
+  const providerKinds = useMemo(
+    () => Array.from(new Set(convRequests.map((r) => r.parsed.kind))),
+    [convRequests],
+  );
+  // A normal agent session resends one growing history to a single provider, so the
+  // last conversation-capable request alone is the full transcript — show it plainly.
+  // The <unscoped> catch-all instead groups UNRELATED requests (often across several
+  // providers); there is no single conversation, so whenever it holds more than one we
+  // render the most recent and flag that the others are only viewable by expanding
+  // their request above. (A multi-provider lane is always treated as mixed.)
+  const mixed = (isUnscoped && convRequests.length > 1) || providerKinds.length > 1;
+
+  if (!primary) return null;
+
+  const providerList = providerKinds.map(providerLabel).join(', ');
+  return (
+    <Box sx={{ px: 1.5, pb: 0.75 }}>
+      <Button
+        size="small"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        startIcon={open ? <ExpandMoreIcon fontSize="small" /> : <ChevronRightIcon fontSize="small" />}
+        sx={{ textTransform: 'none', fontSize: '0.7rem', color: 'text.secondary', px: 0.5, minWidth: 0 }}
+      >
+        {mixed ? `Conversation (latest of ${convRequests.length})` : 'Conversation'}
+      </Button>
+      <Collapse in={open} unmountOnExit>
+        <Box sx={{ mt: 0.5, maxHeight: 500, overflowY: 'auto' }}>
+          {mixed && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', mb: 0.5, fontStyle: 'italic' }}
+            >
+              This lane groups {convRequests.length} unrelated LLM requests
+              {providerKinds.length > 1
+                ? ` across ${providerKinds.length} providers (${providerList})`
+                : ` (${providerList})`}
+              . Showing only the most recent ({providerLabel(primary.parsed.kind)}) — expand a request
+              above to view the others.
+            </Typography>
+          )}
+          <ConversationByKind parsed={primary.parsed} />
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Per-session token/cost aggregation (pure, no network)
+// ---------------------------------------------------------------------------
+
+interface SessionUsage {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  estimatedCostUsd: number | null;
+}
+
+function computeSessionUsage(requests: SessionRequest[]): SessionUsage | null {
+  let totalIn = 0;
+  let totalOut = 0;
+  let hasCost = false;
+  let totalCost = 0;
+
+  for (const req of requests) {
+    const tokens = getNumericTokens(req.parsed);
+    if (tokens) {
+      totalIn += tokens.inputTokens;
+      totalOut += tokens.outputTokens;
+      const model = getModelLabel(req.parsed);
+      if (model && req.parsed.kind !== 'mcp' && req.parsed.kind !== 'generic') {
+        const cost = estimateCostUsd(req.parsed.kind, model, tokens.inputTokens, tokens.outputTokens);
+        if (cost !== null) {
+          hasCost = true;
+          totalCost += cost;
+        }
+      }
+    }
+  }
+
+  if (totalIn === 0 && totalOut === 0) return null;
+  return {
+    totalInputTokens: totalIn,
+    totalOutputTokens: totalOut,
+    estimatedCostUsd: hasCost ? totalCost : null,
+  };
+}
+
+function formatCost(usd: number): string {
+  if (usd < 0.01) return `$${usd.toFixed(6)}`;
+  if (usd < 1) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,11 +292,21 @@ function SessionLane({ session, connectionParams }: SessionLaneProps) {
 
   const displayName = shortenScenarioName(session.scenarioName);
   const isUnscoped = session.scenarioName === '<unscoped>';
+  const usage = useMemo(() => computeSessionUsage(session.requests), [session.requests]);
 
-  // Derive a provider + path for the call-graph lookup from the session's requests.
+  // Derive a provider + path for the correlated call-graph lookup.
   const graphRequest = session.requests.find((r) => KIND_TO_PROVIDER[r.parsed.kind] != null);
   const graphProvider = graphRequest ? KIND_TO_PROVIDER[graphRequest.parsed.kind] : null;
   const graphPath = graphRequest ? graphRequest.path : null;
+
+  // Derive the isolation scope for this lane so the call graph can be filtered to
+  // this single session server-side (otherwise two sessions on the same endpoint
+  // would render the same merged graph). `scenarioName` retains the full
+  // `…__iso=header:x-agent-id` form, from which parseIsolationSource yields the
+  // source type/key; the value is the session's isolationKey. For the <unscoped>
+  // lane parseIsolationSource returns null, so the scope props stay undefined —
+  // but the graph is only rendered for scoped lanes anyway.
+  const isolationSource = parseIsolationSource(session.scenarioName);
 
   const handleChipClick = useCallback(
     (index: number) => {
@@ -166,26 +333,61 @@ function SessionLane({ session, connectionParams }: SessionLaneProps) {
           flexWrap: 'wrap',
         }}
       >
-        <Typography
-          variant="subtitle2"
-          sx={{
-            fontWeight: 600,
-            fontSize: '0.8rem',
-            fontFamily: isUnscoped ? undefined : 'monospace',
-            fontStyle: isUnscoped ? 'italic' : 'normal',
-          }}
-        >
-          {isUnscoped
-            ? 'Unscoped requests'
+        <Tooltip title={isUnscoped
+            ? (session.isolationKey !== '<unscoped>'
+              ? `Unscoped requests (${session.isolationKey})`
+              : 'Unscoped requests')
             : `${displayName} / ${session.isolationKey}`
           }
-        </Typography>
+        >
+          <Typography
+            variant="subtitle2"
+            noWrap
+            sx={{
+              fontWeight: 600,
+              fontSize: '0.8rem',
+              fontFamily: isUnscoped ? undefined : 'monospace',
+              fontStyle: isUnscoped ? 'italic' : 'normal',
+              maxWidth: 300,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {isUnscoped
+              ? (session.isolationKey !== '<unscoped>'
+                ? `Unscoped requests (${session.isolationKey})`
+                : 'Unscoped requests')
+              : `${displayName} / ${session.isolationKey}`
+            }
+          </Typography>
+        </Tooltip>
         <Chip
           label={`${session.requests.length} request${session.requests.length !== 1 ? 's' : ''}`}
           size="small"
           variant="outlined"
           sx={{ height: 18, fontSize: '0.6rem', '& .MuiChip-label': { px: 0.5 } }}
         />
+        {usage && (
+          <Tooltip title={`${usage.totalInputTokens.toLocaleString()} in / ${usage.totalOutputTokens.toLocaleString()} out`}>
+            <Chip
+              label={`${usage.totalInputTokens.toLocaleString()} in / ${usage.totalOutputTokens.toLocaleString()} out`}
+              size="small"
+              variant="outlined"
+              sx={{ height: 18, fontSize: '0.6rem', fontFamily: monospaceFontFamily, maxWidth: 180, '& .MuiChip-label': { px: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }}
+            />
+          </Tooltip>
+        )}
+        {usage?.estimatedCostUsd != null && (
+          <Tooltip title={formatCost(usage.estimatedCostUsd)}>
+            <Chip
+              label={formatCost(usage.estimatedCostUsd)}
+              size="small"
+              variant="outlined"
+              color="warning"
+              sx={{ height: 18, fontSize: '0.6rem', fontFamily: monospaceFontFamily, '& .MuiChip-label': { px: 0.5 } }}
+            />
+          </Tooltip>
+        )}
       </Box>
 
       {/* Horizontal request timeline */}
@@ -220,10 +422,28 @@ function SessionLane({ session, connectionParams }: SessionLaneProps) {
         </>
       )}
 
-      {/* Correlated call graph (fetched on demand via explain_agent_run) */}
-      {!isUnscoped && graphProvider && (
+      {/* Session-level conversation transcript (chat-bubble Conversation view,
+          same as the Traffic tab). Shown for any session with a detectable LLM
+          provider, including unscoped proxy traffic. */}
+      <SessionConversation requests={session.requests} isUnscoped={isUnscoped} />
+
+      {/* "Show Mermaid" link below the Conversation section — opens the
+          correlated agent-run call graph (fetched on demand via explain_agent_run)
+          as a Mermaid diagram, a compact alternative to the chat transcript.
+          Only shown for a scoped session: the <unscoped> lane is a heterogeneous
+          catch-all of unrelated requests across providers/paths, so a single
+          correlated call graph (derived from one provider+path) cannot represent
+          it and would not match the conversation transcript above. */}
+      {graphProvider && !isUnscoped && (
         <Box sx={{ px: 1.5, pb: 0.75 }}>
-          <AgentRunGraph connectionParams={connectionParams} provider={graphProvider} path={graphPath} />
+          <AgentRunGraph
+            connectionParams={connectionParams}
+            provider={graphProvider}
+            path={graphPath}
+            isolationType={isolationSource?.sourceType}
+            isolationKey={isolationSource?.sourceKey}
+            isolationValue={session.isolationKey}
+          />
         </Box>
       )}
     </Paper>
@@ -275,10 +495,9 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
         <Tabs
           value={tab}
           onChange={(_, v: number) => setTab(v)}
-          sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5, fontSize: '0.8rem' } }}
+          sx={{ borderBottom: 1, borderColor: 'divider', minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5, typography: 'body2' } }}
         >
-          <Tab label="Sessions" />
-          <Tab label="Scenarios" />
+          <Tab label="Traces" />
           <Tab label="Compare" />
         </Tabs>
 
@@ -297,7 +516,7 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
             >
               {hasLlmTraffic && (
                 <Chip
-                  label={`Active sessions: ${sessions.length}`}
+                  label={`Active traces: ${sessions.length}`}
                   size="small"
                   color="primary"
                   variant="outlined"
@@ -306,7 +525,7 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
               )}
               <TextField
                 size="small"
-                placeholder="Filter sessions..."
+                placeholder="Filter traces..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 slotProps={{
@@ -335,12 +554,12 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
                     No LLM traffic captured yet
                   </Typography>
                   <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                    Configure your application to proxy through MockServer to see session groupings.
+                    Configure your application to proxy through MockServer to see traces grouped here.
                   </Typography>
                 </Box>
               ) : filteredSessions.length === 0 ? (
                 <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
-                  No sessions match the current filter
+                  No traces match the current filter
                 </Typography>
               ) : (
                 filteredSessions.map((session) => (
@@ -356,12 +575,6 @@ export default function SessionInspector({ connectionParams }: SessionInspectorP
         )}
 
         {tab === 1 && (
-          <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, p: 1 }}>
-            <ScenarioPanel connectionParams={connectionParams} />
-          </Box>
-        )}
-
-        {tab === 2 && (
           <Box sx={{ flex: 1, overflowY: 'auto', minHeight: 0, p: 2 }}>
             <CompareRunsBody />
           </Box>

@@ -7,9 +7,11 @@ import com.google.common.base.Joiner;
 import org.apache.commons.lang3.Strings;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.model.ConditionalRequestDefinition;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.OpenAPIDefinition;
 import org.mockserver.model.RequestDefinition;
+import org.mockserver.serialization.model.ConditionalRequestDefinitionDTO;
 import org.mockserver.serialization.model.HttpRequestDTO;
 import org.mockserver.serialization.model.HttpRequestPrettyPrintedDTO;
 import org.mockserver.serialization.model.OpenAPIDefinitionDTO;
@@ -59,6 +61,8 @@ public class RequestDefinitionSerializer implements Serializer<RequestDefinition
                 return objectWriter.writeValueAsString(prettyPrint ? new HttpRequestPrettyPrintedDTO((HttpRequest) requestDefinition) : new HttpRequestDTO((HttpRequest) requestDefinition));
             } else if (requestDefinition instanceof OpenAPIDefinition) {
                 return objectWriter.writeValueAsString(new OpenAPIDefinitionDTO((OpenAPIDefinition) requestDefinition));
+            } else if (requestDefinition instanceof ConditionalRequestDefinition) {
+                return objectWriter.writeValueAsString(new ConditionalRequestDefinitionDTO((ConditionalRequestDefinition) requestDefinition));
             } else {
                 return "";
             }
@@ -94,6 +98,8 @@ public class RequestDefinitionSerializer implements Serializer<RequestDefinition
                         requestDefinitionDTOs[i] = prettyPrint ? new HttpRequestPrettyPrintedDTO((HttpRequest) requestDefinitions[i]) : new HttpRequestDTO((HttpRequest) requestDefinitions[i]);
                     } else if (requestDefinitions[i] instanceof OpenAPIDefinition) {
                         requestDefinitionDTOs[i] = new OpenAPIDefinitionDTO((OpenAPIDefinition) requestDefinitions[i]);
+                    } else if (requestDefinitions[i] instanceof ConditionalRequestDefinition) {
+                        requestDefinitionDTOs[i] = new ConditionalRequestDefinitionDTO((ConditionalRequestDefinition) requestDefinitions[i]);
                     }
                 }
                 return objectWriter.writeValueAsString(requestDefinitionDTOs);

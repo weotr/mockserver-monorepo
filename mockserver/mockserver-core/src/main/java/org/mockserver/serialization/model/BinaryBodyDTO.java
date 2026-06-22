@@ -1,7 +1,6 @@
 package org.mockserver.serialization.model;
 
 import org.mockserver.model.BinaryBody;
-import org.mockserver.model.JsonBody;
 
 /**
  * @author jamesdbloom

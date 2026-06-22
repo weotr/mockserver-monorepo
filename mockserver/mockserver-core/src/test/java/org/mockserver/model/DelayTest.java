@@ -146,4 +146,35 @@ public class DelayTest {
         // then
         assertThat(delay.sampleValueMillis(), is(0L));
     }
+
+    @Test
+    public void shouldHaveNoTemplateForStaticAndDistributionDelays() {
+        // then
+        assertThat(new Delay(TimeUnit.SECONDS, 3).hasTemplate(), is(false));
+        assertThat(uniform(TimeUnit.MILLISECONDS, 100, 200).hasTemplate(), is(false));
+        assertThat(new Delay(TimeUnit.SECONDS, 3).getTemplate(), is(nullValue()));
+        assertThat(new Delay(TimeUnit.SECONDS, 3).getTemplateType(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldCreateTemplateDelay() {
+        // when
+        Delay delay = template(HttpTemplate.TemplateType.MUSTACHE, "{{request.body}}");
+
+        // then
+        assertThat(delay.hasTemplate(), is(true));
+        assertThat(delay.getTemplate(), is("{{request.body}}"));
+        assertThat(delay.getTemplateType(), is(HttpTemplate.TemplateType.MUSTACHE));
+        assertThat(delay.getTimeUnit(), is(TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void shouldNotHaveTemplateWhenTemplateTypeMissing() {
+        // when - template text without a type does not count as a template delay
+        Delay delay = new Delay(TimeUnit.MILLISECONDS, 5, null, "100", null);
+
+        // then
+        assertThat(delay.hasTemplate(), is(false));
+        assertThat(delay.sampleValueMillis(), is(5L));
+    }
 }

@@ -134,6 +134,56 @@ fn test_forward_expectation() {
 
 #[test]
 #[ignore]
+fn test_respond_with_advanced_response_builders() {
+    // Exercises the `respond_with_*` fluent aliases (cross-client naming
+    // parity with the Python/PHP/.NET clients) end-to-end against a live
+    // server. Each registers an expectation with one advanced response action.
+    let client = get_client();
+    client.reset().expect("reset failed");
+
+    client
+        .when(HttpRequest::new().method("GET").path("/sse"))
+        .respond_with_sse(HttpSseResponse::new().event(SseEvent::new().data("tick")))
+        .expect("respond_with_sse failed");
+
+    client
+        .when(HttpRequest::new().method("GET").path("/ws"))
+        .respond_with_web_socket(
+            HttpWebSocketResponse::new().message(WebSocketMessage::text("hi")),
+        )
+        .expect("respond_with_web_socket failed");
+
+    client
+        .when(HttpRequest::new().path("/dns"))
+        .respond_with_dns(DnsResponse::new().answer_record(DnsRecord::a("host", "10.0.0.1")))
+        .expect("respond_with_dns failed");
+
+    client
+        .when(HttpRequest::new().path("/raw"))
+        .respond_with_binary(BinaryResponse::from_bytes([0x00, 0xFF]))
+        .expect("respond_with_binary failed");
+
+    client
+        .when(HttpRequest::new().path("/grpc"))
+        .respond_with_grpc_stream(
+            GrpcStreamResponse::new().message(GrpcStreamMessage::json("{}")),
+        )
+        .expect("respond_with_grpc_stream failed");
+
+    let expectations = client
+        .retrieve_active_expectations(None)
+        .expect("retrieve failed");
+    assert_eq!(
+        expectations.len(),
+        5,
+        "all five advanced-response expectations should be registered"
+    );
+
+    client.reset().expect("reset failed");
+}
+
+#[test]
+#[ignore]
 fn test_verify_sequence() {
     let client = get_client();
     client.reset().expect("reset failed");

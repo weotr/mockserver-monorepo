@@ -3,6 +3,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "not": {
+      "type": "boolean"
+    },
     "specUrlOrPayload": {
       "anyOf": [
         {
@@ -14,6 +17,9 @@
       ]
     },
     "operationId": {
+      "type": "string"
+    },
+    "contextPathPrefix": {
       "type": "string"
     }
   },

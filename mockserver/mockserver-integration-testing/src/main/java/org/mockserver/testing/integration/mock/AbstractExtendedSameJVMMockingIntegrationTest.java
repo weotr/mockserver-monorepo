@@ -7,7 +7,7 @@ import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
 import org.mockserver.testing.integration.callback.StaticTestExpectationResponseCallback;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static junit.framework.TestCase.assertEquals;
+import static org.junit.Assert.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.model.Header.header;
 import static org.mockserver.model.HttpClassCallback.callback;

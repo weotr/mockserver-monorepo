@@ -113,6 +113,53 @@ class HttpRequestTest extends TestCase
         $this->assertSame('{"already":"json"}', $array['body']['json']);
     }
 
+    public function testFileBody(): void
+    {
+        $request = HttpRequest::request()
+            ->method('POST')
+            ->fileBody('/path/to/request.json');
+
+        $expected = [
+            'method' => 'POST',
+            'body' => [
+                'type' => 'FILE',
+                'filePath' => '/path/to/request.json',
+            ],
+        ];
+
+        $this->assertSame($expected, $request->toArray());
+    }
+
+    public function testFileBodyWithContentType(): void
+    {
+        $request = HttpRequest::request()
+            ->fileBody('/data/payload.xml', 'application/xml');
+
+        $array = $request->toArray();
+
+        $this->assertSame('FILE', $array['body']['type']);
+        $this->assertSame('/data/payload.xml', $array['body']['filePath']);
+        $this->assertSame('application/xml', $array['body']['contentType']);
+        $this->assertArrayNotHasKey('templateType', $array['body']);
+    }
+
+    public function testFileBodyWithTemplateType(): void
+    {
+        $request = HttpRequest::request()
+            ->fileBody('/templates/request.vm', 'application/json', 'VELOCITY');
+
+        $expected = [
+            'body' => [
+                'type' => 'FILE',
+                'filePath' => '/templates/request.vm',
+                'contentType' => 'application/json',
+                'templateType' => 'VELOCITY',
+            ],
+        ];
+
+        $this->assertSame($expected, $request->toArray());
+    }
+
     public function testKeepAliveAndSecure(): void
     {
         $request = HttpRequest::request()

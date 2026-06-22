@@ -38,6 +38,117 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json""
+    },
+    ""httpResponse"": {
+        ""body"": ""some_response_body""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+        ],
+        'httpResponse' =&gt; ['body' =&gt; 'some_response_body'],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -88,6 +199,123 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"",
+        ""operationId"": ""showPetById""
+    },
+    ""httpResponse"": {
+        ""body"": ""some_response_body""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+            'operationId' =&gt; 'showPetById',
+        ],
+        'httpResponse' =&gt; ['body' =&gt; 'some_response_body'],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -109,7 +337,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .when(
         openAPI(
-            "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+            "file:/path/to/openapi_petstore_example.json"
         )
     )
     .respond(
@@ -122,7 +350,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
 mockServerClient("localhost", 1080).mockAnyResponse({
     "httpRequest": {
-        "specUrlOrPayload": "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
     },
     "httpResponse": {
         "body": "some_response_body"
@@ -137,11 +365,122 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""specUrlOrPayload"": ""file:/path/to/openapi_petstore_example.json""
+    },
+    ""httpResponse"": {
+        ""body"": ""some_response_body""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'file:/path/to/openapi_petstore_example.json',
+        ],
+        'httpResponse' =&gt; ['body' =&gt; 'some_response_body'],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
     "httpRequest": {
-        "specUrlOrPayload": "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
     },
     "httpResponse": {
         "body": "some_response_body"
@@ -185,6 +524,117 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""specUrlOrPayload"": ""org/mockserver/openapi/openapi_petstore_example.json""
+    },
+    ""httpResponse"": {
+        ""body"": ""some_response_body""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'org/mockserver/openapi/openapi_petstore_example.json',
+        ],
+        'httpResponse' =&gt; ['body' =&gt; 'some_response_body'],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -206,7 +656,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     .when(
         new OpenAPIDefinition()
             .withSpecUrlOrPayload(
-                FileReader.readFileFromClassPathOrPath("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json")
+                FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json")
             )
             .withOperationId("listPets")
     )
@@ -222,7 +672,7 @@ try {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080).mockAnyResponse({
         "httpRequest": {
-            "specUrlOrPayload": fs.readFileSync("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json", "utf8"),
+            "specUrlOrPayload": fs.readFileSync("/path/to/openapi_petstore_example.json", "utf8"),
             "operationId": "showPetById"
         },
         "httpResponse": {
@@ -241,11 +691,141 @@ try {
 }</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import json
+from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+with open("/path/to/openapi_petstore_example.json") as f:
+    spec = json.load(f)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": spec,
+        "operationId": "listPets"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+require 'json'
+
+client = MockServer::Client.new('localhost', 1080)
+spec = JSON.parse(File.read('/path/to/openapi_petstore_example.json'))
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": spec,
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "fmt"
+    "net/http"
+    "os"
+)
+
+func main() {
+    spec, _ := os.ReadFile("/path/to/openapi_petstore_example.json")
+    body := []byte(fmt.Sprintf(`{
+    "httpRequest": {
+        "specUrlOrPayload": %s,
+        "operationId": "listPets"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}`, string(spec)))
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var spec = File.ReadAllText("/path/to/openapi_petstore_example.json");
+var json = $@"{{
+    ""httpRequest"": {{
+        ""specUrlOrPayload"": {spec},
+        ""operationId"": ""listPets""
+    }},
+    ""httpResponse"": {{
+        ""body"": ""some_response_body""
+    }}
+}}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>{% endraw %}
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+use std::fs;
+
+let client = Client::new();
+let spec = fs::read_to_string("/path/to/openapi_petstore_example.json").unwrap();
+let body = format!(r#"{{
+    "httpRequest": {{
+        "specUrlOrPayload": {},
+        "operationId": "listPets"
+    }},
+    "httpResponse": {{
+        "body": "some_response_body"
+    }}
+}}"#, spec);
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body)
+    .send()
+    .unwrap();</code></pre>{% endraw %}
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$specJson = file_get_contents('/path/to/openapi_petstore_example.json');
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; json_decode($specJson, true),
+            'operationId' =&gt; 'listPets',
+        ],
+        'httpResponse' =&gt; ['body' =&gt; 'some_response_body'],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API using cat</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d "{
     \"httpRequest\": {
-        \"specUrlOrPayload\": `cat /Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json`
+        \"specUrlOrPayload\": `cat /path/to/openapi_petstore_example.json`
     },
     \"httpResponse\": {
         \"body\": \"some_response_body\"
@@ -938,6 +1518,132 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+with open("/path/to/openapi_petstore_example.yaml") as f:
+    yaml_spec = f.read()
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": yaml_spec,
+        "operationId": "listPets"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+yaml_spec = File.read('/path/to/openapi_petstore_example.yaml')
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": yaml_spec,
+        "operationId": "listPets"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+    "os"
+)
+
+func main() {
+    yamlSpec, _ := os.ReadFile("/path/to/openapi_petstore_example.yaml")
+    payload := map[string]interface{}{
+        "httpRequest": map[string]interface{}{
+            "specUrlOrPayload": string(yamlSpec),
+            "operationId":      "listPets",
+        },
+        "httpResponse": map[string]interface{}{
+            "body": "some_response_body",
+        },
+    }
+    body, _ := json.Marshal(payload)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+using var httpClient = new HttpClient();
+var yamlSpec = File.ReadAllText("/path/to/openapi_petstore_example.yaml");
+var payload = new {
+    httpRequest = new { specUrlOrPayload = yamlSpec, operationId = "listPets" },
+    httpResponse = new { body = "some_response_body" }
+};
+var json = JsonSerializer.Serialize(payload);
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+use std::fs;
+
+let client = Client::new();
+let yaml_spec = fs::read_to_string("/path/to/openapi_petstore_example.yaml").unwrap();
+let body = serde_json::json!({
+    "httpRequest": {
+        "specUrlOrPayload": yaml_spec,
+        "operationId": "listPets"
+    },
+    "httpResponse": {
+        "body": "some_response_body"
+    }
+});
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .json(&amp;body)
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$yamlSpec = file_get_contents('/path/to/openapi_petstore_example.yaml');
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; $yamlSpec,
+            'operationId' =&gt; 'listPets',
+        ],
+        'httpResponse' =&gt; ['body' =&gt; 'some_response_body'],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -968,7 +1674,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     .when(
         new OpenAPIDefinition()
             .withSpecUrlOrPayload(
-               FileReader.readFileFromClassPathOrPath("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json")
+               FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json")
             )
             .withOperationId("listPets"),
         Times.exactly(2)
@@ -1002,6 +1708,144 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "some_body"
+    },
+    "times": {
+        "remainingTimes": 2
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "some_body"
+    },
+    "times": {
+        "remainingTimes": 2
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest":{
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse":{
+        "statusCode": 200,
+        "body": "some_body"
+    },
+    "times": {
+        "remainingTimes": 2
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"":{
+        ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"",
+        ""operationId"": ""showPetById""
+    },
+    ""httpResponse"":{
+        ""statusCode"": 200,
+        ""body"": ""some_body""
+    },
+    ""times"": {
+        ""remainingTimes"": 2
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest":{
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse":{
+        "statusCode": 200,
+        "body": "some_body"
+    },
+    "times": {
+        "remainingTimes": 2
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+            'operationId' =&gt; 'showPetById',
+        ],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; 'some_body'],
+        'times' =&gt; ['remainingTimes' =&gt; 2],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -1069,6 +1913,172 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "id": "630a6e5b-9d61-4668-a18f-a0d3df558583",
+    "priority": 0,
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "some_response_body"
+    },
+    "times": {
+        "unlimited": True
+    },
+    "timeToLive": {
+        "unlimited": True
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "id": "630a6e5b-9d61-4668-a18f-a0d3df558583",
+    "priority": 0,
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "some_response_body"
+    },
+    "times": {
+        "unlimited": true
+    },
+    "timeToLive": {
+        "unlimited": true
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "id": "630a6e5b-9d61-4668-a18f-a0d3df558583",
+    "priority": 0,
+    "httpRequest":{
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse":{
+        "statusCode": 200,
+        "body": "some_response_body"
+    },
+    "times":{
+        "unlimited": true
+    },
+    "timeToLive":{
+        "unlimited": true
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""id"": ""630a6e5b-9d61-4668-a18f-a0d3df558583"",
+    ""priority"": 0,
+    ""httpRequest"":{
+        ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"",
+        ""operationId"": ""showPetById""
+    },
+    ""httpResponse"":{
+        ""statusCode"": 200,
+        ""body"": ""some_response_body""
+    },
+    ""times"":{
+        ""unlimited"": true
+    },
+    ""timeToLive"":{
+        ""unlimited"": true
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "id": "630a6e5b-9d61-4668-a18f-a0d3df558583",
+    "priority": 0,
+    "httpRequest":{
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "httpResponse":{
+        "statusCode": 200,
+        "body": "some_response_body"
+    },
+    "times":{
+        "unlimited": true
+    },
+    "timeToLive":{
+        "unlimited": true
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'id' =&gt; '630a6e5b-9d61-4668-a18f-a0d3df558583',
+        'priority' =&gt; 0,
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+            'operationId' =&gt; 'showPetById',
+        ],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; 'some_response_body'],
+        'times' =&gt; ['unlimited' =&gt; true],
+        'timeToLive' =&gt; ['unlimited' =&gt; true],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">

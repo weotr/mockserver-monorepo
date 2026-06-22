@@ -62,6 +62,18 @@ public class CompletionTest {
         assertThat(c.getUsage(), is(nullValue()));
         assertThat(c.getStreaming(), is(nullValue()));
         assertThat(c.getStreamingPhysics(), is(nullValue()));
+        assertThat(c.getToolChoice(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldBuildWithToolChoice() {
+        assertThat(completion().withToolChoice("required").getToolChoice(), is("required"));
+    }
+
+    @Test
+    public void shouldNotBeEqualWhenDifferentToolChoice() {
+        assertThat(completion().withToolChoice("required"),
+            is(not(completion().withToolChoice("none"))));
     }
 
     @Test
@@ -127,6 +139,31 @@ public class CompletionTest {
     public void shouldNotBeEqualWhenDifferentOutputSchema() {
         assertThat(completion().withOutputSchema("{\"type\":\"object\"}"),
             is(not(completion().withOutputSchema("{\"type\":\"array\"}"))));
+    }
+
+    @Test
+    public void shouldDefaultEnforceOutputSchemaToNull() {
+        assertThat(completion().getEnforceOutputSchema(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldSetEnforceOutputSchema() {
+        assertThat(completion().withEnforceOutputSchema(true).getEnforceOutputSchema(), is(true));
+        assertThat(completion().enforceOutputSchema().getEnforceOutputSchema(), is(true));
+    }
+
+    @Test
+    public void shouldNotBeEqualWhenDifferentEnforceOutputSchema() {
+        assertThat(completion().withEnforceOutputSchema(true),
+            is(not(completion().withEnforceOutputSchema(false))));
+    }
+
+    @Test
+    public void shouldBeEqualWithSameEnforceOutputSchema() {
+        Completion c1 = completion().withOutputSchema("{\"type\":\"object\"}").enforceOutputSchema();
+        Completion c2 = completion().withOutputSchema("{\"type\":\"object\"}").enforceOutputSchema();
+        assertThat(c1, is(c2));
+        assertThat(c1.hashCode(), is(c2.hashCode()));
     }
 
     @Test

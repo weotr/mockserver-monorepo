@@ -1,6 +1,7 @@
 package org.mockserver.imports;
 
 import org.junit.Test;
+import org.mockserver.fixture.FixtureRedactor;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.Header;
 import org.mockserver.model.HttpRequest;
@@ -99,8 +100,10 @@ public class HarImporterTest {
         List<Expectation> expectations = importer.importExpectations(SIMPLE_HAR);
         HttpRequest request = (HttpRequest) expectations.get(0).getHttpRequest();
 
-        // X-Api-Key is NOT volatile, should be present
-        assertThat(request.getFirstHeader("X-Api-Key"), is("test-key"));
+        // X-Api-Key is NOT volatile, so it survives header filtering — but it IS
+        // sensitive, so import redaction (on by default) replaces its value with
+        // the placeholder rather than leaking the real key.
+        assertThat(request.getFirstHeader("X-Api-Key"), is(FixtureRedactor.REDACTED_PLACEHOLDER));
 
         // Date, User-Agent, Accept are volatile, should be filtered
         assertThat(request.getFirstHeader("Date"), is(""));

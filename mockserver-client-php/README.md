@@ -86,6 +86,55 @@ $client->when(
 );
 ```
 
+### Class Callbacks
+
+A **class callback** references a server-side class (already on MockServer's
+classpath) that implements one of MockServer's callback interfaces, and lets
+MockServer compute the response — or the request to forward — dynamically. It is
+pure JSON over the control plane, so it works fully from the PHP client.
+
+```php
+use MockServer\Expectation;
+use MockServer\HttpClassCallback;
+use MockServer\Delay;
+
+// Respond using a server-side ExpectationResponseCallback class
+$client->upsertExpectation(
+    (new Expectation())
+        ->httpRequest(HttpRequest::request()->method('GET')->path('/dynamic'))
+        ->httpResponseClassCallback('com.example.MyResponseCallback')
+);
+
+// Optionally add a delay / mark the connection primary
+$client->upsertExpectation(
+    (new Expectation())
+        ->httpRequest(HttpRequest::request()->path('/delayed'))
+        ->httpResponseClassCallback(
+            HttpClassCallback::callback('com.example.MyResponseCallback')
+                ->delay(Delay::milliseconds(250))
+                ->primary(true)
+        )
+);
+
+// Forward using a server-side ExpectationForwardCallback class
+$client->upsertExpectation(
+    (new Expectation())
+        ->httpRequest(HttpRequest::request()->path('/proxy'))
+        ->httpForwardClassCallback('com.example.MyForwardCallback')
+);
+```
+
+> **Object / closure callbacks are not available in PHP.** MockServer also
+> supports *object* (closure) callbacks, where the callback runs in your own
+> process: the client opens a callback **WebSocket**, the server hands it a
+> `clientId`, and on each match it streams the request to your code, which
+> returns the response. The PHP client is **REST-only and does not implement
+> that callback WebSocket**, so object/closure callbacks cannot be used from
+> PHP — use a **class callback** (a class on the MockServer classpath) instead.
+> This is a transport limitation of the PHP client, not of MockServer.
+
+See [`examples/php/callback`](../examples/php/callback) for a runnable example.
+
 ### Verification
 
 ```php
@@ -148,11 +197,214 @@ if ($client->hasStarted()) {
 }
 ```
 
+### SRE Control Plane
+
+Methods for resilience verification — load generation, fault injection, SLO
+verdicts, preemption (cordon/drain) and scheduled chaos experiments. Some are
+gated behind a server start-up flag and raise `FeatureNotEnabledException`
+(HTTP 403) until that flag is set.
+
+```php
+use MockServer\LoadScenario;
+use MockServer\LoadProfile;
+use MockServer\LoadStage;
+
+// Load generation registry: register scenarios (always allowed), then start
+// them (requires loadGenerationEnabled=true). Each scenario is an SLI producer.
+$scenario = LoadScenario::scenario('checkout-load')
+    ->maxRequests(5000)
+    ->profile(LoadProfile::of(
+        LoadStage::vuRamp(1, 10, 10000),   // warm up
+        LoadStage::vuHold(10, 30000),      // steady state
+        LoadStage::pause(5000),            // cool down
+    ))
+    ->addStep(
+        HttpRequest::request()->method('GET')->path('/api/item/$iteration.index'),
+        Delay::milliseconds(20),
+    );
+
+$client->loadScenario($scenario);            // PUT — register (does not run)
+$client->startLoadScenarios('checkout-load');// PUT /start — drive load (name or array)
+$client->loadScenarios();                    // GET — list all + state
+$client->getLoadScenario('checkout-load');   // GET /{name}
+$client->stopLoadScenarios();                // PUT /stop — stop all (or pass names)
+$client->deleteLoadScenario('checkout-load');// DELETE /{name}
+$client->clearLoadScenarios();               // DELETE — remove all
+
+// Or register-and-start in one call:
+$client->runLoadScenario($scenario);
+
+// Service-scoped HTTP chaos for a downstream host (optional TTL dead-man's switch)
+$client->setServiceChaos('payments.internal:8443', [
+    'errorStatus' => 503,
+    'errorProbability' => 0.3,
+    'latency' => ['timeUnit' => 'MILLISECONDS', 'value' => 200],
+], 60000);
+
+// SLO verdict (requires sloTrackingEnabled=true). FAIL raises VerificationException;
+// PASS / INCONCLUSIVE return the verdict array.
+$verdict = $client->verifySlo([
+    'name' => 'checkout-slo',
+    'window' => ['type' => 'LOOKBACK', 'lookbackMillis' => 60000],
+    'minimumSampleCount' => 20,
+    'objectives' => [
+        ['sli' => 'LATENCY_P95', 'comparator' => 'LESS_THAN', 'threshold' => 250.0],
+        ['sli' => 'ERROR_RATE', 'comparator' => 'LESS_THAN_OR_EQUAL', 'threshold' => 0.01],
+    ],
+]);
+
+// Preemption — cordon and drain the server (Kubernetes node drain / spot reclaim)
+$client->setPreemption(['mode' => 'both', 'drainMillis' => 10000, 'ttlMillis' => 60000]);
+$client->preemptionStatus();   // GET
+$client->clearPreemption();    // DELETE — uncordon
+
+// Scheduled multi-stage chaos experiment
+$client->startChaosExperiment([
+    'name' => 'gradual-degradation',
+    'stages' => [
+        ['durationMillis' => 10000, 'profiles' => ['api.example.com' => ['errorStatus' => 500, 'errorProbability' => 0.1]]],
+        ['durationMillis' => 10000, 'profiles' => ['api.example.com' => ['errorStatus' => 500, 'errorProbability' => 0.5]]],
+    ],
+]);
+```
+
+## Mocking LLM APIs
+
+Fluent builders under the `MockServer\Llm` namespace mock provider-agnostic LLM
+completions, embeddings, multi-turn conversations and provider failover. The
+wire JSON they produce is identical to the Java, Node and Python clients, so a
+mock scripted from PHP behaves the same as one scripted anywhere else.
+
+```php
+<?php
+
+use MockServer\Llm\Completion;
+use MockServer\Llm\IsolationSource;
+use MockServer\Llm\LlmConversationBuilder;
+use MockServer\Llm\LlmFailoverBuilder;
+use MockServer\Llm\LlmMockBuilder;
+use MockServer\Llm\Provider;
+use MockServer\Llm\Role;
+use MockServer\Llm\Usage;
+
+// Single completion mock
+LlmMockBuilder::llmMock('/v1/chat/completions')
+    ->withProvider(Provider::OPENAI)
+    ->withModel('gpt-4o')
+    ->respondingWith(
+        Completion::completion()
+            ->withText('Hello from a mocked model!')
+            ->withStopReason('stop')
+            ->withUsage(Usage::usage()->withInputTokens(12)->withOutputTokens(8))
+    )
+    ->applyTo($client);
+
+// Multi-turn conversation (advances MockServer scenario state per turn),
+// isolated per session by a request header
+LlmConversationBuilder::conversation()
+    ->withPath('/v1/chat/completions')
+    ->withProvider(Provider::ANTHROPIC)
+    ->isolateBy(IsolationSource::header('x-session-id'))
+    ->turn()
+        ->whenLatestMessageRole(Role::USER)
+        ->respondingWith(Completion::completion()->withText('Hi! How can I help?'))
+    ->turn()
+        ->respondingWith(Completion::completion()->withText('Goodbye!'))
+    ->applyTo($client);
+
+// Provider failover: fail twice, then succeed (consecutive identical failures
+// are coalesced; default JSON error bodies are supplied per status code)
+LlmFailoverBuilder::llmFailover()
+    ->withPath('/v1/chat/completions')
+    ->withProvider(Provider::OPENAI)
+    ->failWith(429)
+    ->failWith(503, 2)
+    ->thenRespondWith(Completion::completion()->withText('Recovered'))
+    ->applyTo($client);
+```
+
+## Mocking MCP Servers
+
+`MockServer\Mcp\McpMockBuilder` emulates a Streamable-HTTP MCP (Model Context
+Protocol) server speaking JSON-RPC 2.0. It generates the full set of
+expectations — `initialize`, `ping`, `notifications/initialized`, plus
+`tools/list` + `tools/call`, `resources/list` + `resources/read` and
+`prompts/list` + `prompts/get` for any tools, resources and prompts declared.
+
+```php
+<?php
+
+use MockServer\Mcp\McpMockBuilder;
+use MockServer\Llm\Role;
+
+McpMockBuilder::mcpMock('/mcp')
+    ->withServerName('WeatherServer')
+    ->withTool('get_weather')
+        ->withDescription('Get the weather for a city')
+        ->withInputSchema('{"type":"object","properties":{"city":{"type":"string"}}}')
+        ->respondingWith('72F and sunny')
+    ->and()
+    ->withResource('file:///config.json')
+        ->withName('config')
+        ->withMimeType('application/json')
+        ->withContent('{"debug":true}')
+    ->and()
+    ->withPrompt('greeting')
+        ->withArgument('name', 'Who to greet', true)
+        ->respondingWith(Role::ASSISTANT, 'Hello there!')
+    ->and()
+    ->applyTo($client);
+```
+
+Every builder also exposes `build()` to obtain the raw `Expectation`
+object(s) without registering them (a single `Expectation` for `llmMock`,
+or an array of `Expectation` for conversations, failover and MCP).
+
+## Start / Launch MockServer
+
+The PHP client does not include a binary launcher (PHP lacks the native WebSocket and subprocess management required for embedded launch). To start MockServer, use one of the following approaches:
+
+- **Docker:** `docker run -d -p 1080:1080 mockserver/mockserver`
+- **Executable JAR:** `java -jar mockserver-netty-no-dependencies-<version>.jar -serverPort 1080`
+- **Homebrew:** `brew install mockserver && mockserver -serverPort 1080`
+- **Another client's launcher:** The Node, Python, Ruby, Go, .NET, and Rust clients can each download and launch MockServer automatically without Java or Docker.
+
+See the [Running MockServer](https://www.mock-server.com/mock_server/running_mock_server.html) documentation for all available options.
+
 ## Building
 
 ```bash
 composer install
 ```
+
+## Using in tests (PHPUnit)
+
+`MockServer\Testing\MockServerTestTrait` provides a `MockServerClient` and resets
+the server before and after each test, so recorded requests, expectations and
+logs never leak between tests. Mix it into your PHPUnit test case and call the
+lifecycle helpers from `setUp()` / `tearDown()`:
+
+```php
+use MockServer\Testing\MockServerTestTrait;
+use PHPUnit\Framework\TestCase;
+
+final class MyTest extends TestCase
+{
+    use MockServerTestTrait;
+
+    protected function setUp(): void    { $this->setUpMockServer(); }
+    protected function tearDown(): void { $this->tearDownMockServer(); }
+
+    public function testSomething(): void
+    {
+        // $this->mockServer is a reset MockServerClient ready to use
+        $this->mockServer->reset();
+    }
+}
+```
+
+The server URL is read from the `MOCKSERVER_URL` environment variable (for
+example `http://localhost:1080`); when it is unset the test is skipped.
 
 ## Running Tests
 

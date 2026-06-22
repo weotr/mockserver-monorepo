@@ -16,9 +16,9 @@ Follow the worktree workflow in `.opencode/rules/worktree-workflow.md`. This com
    ```
 5. Change working directory into the worktree for the rest of the session. All subsequent commands run inside the worktree.
 6. Tell the user clearly:
-   - The worktree path
-   - That IntelliJ MCP tools (`mcp__idea__*`) still operate on the **main** checkout, not the worktree — if they want IDE visibility for this work they need to **File → Open** the worktree path in a new IntelliJ window. Without that, watching the file-change diff in `git status` is the primary signal.
-   - To merge work back to master, run `/worktree-merge` which runs the 4 verification gates and the locked rebase.
+   - The worktree path.
+   - That worktree isolation is the **default** for an independent session: work proceeds inside the worktree, and `git status` / `git diff` is the primary signal.
+   - To merge work back to master, run `/worktree-merge`, which runs the 4 verification gates and the locked rebase.
 
 If `.tmp/active-worktree` already exists, the session is already in worktree mode — report the existing path instead of creating a second one.
 

@@ -11,7 +11,7 @@
 ARG source=download
 
 # build image — downloads release artifacts from Sonatype, tcnative from Maven Central
-FROM alpine:3.23 as download
+FROM alpine:3.24 as download
 
 # Optional: trust a corporate root CA before `apk add`. The build context contains
 # ca-bundle.pem (empty in CI, populated locally behind a TLS-inspecting proxy).
@@ -27,6 +27,10 @@ RUN if [ -s /tmp/local-ca.pem ]; then \
       cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
       update-ca-certificates >/dev/null 2>&1 || true; \
     fi
+# Harden Maven Central downloads against transient DNS/connection blips (e.g. flaky
+# networks, CI). GNU wget retries host-resolution + connection-refused errors;
+# BusyBox wget ignores /etc/wgetrc, so this is a safe no-op there.
+RUN printf 'tries=5\ntimeout=60\nwaitretry=10\nretry_on_host_error=on\nretry_connrefused=on\n' >> /etc/wgetrc
 ARG VERSION=RELEASE
 ARG REPOSITORY_URL=https://repo1.maven.org/maven2/org/mock-server/mockserver-netty/${VERSION}/mockserver-netty-${VERSION}-jar-with-dependencies.jar
 # Audit finding F-DKR-06: SHA256-verify all Maven Central downloads.
@@ -45,7 +49,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; \
 RUN unzip netty-tcnative-boringssl-static.jar
 
 # build image — copies JAR from context, downloads tcnative from Maven Central
-FROM alpine:3.23 as copy
+FROM alpine:3.24 as copy
 
 COPY ca-bundle.pem /tmp/local-ca.pem
 RUN if [ -s /tmp/local-ca.pem ]; then \
@@ -59,6 +63,10 @@ RUN if [ -s /tmp/local-ca.pem ]; then \
       cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
       update-ca-certificates >/dev/null 2>&1 || true; \
     fi
+# Harden Maven Central downloads against transient DNS/connection blips (e.g. flaky
+# networks, CI). GNU wget retries host-resolution + connection-refused errors;
+# BusyBox wget ignores /etc/wgetrc, so this is a safe no-op there.
+RUN printf 'tries=5\ntimeout=60\nwaitretry=10\nretry_on_host_error=on\nretry_connrefused=on\n' >> /etc/wgetrc
 COPY mockserver-netty-jar-with-dependencies.jar .
 ARG TARGETARCH=amd64
 ARG NETTY_TCNATIVE=2.0.77.Final
@@ -73,7 +81,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; \
 RUN unzip netty-tcnative-boringssl-static.jar
 
 # download GraalJS JARs
-FROM alpine:3.23 as graaljs
+FROM alpine:3.24 as graaljs
 
 COPY ca-bundle.pem /tmp/local-ca.pem
 RUN if [ -s /tmp/local-ca.pem ]; then \
@@ -87,6 +95,10 @@ RUN if [ -s /tmp/local-ca.pem ]; then \
       cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
       update-ca-certificates >/dev/null 2>&1 || true; \
     fi
+# Harden Maven Central downloads against transient DNS/connection blips (e.g. flaky
+# networks, CI). GNU wget retries host-resolution + connection-refused errors;
+# BusyBox wget ignores /etc/wgetrc, so this is a safe no-op there.
+RUN printf 'tries=5\ntimeout=60\nwaitretry=10\nretry_on_host_error=on\nretry_connrefused=on\n' >> /etc/wgetrc
 ARG GRAALJS_VERSION=25.0.3
 # GraalVM 25.x dropped the JSR-223 javax.script bridge (js-scriptengine.jar is gone).
 # Coordinates also changed: icu4j is now under org.graalvm.shadowed instead of com.ibm.icu,

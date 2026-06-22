@@ -138,6 +138,20 @@ public class HttpRequestToJavaSerializerTest {
     }
 
     @Test
+    public void shouldSerializeFullObjectWithFuzzyBodyRequestAsJava() {
+        // when
+        assertThat(
+            new HttpRequestToJavaSerializer().serialize(1,
+                new HttpRequest()
+                    .withBody(
+                        new FuzzyBody("some fuzzy value", 0.8d, false)
+                    )
+            ), is(NEW_LINE +
+                "        request()" + NEW_LINE +
+                "                .withBody(new FuzzyBody(\"some fuzzy value\", 0.8d, false))"));
+    }
+
+    @Test
     public void shouldEscapeJsonBodies() {
         assertThat(
             new HttpRequestToJavaSerializer().serialize(1,
@@ -281,6 +295,27 @@ public class HttpRequestToJavaSerializerTest {
                 "        request()" + NEW_LINE +
                 "                .withPath(\"somePath\")" + NEW_LINE +
                 "                .withBody(new XmlSchemaBody(\"" + StringEscapeUtils.escapeJava(xmlSchema) + "\"))"));
+    }
+
+    @Test
+    public void shouldEscapeSpecialCharactersInMethodAndPathAsJava() {
+        // given - a method and path containing characters that would otherwise produce
+        // non-compiling or injected Java source (double quote, backslash, dollar, backtick)
+        String method = "GET\"\\$`";
+        String path = "/some\"path\\with$specials`";
+
+        // when
+        String java = new HttpRequestToJavaSerializer().serialize(1,
+            new HttpRequest()
+                .withMethod(method)
+                .withPath(path)
+        );
+
+        // then - both literals are escaped uniformly with escapeJava
+        assertThat(java, is(NEW_LINE +
+            "        request()" + NEW_LINE +
+            "                .withMethod(\"" + StringEscapeUtils.escapeJava(method) + "\")" + NEW_LINE +
+            "                .withPath(\"" + StringEscapeUtils.escapeJava(path) + "\")"));
     }
 
     @Test

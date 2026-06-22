@@ -3,6 +3,7 @@ package org.mockserver.serialization.model;
 import org.junit.Test;
 import org.mockserver.model.Delay;
 import org.mockserver.model.DelayDistribution;
+import org.mockserver.model.HttpTemplate;
 
 import java.util.concurrent.TimeUnit;
 
@@ -87,6 +88,52 @@ public class DelayDTOTest {
         assertThat(built.getTimeUnit(), is(TimeUnit.SECONDS));
         assertThat(built.getValue(), is(5L));
         assertThat(built.getDistribution(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldRoundTripTemplateDelay() {
+        // given
+        Delay templateDelay = Delay.template(HttpTemplate.TemplateType.VELOCITY, "$request.body.length()");
+
+        // when
+        DelayDTO dto = new DelayDTO(templateDelay);
+
+        // then
+        assertThat(dto.getTemplate(), is("$request.body.length()"));
+        assertThat(dto.getTemplateType(), is(HttpTemplate.TemplateType.VELOCITY));
+
+        // and when built back
+        Delay built = dto.buildObject();
+
+        // then
+        assertThat(built.hasTemplate(), is(true));
+        assertThat(built.getTemplate(), is("$request.body.length()"));
+        assertThat(built.getTemplateType(), is(HttpTemplate.TemplateType.VELOCITY));
+    }
+
+    @Test
+    public void shouldLeaveTemplateFieldsNullForStaticDelay() {
+        // when
+        DelayDTO dto = new DelayDTO(new Delay(TimeUnit.SECONDS, 5));
+
+        // then
+        assertThat(dto.getTemplate(), is(nullValue()));
+        assertThat(dto.getTemplateType(), is(nullValue()));
+        assertThat(dto.buildObject().hasTemplate(), is(false));
+    }
+
+    @Test
+    public void shouldSetTemplateViaSetter() {
+        // when
+        DelayDTO dto = new DelayDTO();
+        dto.setTemplateType(HttpTemplate.TemplateType.MUSTACHE);
+        dto.setTemplate("{{request.body}}");
+
+        // then
+        Delay built = dto.buildObject();
+        assertThat(built.hasTemplate(), is(true));
+        assertThat(built.getTemplate(), is("{{request.body}}"));
+        assertThat(built.getTemplateType(), is(HttpTemplate.TemplateType.MUSTACHE));
     }
 
     @Test

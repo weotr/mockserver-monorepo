@@ -1,0 +1,37 @@
+---
+openapi: 3.1.0
+info:
+  version: 1.0.0
+  title: OpenAPI 3.1 Webhooks Only
+  summary: A valid OAS 3.1 document that omits paths entirely and declares only webhooks
+webhooks:
+  newPet:
+    post:
+      operationId: onNewPet
+      summary: Webhook fired when a new pet is registered
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pet'
+      responses:
+        '200':
+          description: webhook acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Pet'
+components:
+  schemas:
+    Pet:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 7
+        name:
+          type: string
+          example: "Rex"

@@ -1,0 +1,27 @@
+meta {
+  name: create expectations from a WSDL
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/mockserver/wsdl
+  body: text
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/xml
+}
+
+body:text {
+  <?xml version="1.0" encoding="UTF-8"?><definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:tns="http://example.com/greeting" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="GreetingService" targetNamespace="http://example.com/greeting"><types><xsd:schema targetNamespace="http://example.com/greeting"><xsd:element name="GreetRequest"><xsd:complexType><xsd:sequence><xsd:element name="name" type="xsd:string"/></xsd:sequence></xsd:complexType></xsd:element><xsd:element name="GreetResponse"><xsd:complexType><xsd:sequence><xsd:element name="greeting" type="xsd:string"/></xsd:sequence></xsd:complexType></xsd:element></xsd:schema></types><message name="GreetRequestMessage"><part name="parameters" element="tns:GreetRequest"/></message><message name="GreetResponseMessage"><part name="parameters" element="tns:GreetResponse"/></message><portType name="GreetingPortType"><operation name="Greet"><input message="tns:GreetRequestMessage"/><output message="tns:GreetResponseMessage"/></operation></portType><binding name="GreetingBinding" type="tns:GreetingPortType"><soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/><operation name="Greet"><soap:operation soapAction="http://example.com/greeting/Greet"/><input><soap:body use="literal"/></input><output><soap:body use="literal"/></output></operation></binding><service name="GreetingService"><port name="GreetingPort" binding="tns:GreetingBinding"><soap:address location="http://localhost:1080/ws/greeting"/></port></service></definitions>
+}
+
+docs {
+  generates expectations from a WSDL document (the request body is the raw WSDL) and adds them
+  
+  WSDL document to generate expectations from
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

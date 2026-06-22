@@ -131,6 +131,20 @@ public class ExpectationTest {
     }
 
     @Test
+    public void shouldNormaliseBlankNamespaceToGlobal() {
+        // a non-blank namespace is trimmed and retained
+        assertThat(new Expectation(request()).withNamespace("team-a").getNamespace(), is("team-a"));
+        assertThat(new Expectation(request()).withNamespace("  team-a  ").getNamespace(), is("team-a"));
+
+        // null / empty / whitespace-only namespace is normalised to null (global),
+        // so a blank namespace is unambiguously global and can never produce an
+        // expectation that matches everything yet cannot be cleared by namespace
+        assertThat(new Expectation(request()).withNamespace(null).getNamespace(), nullValue());
+        assertThat(new Expectation(request()).withNamespace("").getNamespace(), nullValue());
+        assertThat(new Expectation(request()).withNamespace("   ").getNamespace(), nullValue());
+    }
+
+    @Test
     public void shouldReturnAliveStatus() {
         // when no times left should return false
         assertThat(new Expectation(null, Times.exactly(0), TimeToLive.unlimited(), 0).thenRespond((HttpResponse) null).thenForward((HttpForward) null).isActive(), is(false));

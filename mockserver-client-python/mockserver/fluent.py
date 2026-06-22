@@ -161,10 +161,38 @@ class ForwardChainExpectation:
         self._expectation.http_forward_template = template
         return await self._client.upsert(self._expectation)
 
-    async def forward_with_class_callback(self, class_callback: HttpClassCallback) -> list[Expectation]:
-        if not isinstance(class_callback, HttpClassCallback):
+    async def respond_with_class_callback(
+        self, class_callback: HttpClassCallback | str
+    ) -> list[Expectation]:
+        """Respond using a server-side class callback (REST-only, no WebSocket).
+
+        Accepts either an :class:`HttpClassCallback` or, as a shorthand, the
+        fully-qualified callback class name as a ``str``. Serializes to
+        ``httpResponseClassCallback``.
+        """
+        if isinstance(class_callback, str):
+            class_callback = HttpClassCallback(callback_class=class_callback)
+        elif not isinstance(class_callback, HttpClassCallback):
             raise TypeError(
-                f"Expected HttpClassCallback, got {type(class_callback).__name__}"
+                f"Expected HttpClassCallback or str, got {type(class_callback).__name__}"
+            )
+        self._expectation.http_response_class_callback = class_callback
+        return await self._client.upsert(self._expectation)
+
+    async def forward_with_class_callback(
+        self, class_callback: HttpClassCallback | str
+    ) -> list[Expectation]:
+        """Forward using a server-side class callback (REST-only, no WebSocket).
+
+        Accepts either an :class:`HttpClassCallback` or, as a shorthand, the
+        fully-qualified callback class name as a ``str``. Serializes to
+        ``httpForwardClassCallback``.
+        """
+        if isinstance(class_callback, str):
+            class_callback = HttpClassCallback(callback_class=class_callback)
+        elif not isinstance(class_callback, HttpClassCallback):
+            raise TypeError(
+                f"Expected HttpClassCallback or str, got {type(class_callback).__name__}"
             )
         self._expectation.http_forward_class_callback = class_callback
         return await self._client.upsert(self._expectation)

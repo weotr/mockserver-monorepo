@@ -10,6 +10,7 @@ import {
   conversationToMcpCall,
 } from '../lib/conversationCodegen';
 import CopyButton from './CopyButton';
+import { monospaceFontFamily } from '../theme';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -53,7 +54,7 @@ export default function ConversationWizardStep3({ draft }: Step3Props) {
         <Box
           component="pre"
           sx={{
-            fontFamily: 'monospace',
+            fontFamily: monospaceFontFamily,
             fontSize: '0.75rem',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-all',

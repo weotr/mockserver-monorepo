@@ -3,6 +3,9 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "not": {
+      "type": "boolean"
+    },
     "secure": {
       "type": "boolean"
     },

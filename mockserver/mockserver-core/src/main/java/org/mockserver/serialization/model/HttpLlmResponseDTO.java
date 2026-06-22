@@ -10,6 +10,7 @@ public class HttpLlmResponseDTO extends ObjectWithReflectiveEqualsHashCodeToStri
     private String model;
     private Completion completion;
     private EmbeddingResponse embedding;
+    private RerankResponse rerank;
     private ConversationPredicates conversationPredicates;
     private LlmChaosProfile chaos;
     @JsonInclude(JsonInclude.Include.NON_DEFAULT)
@@ -24,6 +25,7 @@ public class HttpLlmResponseDTO extends ObjectWithReflectiveEqualsHashCodeToStri
             model = httpLlmResponse.getModel();
             completion = httpLlmResponse.getCompletion();
             embedding = httpLlmResponse.getEmbedding();
+            rerank = httpLlmResponse.getRerank();
             conversationPredicates = httpLlmResponse.getConversationPredicates();
             chaos = httpLlmResponse.getChaos();
             primary = httpLlmResponse.isPrimary();
@@ -40,6 +42,7 @@ public class HttpLlmResponseDTO extends ObjectWithReflectiveEqualsHashCodeToStri
             .withModel(model)
             .withCompletion(completion)
             .withEmbedding(embedding)
+            .withRerank(rerank)
             .withConversationPredicates(conversationPredicates)
             .withChaos(chaos)
             .withPrimary(primary);
@@ -87,6 +90,15 @@ public class HttpLlmResponseDTO extends ObjectWithReflectiveEqualsHashCodeToStri
 
     public HttpLlmResponseDTO setEmbedding(EmbeddingResponse embedding) {
         this.embedding = embedding;
+        return this;
+    }
+
+    public RerankResponse getRerank() {
+        return rerank;
+    }
+
+    public HttpLlmResponseDTO setRerank(RerankResponse rerank) {
+        this.rerank = rerank;
         return this;
     }
 

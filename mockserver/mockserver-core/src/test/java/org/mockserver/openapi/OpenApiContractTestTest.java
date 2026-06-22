@@ -247,6 +247,30 @@ public class OpenApiContractTestTest {
         assertThat(results, hasSize(1));
         assertThat(results.get(0).isPassed(), is(false));
         assertThat(results.get(0).getValidationErrors(), hasSize(1));
-        assertThat(results.get(0).getValidationErrors().get(0), containsString("contract test error"));
+        // the error names the operation under test and includes the cause, not a bare exception echo
+        assertThat(results.get(0).getValidationErrors().get(0), containsString("contract test for operation listPets"));
+        assertThat(results.get(0).getValidationErrors().get(0), containsString("connection refused"));
+    }
+
+    @Test
+    public void shouldProduceMeaningfulErrorWhenSenderThrowsExceptionWithNullMessage() {
+        // given - a sender that throws an exception with no message (getMessage() == null)
+        Function<HttpRequest, HttpResponse> failingSender = request -> {
+            throw new RuntimeException();
+        };
+
+        // when
+        List<OpenApiContractTest.ContractTestResult> results = contractTest.runContractTests(
+            SPEC, "http://localhost:8080", "listPets", failingSender
+        );
+
+        // then - the error names the operation/aspect and the exception type, never a bare "null"
+        assertThat(results, hasSize(1));
+        assertThat(results.get(0).isPassed(), is(false));
+        assertThat(results.get(0).getValidationErrors(), hasSize(1));
+        String error = results.get(0).getValidationErrors().get(0);
+        assertThat(error, containsString("contract test for operation listPets"));
+        assertThat(error, containsString("RuntimeException"));
+        assertThat(error, not(endsWith(": null")));
     }
 }

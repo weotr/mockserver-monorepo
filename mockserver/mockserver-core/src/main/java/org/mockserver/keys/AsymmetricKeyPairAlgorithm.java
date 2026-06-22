@@ -50,4 +50,62 @@ public enum AsymmetricKeyPairAlgorithm {
     public int getKeyLength() {
         return keyLength;
     }
+
+    /**
+     * The W3C XML Signature {@code SignatureMethod} algorithm URI corresponding to this key/hash
+     * pair, used when enveloped-signing SAML assertions with the JDK XML Digital Signature API.
+     */
+    public String getXmlSignatureMethod() {
+        switch (this) {
+            case EC256_SHA256:
+                return "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
+            case EC384_SHA384:
+                return "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384";
+            case ECP512_SHA512:
+                return "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512";
+            case RSA3072_SHA384:
+                return "http://www.w3.org/2001/04/xmldsig-more#rsa-sha384";
+            case RSA4096_SHA512:
+                return "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
+            case RSA2048_SHA256:
+            default:
+                return "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+        }
+    }
+
+    /**
+     * The W3C XML Signature {@code DigestMethod} algorithm URI corresponding to this algorithm's hash.
+     */
+    public String getXmlDigestMethod() {
+        switch (this) {
+            case EC384_SHA384:
+            case RSA3072_SHA384:
+                return "http://www.w3.org/2001/04/xmldsig-more#sha384";
+            case ECP512_SHA512:
+            case RSA4096_SHA512:
+                return "http://www.w3.org/2001/04/xmlenc#sha512";
+            case EC256_SHA256:
+            case RSA2048_SHA256:
+            default:
+                return "http://www.w3.org/2001/04/xmlenc#sha256";
+        }
+    }
+
+    /**
+     * Resolves an algorithm from its JWT-style short name (e.g. {@code RS256}, {@code ES384}),
+     * case-insensitively, returning {@code null} when the name is null/blank/unrecognised so callers
+     * can fall back to a default.
+     */
+    public static AsymmetricKeyPairAlgorithm fromJwtAlgorithm(String jwtAlgorithm) {
+        if (jwtAlgorithm == null || jwtAlgorithm.trim().isEmpty()) {
+            return null;
+        }
+        String normalised = jwtAlgorithm.trim();
+        for (AsymmetricKeyPairAlgorithm algorithm : values()) {
+            if (algorithm.jwtAlgorithm.equalsIgnoreCase(normalised)) {
+                return algorithm;
+            }
+        }
+        return null;
+    }
 }

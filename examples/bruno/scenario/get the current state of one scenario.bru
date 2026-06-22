@@ -1,0 +1,17 @@
+meta {
+  name: get the current state of one scenario
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/mockserver/scenario/checkout
+  body: none
+  auth: inherit
+}
+
+docs {
+  Returns the current state of the named scenario (null when the scenario has no state yet).
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

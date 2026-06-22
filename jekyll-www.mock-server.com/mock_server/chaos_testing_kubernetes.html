@@ -34,6 +34,41 @@ schema_faq:
 
 <p>This page builds on the <a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> page, which covers the <code class="inline code">chaos</code> profile fields in detail. Here we focus on <strong>deployment patterns in Kubernetes</strong> that put MockServer in the request path so chaos profiles apply to real upstream traffic.</p>
 
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>Three deployment patterns put MockServer in the request path, plus guidance on Helm, HTTPS interception, and scoping:</p>
+
+<table class="comparison_table">
+    <thead>
+        <tr>
+            <th>Deployment patterns</th>
+            <th>Configuration &amp; reference</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#how_it_works">How It Works</a> &mdash; overview of the in-path chaos proxy model</li>
+                    <li><a href="#reverse_proxy_pattern">Pattern 1: Reverse Proxy</a> &mdash; route a Kubernetes Service through MockServer</li>
+                    <li><a href="#forward_proxy_pattern">Pattern 2: Egress / Forward Proxy</a> &mdash; inject chaos into external API calls via HTTP_PROXY</li>
+                    <li><a href="#sidecar_pattern">Pattern 3: Sidecar Proxy</a> &mdash; co-locate MockServer in the same pod</li>
+                </ul>
+            </td>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#helm_deployment">Deploying with Helm</a> &mdash; Helm chart values for reverse-proxy setup</li>
+                    <li><a href="#https_interception">HTTPS Interception</a> &mdash; CA trust and certificate configuration</li>
+                    <li><a href="#selective_chaos">Selective Chaos Scope</a> &mdash; target specific hosts and paths only</li>
+                    <li><a href="#faq">FAQ</a> &mdash; common questions on injection, HTTPS, and transparent proxying</li>
+                </ul>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
 <a id="how_it_works" class="anchor" href="#how_it_works">&nbsp;</a>
 
 <h2>How It Works</h2>

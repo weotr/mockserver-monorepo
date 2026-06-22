@@ -71,6 +71,20 @@ public class CrossProtocolEventBus {
     }
 
     /**
+     * Returns the live {@link ScenarioManager} wired by {@link HttpState},
+     * or {@code null} if no server has been initialised yet. Used by the
+     * template engines (via the {@code scenario} template helper) to read
+     * and write scenario state from response templates, so a value captured
+     * in one request can drive a later response. Returning the live instance
+     * (not a copy) ensures template writes are immediately visible to
+     * subsequent matcher {@link ScenarioManager#matchesState} checks and
+     * vice-versa.
+     */
+    public ScenarioManager getScenarioManager() {
+        return scenarioManager;
+    }
+
+    /**
      * Wires the clustered state backend for fleet-wide registration replication.
      * When the backend {@link StateBackend#isClustered() isClustered()},
      * registrations are replicated via the backend's CRUD entity store, and

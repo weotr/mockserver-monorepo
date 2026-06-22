@@ -1,0 +1,39 @@
+meta {
+  name: save a chaos experiment profile
+  type: http
+  seq: 17
+}
+
+put {
+  url: {{baseUrl}}/mockserver/chaosExperiment/profiles/checkout
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "stages": [
+      {
+        "durationMillis": 30000,
+        "profiles": {
+          "payments.svc": {
+            "errorStatus": 503,
+            "errorProbability": 0.5
+          }
+        }
+      }
+    ]
+  }
+}
+
+docs {
+  Saves a chaos experiment definition (the same body shape as PUT /mockserver/chaosExperiment) under the given name so it can be applied later with POST /mockserver/chaosExperiment/apply/{name}. The name in the path is authoritative; any name field in the body is ignored. The name must be 1-128 characters of letters, digits, space, dot, underscore or hyphen with no leading/trailing space.
+  
+  chaos experiment definition to save
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

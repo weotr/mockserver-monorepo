@@ -65,7 +65,11 @@ export function parsePrometheusText(text: string): PrometheusSample[] {
     const name = match[1];
     if (name === undefined) continue;
     const value = parseValue(match[3] ?? '');
-    if (Number.isNaN(value) && (match[3] ?? '').trim() !== 'NaN') continue; // skip unparseable
+    // Skip non-finite values (NaN, +Inf, -Inf). No MockServer metric *value* is
+    // legitimately infinite — histogram `le="+Inf"` lives in the label, not the
+    // value — so keeping ±Inf here would only poison chart auto-scaling and
+    // numeric formatting (e.g. `toFixed` → "Infinity", `metricSum` → Infinity).
+    if (!Number.isFinite(value)) continue;
     samples.push({ name, labels: parseLabels(match[2]), value });
   }
   return samples;

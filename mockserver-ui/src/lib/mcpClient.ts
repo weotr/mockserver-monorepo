@@ -38,7 +38,7 @@ const initInFlight = new Map<string, Promise<string>>();
  * Perform the MCP initialize + notifications/initialized handshake and
  * return the session id. The result is cached per baseUrl.
  */
-async function initializeSession(baseUrl: string): Promise<string> {
+async function initializeSession(baseUrl: string, signal?: AbortSignal): Promise<string> {
   const initEnvelope = {
     jsonrpc: '2.0',
     id: Date.now(),
@@ -55,6 +55,7 @@ async function initializeSession(baseUrl: string): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(initEnvelope),
+    signal,
   });
   if (!initRes.ok) {
     throw new Error(`MCP initialize failed: HTTP ${initRes.status} ${initRes.statusText}`);
@@ -73,18 +74,22 @@ async function initializeSession(baseUrl: string): Promise<string> {
       'Mcp-Session-Id': sessionId,
     },
     body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    signal,
   });
 
   sessionCache.set(baseUrl, sessionId);
   return sessionId;
 }
 
-async function ensureSession(baseUrl: string): Promise<string> {
+async function ensureSession(baseUrl: string, signal?: AbortSignal): Promise<string> {
   const cached = sessionCache.get(baseUrl);
   if (cached) return cached;
   const inFlight = initInFlight.get(baseUrl);
   if (inFlight) return inFlight;
-  const promise = initializeSession(baseUrl).finally(() => initInFlight.delete(baseUrl));
+  // The handshake promise is shared with any coalesced callers, so only the
+  // caller that *starts* it threads its signal in — aborting a handshake other
+  // callers are awaiting would be surprising.
+  const promise = initializeSession(baseUrl, signal).finally(() => initInFlight.delete(baseUrl));
   initInFlight.set(baseUrl, promise);
   return promise;
 }
@@ -111,14 +116,16 @@ function isExpiredSessionError(error: unknown): boolean {
  *                 (e.g. `http://127.0.0.1:1080`).
  * @param toolName The MCP tool to invoke (e.g. `mock_llm_completion`).
  * @param args     The tool arguments as a plain object.
+ * @param signal   Optional AbortSignal to cancel the in-flight request(s).
  * @returns Parsed result.
  */
 export async function callMcpTool(
   baseUrl: string,
   toolName: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<McpToolCallResult> {
-  return callMcpToolOnce(baseUrl, toolName, args, /*retried*/ false);
+  return callMcpToolOnce(baseUrl, toolName, args, /*retried*/ false, signal);
 }
 
 async function callMcpToolOnce(
@@ -126,10 +133,11 @@ async function callMcpToolOnce(
   toolName: string,
   args: Record<string, unknown>,
   retried: boolean,
+  signal?: AbortSignal,
 ): Promise<McpToolCallResult> {
   let sessionId: string;
   try {
-    sessionId = await ensureSession(baseUrl);
+    sessionId = await ensureSession(baseUrl, signal);
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
@@ -151,6 +159,7 @@ async function callMcpToolOnce(
       'Mcp-Session-Id': sessionId,
     },
     body: JSON.stringify(envelope),
+    signal,
   });
 
   if (!response.ok) {
@@ -159,7 +168,7 @@ async function callMcpToolOnce(
     // malformed requests as well — retrying would mask client-side bugs.
     if (!retried && response.status === 404) {
       sessionCache.delete(baseUrl);
-      return callMcpToolOnce(baseUrl, toolName, args, true);
+      return callMcpToolOnce(baseUrl, toolName, args, true, signal);
     }
     return {
       ok: false,
@@ -173,7 +182,7 @@ async function callMcpToolOnce(
   if (body.error) {
     if (!retried && isExpiredSessionError(body.error)) {
       sessionCache.delete(baseUrl);
-      return callMcpToolOnce(baseUrl, toolName, args, true);
+      return callMcpToolOnce(baseUrl, toolName, args, true, signal);
     }
     return { ok: false, error: body.error };
   }

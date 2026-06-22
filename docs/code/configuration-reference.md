@@ -13,13 +13,23 @@ For the user-facing rendition of the same properties (with examples and cross-li
 `ConfigurationProperties` is a static holder in `mockserver/mockserver-core/src/main/java/org/mockserver/configuration/`. Every property has a typed getter (e.g. `serverPort()`, `tlsMutualAuthenticationRequired()`) that resolves the value in this order — first hit wins:
 
 1. **JVM system property** — `-Dmockserver.serverPort=1080`
-2. **Environment variable** — `MOCKSERVER_SERVER_PORT=1080` (upper-snake form of the system-property suffix)
-3. **Properties file** — pointed to by `-Dmockserver.propertyFile=…` (default: `./mockserver.properties` if present)
+2. **Properties file** — pointed to by `-Dmockserver.propertyFile=…` (default: `./mockserver.properties` if present)
+3. **Environment variable** — `MOCKSERVER_SERVER_PORT=1080` (upper-snake form of the system-property suffix)
 4. **Built-in default** — coded into the typed getter
 
-This means env vars override file properties, system properties override env vars, and explicit `Configuration` instance setters override all of the above (see "Instance-scoped configuration" below).
+This means properties file entries override environment variables, system properties override properties file entries, and explicit `Configuration` instance setters override all of the above (see "Instance-scoped configuration" below). The resolution is implemented in `readPropertyHierarchically`: `System.getProperty(key, properties.getProperty(key, envOrDefault))`.
 
 The loader logs the resolved property source on startup at `TRACE` — useful when a value isn't what you expect.
+
+## Unknown-key warning
+
+A misspelled property (e.g. `-Dmockserver.maxExpectatons=…` or `MOCKSERVER_METRICS_ENABLE=…`) is silently ignored by the per-key resolution above — the typo never matches a getter, so the default is used and "my config did nothing". To catch this, `ConfigurationProperties` runs a one-time validation pass at startup (in its static initialiser, so it fires regardless of whether a properties file is present, covering env-only and `-D`-only deployments). It logs a `WARN` naming any key that is in the `mockserver.` / `MOCKSERVER_` namespace but is **not** a recognised property:
+
+- a JVM system property whose name starts with `mockserver.` but isn't a known key,
+- an environment variable whose name starts with `MOCKSERVER_` but isn't a known key,
+- a `mockserver.*` key in the loaded properties file that isn't a known key.
+
+The recognised-key set is derived **reflectively from the `MOCKSERVER_*` constant fields** in `ConfigurationProperties` (the constant's value is the `mockserver.*` key; the constant's field name is the `MOCKSERVER_*` env-var key), so it can never drift from the actual properties — adding a new property automatically extends recognition. Keys outside the `mockserver.`/`MOCKSERVER_` namespace (e.g. `JAVA_HOME`, `PATH`) are never flagged, so unrelated environment variables do not produce false positives. The check can never throw, so it cannot break startup. Only key **names** are logged, never values.
 
 ## The four equivalent forms
 
@@ -43,10 +53,15 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | Dev mode | `devMode` |
 | Memory usage | `maxExpectations`, `maxLogEntries`, `maxWebSocketExpectations`, `outputMemoryUsageCsv` |
 | HTTP behaviour | `nioEventLoopThreadCount`, `actionHandlerThreadCount`, `webSocketClientEventLoopThreadCount`, `clientNioEventLoopThreadCount`, `streamingResponsesEnabled`, `maxStreamingCaptureBytes` |
-| Initialisation / OpenAPI | `initializationClass`, `initializationJsonPath`, `persistExpectations`, `persistedExpectationsPath`, `openAPIContextPathPrefix`, `openAPIResponseValidation`, `generateRealisticExampleValues`, `validateProxyOpenAPISpec`, `validateProxyEnforce` |
+| Matching | `matchersFailFast`, `matchExactCase` (when `true`, method/path/string-body matching is case-sensitive, and response reason-phrase matching in verification is also case-sensitive; header/cookie/query matching always stays case-insensitive — default `false`) |
+| Initialisation / OpenAPI | `initializationClass`, `initializationJsonPath`, `persistExpectations`, `persistedExpectationsPath`, `openAPIContextPathPrefix`, `openAPIResponseValidation`, `enforceResponseValidationForMocks`, `validateRequestsAgainstOpenApiSpec` (when `true`, requests matched by an OpenAPI-backed mock that violate the spec are rejected with a `400` instead of serving the mock response — default `false`; OpenAPI-backed expectations only), `generateRealisticExampleValues`, `validateProxyOpenAPISpec`, `validateProxyEnforce`, `failOnInitializationError` |
 | CORS | `enableCORSForAPI`, `enableCORSForAllResponses`, `corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders`, `corsAllowCredentials` |
+| Default response headers | `defaultResponseHeaders` |
 | Proxy auth | `forwardHttpsProxy`, `forwardSocksProxy`, `proxyAuthenticationUsername`, `proxyAuthenticationPassword`, `proxyAuthenticationRealm` |
+| Forward resilience | `forwardConnectionPoolEnabled`, `forwardConnectionPoolMaxIdlePerKey`, `forwardConnectionPoolIdleTimeoutMillis`, `forwardProxyRetryCount`, `forwardProxyRetryBackoffMillis`, `forwardProxyCircuitBreakerEnabled`, `forwardProxyCircuitBreakerFailureThreshold`, `forwardProxyCircuitBreakerWindowMillis` (upstream keep-alive connection pooling plus retry + per-upstream circuit breaker for matched FORWARD-class actions; `forwardConnectionPoolEnabled` defaults to `true` — idle HTTP/1.1 keep-alive upstream connections are pooled and reused (avoids ephemeral-port exhaustion under sustained forward load); set `false` to open a fresh upstream connection per request (the historical behaviour). Pooling is safe on by default: the forward client runs on a dedicated event-loop group disjoint from the server workers (so a loopback object-callback can never self-deadlock) and a channel is only pooled when its codec is genuinely quiescent — an `error()`/raw-bytes/drop-connection reply is never pooled. Retry and breaker still default to off) |
 | Control-plane JWT auth | `controlPlaneJWTAuthenticationRequired`, `controlPlaneJWTAuthenticationJWKSource`, `controlPlaneJWTAuthenticationExpectedAudience` |
+| Control-plane OIDC auth | `controlPlaneOidcAuthenticationRequired`, `controlPlaneOidcIssuer`, `controlPlaneOidcJwksUri`, `controlPlaneOidcAudience`, `controlPlaneOidcRequiredScopes`, `controlPlaneOidcScopeClaim` (verify an external-IdP OIDC Bearer token — issuer/audience/exp/nbf/required-scopes — and record the verified `sub` as the control-plane audit principal; all off by default) |
+| Control-plane authorization | `controlPlaneAuthorizationEnabled`, `controlPlaneScopeMapping` (coarse role-based authorization: map verified scope/group values to `read`/`mutate`/`admin` roles — `platform-admins=admin,qa-team=mutate,viewers=read` — and enforce a read/mutate split, returning `403` + audit `outcome=FORBIDDEN` on denial; off by default, requires a verified principal) |
 | TLS inbound — dynamic | `certificateAuthorityPrivateKey`, `certificateAuthorityCertificate`, `dynamicallyCreateCertificateAuthorityCertificate`, `directoryToSaveDynamicSSLCertificate`, `preventCertificateDynamicUpdate`, `sslCertificateDomainName`, `sslSubjectAlternativeNameDomains`, `sslSubjectAlternativeNameIps` |
 | TLS inbound — fixed | `privateKeyPath`, `x509CertificatePath` |
 | mTLS | `tlsMutualAuthenticationRequired`, `tlsMutualAuthenticationCertificateChain` |
@@ -60,14 +75,95 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | Service mesh / transparent proxy | `transparentProxyEnabled`, `transparentProxyTproxy`, `transparentProxyEbpf`, `transparentProxyEbpfMapPath` |
 | OpenTelemetry | `otelMetricsEnabled`, `otelTracesEnabled`, `otelEndpoint`, `otelMetricsExportIntervalSeconds`, `otelPropagateTraceContext`, `otelGenerateTraceId` |
 | Chaos auto-halt | `chaosAutoHaltEnabled`, `chaosAutoHaltErrorThreshold`, `chaosAutoHaltWindowMillis` |
-| Request breakpoints | `breakpointEnabled`, `breakpointTimeoutMillis`, `breakpointMaxHeld` |
-| Drift detection | `driftSemanticAnalysisEnabled`, `driftResponseTimeThresholdMs` |
-| Clustered state | `stateBackend`, `clusterEnabled`, `clusterName`, `clusterTransportConfig` |
+| Rate limiting | `rateLimitMaxNamedQuotas` |
+| SLO verdicts | `sloTrackingEnabled`, `sloWindowRetentionMillis`, `sloWindowMaxSamples` |
+| Load generation | `loadGenerationEnabled`, `loadGenerationMaxVirtualUsers`, `loadGenerationMaxInFlightRequests`, `loadGenerationMaxRequestsPerSecond`, `loadGenerationMaxDurationMillis`, `loadGenerationMaxSteps` |
+| Breakpoints | `breakpointTimeoutMillis`, `breakpointMaxHeld` (breakpoint activation is now via the matcher-based registry REST API) |
+| Drift detection | `driftSemanticAnalysisEnabled`, `driftResponseTimeThresholdMs`, `driftAlertWebhookEnabled`, `driftAlertWebhookUrl`, `driftAlertSeverityThreshold`, `driftAlertCooldownMillis` |
+| Control-plane audit | `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads` |
+| Clustered state | `stateBackend`, `clusterEnabled`, `clusterName`, `clusterTransportConfig`, `clusterSharedTimesEnabled` |
 | Blob store | `blobStoreType`, `blobStoreBucket`, `blobStoreRegion`, `blobStoreEndpoint`, `blobStoreKeyPrefix`, `blobStoreAccessKeyId`, `blobStoreSecretAccessKey`, `blobStoreContainer`, `blobStoreConnectionString`, `blobStoreProjectId` |
 | Async messaging | `asyncKafkaBootstrapServers`, `asyncMqttBrokerUrl`, `asyncRecordedMessageMaxEntries` |
+| JSON Schema matching | `jsonSchemaAllowRemoteRefs` (JVM system property only — not in `ConfigurationProperties`; read via `System.getProperty` in `JsonSchemaValidator` at schema-build time) |
 | LLM mocking | `llmProvider`, `llmApiKey`, `llmModel`, `llmBaseUrl`, `llmBackendsConfig`, `llmSemanticMatchingEnabled`, `llmVcrStrict`, `fixtureBodyRedactFields` |
+| LLM metrics & budget | `llmMetricsEnabled`, `llmCostBudgetUsd`, `perExpectationMetricsEnabled` |
+| Recorded expectations | `deduplicateRecordedExpectations`, `redactSecretsInRecordedExpectations` |
+| Event log / dashboard | `redactSecretsInLog` |
+| Lifecycle | `stopDrainMillis` |
 
 The example file documents the most commonly tuned properties (≈220 lines). For the complete list including newer subsystems, read `ConfigurationProperties.java` or the consumer reference page.
+
+### `redactSecretsInRecordedExpectations`
+
+Opt-in (default `false`). When `true`, MockServer masks sensitive header values — `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`, `api-key` (which also covers bearer/token credentials carried in those headers) — with `***REDACTED***` on the recorded-expectation retrieval path (`HttpState.postProcessRecordedExpectations`). Because that path feeds every retrieve format, redaction covers retrieve-as-JSON, retrieve-as-code (generated client code), and persisted recorded JSON. Redaction reuses `FixtureRedactor` (the same masking already applied on the import path) and operates on copies, so the live event log is never mutated. On this path it uses the constraint-preserving variant (`redact(..., preserveConstraints=true)`), so the redacted recordings keep their original `times`, `timeToLive`, `priority`, and `id` — only the sensitive values are masked.
+
+**Trade-off:** a redacted recorded expectation can no longer replay against an upstream that requires the masked credential, so this is off by default — enable it only when you want to share or persist recordings without leaking proxied secrets.
+
+### `redactSecretsInLog`
+
+Opt-in (default `false`). When `true`, MockServer masks the same sensitive header values — `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`, `api-key` — with `***REDACTED***` in the **live event log and dashboard**: the requests/responses returned by `retrieveLogMessages`, `retrieveRecordedRequests` and `retrieveRecordedRequestsAndResponses` (and the JSON/HAR/cURL/OpenAPI/Postman export formats derived from them) and the request/response panes shown in the dashboard event view. JSON body fields named in `fixtureBodyRedactFields` are masked too. Reuses `FixtureRedactor` and operates only on clones produced by `LogEntry`'s display/retrieve getters (`getHttpUpdatedRequests()`/`getHttpUpdatedResponse()` for the log/dashboard view, `getRedactedHttpRequests()`/`getRedactedHttpResponse()` for the recorded-request/export retrieval paths) — the underlying log entry read by request matching and verification keeps the original, unredacted values, so enabling this does **not** change matching or verification behaviour. Off by default so the log is byte-for-byte unchanged.
+
+This complements `redactSecretsInRecordedExpectations` (which masks the recorded-expectation *export* path); set both when you want secrets masked everywhere they could be observed.
+
+### `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads`
+
+Opt-in, append-only, bounded, in-memory audit log of control-plane *mutations* (who/what/when/where/outcome) that backs `GET /mockserver/audit` (see [docs/code/event-system.md](event-system.md#control-plane-audit-log)). It records redacted, structural metadata only — never request headers or bodies.
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `controlPlaneAuditEnabled` | `false` | When `false`, no audit entries are recorded and control-plane operations behave byte-for-byte identically (the audit emit returns immediately). Set to `true` to opt in. |
+| `controlPlaneAuditMaxEntries` | `1000` | Maximum entries retained in the bounded ring; the oldest is evicted once full. **Read once at `AuditStore` construction** — a fixed-capacity ring (like the drift store), so changing it at runtime does not resize an already-constructed store. |
+| `controlPlaneAuditReads` | `false` | When `false`, only mutations (and `reset`) are audited. Set to `true` to also audit control-plane reads (GET requests and read-only PUTs such as `/retrieve`, `/verify`, `/diff`). No effect unless `controlPlaneAuditEnabled` is `true`. |
+
+The recorded principal is **best-effort and unverified** in this version: the JWT `sub` is read with no signature verification, or the mTLS client-certificate CN, else `anonymous`. The raw token is never stored.
+
+### `sloTrackingEnabled`, `sloWindowRetentionMillis`, `sloWindowMaxSamples`
+
+Opt-in SLO sample tracking that backs `PUT /mockserver/verifySLO` (see [docs/code/slo-verdicts.md](slo-verdicts.md)).
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `sloTrackingEnabled` | `false` | When `true`, MockServer records a windowed sample (latency, error flag, upstream host) for every forwarded upstream round-trip so a verdict can be computed. When `false` the recording funnel is a no-op, so the forward hot path pays nothing. |
+| `sloWindowRetentionMillis` | `600000` (10 min) | Maximum age of a retained sample, measured relative to the newest recorded sample. Older samples are evicted lazily on record and on query. Set the trailing window of history you want verdicts to draw on. |
+| `sloWindowMaxSamples` | `50000` | Hard cap on retained samples; the oldest is evicted when the cap is exceeded. Bounds memory regardless of throughput. |
+
+Because tracking is off by default, the `verifySLO` endpoint returns `400` with `SLO tracking not enabled (set sloTrackingEnabled=true)` until you enable it.
+
+### `loadGeneration*`
+
+Opt-in API-driven load generation that backs `PUT /mockserver/loadScenario` (see [docs/code/load-generation.md](load-generation.md)).
+
+| Property | Default | Meaning |
+|----------|---------|---------|
+| `loadGenerationEnabled` | `false` | When `false`, `PUT /mockserver/loadScenario` returns `403`. Must be set to `true` to opt in — MockServer never self-generates traffic unless explicitly enabled. |
+| `loadGenerationMaxVirtualUsers` | `50` | Hard cap on the concurrent virtual users a scenario may drive; a profile requesting more is rejected at validation. |
+| `loadGenerationMaxInFlightRequests` | `200` | Hard cap on outstanding (not-yet-completed) requests, enforced live by an in-flight semaphore so a slow target cannot let the scenario queue unbounded work. |
+| `loadGenerationMaxRequestsPerSecond` | `500` | Hard cap on dispatch rate, enforced live by a token bucket. |
+| `loadGenerationMaxDurationMillis` | `3600000` (1 h) | Hard cap on how long a scenario may run; a longer profile is rejected at validation, so a forgotten scenario cannot drive traffic indefinitely. |
+| `loadGenerationMaxSteps` | `50` | Hard cap on the number of request steps a single scenario may define. |
+
+The caps are enforced both at validation (VU count, duration, step count) and live at dispatch (in-flight, RPS), so the feature cannot self-DoS the server even when enabled.
+
+### `rateLimitMaxNamedQuotas`
+
+Default `10000` (env `MOCKSERVER_RATE_LIMIT_MAX_NAMED_QUOTAS`). Caps the number of distinct named counters held in the in-process `RateLimitRegistry` that backs the declarative `rateLimit` expectation clause (see [docs/code/request-processing.md](request-processing.md) and [docs/code/domain-model.md](domain-model.md)). Each distinct `rateLimit.name` (or, when `name` is omitted, each distinct expectation id) is one counter. Once the cap is reached, a request for a *new* counter key **fails open** (is allowed) rather than evicting an existing counter, so an unbounded set of keys can never exhaust memory and can never silently start rate-limiting a previously-unseen key. There is no enable flag — the registry is inert until an expectation carries a `rateLimit` clause.
+
+### `failOnInitializationError`
+
+Opt-in (default `false`). By default a malformed `initializationJsonPath` / `initializationOpenAPIPath` file or a broken `initializationClass` logs a single `WARN` and yields **zero** expectations from that source while the server still finishes starting — a silent, hard-to-notice failure mode in CI and Kubernetes. When `true`, any such load failure throws an `ExpectationInitializerException` from the `HttpState` constructor, so startup fails (non-zero exit / propagated exception) instead of continuing with missing expectations. Use it in pipelines and orchestrated deployments where a half-initialised mock is worse than a crash. The throw happens inside `ExpectationInitializerLoader.failFastIfConfigured(...)`, immediately after the existing WARN log.
+
+This pairs with the readiness signal (below): fail-fast catches a *broken* initializer; the readiness probe gates traffic until a *slow* (but valid) initializer finishes.
+
+## Readiness vs liveness
+
+`PUT /mockserver/status` and the configurable `livenessHttpGetPath` (`GET`) both answer `200` the instant the server port binds — **before** expectation initializers / OpenAPI seeding complete. That is the correct liveness semantic (the process is alive) but the wrong readiness semantic (it should not receive traffic yet).
+
+`GET /mockserver/ready` (alias `GET /ready`) is the readiness signal:
+
+- returns `503 {"status":"NOT_READY"}` until the synchronous `HttpState` constructor (expectation initializers, OpenAPI seeding, gRPC descriptor loading) has completed, then
+- returns `200 {"status":"READY"}` thereafter.
+
+It is backed by a thread-safe `volatile boolean` flipped as the **last** action of the `HttpState` constructor (`HttpState.isInitializationComplete()`), so a partially-constructed server never reports ready. The Helm chart points the readiness probe at `/mockserver/ready` and the liveness probe at the always-200 liveness path (see [helm.md](../infrastructure/helm.md)).
 
 ## Adding a property
 

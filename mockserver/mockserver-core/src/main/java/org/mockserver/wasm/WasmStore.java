@@ -37,7 +37,12 @@ public class WasmStore {
 
     public void remove(String name) {
         if (name != null) {
-            modules.remove(name);
+            byte[] removed = modules.remove(name);
+            if (removed != null) {
+                // release the cached parsed form of these bytes (content-keyed, so safe even if
+                // another name happens to map to identical bytes — it would simply be re-parsed)
+                WasmRuntime.invalidate(removed);
+            }
         }
     }
 
@@ -47,5 +52,6 @@ public class WasmStore {
 
     public void reset() {
         modules.clear();
+        WasmRuntime.invalidateAll();
     }
 }

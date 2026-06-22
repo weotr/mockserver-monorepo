@@ -209,6 +209,62 @@ public class HttpRequestToCurlSerializerTest {
     }
 
     @Test
+    public void shouldEscapeSingleQuotesInBodyUsingPosixIdiom() {
+        // given
+        HttpRequestToCurlSerializer httpRequestToCurlSerializer = new HttpRequestToCurlSerializer(mockServerLogger);
+
+        // when
+        String curl = httpRequestToCurlSerializer.toCurl(
+            request()
+                .withMethod("POST")
+                .withBody("it's a \"test\" with $VAR and `cmd` and \\ backslash"),
+            new InetSocketAddress("localhost", 80)
+        );
+
+        // then - only the single quote is escaped, everything else is literal inside single quotes
+        assertThat(curl, is("curl -v 'http://localhost:80/' -X POST" +
+            " --data 'it'\\''s a \"test\" with $VAR and `cmd` and \\ backslash'"));
+    }
+
+    @Test
+    public void shouldEscapeSingleQuotesInHeaderNameAndValueUsingPosixIdiom() {
+        // given
+        HttpRequestToCurlSerializer httpRequestToCurlSerializer = new HttpRequestToCurlSerializer(mockServerLogger);
+
+        // when
+        String curl = httpRequestToCurlSerializer.toCurl(
+            request()
+                .withHeaders(
+                    new Header("X-Evil'Name", "value with ' quote and $VAR and `cmd`")
+                ),
+            new InetSocketAddress("localhost", 80)
+        );
+
+        // then
+        assertThat(curl, is("curl -v 'http://localhost:80/'" +
+            " -H 'X-Evil'\\''Name: value with '\\'' quote and $VAR and `cmd`'"));
+    }
+
+    @Test
+    public void shouldEscapeSingleQuotesInCookieUsingPosixIdiom() {
+        // given
+        HttpRequestToCurlSerializer httpRequestToCurlSerializer = new HttpRequestToCurlSerializer(mockServerLogger);
+
+        // when
+        String curl = httpRequestToCurlSerializer.toCurl(
+            request()
+                .withCookies(
+                    new Cookie("session", "abc'def")
+                ),
+            new InetSocketAddress("localhost", 80)
+        );
+
+        // then - the embedded single quote is escaped with the POSIX '\'' idiom
+        assertThat(curl, is("curl -v 'http://localhost:80/'" +
+            " -H 'cookie: session=abc'\\''def'"));
+    }
+
+    @Test
     public void shouldHandleNullWhenGeneratingCurl() {
         // given
         HttpRequestToCurlSerializer httpRequestToCurlSerializer = new HttpRequestToCurlSerializer(mockServerLogger);

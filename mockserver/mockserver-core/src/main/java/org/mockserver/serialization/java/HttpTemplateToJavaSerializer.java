@@ -21,6 +21,9 @@ public class HttpTemplateToJavaSerializer implements ToJavaSerializer<HttpTempla
             if (isNotBlank(httpTemplate.getTemplate())) {
                 appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withTemplate(\"").append(StringEscapeUtils.escapeJava(httpTemplate.getTemplate())).append("\")");
             }
+            if (isNotBlank(httpTemplate.getTemplateFile())) {
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withTemplateFile(\"").append(StringEscapeUtils.escapeJava(httpTemplate.getTemplateFile())).append("\")");
+            }
             if (httpTemplate.getResponseOverride() != null) {
                 appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withResponseOverride(");
                 output.append(new HttpResponseToJavaSerializer().serialize(numberOfSpacesToIndent + 2, httpTemplate.getResponseOverride()));

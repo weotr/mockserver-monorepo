@@ -1,0 +1,21 @@
+meta {
+  name: retrieve the control-plane audit log
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/mockserver/audit
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~limit: 200
+}
+
+docs {
+  Returns the most-recent control-plane audit entries (one per authorised control-plane mutation, newest first). Off by default — enable with controlPlaneAuditEnabled. Each entry records redacted, structural metadata only (method, control-plane path with query string dropped, logical operation, source address, best-effort principal, outcome); it never contains request headers or bodies.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -17,6 +17,15 @@
 #   --no-browser    Do not auto-open the browser
 #   --with-broker   Start a Mosquitto MQTT broker (Docker) so the AsyncAPI panel's
 #                   Recorded Messages table populates with a live, ticking feed
+#   --with-load-injection
+#                   Enable load generation + SLO tracking, register delayed
+#                   self-target endpoints, and start a long-running load scenario
+#                   so the Performance tab shows a live scenario with latency /
+#                   throughput against a real (delayed) target
+#   --load-generation
+#                   Enable the load-generation control plane but DON'T auto-start the
+#                   heavy demo scenarios — lets a caller drive a light scenario itself
+#                   (e.g. for a clean Performance screenshot) without saturating the server
 #   --port PORT     MockServer port (default: 1080)
 #   --ui-port PORT  UI dev server port (default: 3000)
 #   --mqtt-port P   MQTT broker port (default: 1883; only with --with-broker)
@@ -39,6 +48,8 @@ UI_PORT=3000
 REBUILD=false
 NO_BROWSER=false
 WITH_BROKER=false
+WITH_LOAD_INJECTION=false
+LOAD_GENERATION=false
 MQTT_PORT=1883
 MQTT_CONTAINER="mockserver-demo-mqtt"
 
@@ -47,10 +58,12 @@ while [[ $# -gt 0 ]]; do
     --rebuild) REBUILD=true; shift ;;
     --no-browser) NO_BROWSER=true; shift ;;
     --with-broker) WITH_BROKER=true; shift ;;
+    --with-load-injection) WITH_LOAD_INJECTION=true; shift ;;
+    --load-generation) LOAD_GENERATION=true; shift ;;
     --port) MOCKSERVER_PORT="$2"; shift 2 ;;
     --ui-port) UI_PORT="$2"; shift 2 ;;
     --mqtt-port) MQTT_PORT="$2"; shift 2 ;;
-    --help|-h) sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --help|-h) sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $1 (use --help)"; exit 1 ;;
   esac
 done
@@ -72,9 +85,32 @@ find_jar() {
   [ -n "$jar" ] && { echo "$jar"; return 0; } || return 1
 }
 
-if [ "$REBUILD" = true ] || ! find_jar >/dev/null; then
+# Decide whether to (re)build the runnable JAR: forced, missing, or STALE. The jar is
+# stale when a server-side Java source (or a pom.xml) under mockserver/ is newer than it.
+# That is the common footgun here: an older jar silently lacks an endpoint the
+# checked-out populate script calls (e.g. PUT /mockserver/loadScenario/start), so the demo
+# 404s mid-run and the launcher tears the servers down. Auto-rebuilding when stale keeps
+# the running endpoints in step with the checked-out code. The demo serves the UI from the
+# vite dev server (npm run dev), so UI edits do NOT make the jar stale — only server-side
+# Java/poms do, which is why the staleness check is scoped to mockserver/ sources.
+NEED_BUILD=false
+BUILD_REASON=""
+if [ "$REBUILD" = true ]; then
+  NEED_BUILD=true; BUILD_REASON="--rebuild requested"
+elif ! find_jar >/dev/null; then
+  NEED_BUILD=true; BUILD_REASON="no MockServer JAR found"
+else
+  STALE_SRC="$(find "$REPO_ROOT/mockserver" -not -path '*/target/*' \( \( -path '*/src/main/*' -name '*.java' \) -o -name 'pom.xml' \) -newer "$(find_jar)" -print 2>/dev/null | head -1)"
+  if [ -n "$STALE_SRC" ]; then
+    NEED_BUILD=true
+    BUILD_REASON="JAR is stale — $(basename "$STALE_SRC") (and maybe others) changed since it was built; rebuilding so the running endpoints match the checked-out code"
+  fi
+fi
+
+if [ "$NEED_BUILD" = true ]; then
   BUILD_LOG="$UI_DIR/mockserver-build.log"
-  echo "→ Building MockServer JAR (this can take a few minutes)"
+  echo "→ Building MockServer JAR ($BUILD_REASON)"
+  echo "  (this can take a few minutes)"
   echo "  cmd: (cd mockserver && ./mvnw clean install -DskipTests -pl mockserver-netty-no-dependencies -am)"
   echo "  full log: $BUILD_LOG"
   echo "  progress (Maven reactor — one line per module + result):"
@@ -106,8 +142,19 @@ fi
 
 # --- start MockServer ------------------------------------------------------
 MOCKSERVER_LOG="$UI_DIR/mockserver-demo.log"
+# Feature flags passed to the JVM. Load injection needs loadGenerationEnabled (the
+# /mockserver/loadScenario control plane is 403 otherwise) + sloTrackingEnabled so the
+# load run's latency/error samples feed the SLO verdict store the Performance tab reads.
+MOCKSERVER_JVM_ARGS=(-Dmockserver.metricsEnabled=true -Dmockserver.wasmEnabled=true)
+# --load-generation enables the load-generation control plane WITHOUT auto-starting the
+# heavy demo scenarios (that auto-start is gated on DEMO_WITH_LOAD_INJECTION below). This lets
+# a caller drive a deliberately light scenario — e.g. for a clean Performance screenshot —
+# without the heavy self-targeting load that saturates the server.
+if [ "$WITH_LOAD_INJECTION" = true ] || [ "$LOAD_GENERATION" = true ]; then
+  MOCKSERVER_JVM_ARGS+=(-Dmockserver.loadGenerationEnabled=true -Dmockserver.sloTrackingEnabled=true)
+fi
 echo "→ Starting MockServer on port $MOCKSERVER_PORT (log: $MOCKSERVER_LOG)..."
-java -Dmockserver.metricsEnabled=true -Dmockserver.wasmEnabled=true -jar "$MOCKSERVER_JAR" -serverPort "$MOCKSERVER_PORT" -logLevel INFO > "$MOCKSERVER_LOG" 2>&1 &
+java "${MOCKSERVER_JVM_ARGS[@]}" -jar "$MOCKSERVER_JAR" -serverPort "$MOCKSERVER_PORT" -logLevel INFO > "$MOCKSERVER_LOG" 2>&1 &
 MOCKSERVER_PID=$!
 
 UI_PID=""
@@ -161,7 +208,7 @@ fi
 
 # --- populate demo data ----------------------------------------------------
 echo "→ Populating demo data..."
-DEMO_MQTT_BROKER_URL="$DEMO_MQTT_BROKER_URL" node "$SCRIPT_DIR/populate-demo-data.mjs" --url "http://localhost:$MOCKSERVER_PORT"
+DEMO_MQTT_BROKER_URL="$DEMO_MQTT_BROKER_URL" DEMO_WITH_LOAD_INJECTION="$WITH_LOAD_INJECTION" node "$SCRIPT_DIR/populate-demo-data.mjs" --url "http://localhost:$MOCKSERVER_PORT"
 
 # --- start UI dev server ---------------------------------------------------
 echo "→ Starting UI dev server on port $UI_PORT..."
@@ -191,6 +238,14 @@ echo "  UI (dev) : $UI_URL"
 echo "  Dashboard: http://localhost:$MOCKSERVER_PORT/mockserver/dashboard"
 echo "  MockServer log: $MOCKSERVER_LOG"
 echo ""
+if [ "$WITH_LOAD_INJECTION" = true ]; then
+  echo "  ⚡ Load injection is RUNNING against delayed self-target endpoints."
+  echo "     Open the Performance tab to watch / edit the live load scenario and its"
+  echo "     latency + throughput metrics:"
+  echo "       $UI_URL  (then click the Performance tab)"
+  echo "     or the bundled dashboard: http://localhost:$MOCKSERVER_PORT/mockserver/dashboard/?port=$MOCKSERVER_PORT"
+  echo ""
+fi
 echo "  Re-populate at any time:  npm run demo:data"
 echo "  Press Ctrl+C to stop both servers."
 echo "========================================"

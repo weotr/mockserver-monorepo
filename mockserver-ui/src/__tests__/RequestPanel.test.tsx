@@ -11,7 +11,7 @@ describe('RequestPanel', () => {
     expect(screen.getByText(/No requests/)).toBeInTheDocument();
   });
 
-  it('renders requests with reverse index (most recent first)', () => {
+  it('renders requests with reverse index based on filtered count', () => {
     const items = [
       { key: 'r1', value: { method: 'GET', path: '/first' } },
       { key: 'r2', value: { method: 'POST', path: '/second' } },

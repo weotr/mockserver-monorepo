@@ -99,22 +99,43 @@ public class MockServerEventBusTest {
 	}
 
 	@Test
-	public void shouldClearAllSubscribersAfterPublish() {
-		// given
+	public void shouldOnlyRemoveSubscribersForPublishedEventType() {
+		// given - two subscribers for different event types (e.g. two MockServerClient
+		// instances sharing the same per-port event bus)
 		bus.subscribe(subscriber, RESET);
 		bus.subscribe(secondSubscriber, STOP);
 
-		// when
+		// when - one client publishes RESET
 		bus.publish(RESET);
 
-		// then - RESET subscriber called, STOP subscriber not called
+		// then - only the RESET subscriber is notified, the STOP subscriber is untouched
 		verify(subscriber, times(1)).handle();
 		verify(secondSubscriber, never()).handle();
 
-		// when - publish STOP (all subscribers were cleared by previous publish)
+		// when - another client later publishes STOP
 		bus.publish(STOP);
 
-		// then - secondSubscriber should not be called (was cleared)
-		verify(secondSubscriber, never()).handle();
+		// then - the STOP subscriber is still registered and now notified, and the RESET
+		// subscriber is not notified again (it was only removed for its own event type)
+		verify(secondSubscriber, times(1)).handle();
+		verify(subscriber, times(1)).handle();
+	}
+
+	@Test
+	public void shouldNotRemoveOtherEventTypeSubscriptionForSameSubscriber() {
+		// given - a single subscriber registered for both RESET and STOP
+		bus.subscribe(subscriber, RESET, STOP);
+
+		// when - RESET is published
+		bus.publish(RESET);
+
+		// then - the subscriber is notified once for RESET
+		verify(subscriber, times(1)).handle();
+
+		// when - STOP is published afterwards
+		bus.publish(STOP);
+
+		// then - the subscriber's STOP registration survived the RESET publish and is now notified
+		verify(subscriber, times(2)).handle();
 	}
 }

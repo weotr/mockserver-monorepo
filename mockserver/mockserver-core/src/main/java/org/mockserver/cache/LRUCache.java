@@ -69,6 +69,41 @@ public class LRUCache<K, V> {
         return System.currentTimeMillis() + ttl;
     }
 
+    /**
+     * Atomically returns the value for {@code key}, computing and inserting it with {@code mappingFunction}
+     * if absent. Unlike a {@code get}-then-{@code put} sequence this is race-free: concurrent callers for
+     * the same absent key do not each build their own value and then clobber the cache — the mapping
+     * function runs at most once and a single value instance is shared by and returned to all of them
+     * (so there are no orphaned instances). Used where the cached value's identity, not just its content,
+     * must be stable across threads.
+     */
+    public V getOrCompute(K key, java.util.function.Function<? super K, ? extends V> mappingFunction) {
+        if (!allCachesEnabled || key == null) {
+            // caching disabled or no key: compute without caching, preserving call-through behaviour
+            return mappingFunction.apply(key);
+        }
+        V existing = get(key);
+        if (existing != null) {
+            return existing;
+        }
+        // evict BEFORE inserting (mirroring put()), so the key we are about to add can never be the one
+        // polled here — this keeps the queue and the map in lock-step (no drift where a still-mapped key
+        // is dropped from the queue and so escapes future LRU eviction)
+        while (queue.size() >= maxSize || maxSizeOverride > 0 && queue.size() >= maxSizeOverride) {
+            K oldestKey = queue.poll();
+            if (null != oldestKey) {
+                map.remove(oldestKey);
+            }
+        }
+        // ConcurrentHashMap.computeIfAbsent runs the mapping function at most once for an absent key,
+        // so racing callers share the one computed value rather than each building and clobbering one
+        Entry<V> entry = map.computeIfAbsent(key, k -> {
+            queue.add(k);
+            return new Entry<>(ttlInMillis, expiryInMillis(ttlInMillis), mappingFunction.apply(k));
+        });
+        return entry.getValue();
+    }
+
     public V get(K key) {
         if (allCachesEnabled && key != null) {
             if (map.containsKey(key)) {

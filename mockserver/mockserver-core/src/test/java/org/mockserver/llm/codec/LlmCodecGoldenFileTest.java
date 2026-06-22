@@ -71,6 +71,15 @@ public class LlmCodecGoldenFileTest {
     }
 
     /**
+     * Rerank-only providers have no chat/completion encode or streaming path, so
+     * they are intentionally excluded from the chat-codec golden coverage. Their
+     * rerank shape is covered by dedicated unit tests
+     * ({@code CohereCodecTest} / {@code VoyageCodecTest}).
+     */
+    private static final Set<Provider> RERANK_ONLY_PROVIDERS =
+        Collections.unmodifiableSet(EnumSet.of(Provider.COHERE, Provider.VOYAGE));
+
+    /**
      * Map Provider enum to fixture directory name.
      */
     private static final Map<Provider, String> PROVIDER_DIR_NAMES;
@@ -156,6 +165,10 @@ public class LlmCodecGoldenFileTest {
                 continue;
             }
             ProviderCodec codec = optCodec.get();
+            if (RERANK_ONLY_PROVIDERS.contains(provider)) {
+                // Rerank-only providers have no chat encode/streaming path by design.
+                continue;
+            }
             String dirName = PROVIDER_DIR_NAMES.get(provider);
             if (dirName == null) {
                 skipped.add(provider.name() + " (no directory mapping)");

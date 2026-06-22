@@ -19,6 +19,14 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
     private final Multimap<NottableString, NottableString> multimap;
     private final K k = (K) this;
 
+    // Lazily memoized request-side conversion (see #getConvertedMatcher / #setConvertedMatcher).
+    // Two slots keyed by controlPlaneMatcher: index 0 = data-plane (false), index 1 = control-plane (true).
+    // Cleared on every mutation via #clearConvertedMatcher (invoked from #isModified) so a mutated
+    // collection never serves a stale conversion. A request-side collection is matched on a single I/O
+    // thread, so this lazy cache is not contended; it is declared volatile only to make any future
+    // cross-thread read see a fully-published array rather than a torn one, at negligible cost.
+    private transient volatile Object[] convertedMatcher;
+
     protected KeysToMultiValues() {
         multimap = LinkedListMultimap.create();
     }
@@ -27,9 +35,45 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
         this.multimap = LinkedListMultimap.create(multimap);
     }
 
+    /**
+     * Returns the memoized request-side conversion for the given control-plane flag, or {@code null} if
+     * not yet built. The conversion is intentionally keyed by {@code controlPlaneMatcher} because the
+     * converted form embeds a control-plane-sensitive matcher; a data-plane conversion must never be
+     * served to a control-plane caller or vice versa.
+     */
+    public Object getConvertedMatcher(boolean controlPlaneMatcher) {
+        Object[] cache = convertedMatcher;
+        return cache == null ? null : cache[controlPlaneMatcher ? 1 : 0];
+    }
+
+    /**
+     * Stores the memoized request-side conversion for the given control-plane flag. The cache is cleared
+     * automatically on any mutation (see #isModified), so callers may safely reuse the value for the
+     * lifetime of an unmutated collection (e.g. across a single request's expectation scan).
+     */
+    public void setConvertedMatcher(boolean controlPlaneMatcher, Object converted) {
+        Object[] cache = convertedMatcher;
+        if (cache == null) {
+            cache = new Object[2];
+            convertedMatcher = cache;
+        }
+        cache[controlPlaneMatcher ? 1 : 0] = converted;
+    }
+
+    protected void clearConvertedMatcher() {
+        convertedMatcher = null;
+    }
+
     public abstract T build(final NottableString name, final Collection<NottableString> values);
 
-    protected abstract void isModified();
+    /**
+     * Invoked from every mutating method before the underlying multimap is changed. Clears the memoized
+     * request-side conversion so a mutated collection never serves a stale conversion. Subclasses that
+     * override this MUST call {@code super.isModified()}.
+     */
+    protected void isModified() {
+        clearConvertedMatcher();
+    }
 
     public KeyMatchStyle getKeyMatchStyle() {
         return keyMatchStyle;

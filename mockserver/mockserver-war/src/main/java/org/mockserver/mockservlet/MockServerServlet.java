@@ -4,7 +4,6 @@ import com.google.common.collect.ImmutableSet;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import org.mockserver.configuration.Configuration;
-import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.log.MockServerEventLog;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;

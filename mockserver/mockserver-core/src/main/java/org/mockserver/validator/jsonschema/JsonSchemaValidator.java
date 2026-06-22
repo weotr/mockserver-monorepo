@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.common.base.Joiner;
+import com.google.common.hash.Hashing;
+import com.networknt.schema.AbsoluteIri;
 import com.networknt.schema.Error;
 import com.networknt.schema.InputFormat;
 import com.networknt.schema.Schema;
@@ -12,6 +14,7 @@ import com.networknt.schema.SchemaRegistryConfig;
 import com.networknt.schema.SpecificationVersion;
 import com.networknt.schema.path.PathType;
 import org.apache.commons.lang3.StringUtils;
+import org.mockserver.cache.LRUCache;
 import org.mockserver.file.FileReader;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
@@ -36,6 +39,20 @@ public class JsonSchemaValidator extends ObjectWithReflectiveEqualsHashCodeToStr
 
     public static final String OPEN_API_SPECIFICATION_URL = "OpenAPI Specification: https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/" + Version.getMajorMinorVersion() + ".x" + NEW_LINE +
         "Documentation: https://mock-server.com/mock_server/creating_expectations.html";
+
+    /**
+     * System property opt-in to allow remote {@code $ref} resolution in JSON schemas.
+     * <p>
+     * SECURITY: by default MockServer blocks resolution of remote {@code $ref}s
+     * (http, https, ftp and external file URIs) when matching a request/response body
+     * against a JSON Schema, to avoid an SSRF / unexpected-network-fetch risk where a
+     * schema could cause the server to fetch arbitrary external resources. Schemas that
+     * use only internal references ({@code #/...}) and inline definitions are unaffected.
+     * <p>
+     * Set {@code -Dmockserver.jsonSchemaAllowRemoteRefs=true} to opt in to remote
+     * {@code $ref} resolution for the rare case where it is genuinely required.
+     */
+    public static final String JSON_SCHEMA_ALLOW_REMOTE_REFS_PROPERTY = "mockserver.jsonSchemaAllowRemoteRefs";
     private static final Map<String, String> schemaCache = new ConcurrentHashMap<>();
     // using draft 07 as default due to TLS issues downloading draft 2019-09 which causes errors
     private static final SpecificationVersion DEFAULT_JSON_SCHEMA_VERSION = SpecificationVersion.DRAFT_7;
@@ -45,6 +62,71 @@ public class JsonSchemaValidator extends ObjectWithReflectiveEqualsHashCodeToStr
     private final JsonNode schemaJsonNode;
     private Schema validator;
     private final static ObjectMapper OBJECT_MAPPER = ObjectMapperFactory.createObjectMapper();
+
+    /**
+     * Immutable, thread-safe holder for the result of compiling a schema once: the resolved schema
+     * string, its parsed {@link JsonNode}, and the compiled networknt {@link Schema}. A networknt
+     * {@link Schema} is immutable and safe for concurrent {@code validate} calls, so a single holder
+     * can be shared across request threads. Caching this holder — rather than a whole
+     * {@link JsonSchemaValidator} — keeps each request's validator instance (and therefore its
+     * {@code mockServerLogger} and the post-construction {@code validator}-field reassignment in the
+     * rare "Unknown MetaSchema" recovery branch) thread-confined, so cached reuse is byte-for-byte
+     * equivalent to constructing a fresh validator per request.
+     */
+    private static final class CompiledSchema {
+        private final String schema;
+        private final JsonNode schemaJsonNode;
+        private final Schema validator;
+
+        private CompiledSchema(String schema, JsonNode schemaJsonNode, Schema validator) {
+            this.schema = schema;
+            this.schemaJsonNode = schemaJsonNode;
+            this.validator = validator;
+        }
+    }
+
+    /**
+     * Caches the compiled-schema holder keyed by the SHA-256 of the schema JSON. Compiling a networknt
+     * {@link Schema}/{@link SchemaRegistry} is expensive and allocation-heavy and was previously
+     * repeated per request on the OpenAPI request/response validation hot path even though the
+     * operation schema never changes. Keying by schema <em>content</em> (not operationId/spec) means
+     * identical schemas — within one spec or across specs — share a single compilation with no
+     * cross-spec collisions. The cache is bounded (250 entries / 30 minute TTL, matching
+     * {@code OpenAPIParser}), thread-safe, and participates in {@link LRUCache#clearAllCaches()}.
+     */
+    private final static LRUCache<String, CompiledSchema> COMPILED_SCHEMA_CACHE =
+        new LRUCache<>(new MockServerLogger(), 250, java.util.concurrent.TimeUnit.MINUTES.toMillis(30));
+
+    /**
+     * Returns a {@link JsonSchemaValidator} for {@code schemaJson} that reuses a cached one-time
+     * compilation of the schema when the same content has been seen before. The returned validator is
+     * behaviour-identical to {@code new JsonSchemaValidator(logger, schemaJson)} for the same input —
+     * same validation outcomes and error messages, the caller's own {@code logger}, and an independent
+     * per-call instance — only the expensive {@code Schema}/{@code SchemaRegistry} compilation is
+     * elided on a cache hit. Intended for the per-request OpenAPI validation path.
+     */
+    public static JsonSchemaValidator cachedJsonSchemaValidator(MockServerLogger mockServerLogger, String schemaJson) {
+        String key = Hashing.sha256().hashString(schemaJson, java.nio.charset.StandardCharsets.UTF_8).toString();
+        CompiledSchema compiled = COMPILED_SCHEMA_CACHE.getOrCompute(key, k -> {
+            // compile exactly as the (MockServerLogger, String) constructor does — same resolution,
+            // same registry selection, same getSchema call — but store the result for reuse. A detached
+            // logger is used only for any compile-time logging; per-call validation logging still uses
+            // the caller's logger via the wrapper instance below.
+            JsonSchemaValidator built = new JsonSchemaValidator(new MockServerLogger(), schemaJson);
+            return new CompiledSchema(built.schema, built.schemaJsonNode, built.validator);
+        });
+        // wrap a fresh, thread-confined instance around the shared immutable compilation, carrying the
+        // caller's logger so error-log routing is identical to constructing a validator per request
+        return new JsonSchemaValidator(mockServerLogger, compiled);
+    }
+
+    private JsonSchemaValidator(MockServerLogger mockServerLogger, CompiledSchema compiled) {
+        this.mockServerLogger = mockServerLogger;
+        this.type = null;
+        this.schema = compiled.schema;
+        this.schemaJsonNode = compiled.schemaJsonNode;
+        this.validator = compiled.validator;
+    }
 
     public JsonSchemaValidator(MockServerLogger mockServerLogger, String schema) {
         this.mockServerLogger = mockServerLogger;
@@ -112,10 +194,52 @@ public class JsonSchemaValidator extends ObjectWithReflectiveEqualsHashCodeToStr
         return createSchemaRegistry(DEFAULT_JSON_SCHEMA_VERSION);
     }
 
+    // SECURITY: schemes that the IriResourceLoader would fetch over the network or from
+    // the local filesystem. Blocking these prevents a schema $ref from triggering an
+    // outbound request (SSRF) or reading an arbitrary local file during body matching.
+    private static final Set<String> BLOCKED_REF_SCHEMES = new HashSet<>(Arrays.asList(
+        "http", "https", "ftp", "ftps", "file", "jar"
+    ));
+
+    /**
+     * Whether remote {@code $ref} resolution is currently permitted, read at
+     * validator-build time from {@link #JSON_SCHEMA_ALLOW_REMOTE_REFS_PROPERTY}.
+     */
+    static boolean isRemoteRefsAllowed() {
+        return Boolean.parseBoolean(System.getProperty(JSON_SCHEMA_ALLOW_REMOTE_REFS_PROPERTY, "false"));
+    }
+
     private static SchemaRegistry createSchemaRegistry(SpecificationVersion version) {
-        return SchemaRegistry.withDefaultDialect(version, builder ->
-            builder.schemaRegistryConfig(SCHEMA_REGISTRY_CONFIG)
-        );
+        final boolean allowRemoteRefs = isRemoteRefsAllowed();
+        return SchemaRegistry.withDefaultDialect(version, builder -> {
+            builder.schemaRegistryConfig(SCHEMA_REGISTRY_CONFIG);
+            if (allowRemoteRefs) {
+                // opt-in: register the IriResourceLoader so remote/file $refs are fetched
+                builder.schemaLoader(schemaLoader -> schemaLoader.fetchRemoteResources());
+            } else {
+                // secure default: never fetch remote/file $refs. The networknt default
+                // SchemaLoader already omits the IriResourceLoader, but we also install an
+                // explicit block predicate so any remote/external-file $ref is rejected with
+                // a clear error (treated as unresolved) rather than silently fetched — this
+                // keeps the control independent of the library's default behaviour.
+                builder.schemaLoader(schemaLoader -> schemaLoader.block(JsonSchemaValidator::isRemoteRef));
+            }
+        });
+    }
+
+    private static boolean isRemoteRef(AbsoluteIri absoluteIri) {
+        if (absoluteIri == null) {
+            return false;
+        }
+        String scheme = absoluteIri.getScheme();
+        if (scheme == null || !BLOCKED_REF_SCHEMES.contains(scheme.toLowerCase(Locale.ROOT))) {
+            return false;
+        }
+        // The standard JSON Schema meta-schemas (e.g. http(s)://json-schema.org/draft-07/schema)
+        // are NOT fetched over the network — the library re-maps them to bundled classpath
+        // resources — so they must not be blocked or all validation would fail.
+        String iri = absoluteIri.toString().toLowerCase(Locale.ROOT);
+        return !iri.startsWith("http://json-schema.org/") && !iri.startsWith("https://json-schema.org/");
     }
 
     private JsonNode getSchemaJsonNode() {

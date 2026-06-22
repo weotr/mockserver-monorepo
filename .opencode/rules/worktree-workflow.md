@@ -1,32 +1,51 @@
-# Worktree Workflow — Opt-In Per-Agent Isolation With Rebase Lock
+# Worktree Workflow — Default Per-Session Isolation With Rebase Lock
 
 ## Rule
 
-When a session is started with `/worktree` (Claude) or when the user
-explicitly asks to "start in a worktree", the agent works inside a
-**dedicated git worktree** instead of the main checkout. Changes return
-to `master` only via a gated merge using `flock` to serialize concurrent
-rebases. This enables multiple agent sessions to operate on the same
-repo simultaneously without stepping on each other.
+Every **independent session** — the primary interactive session, any
+parallel Claude/opencode window, and every long autonomous run — works
+inside its **own dedicated git worktree** on a **local-only branch**,
+not the main checkout. Start in a worktree (via `/worktree`) at session
+start. **This holds even when the session makes no changes** —
+read-only investigation, analysis, and review work in a worktree too;
+the rule is *no work runs in the bare main checkout*, not *only
+change-making work is isolated*. Changes return to `master` only via a
+gated merge using `flock` to serialize concurrent rebases.
+Isolation-by-default is what lets concurrent sessions operate on the
+same repo without stepping on each other, and matches the AI-in-SDLC
+spec (`docs/operations/ai-sdlc-integration-spec.md` §8.3).
 
-**Default behaviour is unchanged**: without `/worktree`, the agent works
-directly in the main checkout. This rule activates only when explicitly
-opted in. The default keeps the IntelliJ MCP transparency contract (see
-[[intellij-mcp-preference]]) — IntelliJ is open on the main checkout
-and watching IDE tool windows live remains the primary feedback loop.
+**Delegate, don't do — and delegating is how routing happens.** The
+primary session's job is to *orchestrate* (see [[operating-model]] and
+[[subagent-routing]]): it should hand almost all execution —
+implementation *and* investigation — to subagents rather than doing it
+inline, because a subagent is where the correct **model, temperature,
+and reasoning effort** are selected for the task. Those subagents are
+**helper subagents** and so share this session's worktree (next
+paragraph); the point is that the work still lands in *this* worktree,
+just run by a right-sized subagent.
+
+**Helper subagents are the one deliberate exception.** A subagent
+spawned by a primary via the `Agent` tool **shares the primary's tree**
+and is *not* isolated — this is required for correctness, not
+convenience: helper subagents (reviewers, investigators) read the
+primary's **uncommitted in-flight diff**; a worktree branched off
+`origin/master` would see only committed state and miss the very changes
+they exist to analyse, silently breaking the commit gate chain.
+Isolation is **between independent sessions, not within one**.
 
 ## When To Use This
 
 | Situation | Use worktree? |
 |-----------|---------------|
-| Single interactive session, one user, one Claude window | **No** — stay in main checkout for IntelliJ MCP visibility (this is the default) |
-| **Subagents spawned from the main session** via the `Agent` tool | **No, share the primary's checkout.** Subagents typically read/analyse in-flight work (uncommitted edits the primary just made). A worktree based on `origin/master` would only see committed state and miss the live changes the subagent needs to reason about |
-| Short edits expected to merge in minutes | **No** — overhead of the 4-gate merge outweighs the safety |
-| **A second, independent Claude/opencode window** opened by the user for parallel work on the same repo | **Yes** — that session invokes `/worktree` at start. Each independent session gets its own worktree |
-| Long autonomous task (`/loop`, `/schedule`, "go work on X and come back when done") | **Yes** — invoke `/worktree` at session start. The user already accepts they won't watch in real time |
-| `Agent` tool with explicit `isolation: "worktree"` parameter | **Yes, but only when the subagent genuinely needs a clean tree** (e.g., experimental refactor sandboxing where the primary doesn't want side effects). This is rare; the default is to share the primary's checkout |
+| **Primary interactive session** doing substantive work | **Yes (default)** — start in a worktree via `/worktree`. (This previously stayed in the main checkout for IDE visibility; that exception is gone now that IntelliJ integration has been dropped.) |
+| **Primary session doing read-only work** (investigation, analysis, answering a question, reviewing) that makes no changes | **Yes** — still a worktree. The rule is *no work in the bare checkout*; isolation is not contingent on whether files change. The merge ceremony simply has nothing to merge (skip to cleanup). |
+| **Subagents spawned from the main session** via the `Agent` tool | **No separate worktree — share the spawning session's checkout.** Helper subagents read/analyse in-flight work (uncommitted edits the primary just made). A worktree based on `origin/master` would only see committed state and miss the live changes — and would break the review gate, which reviews the primary's uncommitted diff. They are still "in a worktree" — the primary's. |
+| **A second, independent Claude/opencode window** for parallel work on the same repo | **Yes** — that session invokes `/worktree` at start. Each independent session gets its own worktree |
+| Long autonomous task (`/loop`, `/schedule`, "go work on X and come back when done") | **Yes** — invoke `/worktree` at session start |
+| Trivial one-off (typo, comment, doc one-liner) in a quick session | **Yes — still a worktree** (cheap: it shares the `.git` object store). What scales down for a trivial change is the *merge ceremony* (the 4-gate chain), not the isolation — see [[operating-model]], Scale The Ceremony |
 
-**Key principle**: worktrees provide isolation **between independent agents** (different Claude sessions), not **within an agent** (primary + its subagents). Subagents are helpers of the primary and inherit the primary's filesystem state.
+**Key principle**: worktrees provide isolation **between independent sessions** (different Claude windows / autonomous runs), not **within a session** (a primary + its helper subagents). Helper subagents inherit the primary's filesystem state so they can see its uncommitted work.
 
 ## Workflow
 
@@ -62,10 +81,7 @@ so a session resumption can find it again.
 
 All edits, commits, builds, tests happen inside `WORKTREE_DIR`. The
 agent commits incrementally on the worktree branch (no rebase to master
-yet). IntelliJ MCP tools operate on the main checkout, **not** the
-worktree — if the user wants IDE visibility for worktree work, they
-must `File → Open` the worktree path in a new IntelliJ window. Calling
-this out explicitly in the response when `/worktree` is invoked.
+yet).
 
 #### Activity recording for `/agent-status`
 
@@ -134,6 +150,9 @@ the worktree unmerged for inspection.
 ### Step 7 — Atomic merge via flock
 
 ```bash
+# Respect the operator halt before any reintegration (see [[operator-halt]]).
+.opencode/scripts/check-halt.sh || { echo "operator halt engaged — not merging"; exit 1; }
+
 LOCK_FILE=".git/agent-rebase.lock"
 flock --timeout 300 "${LOCK_FILE}" bash -c '
     set -euo pipefail
@@ -164,7 +183,7 @@ trap "rmdir ${LOCK_DIR}" EXIT
 ### Step 8 — Cleanup
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/.."  # back to main checkout's parent
+cd "$(git rev-parse --show-toplevel)/.."  # navigate to the parent of the worktree directory
 git worktree remove "${WORKTREE_DIR}" --force
 git branch -D "${BRANCH}"
 rm -f .tmp/active-worktree
@@ -230,7 +249,3 @@ The first three remain good hygiene.
 - **Diff size cap on Gate 4.** For very large diffs the summary
   presentation is awkward. Consider a "diff summary + risk score"
   presentation rather than raw diff dump.
-- **IntelliJ MCP visibility inside a worktree.** Currently lost.
-  Possible future: have the agent open the worktree in a second IntelliJ
-  window and use a separate MCP connection — but multi-window MCP isn't
-  yet supported reliably.

@@ -34,6 +34,24 @@ VERSION=$(in_docker "$RUBY_IMAGE" \
 [[ -n "$VERSION" ]] || { log_error "could not read version.rb"; exit 1; }
 log_info "  version: $VERSION"
 
+# In dry-run, update-version-references (which bumps version.rb) is skipped and
+# its bump would never reach this step's fresh checkout anyway, so the file still
+# holds the previous version. Bump it in-place to RELEASE_VERSION so the dry-run
+# builds the real version; restore on exit (dry-run never commits).
+VERSION_RB_FILE="$RUBY_DIR/lib/mockserver/version.rb"
+if is_dry_run && [[ "$VERSION" != "$RELEASE_VERSION" ]]; then
+  mkdir -p "$REPO_ROOT/.tmp"
+  cp "$VERSION_RB_FILE" "$REPO_ROOT/.tmp/version.rb.bak"
+  # shellcheck disable=SC2064  # expand the path now, not at trap-fire time
+  trap "cp '$REPO_ROOT/.tmp/version.rb.bak' '$VERSION_RB_FILE' 2>/dev/null || true" EXIT
+  _newrb="$REPO_ROOT/.tmp/version.rb.new"
+  sed "s/VERSION = '.*'/VERSION = '$RELEASE_VERSION'/" "$VERSION_RB_FILE" > "$_newrb" && mv "$_newrb" "$VERSION_RB_FILE"
+  grep -qE "VERSION = '$RELEASE_VERSION'" "$VERSION_RB_FILE" \
+    || { log_error "dry-run: failed to bump version.rb (format changed?)"; exit 1; }
+  VERSION="$RELEASE_VERSION"
+  log_info "dry-run: bumped version.rb to $RELEASE_VERSION in-place (not committed)"
+fi
+
 # Fail-fast version guard. Must run BEFORE the "already on RubyGems"
 # idempotency check, otherwise a stale version.rb (e.g. prepare.sh didn't
 # bump it) would silently skip — masking the bug behind an "already

@@ -3,7 +3,6 @@ package org.mockserver.model;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.util.*;
-import java.util.concurrent.TimeUnit;
 
 public class HttpSseResponse extends Action<HttpSseResponse> {
     private int hashCode;

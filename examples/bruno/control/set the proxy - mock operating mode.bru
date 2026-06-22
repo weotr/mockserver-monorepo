@@ -1,0 +1,21 @@
+meta {
+  name: set the proxy / mock operating mode
+  type: http
+  seq: 11
+}
+
+put {
+  url: {{baseUrl}}/mockserver/mode?mode=SIMULATE
+  body: none
+  auth: inherit
+}
+
+params:query {
+  mode: SIMULATE
+}
+
+docs {
+  Sets the operating mode that controls how unmatched requests are handled. SIMULATE matches expectations and returns a 404 for unmatched requests; SPY matches expectations but forwards (and records) unmatched requests to the real downstream; CAPTURE forwards and records all traffic (the same proxy-on-no-match behaviour as SPY).
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

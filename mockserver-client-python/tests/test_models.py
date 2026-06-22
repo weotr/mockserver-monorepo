@@ -7,6 +7,8 @@ from mockserver.models import (
     BinaryResponse,
     Body,
     ConnectionOptions,
+    CrossProtocolScenario,
+    CrossProtocolTrigger,
     Delay,
     DelayDistribution,
     DnsRecord,
@@ -32,6 +34,7 @@ from mockserver.models import (
     OpenAPIExpectation,
     Ports,
     RequestDefinition,
+    ResponseMode,
     SocketAddress,
     TimeToLive,
     Times,
@@ -664,7 +667,8 @@ class TestHttpRequest:
     def test_to_dict_with_cookies(self):
         r = HttpRequest.request().with_cookie("sid", "abc")
         result = r.to_dict()
-        assert result["cookies"] == [{"name": "sid", "values": ["abc"]}]
+        # cookies serialize as a {name: value} object map (not the header/query array form)
+        assert result["cookies"] == {"sid": "abc"}
 
     def test_to_dict_camel_case_keys(self):
         r = HttpRequest(
@@ -1274,6 +1278,23 @@ class TestHttpError:
         assert restored.response_bytes == "YWJj"
         assert restored.delay.value == 200
 
+    def test_stream_error_none_by_default(self):
+        assert HttpError.error().stream_error is None
+        assert "streamError" not in HttpError(drop_connection=True).to_dict()
+
+    def test_stream_error_serializes_to_camel_case(self):
+        e = HttpError(stream_error=7)
+        assert e.to_dict() == {"streamError": 7}
+
+    def test_stream_error_from_dict(self):
+        e = HttpError.from_dict({"streamError": 268})
+        assert e.stream_error == 268
+
+    def test_stream_error_round_trip(self):
+        original = HttpError(stream_error=7)
+        restored = HttpError.from_dict(original.to_dict())
+        assert restored.stream_error == 7
+
 
 class TestHttpOverrideForwardedRequest:
     def test_factory(self):
@@ -1763,6 +1784,152 @@ class TestExpectation:
         assert restored.chaos.to_dict() == original.chaos.to_dict()
 
 
+class TestCrossProtocolScenario:
+    def test_defaults_emit_nothing(self):
+        assert CrossProtocolScenario().to_dict() == {}
+
+    def test_to_dict_camel_case(self):
+        c = CrossProtocolScenario(
+            trigger=CrossProtocolTrigger.DNS_QUERY,
+            match_pattern="api.example.com",
+            scenario_name="Deploy",
+            target_state="DnsObserved",
+        )
+        assert c.to_dict() == {
+            "trigger": "DNS_QUERY",
+            "matchPattern": "api.example.com",
+            "scenarioName": "Deploy",
+            "targetState": "DnsObserved",
+        }
+
+    def test_match_pattern_omitted_when_none(self):
+        c = CrossProtocolScenario(
+            trigger=CrossProtocolTrigger.WEBSOCKET_CONNECT,
+            scenario_name="Deploy",
+            target_state="Connected",
+        )
+        d = c.to_dict()
+        assert "matchPattern" not in d
+        assert d == {
+            "trigger": "WEBSOCKET_CONNECT",
+            "scenarioName": "Deploy",
+            "targetState": "Connected",
+        }
+
+    def test_from_dict(self):
+        c = CrossProtocolScenario.from_dict({
+            "trigger": "GRPC_REQUEST",
+            "matchPattern": "MyService",
+            "scenarioName": "Deploy",
+            "targetState": "GrpcSeen",
+        })
+        assert c.trigger == "GRPC_REQUEST"
+        assert c.match_pattern == "MyService"
+        assert c.scenario_name == "Deploy"
+        assert c.target_state == "GrpcSeen"
+
+    def test_from_dict_none(self):
+        assert CrossProtocolScenario.from_dict(None) is None
+
+    def test_round_trip(self):
+        original = CrossProtocolScenario(
+            trigger=CrossProtocolTrigger.HTTP_REQUEST,
+            match_pattern="/health",
+            scenario_name="Deploy",
+            target_state="HttpSeen",
+        )
+        assert CrossProtocolScenario.from_dict(original.to_dict()).to_dict() == original.to_dict()
+
+
+class TestExpectationScenarioParity:
+    """Serialization of the typed stateful-scenario fields against the
+    scenario-parity contract (camelCase JSON must match the core contract).
+    """
+
+    def test_response_mode_constants(self):
+        assert ResponseMode.SEQUENTIAL == "SEQUENTIAL"
+        assert ResponseMode.RANDOM == "RANDOM"
+        assert ResponseMode.WEIGHTED == "WEIGHTED"
+        assert ResponseMode.SWITCH == "SWITCH"
+
+    def test_cross_protocol_trigger_constants(self):
+        assert CrossProtocolTrigger.DNS_QUERY == "DNS_QUERY"
+        assert CrossProtocolTrigger.WEBSOCKET_CONNECT == "WEBSOCKET_CONNECT"
+        assert CrossProtocolTrigger.GRPC_REQUEST == "GRPC_REQUEST"
+        assert CrossProtocolTrigger.HTTP_REQUEST == "HTTP_REQUEST"
+
+    def test_new_fields_emit_camel_case(self):
+        e = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_responses=[
+                HttpResponse(status_code=200, body="a"),
+                HttpResponse(status_code=500, body="b"),
+            ],
+            response_mode=ResponseMode.WEIGHTED,
+            response_weights=[3, 1],
+            switch_after=2,
+            cross_protocol_scenarios=[
+                CrossProtocolScenario(
+                    trigger=CrossProtocolTrigger.DNS_QUERY,
+                    match_pattern="api.example.com",
+                    scenario_name="Deploy",
+                    target_state="DnsObserved",
+                )
+            ],
+            scenario_name="Deploy",
+            scenario_state="Pending",
+            new_scenario_state="Deploying",
+        )
+        d = e.to_dict()
+        assert d["responseMode"] == "WEIGHTED"
+        assert d["responseWeights"] == [3, 1]
+        assert d["switchAfter"] == 2
+        assert d["crossProtocolScenarios"] == [{
+            "trigger": "DNS_QUERY",
+            "matchPattern": "api.example.com",
+            "scenarioName": "Deploy",
+            "targetState": "DnsObserved",
+        }]
+        assert d["scenarioName"] == "Deploy"
+        assert d["scenarioState"] == "Pending"
+        assert d["newScenarioState"] == "Deploying"
+        assert len(d["httpResponses"]) == 2
+
+    def test_new_fields_omitted_when_unset(self):
+        d = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_response=HttpResponse(status_code=200),
+        ).to_dict()
+        assert "responseWeights" not in d
+        assert "switchAfter" not in d
+        assert "crossProtocolScenarios" not in d
+
+    def test_round_trip(self):
+        original = Expectation(
+            http_request=HttpRequest(path="/api"),
+            http_responses=[HttpResponse(status_code=200), HttpResponse(status_code=500)],
+            response_mode=ResponseMode.SWITCH,
+            response_weights=[5, 2],
+            switch_after=3,
+            cross_protocol_scenarios=[
+                CrossProtocolScenario(
+                    trigger=CrossProtocolTrigger.WEBSOCKET_CONNECT,
+                    scenario_name="Deploy",
+                    target_state="Connected",
+                )
+            ],
+        )
+        restored = Expectation.from_dict(original.to_dict())
+        assert restored.response_mode == "SWITCH"
+        assert restored.response_weights == [5, 2]
+        assert restored.switch_after == 3
+        assert len(restored.cross_protocol_scenarios) == 1
+        assert restored.cross_protocol_scenarios[0].trigger == "WEBSOCKET_CONNECT"
+        assert restored.cross_protocol_scenarios[0].scenario_name == "Deploy"
+        assert restored.cross_protocol_scenarios[0].target_state == "Connected"
+        assert restored.to_dict() == original.to_dict()
+
+
 class TestOpenAPIDefinition:
     def test_defaults(self):
         d = OpenAPIDefinition()
@@ -1928,6 +2095,7 @@ class TestVerification:
     def test_defaults(self):
         v = Verification()
         assert v.http_request is None
+        assert v.http_response is None
         assert v.expectation_id is None
         assert v.times is None
 
@@ -1969,10 +2137,26 @@ class TestVerification:
         result = v.to_dict()
         assert result["expectationId"] == {"id": "eid"}
 
+    def test_with_http_response(self):
+        v = Verification(
+            http_request=HttpRequest(path="/test"),
+            http_response=HttpResponse(status_code=200),
+        )
+        assert v.http_response.status_code == 200
+        result = v.to_dict()
+        assert result["httpResponse"] == {"statusCode": 200}
+
+    def test_to_dict_response_only(self):
+        v = Verification(http_response=HttpResponse(status_code=404))
+        result = v.to_dict()
+        assert "httpRequest" not in result
+        assert result["httpResponse"] == {"statusCode": 404}
+
     def test_to_dict_strips_none(self):
         v = Verification(http_request=HttpRequest(path="/p"))
         result = v.to_dict()
         assert "expectationId" not in result
+        assert "httpResponse" not in result
         assert "times" not in result
 
     def test_from_dict(self):
@@ -1991,6 +2175,14 @@ class TestVerification:
         })
         assert v.expectation_id.id == "eid-123"
 
+    def test_from_dict_with_http_response(self):
+        v = Verification.from_dict({
+            "httpRequest": {"path": "/test"},
+            "httpResponse": {"statusCode": 200},
+        })
+        assert v.http_request.path == "/test"
+        assert v.http_response.status_code == 200
+
     def test_from_dict_none(self):
         assert Verification.from_dict(None) is None
 
@@ -2007,11 +2199,23 @@ class TestVerification:
         assert restored.times.at_most == 5
         assert restored.maximum_number_of_request_to_return_in_verification_failure == 20
 
+    def test_round_trip_with_response(self):
+        original = Verification(
+            http_request=HttpRequest.request("/api").with_method("POST"),
+            http_response=HttpResponse(status_code=201),
+            times=VerificationTimes.once(),
+        )
+        restored = Verification.from_dict(original.to_dict())
+        assert restored.http_request.path == "/api"
+        assert restored.http_response.status_code == 201
+        assert restored.times.at_least == 1
+
 
 class TestVerificationSequence:
     def test_defaults(self):
         vs = VerificationSequence()
         assert vs.http_requests is None
+        assert vs.http_responses is None
         assert vs.expectation_ids is None
 
     def test_with_requests(self):
@@ -2032,6 +2236,15 @@ class TestVerificationSequence:
         )
         assert len(vs.expectation_ids) == 2
 
+    def test_with_http_responses(self):
+        vs = VerificationSequence(
+            http_requests=[HttpRequest(path="/a"), HttpRequest(path="/b")],
+            http_responses=[HttpResponse(status_code=200), HttpResponse(status_code=201)],
+        )
+        assert len(vs.http_responses) == 2
+        assert vs.http_responses[0].status_code == 200
+        assert vs.http_responses[1].status_code == 201
+
     def test_to_dict(self):
         vs = VerificationSequence(
             http_requests=[HttpRequest(path="/a"), HttpRequest(path="/b")],
@@ -2050,10 +2263,22 @@ class TestVerificationSequence:
             "expectationIds": [{"id": "e1"}, {"id": "e2"}],
         }
 
+    def test_to_dict_with_http_responses(self):
+        vs = VerificationSequence(
+            http_requests=[HttpRequest(path="/a"), HttpRequest(path="/b")],
+            http_responses=[HttpResponse(status_code=200), HttpResponse(status_code=201)],
+        )
+        result = vs.to_dict()
+        assert result == {
+            "httpRequests": [{"path": "/a"}, {"path": "/b"}],
+            "httpResponses": [{"statusCode": 200}, {"statusCode": 201}],
+        }
+
     def test_to_dict_strips_none(self):
         vs = VerificationSequence(http_requests=[HttpRequest(path="/a")])
         result = vs.to_dict()
         assert "expectationIds" not in result
+        assert "httpResponses" not in result
 
     def test_from_dict(self):
         vs = VerificationSequence.from_dict({
@@ -2076,9 +2301,20 @@ class TestVerificationSequence:
     def test_from_dict_none(self):
         assert VerificationSequence.from_dict(None) is None
 
+    def test_from_dict_with_http_responses(self):
+        vs = VerificationSequence.from_dict({
+            "httpRequests": [{"path": "/a"}, {"path": "/b"}],
+            "httpResponses": [{"statusCode": 200}, {"statusCode": 201}],
+        })
+        assert len(vs.http_requests) == 2
+        assert len(vs.http_responses) == 2
+        assert vs.http_responses[0].status_code == 200
+        assert vs.http_responses[1].status_code == 201
+
     def test_from_dict_empty(self):
         vs = VerificationSequence.from_dict({})
         assert vs.http_requests is None
+        assert vs.http_responses is None
         assert vs.expectation_ids is None
 
     def test_round_trip(self):
@@ -2098,6 +2334,23 @@ class TestVerificationSequence:
         assert restored.http_requests[1].method == "POST"
         assert len(restored.expectation_ids) == 2
         assert restored.expectation_ids[0].id == "ea"
+
+    def test_round_trip_with_responses(self):
+        original = VerificationSequence(
+            http_requests=[
+                HttpRequest.request("/a").with_method("GET"),
+                HttpRequest.request("/b").with_method("POST"),
+            ],
+            http_responses=[
+                HttpResponse(status_code=200),
+                HttpResponse(status_code=201),
+            ],
+        )
+        restored = VerificationSequence.from_dict(original.to_dict())
+        assert len(restored.http_requests) == 2
+        assert len(restored.http_responses) == 2
+        assert restored.http_responses[0].status_code == 200
+        assert restored.http_responses[1].status_code == 201
 
 
 class TestPorts:
@@ -3118,3 +3371,233 @@ class TestExpectationWithSteps:
         assert restored.steps[0].failure_policy == "BEST_EFFORT"
         assert restored.steps[1].http_forward.host == "backend.local"
         assert restored.steps[1].responder is True
+
+
+class TestHttpTemplateTemplateFile:
+    """Tests for the templateFile field on HttpTemplate."""
+
+    def test_template_file_default_is_none(self):
+        t = HttpTemplate()
+        assert t.template_file is None
+
+    def test_template_file_construction(self):
+        t = HttpTemplate(template_type="VELOCITY", template_file="/templates/response.vm")
+        assert t.template_file == "/templates/response.vm"
+        assert t.template_type == "VELOCITY"
+
+    def test_template_file_to_dict(self):
+        t = HttpTemplate(template_type="MUSTACHE", template_file="/tpl/resp.mustache")
+        result = t.to_dict()
+        assert result["templateFile"] == "/tpl/resp.mustache"
+        assert result["templateType"] == "MUSTACHE"
+
+    def test_template_file_not_emitted_when_none(self):
+        t = HttpTemplate(template_type="VELOCITY", template="inline content")
+        result = t.to_dict()
+        assert "templateFile" not in result
+
+    def test_template_file_from_dict(self):
+        t = HttpTemplate.from_dict({
+            "templateType": "VELOCITY",
+            "templateFile": "/path/to/template.vm",
+        })
+        assert t.template_file == "/path/to/template.vm"
+        assert t.template_type == "VELOCITY"
+
+    def test_template_file_round_trip(self):
+        original = HttpTemplate(
+            template_type="MUSTACHE",
+            template_file="/templates/forward.mustache",
+            delay=Delay(time_unit="SECONDS", value=1),
+        )
+        restored = HttpTemplate.from_dict(original.to_dict())
+        assert restored.template_type == "MUSTACHE"
+        assert restored.template_file == "/templates/forward.mustache"
+        assert restored.template is None
+        assert restored.delay.value == 1
+
+    def test_template_file_factory(self):
+        t = HttpTemplate.template("VELOCITY", template_file="/tpl/fwd.vm")
+        assert t.template_type == "VELOCITY"
+        assert t.template_file == "/tpl/fwd.vm"
+        assert t.template is None
+
+    def test_template_file_factory_with_inline_template(self):
+        t = HttpTemplate.template("JAVASCRIPT", "return {};", template_file="/fallback.js")
+        assert t.template == "return {};"
+        assert t.template_file == "/fallback.js"
+
+    def test_template_file_coexists_with_template(self):
+        """Both template and templateFile can be set (server decides precedence)."""
+        t = HttpTemplate(
+            template_type="VELOCITY",
+            template="inline $var",
+            template_file="/path/to/file.vm",
+        )
+        result = t.to_dict()
+        assert result["template"] == "inline $var"
+        assert result["templateFile"] == "/path/to/file.vm"
+
+
+class TestBodyFileType:
+    """Tests for the FILE body type with filePath and templateType."""
+
+    def test_file_body_construction(self):
+        b = Body(type="FILE", file_path="/data/response.json", content_type="application/json")
+        assert b.type == "FILE"
+        assert b.file_path == "/data/response.json"
+        assert b.content_type == "application/json"
+
+    def test_file_body_with_template_type(self):
+        b = Body(
+            type="FILE",
+            file_path="/templates/body.mustache",
+            template_type="MUSTACHE",
+            content_type="text/html",
+        )
+        assert b.template_type == "MUSTACHE"
+        assert b.file_path == "/templates/body.mustache"
+
+    def test_file_body_to_dict(self):
+        b = Body(
+            type="FILE",
+            file_path="/data/response.json",
+            content_type="application/json",
+        )
+        result = b.to_dict()
+        assert result == {
+            "type": "FILE",
+            "filePath": "/data/response.json",
+            "contentType": "application/json",
+        }
+
+    def test_file_body_to_dict_with_template_type(self):
+        b = Body(
+            type="FILE",
+            file_path="/tpl/body.vm",
+            template_type="VELOCITY",
+            content_type="text/plain",
+        )
+        result = b.to_dict()
+        assert result == {
+            "type": "FILE",
+            "filePath": "/tpl/body.vm",
+            "templateType": "VELOCITY",
+            "contentType": "text/plain",
+        }
+
+    def test_file_body_template_type_not_emitted_when_none(self):
+        b = Body(type="FILE", file_path="/data/resp.json")
+        result = b.to_dict()
+        assert "templateType" not in result
+
+    def test_file_path_not_emitted_for_non_file_body(self):
+        b = Body(type="STRING", string="hello")
+        result = b.to_dict()
+        assert "filePath" not in result
+        assert "templateType" not in result
+
+    def test_file_body_from_dict(self):
+        b = Body.from_dict({
+            "type": "FILE",
+            "filePath": "/responses/body.json",
+            "contentType": "application/json",
+        })
+        assert b.type == "FILE"
+        assert b.file_path == "/responses/body.json"
+        assert b.content_type == "application/json"
+        assert b.template_type is None
+
+    def test_file_body_from_dict_with_template_type(self):
+        b = Body.from_dict({
+            "type": "FILE",
+            "filePath": "/tpl/resp.mustache",
+            "templateType": "MUSTACHE",
+            "contentType": "text/html",
+        })
+        assert b.type == "FILE"
+        assert b.file_path == "/tpl/resp.mustache"
+        assert b.template_type == "MUSTACHE"
+        assert b.content_type == "text/html"
+
+    def test_file_body_round_trip(self):
+        original = Body(
+            type="FILE",
+            file_path="/templates/response.vm",
+            template_type="VELOCITY",
+            content_type="application/json",
+        )
+        restored = Body.from_dict(original.to_dict())
+        assert restored.type == "FILE"
+        assert restored.file_path == "/templates/response.vm"
+        assert restored.template_type == "VELOCITY"
+        assert restored.content_type == "application/json"
+
+    def test_file_body_factory(self):
+        b = Body.file("/data/response.json")
+        assert b.type == "FILE"
+        assert b.file_path == "/data/response.json"
+        assert b.content_type is None
+        assert b.template_type is None
+
+    def test_file_body_factory_with_content_type(self):
+        b = Body.file("/data/resp.xml", content_type="application/xml")
+        assert b.type == "FILE"
+        assert b.file_path == "/data/resp.xml"
+        assert b.content_type == "application/xml"
+
+    def test_file_body_factory_with_template_type(self):
+        b = Body.file("/tpl/body.mustache", content_type="text/html", template_type="MUSTACHE")
+        assert b.type == "FILE"
+        assert b.file_path == "/tpl/body.mustache"
+        assert b.content_type == "text/html"
+        assert b.template_type == "MUSTACHE"
+
+    def test_file_body_factory_round_trip(self):
+        original = Body.file("/tpl/resp.vm", content_type="text/plain", template_type="VELOCITY")
+        restored = Body.from_dict(original.to_dict())
+        assert restored.type == "FILE"
+        assert restored.file_path == "/tpl/resp.vm"
+        assert restored.content_type == "text/plain"
+        assert restored.template_type == "VELOCITY"
+
+    def test_file_body_deserialized_from_body_in_request(self):
+        """FILE bodies in HTTP request/response are correctly deserialized."""
+        from mockserver.models import _deserialize_body
+        data = {
+            "type": "FILE",
+            "filePath": "/mock-data/payload.json",
+            "templateType": "MUSTACHE",
+            "contentType": "application/json",
+        }
+        body = _deserialize_body(data)
+        assert isinstance(body, Body)
+        assert body.type == "FILE"
+        assert body.file_path == "/mock-data/payload.json"
+        assert body.template_type == "MUSTACHE"
+        assert body.content_type == "application/json"
+
+    def test_field_map_entries(self):
+        """Ensure the _FIELD_MAP has entries for the new fields."""
+        from mockserver.models import _to_camel, _from_camel
+        assert _to_camel("template_file") == "templateFile"
+        assert _to_camel("file_path") == "filePath"
+        assert _from_camel("templateFile") == "template_file"
+        assert _from_camel("filePath") == "file_path"
+
+
+class TestCookieSerialization:
+    # MockServer represents cookies as a {name: value} object map, not the
+    # [{name, values}] array used for headers / query parameters.
+    def test_request_cookie_serialized_as_object_map(self):
+        req = HttpRequest().with_path("/c").with_cookie("session", "abc123")
+        assert req.to_dict()["cookies"] == {"session": "abc123"}
+
+    def test_response_cookie_serialized_as_object_map(self):
+        resp = HttpResponse().with_cookie("set", "v1")
+        assert resp.to_dict()["cookies"] == {"set": "v1"}
+
+    def test_request_cookie_round_trip_from_object_map(self):
+        req = HttpRequest.from_dict({"path": "/c", "cookies": {"session": "abc123"}})
+        assert req.cookies[0].name == "session"
+        assert req.cookies[0].values == ["abc123"]

@@ -168,4 +168,97 @@ describe('DebugMismatchDialog', () => {
     render(<DebugMismatchDialog connectionParams={connectionParams} />);
     expect(screen.getByText('No active expectations')).toBeInTheDocument();
   });
+
+  describe('Visual diff tab', () => {
+    it('renders DiffPanel rows for the closest expectation differing fields', async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({
+        debugMismatchOpen: true,
+        debugMismatchResult: sampleResult,
+      });
+      render(<DebugMismatchDialog connectionParams={connectionParams} />);
+
+      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+
+      // Diff table header from DiffPanel.
+      expect(screen.getByText('Expected')).toBeInTheDocument();
+      expect(screen.getByText('Actual')).toBeInTheDocument();
+      // Field rows derived from the closest match's differences.
+      expect(screen.getByText('path')).toBeInTheDocument();
+      expect(screen.getByText('body')).toBeInTheDocument();
+      // expected-vs-actual extracted from "expected X but was Y".
+      expect(screen.getByText('/api/users')).toBeInTheDocument();
+      expect(screen.getByText('/api/items')).toBeInTheDocument();
+    });
+
+    it('only diffs the closest expectation, not other candidates', async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({
+        debugMismatchOpen: true,
+        debugMismatchResult: sampleResult,
+      });
+      render(<DebugMismatchDialog connectionParams={connectionParams} />);
+
+      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      // exp-2's only difference is on `method`; it must NOT appear because exp-1 is closest.
+      expect(screen.queryByText('method')).not.toBeInTheDocument();
+    });
+
+    it('falls back to the best-scoring candidate when there is no closest match', async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({
+        debugMismatchOpen: true,
+        debugMismatchResult: { ...sampleResult, closestMatch: undefined },
+      });
+      render(<DebugMismatchDialog connectionParams={connectionParams} />);
+
+      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      // exp-1 (10/12) outscores exp-2 (6/12), so its fields drive the diff.
+      expect(screen.getByText('path')).toBeInTheDocument();
+    });
+
+    it('shows a fallback message when no candidate has field-level differences', async () => {
+      const user = userEvent.setup();
+      const noDiffs: DebugMismatchResult = {
+        ...sampleResult,
+        closestMatch: undefined,
+        results: [
+          {
+            expectationId: 'exp-1',
+            expectationMethod: 'GET',
+            expectationPath: '/api/users',
+            matches: false,
+            matchedFieldCount: 10,
+            totalFieldCount: 12,
+          },
+        ],
+      };
+      useDashboardStore.setState({
+        debugMismatchOpen: true,
+        debugMismatchResult: noDiffs,
+      });
+      render(<DebugMismatchDialog connectionParams={connectionParams} />);
+
+      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      expect(
+        screen.getByText(/No closest expectation with field-level differences/),
+      ).toBeInTheDocument();
+    });
+
+    it('keeps the text reasons available on the Match results tab', async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({
+        debugMismatchOpen: true,
+        debugMismatchResult: sampleResult,
+      });
+      render(<DebugMismatchDialog connectionParams={connectionParams} />);
+
+      // Default tab still shows the original score/path UI (info not removed).
+      expect(screen.getByText('10/12')).toBeInTheDocument();
+      await user.click(screen.getByText('GET /api/users'));
+      expect(
+        screen.getByText('expected /api/users but was /api/items'),
+      ).toBeInTheDocument();
+    });
+  });
 });

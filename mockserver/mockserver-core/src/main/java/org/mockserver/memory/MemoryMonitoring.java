@@ -4,10 +4,13 @@ import org.apache.commons.lang3.tuple.ImmutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.log.MockServerEventLog;
+import org.mockserver.log.model.LogEntry;
+import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.RequestMatchers;
 import org.mockserver.mock.listeners.MockServerLogListener;
 import org.mockserver.mock.listeners.MockServerMatcherListener;
 import org.mockserver.mock.listeners.MockServerMatcherNotifier;
+import org.slf4j.event.Level;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -33,6 +36,7 @@ public class MemoryMonitoring implements MockServerLogListener, MockServerMatche
     private static final AtomicInteger currentLogEntriesCount = new AtomicInteger(0);
     private static final AtomicInteger currentExpectationsCount = new AtomicInteger(0);
     private static final List<MemoryPoolMXBean> memoryPoolMXBeans = ManagementFactory.getMemoryPoolMXBeans();
+    private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(MemoryMonitoring.class);
     private final Configuration configuration;
     private final File csvFile;
 
@@ -73,7 +77,12 @@ public class MemoryMonitoring implements MockServerLogListener, MockServerMatche
             rawFileOutputStream.write((line + NEW_LINE).getBytes(StandardCharsets.UTF_8));
             rawFileOutputStream.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            MOCK_SERVER_LOGGER.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("exception writing memory usage statistics to CSV file [" + csvFile + "]")
+                    .setThrowable(e)
+            );
         }
     }
 

@@ -1,0 +1,27 @@
+---
+openapi: 3.0.3
+info:
+  version: 1.0.0
+  title: Recursive XML $ref element naming
+paths:
+  "/tree":
+    get:
+      operationId: getTree
+      responses:
+        '200':
+          description: a tree
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Tree'
+components:
+  schemas:
+    Tree:
+      type: object
+      properties:
+        value:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tree'

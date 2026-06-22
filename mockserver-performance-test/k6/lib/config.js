@@ -185,4 +185,30 @@ export const FORWARD = {
   forwardSelf: bool('K6_FORWARD_SELF', false),
 };
 
+// Forward-path load-shape tunables (forward.js). This scenario is a dedicated
+// REGRESSION GUARD for the upstream connection-pool default
+// (`mockserver.forwardConnectionPoolEnabled`, default true). It drives the
+// FORWARD path (every request opens an outbound upstream connection unless they
+// are pooled) at a sustained high rate — the level where the OLD per-request
+// behaviour exhausted ephemeral ports and threw BindException, surfacing as a
+// spike in `http_req_failed`. The error-rate threshold is the key gate: if
+// pooling regresses, failures climb and the gate trips. Latency gates are
+// secondary (forward adds a network hop, so the bounds are looser than the
+// data-plane match path). Peak default is 1500 rps — the rate that broke the
+// old default (21%/68% errors before the pool fix).
+export const FORWARD_LOAD = {
+  startRate: num('K6_FWD_START_RATE', 100),
+  peakRate: num('K6_FWD_PEAK_RATE', 1500),
+  rampUp: env('K6_FWD_RAMP_UP', '30s'),
+  hold: env('K6_FWD_HOLD', '1m'),
+  rampDown: env('K6_FWD_RAMP_DOWN', '15s'),
+  preAllocatedVUs: num('K6_FWD_PRE_VUS', 200),
+  maxVUs: num('K6_FWD_MAX_VUS', 2000),
+  // Forward adds an upstream network hop, so the data-plane p95/p99 (25/100 ms)
+  // are too tight; these forward-specific bounds are overridable. The error-rate
+  // gate (the actual pool-regression signal) reuses K6_MAX_ERROR_RATE.
+  p95: num('K6_FWD_P95_MS', 50),
+  p99: num('K6_FWD_P99_MS', 200),
+};
+
 export { env, num, bool };

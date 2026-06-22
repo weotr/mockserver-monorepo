@@ -39,6 +39,116 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpError, HttpRequest, Delay
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/some/path")
+).error(
+    HttpError(drop_connection=True, delay=Delay(time_unit="SECONDS", value=5))
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.new(path: '/some/path')
+).error(
+    MockServer::HttpError.new(
+        drop_connection: true,
+        delay: MockServer::Delay.new(time_unit: 'SECONDS', value: 5)
+    )
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().Path("/some/path"),
+).RespondWithError(
+    mockserver.Error().DropConnection(true).WithDelay("SECONDS", 5),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpError"": {
+        ""dropConnection"": true,
+        ""delay"": {
+            ""timeUnit"": ""SECONDS"",
+            ""value"": 5
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpError": {
+        "dropConnection": true,
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 5
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpError": {
+        "dropConnection": true,
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 5
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -96,6 +206,86 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpError, HttpRequest
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/some/path")
+).error(
+    HttpError(drop_connection=True, response_bytes="eQqmdjEEoaXnCvcK6lOAIZeU+Pn+womxmg==")
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.new(path: '/some/path')
+).error(
+    MockServer::HttpError.new(
+        drop_connection: true,
+        response_bytes: 'eQqmdjEEoaXnCvcK6lOAIZeU+Pn+womxmg=='
+    )
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().Path("/some/path"),
+).RespondWithError(
+    mockserver.Error().DropConnection(true).ResponseBytes("eQqmdjEEoaXnCvcK6lOAIZeU+Pn+womxmg=="),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request().WithPath("/some/path")
+).Error(
+    HttpError.Error()
+        .WithDropConnection(true)
+        .WithResponseBytes("eQqmdjEEoaXnCvcK6lOAIZeU+Pn+womxmg==")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpError};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(HttpRequest::new().path("/some/path"))
+    .error(
+        HttpError::new()
+            .drop_connection(true)
+            .response_bytes("eQqmdjEEoaXnCvcK6lOAIZeU+Pn+womxmg==")
+    )
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpError;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;path('/some/path')
+)-&gt;error(
+    HttpError::error()
+        -&gt;dropConnection(true)
+        -&gt;responseBytes('eQqmdjEEoaXnCvcK6lOAIZeU+Pn+womxmg==')
+);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -144,6 +334,76 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpError, HttpRequest
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/some/path")
+).error(
+    HttpError(drop_connection=True)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.new(path: '/some/path')
+).error(
+    MockServer::HttpError.new(drop_connection: true)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().Path("/some/path"),
+).RespondWithError(
+    mockserver.Error().DropConnection(true),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request().WithPath("/some/path")
+).Error(
+    HttpError.Error().WithDropConnection(true)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpError};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(HttpRequest::new().path("/some/path"))
+    .error(HttpError::new().drop_connection(true))
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpError;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;path('/some/path')
+)-&gt;error(
+    HttpError::error()
+        -&gt;dropConnection(true)
+);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -178,6 +438,157 @@ mockServerClient("localhost", 1080).mockAnyResponse({
             )
     );</code></pre>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "method": "POST",
+        "path": "/upload",
+        "respondBeforeBody": True
+    },
+    "httpResponse": {
+        "statusCode": 403,
+        "body": "forbidden",
+        "connectionOptions": {
+            "keepAliveOverride": False
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "method": "POST",
+        "path": "/upload",
+        "respondBeforeBody": true
+    },
+    "httpResponse": {
+        "statusCode": 403,
+        "body": "forbidden",
+        "connectionOptions": {
+            "keepAliveOverride": false
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/upload",
+        "respondBeforeBody": true
+    },
+    "httpResponse": {
+        "statusCode": 403,
+        "body": "forbidden",
+        "connectionOptions": {
+            "keepAliveOverride": false
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""method"": ""POST"",
+        ""path"": ""/upload"",
+        ""respondBeforeBody"": true
+    },
+    ""httpResponse"": {
+        ""statusCode"": 403,
+        ""body"": ""forbidden"",
+        ""connectionOptions"": {
+            ""keepAliveOverride"": false
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/upload",
+        "respondBeforeBody": true
+    },
+    "httpResponse": {
+        "statusCode": 403,
+        "body": "forbidden",
+        "connectionOptions": {
+            "keepAliveOverride": false
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest" : {
+        "method" : "POST",
+        "path" : "/upload",
+        "respondBeforeBody" : true
+    },
+    "httpResponse" : {
+        "statusCode" : 403,
+        "body" : "forbidden",
+        "connectionOptions" : {
+            "keepAliveOverride" : false
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -192,6 +603,75 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         "connectionOptions" : {
             "keepAliveOverride" : false
         }
+    }
+}'</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+
+<button id="button_stream_error" class="accordion">reset HTTP/2 or HTTP/3 stream with an error code</button>
+<div class="panel">
+    <p>For resilience testing of clients that must cope with mid-stream resets, an error action can
+        reset just the matched request stream instead of returning a response. Set <strong>streamError</strong>
+        to the stream error code to send: over HTTP/2 MockServer sends an <code>RST_STREAM</code> for that
+        stream (RFC 7540 codes, e.g. <code>REFUSED_STREAM</code> = 7), and over HTTP/3 a QUIC
+        <code>RESET_STREAM</code> (RFC 9114 codes, e.g. <code>H3_REQUEST_CANCELLED</code> = 268 / 0x10c).
+        Other streams multiplexed on the same connection are unaffected.</p>
+    <p><strong>HTTP/1.1 caveat:</strong> HTTP/1.1 has no stream concept, so a request that matches over
+        HTTP/1.1 cannot be reset at the stream level — MockServer instead drops the whole connection
+        (the same behaviour as <code>dropConnection</code>).</p>
+    <p><strong>Precedence:</strong> if both <code>streamError</code> and <code>dropConnection</code> are
+        set on the same error action, <code>streamError</code> wins and <code>dropConnection</code> is
+        ignored (over HTTP/1.1 the stream-error fallback drops the connection anyway).</p>
+    <p>Common stream error codes:</p>
+    <table>
+        <thead><tr><th>Protocol</th><th>Name</th><th>Code</th></tr></thead>
+        <tbody>
+            <tr><td>HTTP/2</td><td>NO_ERROR</td><td>0</td></tr>
+            <tr><td>HTTP/2</td><td>PROTOCOL_ERROR</td><td>1</td></tr>
+            <tr><td>HTTP/2</td><td>INTERNAL_ERROR</td><td>2</td></tr>
+            <tr><td>HTTP/2</td><td>REFUSED_STREAM</td><td>7</td></tr>
+            <tr><td>HTTP/2</td><td>CANCEL</td><td>8</td></tr>
+            <tr><td>HTTP/2</td><td>ENHANCE_YOUR_CALM</td><td>11</td></tr>
+            <tr><td>HTTP/2</td><td>HTTP_1_1_REQUIRED</td><td>13</td></tr>
+            <tr><td>HTTP/3</td><td>H3_REQUEST_REJECTED</td><td>267 (0x10b)</td></tr>
+            <tr><td>HTTP/3</td><td>H3_REQUEST_CANCELLED</td><td>268 (0x10c)</td></tr>
+            <tr><td>HTTP/3</td><td>H3_INTERNAL_ERROR</td><td>258 (0x102)</td></tr>
+        </tbody>
+    </table>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/some/path")
+    )
+    .error(
+        error()
+            .withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM)
+    );</code></pre>
+        <p>The raw numeric form <code>error().withStreamError(7L)</code> and the
+            <code>error().withStreamErrorCodeName("REFUSED_STREAM")</code> convenience are equivalent.</p>
+    </div>
+    <button class="accordion inner">JSON</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">{
+    "httpRequest" : {
+        "path" : "/some/path"
+    },
+    "httpError" : {
+        "streamError" : 7
+    }
+}</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest" : {
+        "path" : "/some/path"
+    },
+    "httpError" : {
+        "streamError" : 7
     }
 }'</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>

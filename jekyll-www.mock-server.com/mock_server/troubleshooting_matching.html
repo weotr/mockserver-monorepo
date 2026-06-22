@@ -60,7 +60,7 @@ MOCKSERVER_MATCHERS_FAIL_FAST=false</code></pre>
 
 <h3>5. Look for the closest match</h3>
 
-<p>When no expectation matches, MockServer logs a <strong>closest match</strong> summary showing which expectation was most similar to the request and how many fields matched (e.g., "matched 8/12 fields"). This immediately tells you which expectation to investigate.</p>
+<p>When no expectation matches, MockServer logs a <strong>closest match</strong> summary showing which expectation was most similar to the request and how many fields matched (e.g., "matched 14/16 fields"). This immediately tells you which expectation to investigate.</p>
 
 <a id="common_pitfalls" class="anchor" href="#common_pitfalls">&nbsp;</a>
 
@@ -98,7 +98,7 @@ MOCKSERVER_MATCHERS_FAIL_FAST=false</code></pre>
 <p>By default, JSON body matching uses <code>ONLY_MATCHING_FIELDS</code> mode:</p>
 <ul>
     <li><strong>Extra fields</strong> in the request body are ignored (the expectation is a subset match)</li>
-    <li><strong>Missing fields</strong> (in the request but expected in the matcher) cause a failure</li>
+    <li><strong>Missing fields</strong> (a field specified in the matcher but absent from the request body) cause a failure</li>
     <li><strong>Array order</strong> does not matter</li>
     <li><strong>Extra array items</strong> are ignored</li>
 </ul>
@@ -248,8 +248,8 @@ System.out.println(result);</code></pre>
   "totalExpectations": 2,
   "closestMatch": {
     "expectationId": "abc-123",
-    "matchedFields": 10,
-    "totalFields": 12
+    "matchedFields": 14,
+    "totalFields": 16
   },
   "results": [
     {
@@ -257,8 +257,8 @@ System.out.println(result);</code></pre>
       "expectationPath": "/api/users",
       "expectationMethod": "POST",
       "matches": false,
-      "matchedFieldCount": 10,
-      "totalFieldCount": 12,
+      "matchedFieldCount": 14,
+      "totalFieldCount": 16,
       "differences": {
         "method": [
           "string or regex match failed expected: POST found: GET"
@@ -289,7 +289,7 @@ String analysis = mockServerClient.debugMismatch(
 
 // The response will show:
 // - method didn't match: expected POST, found GET
-// - matchedFieldCount: 11/12 (all fields matched except method)</code></pre>
+// - matchedFieldCount: 15/16 (all fields matched except method)</code></pre>
 
 <p>This endpoint is also available via the <a href="/mock_server/ai_mcp_tools.html">MCP <code>debug_request_mismatch</code> tool</a> for AI-assisted debugging.</p>
 

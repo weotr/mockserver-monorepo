@@ -1,0 +1,22 @@
+[
+  {
+    "httpRequest": { "method": "POST", "path": "/login" },
+    "httpResponse": { "statusCode": 200, "body": "{\"token\": \"abc123\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "Started",
+    "newScenarioState": "LoggedIn",
+    "times": { "remainingTimes": 1 }
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/profile" },
+    "httpResponse": { "statusCode": 200, "body": "{\"name\": \"Alice\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "LoggedIn"
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/profile" },
+    "httpResponse": { "statusCode": 401, "body": "{\"error\": \"Not authenticated\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "Started"
+  }
+]

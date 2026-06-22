@@ -6,6 +6,7 @@ import org.mockserver.model.Provider;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.closeTo;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
 public class LlmPricingTest {
@@ -70,6 +71,51 @@ public class LlmPricingTest {
     public void shouldReturnZeroForZeroTokensOnKnownModel() {
         assertThat(LlmPricing.estimateCostUsd(Provider.ANTHROPIC, "claude-sonnet-4", 0, 0),
             is(closeTo(0.0, EPS)));
+    }
+
+    @Test
+    public void shouldPriceCurrentAnthropicModels() {
+        // claude-opus-4-8: $5 input / $25 output per 1M
+        assertThat(LlmPricing.estimateCostUsd(Provider.ANTHROPIC, "claude-opus-4-8", 1_000_000, 1_000_000),
+            is(closeTo(30.0, EPS)));
+        // claude-haiku-4-5: $1 input / $5 output per 1M
+        assertThat(LlmPricing.estimateCostUsd(Provider.ANTHROPIC, "claude-haiku-4-5", 1_000_000, 0),
+            is(closeTo(1.0, EPS)));
+        // claude-fable-5: $10 input / $50 output per 1M
+        assertThat(LlmPricing.estimateCostUsd(Provider.ANTHROPIC, "claude-fable-5", 0, 1_000_000),
+            is(closeTo(50.0, EPS)));
+    }
+
+    @Test
+    public void shouldPriceNewerModelsAheadOfGenericPrefix() {
+        // the more-specific claude-opus-4-8 ($5) must win over the generic
+        // claude-opus-4 ($15) entry that follows it in the table
+        assertThat(LlmPricing.estimateCostUsd(Provider.ANTHROPIC, "claude-opus-4-8-20260101", 1_000_000, 0),
+            is(closeTo(5.0, EPS)));
+        // an original claude-opus-4-0 still falls through to the generic $15 tier
+        assertThat(LlmPricing.estimateCostUsd(Provider.ANTHROPIC, "claude-opus-4-0", 1_000_000, 0),
+            is(closeTo(15.0, EPS)));
+    }
+
+    @Test
+    public void shouldPriceCurrentOpenAiAndGeminiModels() {
+        // gpt-4.1: $2 input / $8 output per 1M
+        assertThat(LlmPricing.estimateCostUsd(Provider.OPENAI, "gpt-4.1", 1_000_000, 0),
+            is(closeTo(2.0, EPS)));
+        // gpt-4.1-mini must win over gpt-4.1 in the prefix walk
+        assertThat(LlmPricing.estimateCostUsd(Provider.OPENAI, "gpt-4.1-mini", 1_000_000, 0),
+            is(closeTo(0.4, EPS)));
+        // gemini-2.5-pro: $1.25 input / $10 output per 1M
+        assertThat(LlmPricing.estimateCostUsd(Provider.GEMINI, "gemini-2.5-pro", 1_000_000, 1_000_000),
+            is(closeTo(11.25, EPS)));
+    }
+
+    @Test
+    public void shouldResolveApproximatedGpt5ModelsToNonNull() {
+        // gpt-5* prices are approximated placeholders — they must still resolve
+        // to SOMETHING (not null) so a recognised model is priced, not dropped.
+        assertThat(LlmPricing.getPricing(Provider.OPENAI, "gpt-5"), is(notNullValue()));
+        assertThat(LlmPricing.getPricing(Provider.OPENAI, "gpt-5-mini"), is(notNullValue()));
     }
 
     @Test

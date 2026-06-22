@@ -1,0 +1,35 @@
+meta {
+  name: register, remove or clear gRPC chaos
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/mockserver/grpcChaos
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "service": "com.example.OrderService",
+    "chaos": {
+      "errorStatusCode": "UNAVAILABLE",
+      "errorMessage": "service maintenance",
+      "errorProbability": 0.5,
+      "latencyMs": 100
+    }
+  }
+}
+
+docs {
+  Registers a gRPC chaos / fault-injection profile for a service, removes a service's profile, or clears all gRPC chaos. Supply a 'service' with a 'chaos' object to register, 'service' with 'remove':true (or no 'chaos') to remove a single service, or 'clear':true to clear all.
+  
+  gRPC chaos registration, removal or clear instruction
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

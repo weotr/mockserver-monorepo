@@ -7,6 +7,7 @@ import org.mockserver.mock.listeners.MockServerMatcherNotifier;
 import org.mockserver.model.RequestDefinition;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.mockserver.character.Character.NEW_LINE;
 
@@ -27,6 +28,15 @@ public abstract class AbstractHttpRequestMatcher extends NotMatcher<RequestDefin
     private int hashCode;
     private boolean isBlank = false;
     private volatile boolean responseInProgress = false;
+    // Guards the lazy async removal of this matcher when it goes inactive. Several
+    // data-plane scans (firstMatchingExpectation, retrieveActiveExpectations,
+    // retrieveRequestMatchers) independently observe "!responseInProgress && !active"
+    // and each would otherwise schedule a removal task for the same matcher under
+    // concurrency. The removal is idempotent (the backing CircularPriorityQueue.remove
+    // returns false the second time) so duplicates were never corrupting, but they were
+    // wasteful — double scheduler load and a redundant backend remove() under churn.
+    // This flag lets exactly the FIRST observer schedule the removal (CAS true once).
+    private final AtomicBoolean removalScheduled = new AtomicBoolean(false);
     private MockServerMatcherNotifier.Cause source;
     protected boolean controlPlaneMatcher;
     protected Expectation expectation;
@@ -56,6 +66,9 @@ public abstract class AbstractHttpRequestMatcher extends NotMatcher<RequestDefin
             this.expectation = expectation;
             this.hashCode = 0;
             this.isBlank = expectation.getHttpRequest() == null;
+            // A matcher reused in place with a new expectation may become active
+            // again (e.g. Times reset); allow its lazy removal to be re-armed.
+            this.removalScheduled.set(false);
             apply(expectation.getHttpRequest());
             return true;
         }
@@ -97,6 +110,18 @@ public abstract class AbstractHttpRequestMatcher extends NotMatcher<RequestDefin
     public HttpRequestMatcher setResponseInProgress(boolean responseInProgress) {
         this.responseInProgress = responseInProgress;
         return this;
+    }
+
+    /**
+     * Atomically claims the right to schedule this matcher's lazy async removal.
+     * Returns {@code true} for the FIRST caller only; all subsequent concurrent
+     * callers observing the same inactive matcher get {@code false} and must NOT
+     * schedule a duplicate removal. This deduplicates the otherwise-redundant
+     * {@code scheduler.submit(removeHttpRequestMatcher(...))} that several
+     * data-plane scans would each fire for the same matcher.
+     */
+    public boolean tryScheduleRemoval() {
+        return removalScheduled.compareAndSet(false, true);
     }
 
     public MockServerMatcherNotifier.Cause getSource() {

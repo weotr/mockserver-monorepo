@@ -1,0 +1,47 @@
+meta {
+  name: start a scheduled multi-stage chaos experiment
+  type: http
+  seq: 10
+}
+
+put {
+  url: {{baseUrl}}/mockserver/chaosExperiment
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "gradual-degradation",
+    "stages": [
+      {
+        "durationMillis": 10000,
+        "profiles": {
+          "api.example.com": {
+            "errorStatus": 500,
+            "errorProbability": 0.1
+          }
+        }
+      },
+      {
+        "durationMillis": 10000,
+        "profiles": {
+          "api.example.com": {
+            "errorStatus": 500,
+            "errorProbability": 0.5
+          }
+        }
+      }
+    ]
+  }
+}
+
+docs {
+  Starts a chaos experiment with an ordered sequence of stages, each applying service-scoped chaos profiles to one or more hosts for a specified duration. Stages progress automatically. Only one experiment may be active at a time; starting a new one stops the previous one. Safety limits: max 50 stages, max 24h per stage duration, auto-halt integration.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

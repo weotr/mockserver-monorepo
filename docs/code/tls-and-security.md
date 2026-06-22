@@ -177,32 +177,113 @@ Authentication is configured in `MockServer.createServerBootstrap()` and validat
 |---------------|---------|-----------|
 | `controlPlaneTLSMutualAuthenticationCAChain` | mTLS handler | Validates client cert against CA chain |
 | `controlPlaneJWTAuthenticationJWKSource` | JWT handler | Validates Bearer token using JWK source |
-| Both configured | Chained handler | Both mTLS and JWT must succeed |
+| `controlPlaneOidcAuthenticationRequired` | OIDC handler | Verifies an external-IdP Bearer token (issuer + audience + scopes) and surfaces a verified principal |
+| Two or more configured | Chained handler | Every configured handler must succeed (logical AND) |
+
+### Verified OIDC Control-Plane Authentication
+
+`OidcAuthenticationHandler` (`o.m.authentication.oidc`) lets an external OIDC IdP govern the control plane. It is off by default — with no `controlPlaneOidc*` configuration the control plane behaves byte-for-byte as before. When `controlPlaneOidcAuthenticationRequired` is enabled it:
+
+1. extracts the single `Authorization: Bearer <jwt>` access token (missing or non-Bearer → `AuthenticationException` → 401);
+2. resolves the IdP JWK set — directly from `controlPlaneOidcJwksUri`, or by fetching `{controlPlaneOidcIssuer}/.well-known/openid-configuration` and reading its `jwks_uri`;
+3. verifies the token signature and asserts issuer (`controlPlaneOidcIssuer`), audience (`controlPlaneOidcAudience`), `exp`/`nbf` (60s skew), and that the granted scopes contain every `controlPlaneOidcRequiredScopes` entry. Scopes are read from `controlPlaneOidcScopeClaim` (default `scope`, space-delimited; array claims such as `scp`/`roles`/`groups` are also supported);
+4. returns an `AuthenticationResult` carrying the **verified** principal (`sub`), source `verified-oidc`, a redaction-safe claim subset (`sub`/`iss`/`aud`/`scope`/`groups`/`email` — never the raw token) and the normalised scope set.
+
+The verified principal flows into the control-plane audit log (`AuditEntry.principalSource == "verified-oidc"`, `principal == sub`) instead of the unverified best-effort extraction. Wave 1 authenticates only; scope-based authorization/403 enforcement is a later wave.
+
+**Secure-by-default hardening** (the OIDC handler only — the legacy `JWTAuthenticationHandler` is unchanged):
+
+- **Asymmetric algorithms only.** The OIDC validator accepts only asymmetric JWS families (`RS*`, `PS*`, `ES*`, `EdDSA`). HMAC (`HS256/384/512`) and the unsecured `alg=none` are rejected — accepting HMAC against a public JWK set is the classic algorithm-confusion attack (forge an HMAC token using the public key bytes as the shared secret).
+- **`exp` required.** A token without an `exp` claim is rejected (nimbus only checks expiry when the claim is present, so without this a no-`exp` token would be valid forever). Real OIDC tokens always carry `exp`.
+- **`iss` or `aud` required.** At least one of `controlPlaneOidcIssuer` / `controlPlaneOidcAudience` must be configured. If both are blank the handler **fails construction** (logs an error, leaves the validator null so every request 401s fail-closed) — with neither set, any validly-signed token from the configured JWKS would be accepted regardless of who it was minted for.
+- **HTTPS JWKS required.** A remote `controlPlaneOidcJwksUri` / `controlPlaneOidcIssuer` (used for discovery) must use `https://`. Plaintext `http://` is permitted **only** to `localhost`/loopback (local testing); file/classpath JWKS paths are unaffected. An `http://` URL to any other host fails construction (fail-closed), preventing MITM on plaintext key retrieval.
+- **Generic 401 body.** On an OIDC authentication failure the client receives a generic `Unauthorized for control plane` body; the detailed reason (expected issuer/audience/scopes, signature failure) is logged **server-side only**. The legacy JWT/mTLS path still echoes its detailed reason to the client (unchanged). This is driven by `AuthenticationException.isClientSafeMessage()` — `false` for OIDC-originated exceptions, `true` (the default) for all others.
+
+### Control-Plane Authorization (claims→scopes)
+
+Authentication answers *who* a caller is; **authorization** answers *what they may do*. On top of verified OIDC authentication, MockServer adds a coarse, hierarchical role model — "RBAC by standards conformance" — that maps a verified principal's scopes/groups to one of three roles and enforces a read/mutate split on the control plane.
+
+Off by default: with `controlPlaneAuthorizationEnabled=false` (the default) no authorization check runs and the control plane behaves byte-for-byte as before (verified authentication only). Authentication is unaffected by this switch.
+
+**Role model.** Roles are strictly hierarchical — `ADMIN ⊇ MUTATE ⊇ READ`:
+
+| Role | Grants |
+|------|--------|
+| `read` | Read-only control-plane operations (every `GET`, plus the read `PUT`s: `retrieve`, `verify`, `verifySequence`, `verifySLO`, `diff`, `explainUnmatched`, `debugMismatch`, `files/retrieve`, `files/list`) |
+| `mutate` | Everything `read` grants **plus** all mutations (creating expectations, clearing, resetting, binding ports, etc.) |
+| `admin` | Everything `mutate` grants (ceiling for future admin-only operations; currently a strict superset of `mutate`) |
+
+**Mapping.** `controlPlaneScopeMapping` maps a verified scope/group **value** to a role. Serialized form is a comma-separated list of `value=role` pairs, e.g. `platform-admins=admin,qa-team=mutate,viewers=read`. The scope values come from the same verified scope set as authentication (`controlPlaneOidcScopeClaim` — `scope`/`scp`/`roles`/`groups`). Unrecognised roles and malformed pairs are skipped at parse time so a typo can never silently widen access.
+
+**Enforcement** (in `HttpState.controlPlaneRequestAuthenticated`, after authentication succeeds and before the operation runs):
+
+1. the operation's **required role** is derived from the existing read/mutate split (`isControlPlaneRead` → `READ`; otherwise `MUTATE`);
+2. the principal's verified scopes are mapped through `controlPlaneScopeMapping` into its **granted roles**;
+3. if no granted role `satisfies` the required role, the request is denied with a generic **`403 Forbidden`** (`Forbidden for control plane`) and an audit entry is recorded with **`outcome=FORBIDDEN`**. The denial detail (granted vs required role) is logged at INFO **server-side only**, so authorization policy is not disclosed to the client.
+4. otherwise the operation proceeds and is audited with `outcome=AUTHORIZED` (as before).
+
+**Fail-closed, requires a verified principal.** Authorization maps the *verified* scope set, so it requires control-plane OIDC authentication to be enabled. A principal with no scopes, or whose scopes map to no role, is granted nothing and is **denied every mutation** (and every read unless it has a `READ`-or-higher role). A `read`-only principal passes reads but is `403`'d on mutations; an `admin` principal passes everything. FORBIDDEN denials are always recorded when auditing is enabled, even for reads (unlike AUTHORIZED reads, which honour `controlPlaneAuditReads`).
+
+Classes: `ControlPlaneRole` (enum, `o.m.authentication.authorization`) with `satisfies(required)`; `ControlPlaneAuthorizer` (same package) maps scopes→roles and decides allow/deny.
+
+**Coverage — exactly what authorization protects.** The authorization decision runs in `HttpState.controlPlaneRequestAuthenticated`. Every operation dispatched through `HttpState.handle` is covered: all expectation CRUD (`PUT/POST /expectation`), `clear`, `reset`, retrieve/verify, mode/bind-config, drift/chaos/SLO, replay, contract-test, and so on. A handful of routes are serviced directly in the Netty layer (`HttpRequestHandler`) outside `HttpState.handle`; their coverage is:
+
+| Route | Authn | Authz | Notes |
+|-------|-------|-------|-------|
+| `PUT /mockserver/configuration` (mutates live config) | yes | **yes** | Routed through the shared `HttpState.controlPlaneRequestAuthenticated` gate, so it takes the same read/mutate authorization as `handle`-dispatched mutations (classified `MUTATE`). A read-only principal is `403`'d; mutate/admin proceed. |
+| `GET /mockserver/configuration` | yes | yes | Same gate, classified `READ`. |
+| `GET /mockserver/openapi.yaml`, `GET /mockserver/llm/optimisationReport` | yes | yes | Reads; routed through the shared gate. |
+| `PUT /mockserver/status`, `PUT /mockserver/bind`, `PUT /mockserver/stop` | **no** | **no** | Pre-existing: these lifecycle endpoints are **neither authenticated nor authorized** (they sit before the auth choke point). An attacker who can reach the port can bind extra ports or stop the server regardless of roles — authorization does not change this. Restrict network reachability of the control port if this matters. |
+| MCP control plane (`POST /mockserver/mcp` over HTTP/1.1, HTTP/2 and HTTP/3) | yes | **no (out of scope for Wave-2)** | MCP tools can mutate the control plane (`create_expectation`, `clear_expectations`, `reset`, …) by calling `HttpState` directly, not via `handle`. MCP requests are **authenticated** (same mTLS/JWT/OIDC as every control-plane route) but the per-tool **read/mutate authorization** is **not yet enforced** — the operation is only known after JSON-RPC body parsing inside the tool executor, so a verified read-only principal could still invoke a mutating MCP tool. If you enable authorization and also expose MCP, treat MCP access as mutate-capable and restrict who can authenticate to the MCP endpoint. Wiring per-tool authorization into the MCP tool layer is tracked as later work. |
+
+HTTP/3 non-MCP control-plane requests re-dispatch into `HttpState.handle`, so they inherit full authorization automatically; only the MCP-over-HTTP/3 path shares the MCP out-of-scope status above.
+
+### Enriched Authentication SPI (`AuthenticationResult`)
+
+The `AuthenticationHandler` SPI gained a richer, default-adapted method alongside the legacy boolean:
+
+```java
+default AuthenticationResult authenticate(HttpRequest request) {
+    return controlPlaneRequestAuthenticated(request)
+        ? AuthenticationResult.authenticated(null, "none", Map.of(), Set.of())
+        : AuthenticationResult.unauthenticated();
+}
+```
+
+`AuthenticationResult` is immutable and carries `authenticated`, `principal` (null = anonymous), `principalSource`, a read-only `claims` map and a read-only `scopes` set. Existing and third-party handlers that implement only the boolean method keep working unchanged — the default adapter treats their `true` as authenticated-but-anonymous. `ChainedAuthenticationHandler.authenticate()` ANDs every delegate, returns unauthenticated if any fails, and otherwise selects the first delegate with a non-null principal (so an OIDC/JWT principal wins over an mTLS-only null) while unioning all delegates' scopes.
 
 ### MCP Endpoint Authentication
 
-The MCP endpoint (`/mockserver/mcp`) enforces the same control-plane authentication as all other control-plane routes. When `controlPlaneTLSMutualAuthenticationCAChain` and/or `controlPlaneJWTAuthenticationJWKSource` are configured, MCP requests must satisfy the same mTLS and/or JWT requirements. Unauthenticated MCP requests receive a `401 Unauthorized` response with a JSON-RPC error body. This ensures that enabling MCP does not widen the attack surface of a secured MockServer instance.
+The MCP endpoint (`/mockserver/mcp`) enforces the same control-plane **authentication** as all other control-plane routes. When `controlPlaneTLSMutualAuthenticationCAChain` and/or `controlPlaneJWTAuthenticationJWKSource` are configured, MCP requests must satisfy the same mTLS and/or JWT requirements. Unauthenticated MCP requests receive a `401 Unauthorized` response with a JSON-RPC error body. This ensures that enabling MCP does not widen the attack surface of a secured MockServer instance.
+
+**Authorization caveat.** MCP **authentication** is enforced, but the coarse read/mutate **authorization** described above is **not yet applied per-tool** at the MCP layer (see the coverage table above): MCP tools can mutate the control plane, so with `controlPlaneAuthorizationEnabled=true` a verified read-only principal could still invoke a mutating MCP tool. Treat MCP access as mutate-capable when authorization is enabled.
 
 ### Authentication Classes
 
 | Class | Package | Purpose |
 |-------|---------|---------|
-| `AuthenticationHandler` | `o.m.authentication` | Core interface: `controlPlaneRequestAuthenticated(HttpRequest): boolean` |
-| `ChainedAuthenticationHandler` | `o.m.authentication` | Chains multiple `AuthenticationHandler` instances (logical AND — all must pass) |
+| `AuthenticationHandler` | `o.m.authentication` | Core interface: legacy `controlPlaneRequestAuthenticated(HttpRequest): boolean` plus default-adapted `authenticate(HttpRequest): AuthenticationResult` |
+| `AuthenticationResult` | `o.m.authentication` | Immutable enriched outcome: authenticated flag, verified principal, principalSource, read-only claims/scopes |
+| `ChainedAuthenticationHandler` | `o.m.authentication` | Chains multiple `AuthenticationHandler` instances (logical AND — all must pass); combines results selecting the first verified principal and unioning scopes |
 | `AuthenticationException` | `o.m.authentication` | Thrown on authentication failure |
 | `MTLSAuthenticationHandler` | `o.m.authentication.mtls` | Validates client certificate chain against configured CA certificates via `X509Certificate.verify()` |
 | `JWTAuthenticationHandler` | `o.m.authentication.jwt` | Loads JWK keys from URL (`RemoteJWKSet`) or file (`ImmutableJWKSet`), extracts Bearer token from `Authorization` header, delegates to `JWTValidator` |
+| `OidcAuthenticationHandler` | `o.m.authentication.oidc` | Verifies an external-IdP OIDC Bearer token (signature + issuer + audience + exp/nbf + required scopes) and returns a verified-principal `AuthenticationResult`; resolves the JWK set directly or via OIDC discovery |
+| `ControlPlaneRole` | `o.m.authentication.authorization` | Coarse hierarchical role enum (`READ` < `MUTATE` < `ADMIN`) with `satisfies(required)` |
+| `ControlPlaneAuthorizer` | `o.m.authentication.authorization` | Maps a principal's verified scopes through `controlPlaneScopeMapping` into granted roles and decides allow/deny against the operation's required role |
 | `JWTValidator` | `o.m.authentication.jwt` | Validates JWT tokens using nimbus-jose-jwt; supports `withExpectedAudience()`, `withMatchingClaims()`, `withRequiredClaims()` |
 | `JWTGenerator` | `o.m.authentication.jwt` | Generates JWT tokens with configurable claims (used in tests) |
 | `JWKGenerator` | `o.m.authentication.jwt` | Generates JWK sets from `AsymmetricKeyPair` objects (RSA and EC key types) |
 
 ### Supported JWS Algorithms
 
-`JWTValidator` supports 14 JWS algorithms:
+`JWTValidator` supports 11 JWS algorithms — **asymmetric families only**. HMAC (`HS256/384/512`)
+is rejected: the validator verifies against a public-key JWK set loaded from a URL or file, and
+accepting HMAC there is the classic algorithm-confusion forgery vector (an attacker signs an HMAC
+token using the public key bytes as the shared secret). This matches `OidcJWTValidator`.
 
 | Family | Algorithms |
 |--------|-----------|
-| HMAC | `HS256`, `HS384`, `HS512` |
 | RSA PKCS#1 | `RS256`, `RS384`, `RS512` |
 | ECDSA | `ES256`, `ES256K`, `ES384`, `ES512` |
 | RSA-PSS | `PS256`, `PS384`, `PS512` |
@@ -240,3 +321,11 @@ SOCKS5 proxy also supports username/password authentication (configured separate
 | `controlPlaneTLSMutualAuthenticationCAChain` | (none) | CA chain for control plane mTLS |
 | `controlPlaneJWTAuthenticationJWKSource` | (none) | JWK source URL for JWT validation |
 | `controlPlaneJWTAuthenticationRequired` | false | Require JWT for control plane |
+| `controlPlaneOidcAuthenticationRequired` | false | Require verified external-IdP OIDC token for control plane |
+| `controlPlaneOidcIssuer` | (none) | Required `iss`; also used for OIDC discovery of the JWKS URI |
+| `controlPlaneOidcJwksUri` | (none) | JWK set URI (skips discovery when set) |
+| `controlPlaneOidcAudience` | (none) | Required `aud` on control-plane tokens |
+| `controlPlaneOidcRequiredScopes` | (empty) | Scopes that must all be present |
+| `controlPlaneOidcScopeClaim` | scope | Claim holding granted scopes (`scope`/`scp`/`roles`/`groups`) |
+| `controlPlaneAuthorizationEnabled` | false | Enforce coarse role-based authorization of control-plane requests (requires a verified principal) |
+| `controlPlaneScopeMapping` | (empty) | Map verified scope/group values to roles, e.g. `platform-admins=admin,qa-team=mutate,viewers=read` |

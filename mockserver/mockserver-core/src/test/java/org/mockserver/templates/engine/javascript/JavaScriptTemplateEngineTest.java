@@ -82,6 +82,52 @@ public class JavaScriptTemplateEngineTest {
     }
 
     @Test
+    public void shouldBindLoadIterationContextVariable() {
+        // given a load-generation iteration context exposed to the JS scope as "iteration"
+        graalJsAvailable();
+        String template = "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': 'idx=' + iteration.getIndex() + ',vu=' + iteration.getVuId()" + NEW_LINE +
+            "};";
+        HttpRequest request = request().withPath("/somePath").withMethod("GET");
+        org.mockserver.load.IterationContext iteration =
+            new org.mockserver.load.IterationContext(7, 2, 3, 1234, 42);
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, configuration)
+            .executeTemplate(template, request, iteration, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse, is(response().withStatusCode(200).withBody("idx=7,vu=2")));
+    }
+
+    @Test
+    public void shouldHandleHttpRequestsWithJavaScriptResponseTemplateReferencingPathGroups() {
+        // given
+        graalJsAvailable();
+        String template = "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': 'first=' + request.pathGroups[1] + ',second=' + request.pathGroups[2] + ',named=' + request.namedPathGroups.userId" + NEW_LINE +
+            "};";
+        // path groups are populated post-match by the matcher; set them directly here to drive the template
+        HttpRequest request = request()
+            .withPath("/users/42/orders/abc")
+            .withMethod("GET")
+            .withPathGroups(java.util.Arrays.asList("/users/42/orders/abc", "42", "abc"))
+            .withNamedPathGroups(java.util.Collections.singletonMap("userId", "42"));
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(200)
+                .withBody("first=42,second=abc,named=42")
+        ));
+    }
+
+    @Test
     public void shouldHandleHttpRequestsWithJavaScriptResponseTemplateWithECMA6() throws JsonProcessingException {
         // given
         graalJsAvailable();
@@ -1123,6 +1169,82 @@ public class JavaScriptTemplateEngineTest {
             future.get();
         }
         newFixedThreadPool.shutdown();
+    }
+
+    @Test
+    public void shouldHandleJavaScriptResponseTemplateWithJsonPath() {
+        // given
+        graalJsAvailable();
+        String template = "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': '{\\'title\\': \\'' + jsonPath('$.store.book[0].title') + '\\', \\'bikeColor\\': \\'' + jsonPath('$.store.bicycle.color') + '\\'}'" + NEW_LINE +
+            "};";
+        HttpRequest request = request()
+            .withPath("/somePath")
+            .withBody(json("{" + NEW_LINE +
+                "    \"store\": {" + NEW_LINE +
+                "        \"book\": [" + NEW_LINE +
+                "            { \"title\": \"Sayings of the Century\", \"price\": 18.95 }" + NEW_LINE +
+                "        ]," + NEW_LINE +
+                "        \"bicycle\": { \"color\": \"red\", \"price\": 19.95 }" + NEW_LINE +
+                "    }" + NEW_LINE +
+                "}"));
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(200)
+                .withBody("{'title': 'Sayings of the Century', 'bikeColor': 'red'}")
+        ));
+    }
+
+    @Test
+    public void shouldHandleJavaScriptResponseTemplateWithXPath() {
+        // given
+        graalJsAvailable();
+        String template = "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': '{\\'key\\': \\'' + xPath('/element/key') + '\\', \\'value\\': \\'' + xPath('/element/value') + '\\'}'" + NEW_LINE +
+            "};";
+        HttpRequest request = request()
+            .withPath("/somePath")
+            .withBody("<element><key>some_key</key><value>some_value</value></element>");
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(200)
+                .withBody("{'key': 'some_key', 'value': 'some_value'}")
+        ));
+    }
+
+    @Test
+    public void shouldHandleJavaScriptResponseTemplateWithJsonPathForMissingPath() {
+        // given
+        graalJsAvailable();
+        String template = "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': '{\\'missing\\': \\'' + jsonPath('$.store.does.not.exist') + '\\'}'" + NEW_LINE +
+            "};";
+        HttpRequest request = request()
+            .withPath("/somePath")
+            .withBody(json("{ \"store\": { \"bicycle\": { \"color\": \"red\" } } }"));
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then - missing path mirrors Mustache: empty value, no exception
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(200)
+                .withBody("{'missing': ''}")
+        ));
     }
 
 }

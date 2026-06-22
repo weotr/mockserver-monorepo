@@ -182,14 +182,24 @@ module MockServer
       @client.upsert(@expectation)
     end
 
-    # Set a forward class callback action.
-    # @param class_callback [HttpClassCallback]
+    # Set a response class-callback action: the server invokes a server-side
+    # class implementing the response callback interface. Accepts either a
+    # fully-qualified class-name String (e.g. "com.example.MyResponseCallback")
+    # or a pre-built {HttpClassCallback} (carrying an optional +delay+ /
+    # +primary+).
+    # @param class_callback [String, HttpClassCallback]
+    # @return [Array<Expectation>]
+    def respond_with_class_callback(class_callback)
+      @expectation.http_response_class_callback = class_callback
+      @client.upsert(@expectation)
+    end
+
+    # Set a forward class-callback action: the server invokes a server-side
+    # class implementing the forward callback interface. Accepts either a
+    # fully-qualified class-name String or a pre-built {HttpClassCallback}.
+    # @param class_callback [String, HttpClassCallback]
     # @return [Array<Expectation>]
     def forward_with_class_callback(class_callback)
-      unless class_callback.is_a?(HttpClassCallback)
-        raise TypeError,
-              "Expected HttpClassCallback, got #{class_callback.class.name}"
-      end
       @expectation.http_forward_class_callback = class_callback
       @client.upsert(@expectation)
     end

@@ -10,7 +10,6 @@ import com.nimbusds.jose.proc.JWSVerificationKeySelector;
 import com.nimbusds.jose.proc.SecurityContext;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.proc.ConfigurableJWTProcessor;
-import com.nimbusds.jwt.proc.DefaultJWTClaimsVerifier;
 import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import org.mockserver.authentication.AuthenticationException;
 
@@ -30,12 +29,15 @@ public class JWTValidator {
     private String expectedAudience;
     private Map<String, String> matchingClaims;
     private Set<String> requiredClaims;
+    // Only ASYMMETRIC JWS algorithms are accepted (RS*, ES*, PS*, EdDSA). HMAC
+    // (HS256/384/512) is deliberately excluded: the JWK source backing this
+    // validator is always a PUBLIC-key JWK set (RemoteJWKSet from a URL or
+    // ImmutableJWKSet from a file, per JWTAuthenticationHandler). Accepting HMAC
+    // against a public JWK set is the classic algorithm-confusion forgery vector
+    // (an attacker signs an HS256 token using the public key bytes as the shared
+    // HMAC secret, and it verifies). The unsecured alg=none JWS is likewise
+    // rejected by nimbus because it is not in this set. Mirrors OidcJWTValidator.
     private static final Set<JWSAlgorithm> JWS_ALGORITHMS = new HashSet<>(Arrays.asList(
-        JWSAlgorithm.HS256,
-        // HMAC using SHA-384 hash algorithm (optional).
-        JWSAlgorithm.HS384,
-        // HMAC using SHA-512 hash algorithm (optional).
-        JWSAlgorithm.HS512,
         // RSASSA-PKCS-v1_5 using SHA-256 hash algorithm (recommended).
         JWSAlgorithm.RS256,
         // RSASSA-PKCS-v1_5 using SHA-384 hash algorithm (optional).

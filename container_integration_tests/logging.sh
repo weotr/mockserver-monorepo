@@ -67,12 +67,15 @@ function logTestResult() {
   TEST_CASE="${2}"
   if [[ "${TEST_EXIT_CODE}" != "0" ]]; then
     printFailureMessage "Failed: ${TEST_CASE}"
-    if [ -n "${3:-}" ]; then
-      container-logs "${3:-}"
-    fi
-    container-logs
-    printFailureMessage "Failed: ${TEST_CASE}"
+    # Record the failure BEFORE dumping diagnostics so a failing diagnostic
+    # (e.g. container-logs on a crashed project) can never, under the caller's
+    # `set -e`, abort this function before the failure is tallied.
     printPlainFailureMessage "  - ${TEST_CASE}" >>${FAIL_LOG_FILE} 2>&1
+    if [ -n "${3:-}" ]; then
+      container-logs "${3:-}" || true
+    fi
+    container-logs || true
+    printFailureMessage "Failed: ${TEST_CASE}"
   else
     printPassMessage "Passed: ${TEST_CASE}"
     printPlainPassMessage "  - ${TEST_CASE}" >>${PASS_LOG_FILE} 2>&1

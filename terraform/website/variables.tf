@@ -14,6 +14,11 @@ variable "build_account_agent_role_arn" {
   description = "IAM role ARN of the Buildkite agent in the build account, used in the cross-account trust policy"
 }
 
+variable "build_account_default_role_arn" {
+  type        = string
+  description = "IAM role ARN of the default-queue Buildkite agent in the build account, granted cross-account write access to the binaries bucket"
+}
+
 variable "sites" {
   type = map(object({
     bucket_name = string

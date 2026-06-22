@@ -13,7 +13,11 @@ import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { buildBaseUrl, callMcpTool } from '../lib/mcpClient';
+import { humanizeError } from '../lib/errorMessage';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
+
+const POLL_INTERVAL_MS = 5000;
 
 interface McpTool {
   name?: string;
@@ -40,43 +44,38 @@ export default function McpToolsPanel({ connectionParams, selectedExpectationId 
   const [tools, setTools] = useState<McpTool[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
   const selectedRowRef = useRef<HTMLTableRowElement | null>(null);
 
-  // Refresh by bumping a tick (event-handler setState is fine); the effect re-runs and re-fetches.
+  // The read-only tool list auto-refreshes; the spinner is shown only for the
+  // initial load and explicit manual refreshes, not on every background poll,
+  // so the Refresh button doesn't flicker every interval.
+  const load = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const res = await callMcpTool(buildBaseUrl(connectionParams), 'list_mock_tools', {}, signal);
+      if (!res.ok) {
+        setError(typeof res.error === 'string' ? res.error : 'failed to generate MCP tools');
+        setTools([]);
+        return;
+      }
+      const result = res.result ?? {};
+      const rawTools = Array.isArray(result.tools) ? (result.tools as McpTool[]) : [];
+      setTools(rawTools);
+      setError(null);
+    } catch (e) {
+      if (signal?.aborted) return;
+      setError(humanizeError(e).message);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [connectionParams]);
+
+  useAutoRefresh(load, { intervalMs: POLL_INTERVAL_MS });
+
+  // Manual force-refresh: show the spinner for this explicit fetch.
   const refresh = useCallback(() => {
     setLoading(true);
-    setRefreshTick((t) => t + 1);
-  }, []);
-
-  // Fetch defined inline in the effect with state mutated only after the await — mirrors
-  // DriftPanel and keeps the effect free of synchronous setState.
-  useEffect(() => {
-    let cancelled = false;
-    async function load(): Promise<void> {
-      try {
-        const res = await callMcpTool(buildBaseUrl(connectionParams), 'list_mock_tools', {});
-        if (cancelled) return;
-        if (!res.ok) {
-          setError(typeof res.error === 'string' ? res.error : 'failed to generate MCP tools');
-          setTools([]);
-          return;
-        }
-        const result = res.result ?? {};
-        const rawTools = Array.isArray(result.tools) ? (result.tools as McpTool[]) : [];
-        setTools(rawTools);
-        setError(null);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
     void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [connectionParams, refreshTick]);
+  }, [load]);
 
   // Bring the highlighted tool into view when the selected expectation changes.
   useEffect(() => {

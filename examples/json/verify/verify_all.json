@@ -1,0 +1,9 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "times": {
+    "atLeast": 1
+  },
+  "maximumNumberOfRequestToReturnInVerificationFailure": 10
+}

@@ -1,0 +1,34 @@
+---
+openapi: 3.0.3
+info:
+  version: 1.0.0
+  title: XML array element names
+paths:
+  "/zoo":
+    get:
+      operationId: getZoo
+      responses:
+        '200':
+          description: a zoo
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Zoo'
+components:
+  schemas:
+    Zoo:
+      type: object
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+        animals:
+          type: array
+          items:
+            $ref: '#/components/schemas/Animal'
+    Animal:
+      type: object
+      properties:
+        name:
+          type: string

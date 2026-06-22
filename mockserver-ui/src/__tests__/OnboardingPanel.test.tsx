@@ -51,12 +51,23 @@ describe('OnboardingPanel', () => {
     expect(screen.getByText('Welcome to MockServer')).toBeInTheDocument();
   });
 
-  it('renders all four action cards', () => {
+  it('renders the six key features (tile layout + narrow bulleted list)', () => {
     renderPanel();
-    expect(screen.getByText('Import an OpenAPI Spec')).toBeInTheDocument();
-    expect(screen.getByText('Record Live Traffic')).toBeInTheDocument();
-    expect(screen.getByText('Try a Quick-Start Recipe')).toBeInTheDocument();
-    expect(screen.getByText('Explore the Dashboard')).toBeInTheDocument();
+    // Each feature appears in both the wide-screen tiles and the narrow-screen
+    // bulleted list (one is CSS-hidden per viewport), so each is present >= once.
+    for (const title of ['Breakpoints', 'Debugging Proxy', 'Performance Testing', 'LLM Optimise', 'Mocking', 'Chaos Testing']) {
+      expect(screen.getAllByText(title).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('no longer claims that no expectations or traffic are recorded', () => {
+    renderPanel();
+    expect(screen.queryByText(/No expectations or traffic recorded/i)).not.toBeInTheDocument();
+  });
+
+  it('has no per-tile Docs links', () => {
+    renderPanel();
+    expect(screen.queryByRole('link', { name: 'Docs' })).not.toBeInTheDocument();
   });
 
   it('renders the Import OpenAPI button', () => {
@@ -64,17 +75,40 @@ describe('OnboardingPanel', () => {
     expect(screen.getByRole('button', { name: /Import OpenAPI/i })).toBeInTheDocument();
   });
 
-  it('renders external links to documentation', () => {
+  it('navigates to a feature page when a tile action is clicked', async () => {
+    const user = userEvent.setup();
     renderPanel();
-    const proxyLink = screen.getByRole('link', { name: /Proxy setup guide/i });
-    expect(proxyLink).toHaveAttribute('href', 'https://www.mock-server.com/mock_server/self_hosting_mockserver.html');
-    expect(proxyLink).toHaveAttribute('target', '_blank');
 
-    const recipesLink = screen.getByRole('link', { name: /View recipes/i });
-    expect(recipesLink).toHaveAttribute('href', expect.stringContaining('examples/docker-compose'));
+    await user.click(screen.getByRole('button', { name: /Open Breakpoints/i }));
+    expect(useDashboardStore.getState().view).toBe('breakpoints');
 
-    const docsLink = screen.getByRole('link', { name: /Dashboard docs/i });
-    expect(docsLink).toHaveAttribute('href', 'https://www.mock-server.com/mock_server/mockserver_ui.html');
+    await user.click(screen.getByRole('button', { name: /Open Chaos/i }));
+    expect(useDashboardStore.getState().view).toBe('chaos');
+
+    await user.click(screen.getByRole('button', { name: /Open Performance/i }));
+    expect(useDashboardStore.getState().view).toBe('performance');
+
+    await user.click(screen.getByRole('button', { name: /Open LLM Optimise/i }));
+    expect(useDashboardStore.getState().view).toBe('optimise');
+  });
+
+  it('lists the other tabs as in-app navigation links', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.getByText(/More in the tabs above/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Drift' }));
+    expect(useDashboardStore.getState().view).toBe('drift');
+
+    await user.click(screen.getByRole('button', { name: 'Metrics' }));
+    expect(useDashboardStore.getState().view).toBe('metrics');
+  });
+
+  it('links to the UI docs inline in the more-tabs line', () => {
+    renderPanel();
+    const uiDocs = screen.getByRole('link', { name: 'UI docs' });
+    expect(uiDocs).toHaveAttribute('href', 'https://www.mock-server.com/mock_server/mockserver_ui.html');
+    expect(uiDocs).toHaveAttribute('target', '_blank');
   });
 
   it('opens the OpenAPI import dialog when the button is clicked', async () => {
@@ -104,7 +138,7 @@ describe('OnboardingPanel default-selection logic', () => {
     expect(useDashboardStore.getState().view).toBe('get-started');
   });
 
-  it('auto-switches to dashboard when expectations arrive', () => {
+  it('stays on get-started when expectations arrive (no auto-switch)', () => {
     const message: WebSocketMessage = {
       logMessages: [],
       activeExpectations: [{ key: 'exp1', value: { httpRequest: { path: '/test' } } }],
@@ -112,10 +146,10 @@ describe('OnboardingPanel default-selection logic', () => {
       proxiedRequests: [],
     };
     useDashboardStore.getState().applyMessage(message);
-    expect(useDashboardStore.getState().view).toBe('dashboard');
+    expect(useDashboardStore.getState().view).toBe('get-started');
   });
 
-  it('auto-switches to dashboard when recorded requests arrive', () => {
+  it('stays on get-started when recorded requests arrive (no auto-switch)', () => {
     const message: WebSocketMessage = {
       logMessages: [],
       activeExpectations: [],
@@ -123,10 +157,10 @@ describe('OnboardingPanel default-selection logic', () => {
       proxiedRequests: [],
     };
     useDashboardStore.getState().applyMessage(message);
-    expect(useDashboardStore.getState().view).toBe('dashboard');
+    expect(useDashboardStore.getState().view).toBe('get-started');
   });
 
-  it('auto-switches to dashboard when proxied requests arrive', () => {
+  it('stays on get-started when proxied requests arrive (no auto-switch)', () => {
     const message: WebSocketMessage = {
       logMessages: [],
       activeExpectations: [],
@@ -134,10 +168,10 @@ describe('OnboardingPanel default-selection logic', () => {
       proxiedRequests: [{ key: 'prx1', value: { path: '/proxied' } }],
     };
     useDashboardStore.getState().applyMessage(message);
-    expect(useDashboardStore.getState().view).toBe('dashboard');
+    expect(useDashboardStore.getState().view).toBe('get-started');
   });
 
-  it('does not auto-switch when view has been manually changed', () => {
+  it('leaves a manually-chosen view untouched when data arrives', () => {
     useDashboardStore.getState().setView('traffic');
     const message: WebSocketMessage = {
       logMessages: [],
@@ -149,7 +183,7 @@ describe('OnboardingPanel default-selection logic', () => {
     expect(useDashboardStore.getState().view).toBe('traffic');
   });
 
-  it('does not auto-switch when log messages arrive without other data', () => {
+  it('stays on get-started when log messages arrive without other data', () => {
     const message: WebSocketMessage = {
       logMessages: [{ key: 'log1', value: { messageParts: [] } }],
       activeExpectations: [],

@@ -2185,3 +2185,420 @@ curl -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES&fo
     "method": "POST"
 }'
 ```
+
+#### Mock An OpenAI-Style Chat Completion (LLM)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "text": "The capital of France is Paris.",
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 15,
+        "outputTokens": 12
+      }
+    }
+  }
+}'
+```
+
+#### Mock An Embeddings Response (LLM)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/embeddings"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "text-embedding-3-small",
+    "embedding": {
+      "dimensions": 1536,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}'
+```
+
+#### Mock A Rerank Response (LLM)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/rerank"
+  },
+  "httpLlmResponse": {
+    "provider": "COHERE",
+    "model": "rerank-english-v3.0",
+    "rerank": {
+      "topN": 3,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}'
+```
+
+#### Mock An MCP Tool (tools/list And tools/call)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/mcp",
+    "body": {
+      "type": "JSON_RPC",
+      "method": "tools/list"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"tools\": [{\"name\": \"get_weather\", \"description\": \"Get the weather for a city\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}}}]}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}'
+```
+
+#### Mock An A2A Agent Card
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/.well-known/agent.json"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "body": {
+      "name": "TranslationAgent",
+      "description": "Translates text between languages",
+      "version": "1.0.0",
+      "url": "http://localhost:1080/a2a",
+      "capabilities": {
+        "streaming": false,
+        "pushNotifications": false,
+        "stateTransitionHistory": false
+      },
+      "skills": [
+        {
+          "id": "translate",
+          "name": "Translation",
+          "description": "Translates text between languages",
+          "tags": [
+            "nlp",
+            "i18n"
+          ],
+          "examples": [
+            "Translate hello to Spanish"
+          ]
+        }
+      ]
+    }
+  }
+}'
+```
+
+#### Mock An A2A Task Response
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/a2a",
+    "body": {
+      "type": "JSON_RPC",
+      "method": "tasks/send"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"id\": \"mock-task-id\", \"status\": {\"state\": \"completed\"}, \"artifacts\": [{\"parts\": [{\"type\": \"text\", \"text\": \"Bonjour\"}]}]}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}'
+```
+
+#### Import A GraphQL SDL
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/graphql" \
+-H "Content-Type: application/graphql" \
+--data-raw '
+type Query {
+  user(id: ID!): User
+  products(category: String): [Product]
+}
+type Mutation {
+  createOrder(input: OrderInput!): Order
+}
+type User    { id: ID! name: String email: String }
+type Product { id: ID! name: String price: Float inStock: Boolean }
+type Order   { id: ID! status: String total: Float }
+input OrderInput { productId: ID! quantity: Int }
+'
+```
+
+#### Match A GraphQL Request By Query
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/graphql",
+    "body": {
+      "type": "GRAPHQL",
+      "query": "query GetUser($id: ID!) { user(id: $id) { name email } }"
+    }
+  },
+  "httpResponse": {
+    "headers": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "body": "{\"data\":{\"user\":{\"name\":\"Alice\",\"email\":\"alice@example.com\"}}}"
+  }
+}'
+```
+
+#### Match Body By Fuzzy Similarity
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/some/path",
+    "body": {
+      "type": "FUZZY",
+      "fuzzy": "the quick brown fox jumps over the lazy dog",
+      "threshold": 0.8,
+      "ignoreCase": true
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}'
+```
+
+#### Match By Conditional Request Definition (if/then/else)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "if": {
+      "method": "GET"
+    },
+    "then": {
+      "path": "/admin"
+    },
+    "else": {
+      "path": "/public"
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}'
+```
+
+#### Match By Accept Header Content Negotiation
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/some/path",
+    "headers": {
+      "Accept": [
+        "accept:application/json"
+      ]
+    }
+  },
+  "httpResponse": {
+    "headers": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "body": "{\"result\":\"ok\"}"
+  }
+}'
+```
+
+#### Weighted Response (Probabilistic)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponses": [
+    {
+      "statusCode": 200,
+      "body": "success"
+    },
+    {
+      "statusCode": 500,
+      "body": "internal server error"
+    }
+  ],
+  "responseMode": "WEIGHTED",
+  "responseWeights": [
+    90,
+    10
+  ]
+}'
+```
+
+#### Switch Response After Hit Count
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponses": [
+    {
+      "statusCode": 200,
+      "body": "healthy"
+    },
+    {
+      "statusCode": 503,
+      "body": "service unavailable"
+    }
+  ],
+  "responseMode": "SWITCH",
+  "switchAfter": 3
+}'
+```
+
+#### Generate Response Body From JSON Schema
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+-d '{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/some/path"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "generateFromSchema": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\"]}"
+  }
+}'
+```
+
+#### Verify All (Soft / Collecting Verification)
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/verify" \
+-d '{
+  "httpRequest": {
+    "path": "/some/path/one"
+  },
+  "times": {
+    "atLeast": 1
+  }
+}'
+
+curl -X PUT "http://localhost:1080/mockserver/verify" \
+-d '{
+  "httpRequest": {
+    "path": "/some/path/two"
+  },
+  "times": {
+    "atLeast": 1
+  }
+}'
+```
+
+#### Verify A Recorded Response
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/verify" \
+-d '{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponse": {
+    "statusCode": 200
+  },
+  "disposition": "FORWARDED",
+  "times": {
+    "atLeast": 1
+  }
+}'
+```
+
+#### Contract Test An OpenAPI Spec Against A Live Service
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/contractTest" \
+-H "Content-Type: application/json" \
+-d '{
+  "spec": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+  "baseUrl": "https://example.com",
+  "operationId": "listPets"
+}'
+```
+
+#### Import A Pact Contract With A Provider State
+
+```bash
+curl -X PUT "http://localhost:1080/mockserver/pact/import" \
+-H "Content-Type: application/json" \
+-d '{
+  "consumer": {"name": "frontend"},
+  "provider": {"name": "users-service"},
+  "interactions": [
+    {
+      "description": "get user 1 when it exists",
+      "providerStates": [
+        {"name": "a user with id 1 exists", "params": {"id": 1}}
+      ],
+      "request": {"method": "GET", "path": "/api/users/1"},
+      "response": {
+        "status": 200,
+        "headers": {"content-type": ["application/json"]},
+        "body": {"id": 1, "name": "Alice"}
+      }
+    }
+  ],
+  "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}'
+
+curl -X PUT "http://localhost:1080/mockserver/scenario/pact-provider-state" \
+-H "Content-Type: application/json" \
+-d '{"state": "a user with id 1 exists"}'
+```

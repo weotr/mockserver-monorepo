@@ -72,6 +72,9 @@ public class GeminiLlmClient extends AbstractLlmClient {
     public Completion parseCompletionResponse(HttpResponse response) {
         JsonNode root = readBody(response);
         Completion completion = Completion.completion();
+        if (root.hasNonNull("modelVersion")) {
+            completion.withModel(root.path("modelVersion").asText());
+        }
         JsonNode candidate = root.path("candidates").path(0);
         StringBuilder text = new StringBuilder();
         for (JsonNode part : candidate.path("content").path("parts")) {
@@ -93,6 +96,13 @@ public class GeminiLlmClient extends AbstractLlmClient {
             }
             if (usageNode.has("candidatesTokenCount")) {
                 usage.withOutputTokens(usageNode.path("candidatesTokenCount").asInt());
+            }
+            if (usageNode.has("cachedContentTokenCount")) {
+                usage.withCachedInputTokens(usageNode.path("cachedContentTokenCount").asInt());
+            }
+            // Gemini reports reasoning ("thinking") tokens as thoughtsTokenCount.
+            if (usageNode.has("thoughtsTokenCount")) {
+                usage.withReasoningTokens(usageNode.path("thoughtsTokenCount").asInt());
             }
             completion.withUsage(usage);
         }

@@ -1,60 +1,74 @@
-/* Pretty printing styles. Used with prettify.js. */
-pre .str, code .str {
-    color: #5BA382;
+/* Syntax-highlighting theme for highlight.js — dark, tuned to the MockServer palette. */
+.hljs {
+    color: #F1F1F1;
+    background: transparent;
 }
 
-/* string  - green */
-pre .kwd, code .kwd {
-    color: #E28964;
-}
-
-/* keyword - dark pink */
-pre .com, code .com {
+/* comment - gray italic */
+.hljs-comment,
+.hljs-quote {
     color: #9c9c9c;
     font-style: italic;
 }
 
-/* comment - gray */
-pre .typ, code .typ {
+/* keyword / literal - orange */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-meta .hljs-keyword {
+    color: #E28964;
+}
+
+/* string - green */
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+    color: #5BA382;
+}
+
+/* number - blue */
+.hljs-number {
+    color: #3387CC;
+}
+
+/* type / class / built-in - light blue */
+.hljs-type,
+.hljs-built_in,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
     color: #5B93DA;
 }
 
-/* type - light blue */
-pre .lit, code .lit {
-    color: #3387CC;
-}
-
-/* literal - blue */
-pre .pun, code .pun {
-    color: #fff;
-}
-
-/* punctuation - white */
-pre .pln, code .pln {
-    color: #e2e2e2;
-}
-
-/* plaintext - white */
-pre .tag, code .tag {
+/* function names / tag names / titles - light blue */
+.hljs-title,
+.hljs-title.function_,
+.hljs-name,
+.hljs-tag {
     color: #89bdff;
 }
 
-/* html/xml tag    - light blue */
-pre .atn, code .atn {
+/* variables (e.g. PHP $vars), html/xml attributes, properties - khaki */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property {
     color: #bdb76b;
 }
 
-/* html/xml attribute name  - khaki */
-pre .atv, code .atv {
-    color: #65B042;
+/* meta (<?php, shebangs, annotations) - gray; doctags */
+.hljs-meta,
+.hljs-doctag {
+    color: #9c9c9c;
 }
 
-/* html/xml attribute value - green */
-pre .dec, code .dec {
-    color: #3387CC;
-}
-
-/* decimal - blue */
+.hljs-deletion { color: #cc6666; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: bold; }
 
 pre.prettyprint, code.prettyprint {
     background-color: #0f0101;
@@ -110,40 +124,15 @@ li.L1, li.L3, li.L5, li.L7, li.L9 {
 }
 
 @media print {
-    pre .str, code .str {
-        color: #060;
-    }
-    pre .kwd, code .kwd {
-        color: #006;
-        font-weight: bold;
-    }
-    pre .com, code .com {
-        color: #600;
-        font-style: italic;
-    }
-    pre .typ, code .typ {
-        color: #404;
-        font-weight: bold;
-    }
-    pre .lit, code .lit {
-        color: #044;
-    }
-    pre .pun, code .pun {
-        color: #440;
-    }
-    pre .pln, code .pln {
-        color: #000;
-    }
-    pre .tag, code .tag {
-        color: #006;
-        font-weight: bold;
-    }
-    pre .atn, code .atn {
-        color: #404;
-    }
-    pre .atv, code .atv {
-        color: #060;
-    }
+    .hljs { color: #000; }
+    .hljs-string, .hljs-regexp, .hljs-symbol, .hljs-addition { color: #060; }
+    .hljs-keyword, .hljs-literal, .hljs-selector-tag, .hljs-section { color: #006; font-weight: bold; }
+    .hljs-comment, .hljs-quote { color: #600; font-style: italic; }
+    .hljs-type, .hljs-built_in, .hljs-title.class_ { color: #404; font-weight: bold; }
+    .hljs-number { color: #044; }
+    .hljs-title, .hljs-title.function_, .hljs-name, .hljs-tag { color: #006; font-weight: bold; }
+    .hljs-variable, .hljs-attr, .hljs-attribute, .hljs-property { color: #404; }
+    .hljs-meta { color: #440; }
 }
 
 @media (max-width: 765px) {

@@ -326,6 +326,31 @@ class TestForwardWithTemplate:
             await chain.forward_with_template("not a template")
 
 
+class TestRespondWithClassCallback:
+    @pytest.mark.asyncio
+    async def test_with_class_callback(self, chain, mock_client):
+        callback = HttpClassCallback(callback_class="com.example.MyResponseCallback")
+        result = await chain.respond_with_class_callback(callback)
+        assert chain._expectation.http_response_class_callback is callback
+        mock_client.upsert.assert_called_once_with(chain._expectation)
+
+    @pytest.mark.asyncio
+    async def test_with_class_name_string_shorthand(self, chain, mock_client):
+        await chain.respond_with_class_callback("com.example.MyResponseCallback")
+        cb = chain._expectation.http_response_class_callback
+        assert isinstance(cb, HttpClassCallback)
+        assert cb.callback_class == "com.example.MyResponseCallback"
+        # the expectation serializes the wire key httpResponseClassCallback
+        assert chain._expectation.to_dict()["httpResponseClassCallback"] == {
+            "callbackClass": "com.example.MyResponseCallback"
+        }
+
+    @pytest.mark.asyncio
+    async def test_with_invalid_type_raises(self, chain):
+        with pytest.raises(TypeError, match="Expected HttpClassCallback or str"):
+            await chain.respond_with_class_callback(123)
+
+
 class TestForwardWithClassCallback:
     @pytest.mark.asyncio
     async def test_with_class_callback(self, chain, mock_client):
@@ -335,9 +360,19 @@ class TestForwardWithClassCallback:
         mock_client.upsert.assert_called_once_with(chain._expectation)
 
     @pytest.mark.asyncio
+    async def test_with_class_name_string_shorthand(self, chain, mock_client):
+        await chain.forward_with_class_callback("com.example.MyForwardCallback")
+        cb = chain._expectation.http_forward_class_callback
+        assert isinstance(cb, HttpClassCallback)
+        assert cb.callback_class == "com.example.MyForwardCallback"
+        assert chain._expectation.to_dict()["httpForwardClassCallback"] == {
+            "callbackClass": "com.example.MyForwardCallback"
+        }
+
+    @pytest.mark.asyncio
     async def test_with_invalid_type_raises(self, chain):
-        with pytest.raises(TypeError, match="Expected HttpClassCallback"):
-            await chain.forward_with_class_callback("not a callback")
+        with pytest.raises(TypeError, match="Expected HttpClassCallback or str"):
+            await chain.forward_with_class_callback(123)
 
 
 class TestWithSteps:

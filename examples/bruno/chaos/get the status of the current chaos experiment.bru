@@ -1,0 +1,17 @@
+meta {
+  name: get the status of the current chaos experiment
+  type: http
+  seq: 11
+}
+
+get {
+  url: {{baseUrl}}/mockserver/chaosExperiment
+  body: none
+  auth: inherit
+}
+
+docs {
+  Returns the current experiment status including name, running status (running/completed/halted_by_auto_halt/stopped), current stage index, total stages, elapsed/remaining time, loop iteration count, and the full experiment definition. Returns null/empty when no experiment is or was recently active.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

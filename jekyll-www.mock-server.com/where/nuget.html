@@ -1,0 +1,77 @@
+---
+title: NuGet
+description: Install the MockServerClient NuGet package to drive MockServer from .NET tests — fluent API, async support, and an on-demand binary launcher.
+layout: page
+pageOrder: 6.4
+section: 'Where'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-11T08:00:00+01:00
+---
+
+<h2>NuGet &nbsp;&nbsp;<a target="_blank" href="https://www.nuget.org/packages/MockServerClient" rel="noopener noreferrer"><img src="https://img.shields.io/nuget/v/MockServerClient.svg" alt="NuGet version" style="max-width:100%;"></a></h2>
+
+<p>The <a target="_blank" href="https://www.nuget.org/packages/MockServerClient" rel="noopener noreferrer"><code>MockServerClient</code></a> package provides an idiomatic .NET client for MockServer's control-plane REST API. The assembly and namespace are <code>MockServer.Client</code>. It targets .NET Standard 2.0 (compatible with .NET Framework 4.6.1+, .NET Core 2.0+, and Mono 5.4+) and .NET 8.0, and includes an on-demand binary launcher that starts MockServer without Java or Docker.</p>
+
+<h3>Install</h3>
+
+<p>.NET CLI:</p>
+
+<pre><code class="code">dotnet add package MockServerClient</code></pre>
+
+<p>Or via <code>PackageReference</code> in your <code>.csproj</code>:</p>
+
+<pre><code class="code xml">&lt;<span class="element">PackageReference</span> <span class="attribute">Include</span>=<span class="string_literal">"MockServerClient"</span> <span class="attribute">Version</span>=<span class="string_literal">"{{ site.mockserver_version }}"</span> /&gt;</code></pre>
+
+<h3>Quick start</h3>
+
+<pre><code class="code csharp">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+// Create an expectation
+client.When(
+    HttpRequest.Request()
+        .WithMethod("GET")
+        .WithPath("/hello")
+).Respond(
+    HttpResponse.Response()
+        .WithStatusCode(200)
+        .WithBody("world")
+);
+
+// Verify the request was received
+client.Verify(
+    HttpRequest.Request().WithPath("/hello"),
+    VerificationTimes.AtLeastTimes(1)
+);
+
+// Reset
+client.Reset();</code></pre>
+
+<h3>Async API</h3>
+
+<pre><code class="code csharp">await client.VerifyAsync(
+    HttpRequest.Request().WithPath("/hello"),
+    VerificationTimes.AtLeastTimes(1)
+);</code></pre>
+
+<h3>Launch MockServer from .NET</h3>
+
+<p>The package includes a binary launcher — no Java installation or Docker required:</p>
+
+<pre><code class="code csharp">using MockServer.Client;
+
+using var launcher = MockServerBinaryLauncher.Start(port: 1080);
+Console.WriteLine($"MockServer started, PID {launcher.Process?.Id}");
+
+// ... use MockServer ...
+
+launcher.Stop();</code></pre>
+
+<p>See <a href="/mock_server/running_mock_server.html#client_library_launcher">Running MockServer &mdash; client library launcher</a> for full launcher options (version pinning, cache directory, air-gapped networks).</p>
+
+<p>For the full .NET client API, see <a href="/mock_server/mockserver_clients.html">MockServer clients</a>.</p>

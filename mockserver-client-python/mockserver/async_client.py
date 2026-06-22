@@ -23,6 +23,7 @@ from mockserver.models import (
     HttpRequest,
     HttpRequestAndHttpResponse,
     HttpResponse,
+    LoadScenario,
     OpenAPIExpectation,
     Ports,
     TimeToLive,
@@ -36,6 +37,59 @@ from mockserver.websocket_client import MockServerWebSocketClient
 logger = logging.getLogger(__name__)
 
 
+class AsyncScenarioHandle:
+    """An async handle to a single named stateful scenario on the server.
+
+    Obtained via :meth:`AsyncMockServerClient.scenario`. Wraps the
+    ``/mockserver/scenario/{name}`` control-plane endpoints. Each method returns
+    the server's JSON response as a dict (with ``scenarioName`` and
+    ``currentState`` keys).
+    """
+
+    def __init__(self, client: AsyncMockServerClient, name: str) -> None:
+        self._client = client
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def state(self) -> str | None:
+        """GET the current state of this scenario (``None`` if not yet set)."""
+        result = await self._client._scenario_request(
+            "GET", f"/mockserver/scenario/{urllib.parse.quote(self._name, safe="")}"
+        )
+        return result.get("currentState")
+
+    async def set(
+        self,
+        state: str,
+        transition_after_ms: int | None = None,
+        next_state: str | None = None,
+    ) -> dict:
+        """PUT to set this scenario's state, optionally scheduling a timed
+        transition to ``next_state`` after ``transition_after_ms`` milliseconds.
+        """
+        payload: dict = {"state": state}
+        if transition_after_ms is not None:
+            payload["transitionAfterMs"] = transition_after_ms
+        if next_state is not None:
+            payload["nextState"] = next_state
+        return await self._client._scenario_request(
+            "PUT",
+            f"/mockserver/scenario/{urllib.parse.quote(self._name, safe="")}",
+            json.dumps(payload),
+        )
+
+    async def trigger(self, new_state: str) -> dict:
+        """PUT an external trigger advancing this scenario to ``new_state``."""
+        return await self._client._scenario_request(
+            "PUT",
+            f"/mockserver/scenario/{urllib.parse.quote(self._name, safe="")}/trigger",
+            json.dumps({"newState": new_state}),
+        )
+
+
 class AsyncMockServerClient:
     def __init__(
         self,
@@ -45,6 +99,10 @@ class AsyncMockServerClient:
         secure: bool = False,
         ca_cert_path: str | None = None,
         tls_verify: bool = True,
+        client_cert_path: str | None = None,
+        client_key_path: str | None = None,
+        control_plane_bearer_token: str | None = None,
+        control_plane_bearer_token_supplier: Callable[[], str] | None = None,
     ) -> None:
         self._host = host
         self._port = port
@@ -52,6 +110,10 @@ class AsyncMockServerClient:
         self._secure = secure
         self._ca_cert_path = ca_cert_path
         self._tls_verify = tls_verify
+        self._client_cert_path = client_cert_path
+        self._client_key_path = client_key_path
+        self._control_plane_bearer_token = control_plane_bearer_token
+        self._control_plane_bearer_token_supplier = control_plane_bearer_token_supplier
         self._websocket_clients: list[MockServerWebSocketClient] = []
 
         scheme = "https" if secure else "http"
@@ -68,30 +130,57 @@ class AsyncMockServerClient:
             elif not tls_verify:
                 self._ssl_context.check_hostname = False
                 self._ssl_context.verify_mode = ssl.CERT_NONE
+            if client_cert_path:
+                # Load the client certificate chain (and private key) for mTLS.
+                self._ssl_context.load_cert_chain(
+                    certfile=client_cert_path, keyfile=client_key_path
+                )
+
+    def _control_plane_bearer(self) -> str | None:
+        """Resolve the control-plane bearer token for the current request.
+
+        The supplier (if configured) is evaluated per request so rotating /
+        short-lived tokens are picked up; otherwise the static token is used.
+        """
+        if self._control_plane_bearer_token_supplier is not None:
+            return self._control_plane_bearer_token_supplier()
+        return self._control_plane_bearer_token
 
     async def _request(
         self,
         method: str,
         path: str,
-        body: str | None = None,
+        body: str | bytes | None = None,
         query_params: dict[str, str] | None = None,
+        content_type: str = "application/json; charset=utf-8",
     ) -> tuple[int, str]:
         url = f"{self._base_url}{path}"
         if query_params:
             url = f"{url}?{urllib.parse.urlencode(query_params)}"
 
-        data = body.encode("utf-8") if body else None
+        if isinstance(body, bytes):
+            data = body
+        elif body:
+            data = body.encode("utf-8")
+        else:
+            data = None
         req = urllib.request.Request(url, data=data, method=method)
-        req.add_header("Content-Type", "application/json; charset=utf-8")
+        req.add_header("Content-Type", content_type)
+        bearer = self._control_plane_bearer()
+        if bearer:
+            req.add_header("Authorization", f"Bearer {bearer}")
 
         def _do_request() -> tuple[int, str]:
             try:
-                response = urllib.request.urlopen(
+                with urllib.request.urlopen(
                     req, context=self._ssl_context, timeout=60
-                )
-                return response.status, response.read().decode("utf-8")
+                ) as response:
+                    return response.status, response.read().decode("utf-8")
             except urllib.error.HTTPError as e:
-                return e.code, e.read().decode("utf-8")
+                # HTTPError is itself a closeable, response-like object; reading
+                # its body without closing leaks the underlying socket/fd.
+                with e:
+                    return e.code, e.read().decode("utf-8")
             except socket.timeout as e:
                 raise MockServerConnectionError(
                     f"Request to MockServer at {self._base_url} timed out: {e}"
@@ -227,6 +316,53 @@ class AsyncMockServerClient:
             )
         return json.loads(response_body) if response_body else {}
 
+    async def upload_grpc_descriptor(self, descriptor_set_bytes: bytes) -> None:
+        """Upload a compiled protobuf descriptor set so gRPC requests can be matched.
+
+        *descriptor_set_bytes* must be the raw bytes of a
+        ``FileDescriptorSet`` (e.g. the output of
+        ``protoc --descriptor_set_out=... --include_imports``). The bytes are
+        sent verbatim (not base64-encoded) as the request body.
+        """
+        if not descriptor_set_bytes:
+            raise MockServerError("descriptor set bytes must not be empty")
+        status, response_body = await self._request(
+            "PUT",
+            "/mockserver/grpc/descriptors",
+            descriptor_set_bytes,
+            content_type="application/octet-stream",
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to upload gRPC descriptor (status={status}): {response_body}"
+            )
+
+    async def retrieve_grpc_services(self) -> list[dict]:
+        """Retrieve the gRPC services registered from uploaded descriptor sets.
+
+        Returns a list of service dicts, each with a ``name`` and a list of
+        ``methods`` (``name``, ``inputType``, ``outputType``,
+        ``clientStreaming``, ``serverStreaming``).
+        """
+        status, response_body = await self._request(
+            "PUT", "/mockserver/grpc/services"
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to retrieve gRPC services (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else []
+
+    async def clear_grpc_descriptors(self) -> None:
+        """Clear all uploaded gRPC descriptor sets and registered services."""
+        status, response_body = await self._request(
+            "PUT", "/mockserver/grpc/clear"
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to clear gRPC descriptors (status={status}): {response_body}"
+            )
+
     async def set_service_chaos(
         self, host: str, chaos: HttpChaosProfile, ttl_millis: int | None = None
     ) -> dict:
@@ -282,12 +418,196 @@ class AsyncMockServerClient:
             )
         return json.loads(response_body) if response_body else {}
 
+    @staticmethod
+    def _load_generation_disabled_error(action: str, response_body: str) -> MockServerError:
+        return MockServerError(
+            f"Failed to {action}: load generation is disabled "
+            "(start MockServer with loadGenerationEnabled to enable it) "
+            f"(status=403): {response_body}"
+        )
+
+    async def load_scenario(self, scenario: LoadScenario | dict) -> dict:
+        """Register (load) a load-injection scenario in the server-side registry.
+
+        *scenario* is a :class:`LoadScenario` (or an equivalent dict) and must
+        carry a unique ``name``. Registration adds the scenario in the ``LOADED``
+        state but does **not** start generating load; it is allowed even when the
+        server was started without ``loadGenerationEnabled``.
+
+        Returns the JSON ``{"name": ..., "state": ...}`` for the registered
+        scenario. Use :meth:`start_load_scenarios` to begin generating load.
+        """
+        payload = scenario.to_dict() if hasattr(scenario, "to_dict") else scenario
+        body = json.dumps(payload)
+        status, response_body = await self._request(
+            "PUT", "/mockserver/loadScenario", body
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to register load scenario (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def load_scenarios(self) -> dict:
+        """List every registered load scenario.
+
+        Returns ``{"scenarios": [{"name", "state", "definition", "status"?}, ...]}``.
+        """
+        status, response_body = await self._request("GET", "/mockserver/loadScenario")
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to list load scenarios (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def get_load_scenario(self, name: str) -> dict:
+        """Retrieve a single registered load scenario by *name*.
+
+        Raises :class:`MockServerError` if the scenario does not exist (``404``).
+        """
+        status, response_body = await self._request(
+            "GET", f"/mockserver/loadScenario/{urllib.parse.quote(name, safe='')}"
+        )
+        if status == 404:
+            raise MockServerError(
+                f"Load scenario '{name}' not found (status=404): {response_body}"
+            )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to get load scenario '{name}' (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def delete_load_scenario(self, name: str) -> dict:
+        """Remove a single registered load scenario by *name* (stops it if running)."""
+        status, response_body = await self._request(
+            "DELETE", f"/mockserver/loadScenario/{urllib.parse.quote(name, safe='')}"
+        )
+        if status == 404:
+            raise MockServerError(
+                f"Load scenario '{name}' not found (status=404): {response_body}"
+            )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to delete load scenario '{name}' (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def clear_load_scenarios(self) -> dict:
+        """Remove every registered load scenario (stopping any that are running)."""
+        status, response_body = await self._request(
+            "DELETE", "/mockserver/loadScenario"
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to clear load scenarios (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def start_load_scenarios(self, names: str | list[str]) -> dict:
+        """Start one or more registered load scenarios.
+
+        *names* may be a single scenario name or a list of names. The server must
+        have been started with ``loadGenerationEnabled``; otherwise this raises
+        :class:`MockServerError` reporting the ``403`` response. Honours each
+        scenario's ``startDelayMillis``.
+
+        Returns ``{"started": [{"name", "state"}, ...], "status": ...}``.
+        """
+        if isinstance(names, str):
+            names = [names]
+        body = json.dumps({"names": list(names)})
+        status, response_body = await self._request(
+            "PUT", "/mockserver/loadScenario/start", body
+        )
+        if status == 403:
+            raise self._load_generation_disabled_error(
+                "start load scenarios", response_body
+            )
+        if status == 404:
+            raise MockServerError(
+                f"Unknown load scenario (status=404): {response_body}"
+            )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to start load scenarios (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def _scenario_request(
+        self, method: str, path: str, body: str | None = None
+    ) -> dict:
+        status, response_body = await self._request(method, path, body)
+        if status >= 400:
+            raise MockServerError(
+                f"Scenario request failed (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    def scenario(self, name: str) -> AsyncScenarioHandle:
+        """Return a handle to the named stateful scenario, wrapping the
+        ``/mockserver/scenario/{name}`` control-plane endpoints.
+        """
+        return AsyncScenarioHandle(self, name)
+
+    async def scenarios(self) -> list[dict]:
+        """List every known scenario and its current state.
+
+        Returns a list of dicts each with ``scenarioName`` and ``currentState``.
+        """
+        result = await self._scenario_request("GET", "/mockserver/scenario")
+        return result.get("scenarios", [])
+
+    async def stop_load_scenarios(self, names: str | list[str] | None = None) -> dict:
+        """Stop running load scenarios.
+
+        *names* may be a single name, a list of names, or ``None`` to stop every
+        running scenario.
+
+        Returns ``{"stopped": [...], "status": ...}``.
+        """
+        if names is None:
+            payload: dict = {}
+        elif isinstance(names, str):
+            payload = {"names": [names]}
+        else:
+            payload = {"names": list(names)}
+        body = json.dumps(payload)
+        status, response_body = await self._request(
+            "PUT", "/mockserver/loadScenario/stop", body
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to stop load scenarios (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def run_load_scenario(self, scenario: LoadScenario | dict) -> dict:
+        """Convenience: register *scenario* then immediately start it.
+
+        Requires the server to have been started with ``loadGenerationEnabled``
+        (the start step responds ``403`` otherwise). Returns the start result
+        (``{"started": [...], "status": ...}``).
+        """
+        registered = await self.load_scenario(scenario)
+        name = registered.get("name") if isinstance(registered, dict) else None
+        if not name:
+            payload = scenario.to_dict() if hasattr(scenario, "to_dict") else scenario
+            name = payload.get("name") if isinstance(payload, dict) else None
+        if not name:
+            raise MockServerError(
+                "Cannot run load scenario: scenario has no name to start"
+            )
+        return await self.start_load_scenarios(name)
+
     async def verify(
         self,
-        request: HttpRequest,
+        request: HttpRequest | None = None,
         times: VerificationTimes | None = None,
+        *,
+        response: HttpResponse | None = None,
     ) -> None:
-        verification = Verification(http_request=request, times=times)
+        verification = Verification(http_request=request, http_response=response, times=times)
         body = json.dumps(verification.to_dict())
         status, response_body = await self._request("PUT", "/mockserver/verify", body)
         if status == 406:
@@ -297,9 +617,14 @@ class AsyncMockServerClient:
                 f"Failed to verify (status={status}): {response_body}"
             )
 
-    async def verify_sequence(self, *requests: HttpRequest) -> None:
+    async def verify_sequence(
+        self,
+        *requests: HttpRequest,
+        responses: list[HttpResponse] | None = None,
+    ) -> None:
         verification = VerificationSequence(
-            http_requests=list(requests)
+            http_requests=list(requests) if requests else None,
+            http_responses=responses,
         )
         body = json.dumps(verification.to_dict())
         status, response_body = await self._request(
@@ -377,6 +702,49 @@ class AsyncMockServerClient:
             if isinstance(parsed, list):
                 return [Expectation.from_dict(e) for e in parsed]
         return []
+
+    async def retrieve_expectations_as_code(
+        self, fmt: str = "java", request: HttpRequest | None = None
+    ) -> str:
+        """Retrieve the active expectations as MockServer SDK setup code.
+
+        Returns the builder code that recreates the expectations, generated in
+        the requested language (``fmt`` is one of ``java``, ``javascript``,
+        ``python``, ``go``, ``csharp``, ``ruby``, ``rust`` or ``php``).
+        """
+        body = json.dumps(request.to_dict()) if request else ""
+        status, response_body = await self._request(
+            "PUT",
+            "/mockserver/retrieve",
+            body,
+            {"type": "ACTIVE_EXPECTATIONS", "format": fmt.upper()},
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to retrieve expectations as code (status={status}): {response_body}"
+            )
+        return response_body or ""
+
+    async def retrieve_recorded_expectations_as_code(
+        self, fmt: str = "java", request: HttpRequest | None = None
+    ) -> str:
+        """Retrieve the recorded (proxied) request/response pairs as MockServer
+        SDK setup code, generated in the requested language (``fmt`` is one of
+        ``java``, ``javascript``, ``python``, ``go``, ``csharp``, ``ruby``,
+        ``rust`` or ``php``).
+        """
+        body = json.dumps(request.to_dict()) if request else ""
+        status, response_body = await self._request(
+            "PUT",
+            "/mockserver/retrieve",
+            body,
+            {"type": "RECORDED_EXPECTATIONS", "format": fmt.upper()},
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to retrieve recorded expectations as code (status={status}): {response_body}"
+            )
+        return response_body or ""
 
     async def retrieve_recorded_requests_and_responses(
         self, request: HttpRequest | None = None
@@ -503,6 +871,180 @@ class AsyncMockServerClient:
             time_to_live=time_to_live,
         )
         return await self.upsert(expectation)
+
+    # -------------------------------------------------------------------
+    # Breakpoint matcher management
+    # -------------------------------------------------------------------
+
+    async def _ensure_breakpoint_websocket(self) -> MockServerWebSocketClient:
+        """Ensure a callback WS is connected for breakpoint use, returning it."""
+        # Serialise lazy creation so concurrent add_breakpoint coroutines
+        # (e.g. via asyncio.gather) cannot each create a duplicate breakpoint WS
+        # across the await in connect(). Creating/assigning the lock has no await
+        # between the check and the set, so it is atomic on the event loop.
+        lock = getattr(self, '_breakpoint_ws_lock', None)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._breakpoint_ws_lock = lock  # type: ignore[attr-defined]
+        async with lock:
+            # Reuse the first WS client tagged as breakpoint, or create one
+            for ws in self._websocket_clients:
+                if getattr(ws, '_is_breakpoint_ws', False):
+                    return ws
+
+            ws_client = MockServerWebSocketClient()
+            await ws_client.connect(
+                self._host,
+                self._port,
+                self._context_path,
+                self._secure,
+                self._ca_cert_path,
+                tls_verify=self._tls_verify,
+            )
+            ws_client._is_breakpoint_ws = True  # type: ignore[attr-defined]
+            ws_client._listen_task = asyncio.create_task(ws_client.listen())
+            self._websocket_clients.append(ws_client)
+            return ws_client
+
+    async def add_breakpoint(
+        self,
+        matcher: HttpRequest,
+        phases: list[str],
+        request_handler: Callable | None = None,
+        response_handler: Callable | None = None,
+        stream_frame_handler: Callable | None = None,
+    ) -> str:
+        """Register a breakpoint matcher with callback handlers.
+
+        The callback WebSocket is opened lazily on the first call and reused.
+
+        Args:
+            matcher: the request definition to match (same as expectation matcher)
+            phases: list of phase strings: "REQUEST", "RESPONSE",
+                    "RESPONSE_STREAM", "INBOUND_STREAM"
+            request_handler: callable(HttpRequest) -> HttpRequest|HttpResponse
+                             for REQUEST phase (optional)
+            response_handler: callable(HttpRequest, HttpResponse) -> HttpResponse
+                              for RESPONSE phase (optional)
+            stream_frame_handler: callable(dict) -> dict for streaming phases
+                                  (optional). Receives PausedStreamFrameDTO dict,
+                                  returns StreamFrameDecisionDTO dict.
+
+        Returns:
+            The server-assigned breakpoint matcher id (UUID string).
+        """
+        if matcher is None:
+            raise ValueError("add_breakpoint requires a non-None matcher")
+        if not phases:
+            raise ValueError("add_breakpoint requires a non-empty phases list")
+
+        ws_client = await self._ensure_breakpoint_websocket()
+        client_id = ws_client.client_id
+
+        body = json.dumps({
+            "httpRequest": matcher.to_dict(),
+            "phases": phases,
+            "clientId": client_id,
+        })
+        status, response_body = await self._request(
+            "PUT", "/mockserver/breakpoint/matcher", body
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to register breakpoint matcher (status={status}): {response_body}"
+            )
+
+        parsed = json.loads(response_body) if response_body else {}
+        breakpoint_id = parsed.get("id")
+        if not breakpoint_id:
+            raise MockServerError("Server did not return a breakpoint id")
+
+        # Install per-breakpoint-id handlers
+        if request_handler:
+            ws_client.set_breakpoint_request_handler(breakpoint_id, request_handler)
+        if response_handler:
+            ws_client.set_breakpoint_response_handler(breakpoint_id, response_handler)
+        if stream_frame_handler:
+            ws_client.set_breakpoint_stream_frame_handler(breakpoint_id, stream_frame_handler)
+
+        return breakpoint_id
+
+    async def add_request_breakpoint(
+        self,
+        matcher: HttpRequest,
+        request_handler: Callable,
+    ) -> str:
+        """Convenience: register a REQUEST-only breakpoint."""
+        return await self.add_breakpoint(
+            matcher, ["REQUEST"], request_handler=request_handler
+        )
+
+    async def add_request_and_response_breakpoint(
+        self,
+        matcher: HttpRequest,
+        request_handler: Callable,
+        response_handler: Callable,
+    ) -> str:
+        """Convenience: register a REQUEST+RESPONSE breakpoint."""
+        return await self.add_breakpoint(
+            matcher,
+            ["REQUEST", "RESPONSE"],
+            request_handler=request_handler,
+            response_handler=response_handler,
+        )
+
+    async def list_breakpoint_matchers(self) -> dict:
+        """List all registered breakpoint matchers.
+
+        Returns a dict: {"matchers": [{id, httpRequest, phases, clientId}, ...]}.
+        """
+        status, response_body = await self._request(
+            "GET", "/mockserver/breakpoint/matchers"
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to list breakpoint matchers (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def remove_breakpoint_matcher(self, breakpoint_id: str) -> dict:
+        """Remove a breakpoint matcher by id.
+
+        Returns a dict: {"status": "removed", "id": "..."} or raises on 404.
+        """
+        if not breakpoint_id:
+            raise ValueError("remove_breakpoint_matcher requires a non-empty id")
+        body = json.dumps({"id": breakpoint_id})
+        status, response_body = await self._request(
+            "PUT", "/mockserver/breakpoint/matcher/remove", body
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to remove breakpoint matcher (status={status}): {response_body}"
+            )
+        # Remove client-side handlers
+        for ws in self._websocket_clients:
+            if getattr(ws, '_is_breakpoint_ws', False):
+                ws.remove_breakpoint_handlers(breakpoint_id)
+        return json.loads(response_body) if response_body else {}
+
+    async def clear_breakpoint_matchers(self) -> dict:
+        """Clear all registered breakpoint matchers.
+
+        Returns a dict: {"status": "cleared", "count": N}.
+        """
+        status, response_body = await self._request(
+            "PUT", "/mockserver/breakpoint/matcher/clear"
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to clear breakpoint matchers (status={status}): {response_body}"
+            )
+        # Clear client-side handlers
+        for ws in self._websocket_clients:
+            if getattr(ws, '_is_breakpoint_ws', False):
+                ws.clear_breakpoint_handlers()
+        return json.loads(response_body) if response_body else {}
 
     async def _register_websocket_callback(
         self,

@@ -2,6 +2,7 @@
 name: test-runner
 description: Runs Maven tests for changed modules and reports results. Spawn this agent to execute targeted tests after code changes — it maps changed directories to Maven modules and runs only what's needed.
 model: claude-haiku-4-5-20251001
+effort: low
 tools:
   - Read
   - Bash

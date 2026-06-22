@@ -1,0 +1,17 @@
+meta {
+  name: list files in the file store
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/mockserver/files/list
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns the names of all files currently held in the in-memory file store
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

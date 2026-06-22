@@ -1,0 +1,21 @@
+meta {
+  name: stop running load scenario(s)
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/mockserver/loadScenario/stop
+  body: none
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+docs {
+  Stops one or more running load scenarios. Body is {"names":[...]}, {"all":true}, or an empty body (stop all running). Stopped scenarios stay registered (state STOPPED) and can be re-triggered.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -60,15 +60,20 @@ public class HttpLlmResponseActionHandlerCodecTest {
     }
 
     @Test
-    public void shouldReturn200ForEveryRegisteredProvider() throws Exception {
-        // After M4 every Provider enum value has a registered codec; the codec-missing
-        // 400 path remains in the handler for safety but is not reachable through any
-        // current production code path. This positive test pins the post-M4 contract:
-        // every Provider value resolves to a codec and returns 200.
+    public void shouldReturn200ForEveryChatProvider() throws Exception {
+        // After M4 every chat-capable Provider enum value has a registered codec; the
+        // codec-missing 400 path remains in the handler for safety but is not reachable
+        // through any current production code path. This positive test pins the contract:
+        // every chat provider resolves to a codec and returns 200 for a completion.
+        // Rerank-only providers (COHERE, VOYAGE) have no completion path and are covered
+        // by their dedicated rerank tests instead.
         HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
         HttpRequest request = request().withPath("/test");
 
         for (Provider provider : Provider.values()) {
+            if (provider == Provider.COHERE || provider == Provider.VOYAGE) {
+                continue;
+            }
             HttpLlmResponse llmResponse = llmResponse()
                 .withProvider(provider)
                 .withCompletion(completion().withText("hello"));
@@ -78,6 +83,46 @@ public class HttpLlmResponseActionHandlerCodecTest {
             assertThat("expected 200 for provider " + provider,
                 response.getStatusCode(), is(200));
         }
+    }
+
+    @Test
+    public void shouldHandleRerankPathForCohere() throws Exception {
+        // given
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.COHERE)
+            .withRerank(RerankResponse.rerank());
+        HttpRequest request = request()
+            .withPath("/v1/rerank")
+            .withBody("{\"query\":\"q\",\"documents\":[\"alpha\",\"beta\",\"gamma\"]}");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("results").size(), is(3));
+    }
+
+    @Test
+    public void shouldHandleRerankPathWithStructuredDocuments() throws Exception {
+        // given — Cohere structured documents (objects with a text field)
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.VOYAGE)
+            .withRerank(RerankResponse.rerank().withTopN(1));
+        HttpRequest request = request()
+            .withPath("/v1/rerank")
+            .withBody("{\"query\":\"q\",\"documents\":[{\"text\":\"a\"},{\"text\":\"b\"}]}");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then — Voyage uses the data envelope
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("data").size(), is(1));
     }
 
     @Test

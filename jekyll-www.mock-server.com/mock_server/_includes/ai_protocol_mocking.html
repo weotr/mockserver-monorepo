@@ -1,6 +1,6 @@
 <p>MockServer can mock AI protocol servers — including <strong>MCP (Model Context Protocol)</strong> servers and <strong>A2A (Agent-to-Agent Protocol)</strong> agents — enabling you to test AI clients against predictable mock services without running real AI infrastructure.</p>
 
-<p>This is distinct from MockServer's built-in <a href="/mock_server/ai_mcp_setup.html">MCP control plane</a> (which lets AI assistants <em>control</em> MockServer). These features let you <em>mock other people's</em> MCP and A2A servers.</p>
+<p>This is distinct from MockServer's built-in <a href="/mock_server/ai_mcp_setup.html">MCP control plane</a> (which lets AI assistants <em>control</em> MockServer). These features let you <em>mock other people's</em> MCP and A2A servers. For mocking LLM API responses (OpenAI, Anthropic, Gemini, etc.) with provider-correct formatting and streaming, see <a href="/mock_server/llm_response_mocking.html">LLM Response Mocking</a>.</p>
 
 <h2>SSE Streaming Responses</h2>
 
@@ -399,6 +399,52 @@ a2aMock("/agent")
         .and()
     .applyTo(mockServerClient);</code></pre>
         <p>Custom task handlers use regex pattern matching on the message text. Handlers with more specific patterns should be added first. The default <code>tasks/send</code> handler matches any message that doesn't match a custom handler.</p>
+    </div>
+</div>
+
+<button id="button_a2a_streaming" class="accordion">mock A2A agent with streaming (SSE)</button>
+<div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">MockServerClient mockServerClient = new MockServerClient("localhost", 1080);
+
+a2aMock("/agent")
+    .withAgentName("StreamingAgent")
+    .withAgentVersion("1.0.0")
+    .withStreaming()                  // advertise capabilities.streaming: true
+    // optional: override the streaming method name (default "message/stream")
+    // .withStreamingMethod("tasks/sendSubscribe")
+    .withDefaultTaskResponse("Streaming complete")
+    .applyTo(mockServerClient);</code></pre>
+        <p>When <code>withStreaming()</code> is set the agent card reports <code>capabilities.streaming: true</code>. The builder generates an SSE expectation for the streaming JSON-RPC method (default <code>message/stream</code>; legacy <code>tasks/sendSubscribe</code> when overridden). The SSE stream emits three events:</p>
+        <ol>
+            <li>A <code>TaskStatusUpdateEvent</code> with <code>status.state: "working"</code> and <code>"final": false</code></li>
+            <li>A <code>TaskArtifactUpdateEvent</code> carrying the configured response text as a text part</li>
+            <li>A <code>TaskStatusUpdateEvent</code> with <code>status.state: "completed"</code> and <code>"final": true</code></li>
+        </ol>
+        <p>Each SSE event's <code>data</code> is a JSON-RPC 2.0 response envelope. Use <code>withStreamingMethod(String)</code> to override the JSON-RPC method name &mdash; calling this implies <code>withStreaming()</code>.</p>
+    </div>
+</div>
+
+<button id="button_a2a_push" class="accordion">mock A2A agent with push notifications</button>
+<div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">MockServerClient mockServerClient = new MockServerClient("localhost", 1080);
+
+a2aMock("/agent")
+    .withAgentName("PushAgent")
+    .withAgentVersion("1.0.0")
+    .withPushNotifications("http://localhost:9999/a2a/callback")
+    .withDefaultTaskResponse("Task done")
+    .applyTo(mockServerClient);</code></pre>
+        <p><code>withPushNotifications(webhookUrl)</code> does two things:</p>
+        <ul>
+            <li>The agent card reports <code>capabilities.pushNotifications: true</code>.</li>
+            <li>A <code>tasks/pushNotificationConfig/set</code> expectation is created that echoes the registered push-notification config back as the JSON-RPC result.</li>
+            <li>The <code>tasks/send</code> expectation is replaced by an override-forwarded-request that <strong>both</strong> POSTs the completed task (as a JSON-RPC push payload) to the webhook URL <strong>and</strong> returns the standard JSON-RPC task response to the original caller.</li>
+        </ul>
+        <p>The webhook URL must be an absolute HTTP or HTTPS URL (e.g. <code>http://localhost:9999/a2a/callback</code>).</p>
     </div>
 </div>
 

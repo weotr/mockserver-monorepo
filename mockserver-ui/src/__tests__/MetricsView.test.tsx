@@ -38,9 +38,9 @@ describe('MetricsView', () => {
     render(<MetricsView connectionParams={params} />);
     await waitFor(() => expect(screen.getByText('Throughput (derived)')).toBeInTheDocument());
     expect(screen.getByText('HTTP request activity (cumulative)')).toBeInTheDocument();
-    // the standalone number cards were removed — those counts now live only in
-    // the Request activity timeline graph, not as a card value
-    expect(screen.queryByText('42')).not.toBeInTheDocument();
+    // the headline counters are now presented as KPI hero stat cards at the top
+    expect(screen.getByText('Requests received')).toBeInTheDocument();
+    expect(screen.getByText('42')).toBeInTheDocument();
   });
 
   it('renders a separate Async message activity panel when async metrics are present', async () => {
@@ -128,7 +128,38 @@ describe('MetricsView', () => {
     );
     render(<MetricsView connectionParams={params} />);
     await waitFor(() => expect(screen.getByText('Request latency — cumulative since server start')).toBeInTheDocument());
-    expect(screen.getByText('p95')).toBeInTheDocument();
+    // p50/p95/p99 are surfaced as hero stat cards above the chart stack.
+    expect(screen.getByText('latency p95')).toBeInTheDocument();
+    expect(screen.getByText('latency p50')).toBeInTheDocument();
+    expect(screen.getByText('latency p99')).toBeInTheDocument();
+  });
+
+  it('shows skeleton placeholders (not a bare spinner) while the first scrape is in flight', async () => {
+    // A fetch that never resolves keeps the view in the initial loading state.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    const { container } = render(<MetricsView connectionParams={params} />);
+    await waitFor(() =>
+      expect(screen.getByTestId('metrics-loading-skeleton')).toBeInTheDocument(),
+    );
+    // MUI Skeletons render with the MuiSkeleton-root class; the old CircularProgress is gone.
+    expect(container.querySelector('.MuiSkeleton-root')).not.toBeNull();
+    expect(container.querySelector('.MuiCircularProgress-root')).toBeNull();
+  });
+
+  it('leads with KPI hero stat cards showing the headline request counters', async () => {
+    stubFetch(
+      200,
+      'requests_received_count 42.0\nresponse_expectations_matched_count 7.0\n' +
+        'expectations_not_matched_count 3.0\nforward_expectations_matched_count 1.0\n',
+    );
+    render(<MetricsView connectionParams={params} />);
+    // The four headline counters appear as labelled hero cards with their values.
+    await waitFor(() => expect(screen.getByText('Requests received')).toBeInTheDocument());
+    expect(screen.getByText('Matched')).toBeInTheDocument();
+    expect(screen.getByText('Not matched')).toBeInTheDocument();
+    expect(screen.getByText('Forwarded')).toBeInTheDocument();
+    // The headline value now appears in the hero card (it lived nowhere visible before).
+    expect(screen.getByText('42')).toBeInTheDocument();
   });
 
   it('hides the latency panel when the histogram is absent', async () => {
@@ -255,6 +286,99 @@ describe('MetricsView', () => {
     render(<MetricsView connectionParams={params} />);
     await waitFor(() => expect(screen.getByText('MCP tool calls')).toBeInTheDocument());
     expect(screen.getByText('No MCP tool calls recorded.')).toBeInTheDocument();
+  });
+
+  it('renders auto-halt circuit breaker with non-zero count', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_chaos_auto_halt 3.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Chaos auto-halt')).toBeInTheDocument());
+    expect(screen.getByText('3 halts')).toBeInTheDocument();
+  });
+
+  it('renders auto-halt circuit breaker with zero count showing "no halts"', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_chaos_auto_halt 0.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Chaos auto-halt')).toBeInTheDocument());
+    expect(screen.getByText('no halts')).toBeInTheDocument();
+  });
+
+  it('shows singular "halt" for count of 1', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_chaos_auto_halt 1.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Chaos auto-halt')).toBeInTheDocument());
+    expect(screen.getByText('1 halt')).toBeInTheDocument();
+  });
+
+  it('hides auto-halt section when metric is absent', async () => {
+    stubFetch(200, 'requests_received_count 5.0\n');
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Throughput (derived)')).toBeInTheDocument());
+    expect(screen.queryByText('Chaos auto-halt')).not.toBeInTheDocument();
+  });
+
+  it('renders LLM cost-budget circuit breaker with trips', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_llm_cost_budget_tripped 2.0',
+        'mock_server_llm_cost_usd{provider="openai",model="gpt-4"} 1.5',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('LLM cost-budget')).toBeInTheDocument());
+    expect(screen.getByText('2 trips')).toBeInTheDocument();
+    expect(screen.getByText('$1.5000 spent')).toBeInTheDocument();
+  });
+
+  it('renders LLM cost-budget within budget when no trips', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_llm_cost_budget_tripped 0.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('LLM cost-budget')).toBeInTheDocument());
+    expect(screen.getByText('within budget')).toBeInTheDocument();
+  });
+
+  it('shows singular "trip" for LLM cost-budget count of 1', async () => {
+    stubFetch(
+      200,
+      [
+        'requests_received_count 10.0',
+        'mock_server_llm_cost_budget_tripped 1.0',
+        '',
+      ].join('\n'),
+    );
+    render(<MetricsView connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('LLM cost-budget')).toBeInTheDocument());
+    expect(screen.getByText('1 trip')).toBeInTheDocument();
   });
 
   it('hides zero-value expectation types from the chart', async () => {

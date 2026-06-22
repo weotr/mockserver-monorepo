@@ -19,7 +19,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>7.0.1-SNAPSHOT</version>
+        <version>7.1.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -38,6 +38,19 @@
         <dependency>
             <groupId>org.mock-server</groupId>
             <artifactId>mockserver-core</artifactId>
+        </dependency>
+        <!-- GraalVM polyglot + js: mockserver-core declares these <optional>, so they are NOT inherited
+             transitively. The JavaScript template benchmark (JavaScriptTemplateBenchmark) needs them on
+             the runtime classpath so JavaScriptTemplateEngine.isPolyglotAvailable() is true and the
+             GraalJS path is actually exercised; versions come from the parent dependencyManagement. -->
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>polyglot</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.graalvm.polyglot</groupId>
+            <artifactId>js</artifactId>
+            <type>pom</type>
         </dependency>
         <dependency>
             <groupId>org.openjdk.jmh</groupId>

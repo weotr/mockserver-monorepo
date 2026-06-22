@@ -3,7 +3,6 @@ package org.mockserver.templates.engine.mustache;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Splitter;
-import com.jayway.jsonpath.JsonPath;
 import com.samskivert.mustache.Mustache;
 import com.samskivert.mustache.Template;
 import org.mockserver.configuration.Configuration;
@@ -15,15 +14,17 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.model.DTO;
 import org.mockserver.templates.engine.TemplateEngine;
 import org.mockserver.templates.engine.TemplateFunctions;
+import org.mockserver.templates.engine.helpers.RequestBodyExtractionHelper;
 import org.mockserver.templates.engine.model.HttpRequestTemplateObject;
 import org.mockserver.templates.engine.model.HttpResponseTemplateObject;
 import org.mockserver.templates.engine.serializer.HttpTemplateOutputDeserializer;
-import org.mockserver.xml.XPathEvaluator;
 import org.slf4j.event.Level;
 
-import javax.xml.xpath.XPathConstants;
+import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -46,6 +47,32 @@ public class MustacheTemplateEngine implements TemplateEngine {
     private final Mustache.Compiler compiler;
     private HttpTemplateOutputDeserializer httpTemplateOutputDeserializer;
 
+    // ----- parsed-template cache (compile once, render many) -----
+    // Templates are mostly static for the lifetime of a mock — the same template string is rendered on
+    // every matching request. The original path re-compiled the template string into a fresh parsed
+    // Template on every render via compiler.compile(template), which dominated render cost. We instead
+    // compile each distinct template string at most once and reuse the resulting jmustache Template
+    // across renders. A jmustache Template is immutable once compiled and is rendered (Template.execute)
+    // concurrently with a fresh per-render data map, so a single shared compiled Template is safe to
+    // reuse across request threads — mirroring how the Velocity engine reuses its parsed Templates.
+    //
+    // The cache is keyed by the template content string itself, so distinct templates can never collide
+    // onto the same compiled Template. Bound rationale: distinct template strings are bounded by the
+    // number of expectations/actions a user configures, but a misbehaving client (e.g. unique generated
+    // templates per request) could otherwise grow the cache without limit. We cap the number of cached
+    // templates at PARSED_TEMPLATE_CACHE_MAX (matching the Velocity engine's bound) so memory stays
+    // bounded; 1000 comfortably covers realistic mock configurations while remaining cheap. The bound is
+    // enforced by compiledTemplates, an access-ordered LRU wrapped in Collections.synchronizedMap so
+    // concurrent renders read and insert safely (the same concurrency approach Velocity uses for its
+    // registeredTemplates LRU).
+    static final int PARSED_TEMPLATE_CACHE_MAX = 1000;
+    private final Map<String, Template> compiledTemplates = Collections.synchronizedMap(new LinkedHashMap<String, Template>(256, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Template> eldest) {
+            return size() > PARSED_TEMPLATE_CACHE_MAX;
+        }
+    });
+
     public MustacheTemplateEngine(MockServerLogger mockServerLogger, Configuration configuration) {
         this.mockServerLogger = mockServerLogger;
         this.configuration = configuration;
@@ -62,6 +89,26 @@ public class MustacheTemplateEngine implements TemplateEngine {
             .withCollector(new ExtendedCollector());
     }
 
+    /**
+     * Return the jmustache {@link Template} for the given template string, compiling it at most once per
+     * distinct string and reusing the cached compiled Template on subsequent renders. The compiled
+     * Template is immutable and rendered concurrently with a fresh per-render data map, so a single
+     * shared instance is safe across request threads. A compilation failure (malformed template) is not
+     * cached — it propagates to the caller exactly as {@code compiler.compile(template)} would, so error
+     * handling is unchanged.
+     */
+    private Template compiledTemplate(String template) {
+        Template cached = compiledTemplates.get(template);
+        if (cached == null) {
+            // compile outside the map mutation so a malformed template throws (and is never cached);
+            // a benign race where two threads compile the same string concurrently just discards one
+            // identical compiled Template, which is harmless.
+            cached = compiler.compile(template);
+            compiledTemplates.put(template, cached);
+        }
+        return cached;
+    }
+
     @Override
     public <T> T executeTemplate(String template, HttpRequest request, Class<? extends DTO<T>> dtoClass) {
         return executeTemplateInternal(template, request, null, dtoClass);
@@ -72,12 +119,39 @@ public class MustacheTemplateEngine implements TemplateEngine {
         return executeTemplateInternal(template, request, response, dtoClass);
     }
 
+    @Override
+    public String renderTemplate(String template, HttpRequest request) {
+        return renderTemplate(template, request, null);
+    }
+
+    @Override
+    public String renderTemplate(String template, HttpRequest request, org.mockserver.load.IterationContext iteration) {
+        try {
+            validateTemplate(template);
+            Writer writer = new StringWriter();
+            Template compiledTemplate = compiledTemplate(template);
+            Map<String, Object> data = new ConcurrentHashMap<>();
+            data.put("request", new HttpRequestTemplateObject(request));
+            if (iteration != null) {
+                data.put("iteration", iteration);
+            }
+            data.putAll(TemplateFunctions.BUILT_IN_FUNCTIONS);
+            data.putAll(TemplateFunctions.BUILT_IN_HELPERS);
+            data.put("xPath", (Mustache.Lambda) (frag, out) -> evaluatedXPath(frag.execute(), request, out));
+            data.put("jsonPath", (Mustache.Lambda) (frag, out) -> evaluateJsonPath(data, frag.execute(), request, out));
+            compiledTemplate.execute(data, writer);
+            return writer.toString();
+        } catch (Exception e) {
+            throw new RuntimeException(formatLogMessage("Exception:{}transforming template:{}for request:{}", isNotBlank(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName(), template, request), e);
+        }
+    }
+
     private <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass) {
         T result;
         try {
             validateTemplate(template);
             Writer writer = new StringWriter();
-            Template compiledTemplate = compiler.compile(template);
+            Template compiledTemplate = compiledTemplate(template);
             Map<String, Object> data = new ConcurrentHashMap<>();
             data.put("request", new HttpRequestTemplateObject(request));
             if (response != null) {
@@ -130,61 +204,17 @@ public class MustacheTemplateEngine implements TemplateEngine {
         }
     }
 
-    private void evaluateJsonPath(Map<String, Object> data, String jsonPath, HttpRequest request, Writer out) {
-        try {
-            Object jsonPathResult = JsonPath.compile(jsonPath).read(request.getBodyAsJsonOrXmlString());
-            data.put("jsonPathResult", jsonPathResult);
-            if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setLogLevel(Level.TRACE)
-                        .setHttpRequest(request)
-                        .setMessageFormat("evaluated jsonPath:{}against json body:{}as:{}")
-                        .setArguments(jsonPath, request.getBodyAsJsonOrXmlString(), jsonPathResult)
-                );
-            }
-            out.write("");
-        } catch (Throwable throwable) {
-            mockServerLogger.logEvent(
-                new LogEntry()
-                    .setLogLevel(Level.INFO)
-                    .setHttpRequest(request)
-                    .setMessageFormat("exception evaluating jsonPath:{}against json body:{}")
-                    .setArguments(jsonPath, request.getBodyAsJsonOrXmlString())
-                    .setThrowable(throwable)
-            );
-        }
+    private void evaluateJsonPath(Map<String, Object> data, String jsonPath, HttpRequest request, Writer out) throws IOException {
+        // Delegate the actual extraction to the shared helper so the Mustache, Velocity and JavaScript
+        // engines all use the same JSONPath/XPath logic and error handling. The Mustache idiom is to
+        // store the extracted value under "jsonPathResult" (so it can be iterated in a following section)
+        // and emit nothing inline.
+        Object jsonPathResult = new RequestBodyExtractionHelper(request, mockServerLogger).jsonPath(jsonPath);
+        data.put("jsonPathResult", jsonPathResult);
+        out.write("");
     }
 
-    private void evaluatedXPath(String xPath, HttpRequest request, Writer out) {
-        try {
-            String xPathResult = String.valueOf(new XPathEvaluator(xPath, null).evaluateXPathExpression(request.getBodyAsJsonOrXmlString(), (matched, exception, level) -> mockServerLogger.logEvent(
-                new LogEntry()
-                    .setLogLevel(Level.INFO)
-                    .setHttpRequest(request)
-                    .setMessageFormat("exception evaluating xPath:{}against xml body:{}")
-                    .setArguments(xPath, request.getBodyAsJsonOrXmlString())
-                    .setThrowable(exception)
-            ), XPathConstants.STRING));
-            if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setLogLevel(Level.TRACE)
-                        .setHttpRequest(request)
-                        .setMessageFormat("evaluated xPath:{}against xml body:{}as:{}")
-                        .setArguments(xPath, request.getBodyAsJsonOrXmlString(), xPathResult)
-                );
-            }
-            out.write(xPathResult);
-        } catch (Throwable throwable) {
-            mockServerLogger.logEvent(
-                new LogEntry()
-                    .setLogLevel(Level.INFO)
-                    .setHttpRequest(request)
-                    .setMessageFormat("exception evaluating xPath:{}against xml body:{}")
-                    .setArguments(xPath, request.getBodyAsJsonOrXmlString())
-                    .setThrowable(throwable)
-            );
-        }
+    private void evaluatedXPath(String xPath, HttpRequest request, Writer out) throws IOException {
+        out.write(new RequestBodyExtractionHelper(request, mockServerLogger).xPath(xPath));
     }
 }

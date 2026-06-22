@@ -79,7 +79,9 @@ trigger_if_changed "^container_integration_tests/" "mockserver-container-tests" 
 trigger_if_changed "^jekyll-www.mock-server.com/" "mockserver-website" "MockServer Website"
 trigger_if_changed "^docker_build/maven/" "mockserver-build-image" "MockServer Build Image"
 
-if printf '%s\n' "$CHANGED_FILES" | grep -qE -- "^(\.buildkite/|\.github/|terraform/|docker/|scripts/|helm/|docs/|AGENTS\.md|opencode\.jsonc|\.opencode/)"; then
+# examples/ (generated Postman/Bruno collections) and the OpenAPI spec route to
+# infra too, so the collections-validate gate catches spec/collection drift.
+if printf '%s\n' "$CHANGED_FILES" | grep -qE -- "^(\.buildkite/|\.github/|terraform/|docker/|scripts/|helm/|docs/|examples/|jekyll-www\.mock-server\.com/mockserver-openapi\.yaml|AGENTS\.md|opencode\.jsonc|\.opencode/)"; then
   echo "--- :pipeline: Triggering MockServer Infra (infra changes)"
   STEPS="${STEPS}  - label: \":pipeline: MockServer Infra\"
     command: \".buildkite/scripts/trigger-pipeline.sh mockserver-infra 'MockServer Infra'\"

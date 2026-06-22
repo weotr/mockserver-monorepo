@@ -2,16 +2,16 @@ package mockserver
 
 // HttpRequest represents an HTTP request matcher for MockServer.
 type HttpRequest struct {
-	Method               string              `json:"method,omitempty"`
-	Path                 string              `json:"path,omitempty"`
-	QueryStringParams    map[string][]string `json:"queryStringParameters,omitempty"`
-	Headers              map[string][]string `json:"headers,omitempty"`
-	Cookies              map[string]string   `json:"cookies,omitempty"`
-	Body                 interface{}         `json:"body,omitempty"`
-	Secure               *bool               `json:"secure,omitempty"`
-	KeepAlive            *bool               `json:"keepAlive,omitempty"`
-	SocketAddress        *SocketAddress      `json:"socketAddress,omitempty"`
-	PathParametersList   map[string][]string `json:"pathParameters,omitempty"`
+	Method             string              `json:"method,omitempty"`
+	Path               string              `json:"path,omitempty"`
+	QueryStringParams  map[string][]string `json:"queryStringParameters,omitempty"`
+	Headers            map[string][]string `json:"headers,omitempty"`
+	Cookies            map[string]string   `json:"cookies,omitempty"`
+	Body               interface{}         `json:"body,omitempty"`
+	Secure             *bool               `json:"secure,omitempty"`
+	KeepAlive          *bool               `json:"keepAlive,omitempty"`
+	SocketAddress      *SocketAddress      `json:"socketAddress,omitempty"`
+	PathParametersList map[string][]string `json:"pathParameters,omitempty"`
 }
 
 // SocketAddress represents a socket address constraint.
@@ -106,6 +106,14 @@ func (b *RequestBuilder) KeepAlive(keepAlive bool) *RequestBuilder {
 // Build returns the constructed HttpRequest.
 func (b *RequestBuilder) Build() HttpRequest {
 	return b.request
+}
+
+// BuildPtr returns a pointer to the constructed HttpRequest. It is a convenience
+// for object forward-callback handlers (see Client.MockWithForwardCallback) which
+// return a *HttpRequest.
+func (b *RequestBuilder) BuildPtr() *HttpRequest {
+	req := b.request
+	return &req
 }
 
 // TypedBody represents a typed body matcher (e.g., JSON, XML).

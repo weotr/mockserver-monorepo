@@ -1,22 +1,25 @@
 ---
-title: Using OpenAPI Specifications
-description: Generate expectations from an OpenAPI v3 spec, use OpenAPI request matchers for verification and clearing, and filter by operation and status code.
-shortTitle: Using OpenAPI
+title: OpenAPI &amp; WSDL
+description: Generate mock expectations from OpenAPI v3 or WSDL (SOAP) specifications; use OpenAPI request matchers for verification, clearing, and log retrieval.
+shortTitle: OpenAPI &amp; WSDL
 layout: page
-pageOrder: 4
+pageOrder: 5
 section: 'Creating Mocks'
 subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-06-11T00:00:00+00:00
+keywords: OpenAPI, Swagger, OpenAPI v3, WSDL, SOAP, generate mock expectations, spec-driven mocking, OpenAPI request matcher, WSDL mock, SOAP mock
 ---
 
-<p>MockServer supports <a target="_blank" href="https://swagger.io/docs/specification/basic-structure/" rel="noopener noreferrer"><strong>OpenAPI v3.0</strong></a> specifications in either JSON or YAML format.</p>
+<p>MockServer can generate mock expectations automatically from two types of API specification:</p>
+<ul>
+  <li><strong><a target="_blank" href="https://swagger.io/docs/specification/basic-structure/" rel="noopener noreferrer">OpenAPI v3.0 &amp; v3.1</a></strong> — REST/HTTP APIs described in JSON or YAML, including 3.1-specific constructs (<span class="inline_code">$ref</span> siblings, <span class="inline_code">type</span> as an array such as <span class="inline_code">type: [string, "null"]</span>, and the <span class="inline_code">webhooks</span> top-level key). Use OpenAPI specs both to <a href="#generate_expectation_from_openapi">generate expectations</a> and as <a href="/mock_server/getting_started.html#request_openapi_matchers">request matchers</a> for verification and log filtering.</li>
+  <li><strong><a target="_blank" href="https://www.w3.org/TR/wsdl11/" rel="noopener noreferrer">WSDL 1.1</a></strong> — SOAP services. Use WSDL specs to <a href="#generate_expectations_from_wsdl">generate SOAP mock expectations</a>; one expectation is created per operation.</li>
+</ul>
 
-<p><strong>Note:</strong> MockServer uses the <a target="_blank" href="https://github.com/swagger-api/swagger-parser" rel="noopener noreferrer">swagger-parser</a> library, which targets <strong>OpenAPI 3.0.x</strong> and has partial support for <strong>OpenAPI 3.1</strong>. Most 3.1 specifications load, but some 3.1-only constructs (such as <span class="inline_code">$ref</span> siblings, <span class="inline_code">type</span> as an array, and the <span class="inline_code">webhooks</span> top-level key) may not be fully handled. If you hit validation or parsing issues, try converting your specification to OpenAPI 3.0.x.</p>
-
-<p>OpenAPI specifications can be used in <a href="/mock_server/getting_started.html#request_openapi_matchers"><strong>request matchers</strong></a> for</p>
+<p>OpenAPI specifications can be used in <a href="/mock_server/getting_started.html#request_openapi_matchers"><strong>request matchers</strong></a> for:</p>
 <ul>
   <li>expectation <a href="/mock_server/getting_started.html#request_openapi_matchers"><strong>request matchers</strong></a></li>
   <li><a href="/mock_server/verification.html"><strong>verifying requests</strong></a> and <a href="/mock_server/verification.html"><strong>verifying request sequences</strong></a></li>
@@ -24,13 +27,51 @@ sitemap:
   <li>retrieving <a href="/mock_server/debugging_issues.html#retrieving_recorded_logs"><strong>logs</strong></a>, <a href="/mock_server/debugging_issues.html#retrieving_recorded_requests"><strong>recorded requests</strong></a> and <a href="/mock_server/debugging_issues.html#retrieving_active_expectations"><strong>expectations</strong></a></li>
 </ul>
 
-<p>OpenAPI specifications can also be used to <a href="#generate_expectation_from_openapi"><strong>generate expectations</strong></a> with example responses.</p>
+<p>OpenAPI specifications can also be used to <a href="#generate_expectation_from_openapi"><strong>generate expectations</strong></a> with example responses. For SOAP services, see <a href="#generate_expectations_from_wsdl"><strong>Generate Expectations From WSDL (SOAP)</strong></a>.</p>
+
+<a id="generate_response_from_json_schema" class="anchor" href="#generate_response_from_json_schema">&nbsp;</a>
+
+<h2>Generate A Response Body From An Inline JSON Schema</h2>
+
+<p>If you only need a single response with a realistic, type-correct body — and do not want to attach a whole OpenAPI specification — a response can carry a plain <a target="_blank" href="https://json-schema.org" rel="noopener noreferrer">JSON Schema</a> directly using the <span class="inline_code">generateFromSchema</span> field. At response time MockServer generates a schema-valid JSON body from it, using the same example generator as the OpenAPI path, so the generated body honours <span class="inline_code">type</span>, <span class="inline_code">required</span>, <span class="inline_code">enum</span>, <span class="inline_code">default</span>, arrays and nested objects.</p>
+
+<p>This is only used when the response has no explicit <span class="inline_code">body</span> — an explicit body always takes precedence — and a schema that cannot be parsed simply leaves the body unset (and is logged) rather than failing the request.</p>
+
+<pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withPath("/users/1")
+    )
+    .respond(
+        response()
+            .withStatusCode(200)
+            .withGenerateFromSchema("{" +
+                "\"type\":\"object\"," +
+                "\"required\":[\"id\",\"status\"]," +
+                "\"properties\":{" +
+                "\"id\":{\"type\":\"integer\"}," +
+                "\"status\":{\"type\":\"string\",\"enum\":[\"ACTIVE\",\"DISABLED\"]}," +
+                "\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}" +
+                "}}")
+    );</code></pre>
+
+<p>The same field is available in the expectation JSON, for example:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "path": "/users/1"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "generateFromSchema": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}}}"
+    }
+}</code></pre>
 
 <a id="generate_expectation_from_openapi" class="anchor" href="#generate_expectation_from_openapi">&nbsp;</a>
 
 <h2>Generate Expectations From OpenAPI</h2>
 
-<p>MockServer supports <strong>open api expectations</strong> containing the follow fields:</p>
+<p>MockServer supports <strong>open api expectations</strong> containing the following fields:</p>
 <ul>
     <li><strong>specUrlOrPayload</strong> - mandatory value containing an <a target="_blank" href="https://swagger.io/docs/specification/basic-structure/" rel="noopener noreferrer"><strong>OpenAPI v3</strong></a> specifications in either JSON or YAML format as an:
         <ul>
@@ -65,11 +106,6 @@ sitemap:
         </ul>
     </li>
 </ul>
-
-<p></p>
-
-
-<p></p>
 
 <a id="generate_expectation_from_openapi_example" class="anchor" href="#generate_expectation_from_openapi_example">&nbsp;</a>
 
@@ -165,6 +201,82 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, OpenAPIExpectation
+
+client = MockServerClient("localhost", 1080)
+client.open_api_expectation(OpenAPIExpectation(
+    spec_url_or_payload="https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.open_api_expectation(OpenAPIExpectation.new(
+  spec_url_or_payload: 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json'
+))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "bytes"
+    "net/http"
+)
+
+// Go client submits OpenAPI expectations as raw JSON via the REST API
+body := []byte(`{
+    "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+}`)
+resp, err := http.DefaultClient.Do(
+    must(http.NewRequest("PUT", "http://localhost:1080/mockserver/openapi", bytes.NewReader(body))),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// .NET client submits OpenAPI expectations as raw JSON via the REST API
+using var httpClient = new HttpClient();
+var json = @"{
+    ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json""
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/openapi",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">// Rust client submits OpenAPI expectations as raw JSON via the REST API
+let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/openapi")
+    .header("Content-Type", "application/json")
+    .body(r#"{
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    }"#)
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">// PHP client submits OpenAPI expectations as raw JSON via the REST API
+$ch = curl_init('http://localhost:1080/mockserver/openapi');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$result = curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/openapi" -d '{
@@ -207,6 +319,106 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, OpenAPIExpectation
+
+client = MockServerClient("localhost", 1080)
+client.open_api_expectation(OpenAPIExpectation(
+    spec_url_or_payload="https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+    operations_and_responses={
+        "showPetById": "200",
+        "createPets": "500"
+    }
+))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.open_api_expectation(OpenAPIExpectation.new(
+  spec_url_or_payload: 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+  operations_and_responses: {
+    'showPetById' =&gt; '200',
+    'createPets' =&gt; '500'
+  }
+))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "bytes"
+    "net/http"
+)
+
+// Go client submits OpenAPI expectations as raw JSON via the REST API
+body := []byte(`{
+    "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+    "operationsAndResponses": {
+        "showPetById": "200",
+        "createPets": "500"
+    }
+}`)
+resp, err := http.DefaultClient.Do(
+    must(http.NewRequest("PUT", "http://localhost:1080/mockserver/openapi", bytes.NewReader(body))),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// .NET client submits OpenAPI expectations as raw JSON via the REST API
+using var httpClient = new HttpClient();
+var json = @"{
+    ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"",
+    ""operationsAndResponses"": {
+        ""showPetById"": ""200"",
+        ""createPets"": ""500""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/openapi",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">// Rust client submits OpenAPI expectations as raw JSON via the REST API
+let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/openapi")
+    .header("Content-Type", "application/json")
+    .body(r#"{
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+        "operationsAndResponses": {
+            "showPetById": "200",
+            "createPets": "500"
+        }
+    }"#)
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">// PHP client submits OpenAPI expectations as raw JSON via the REST API
+$ch = curl_init('http://localhost:1080/mockserver/openapi');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+        'operationsAndResponses' =&gt; [
+            'showPetById' =&gt; '200',
+            'createPets' =&gt; '500',
+        ],
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$result = curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/openapi" -d '{
@@ -226,7 +438,7 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .upsert(
         openAPIExpectation(
-            "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+            "file:/path/to/openapi_petstore_example.json"
         )
     );</code></pre>
     </div>
@@ -234,7 +446,7 @@ mockServerClient("localhost", 1080).openAPIExpectation({
     <div class="panel">
         <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
 mockServerClient("localhost", 1080).openAPIExpectation({
-    "specUrlOrPayload": "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+    "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
 }).then(
     function () {
         console.log("expectation created");
@@ -245,10 +457,82 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, OpenAPIExpectation
+
+client = MockServerClient("localhost", 1080)
+client.open_api_expectation(OpenAPIExpectation(
+    spec_url_or_payload="file:/path/to/openapi_petstore_example.json"
+))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.open_api_expectation(OpenAPIExpectation.new(
+  spec_url_or_payload: 'file:/path/to/openapi_petstore_example.json'
+))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "bytes"
+    "net/http"
+)
+
+body := []byte(`{
+    "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
+}`)
+resp, err := http.DefaultClient.Do(
+    must(http.NewRequest("PUT", "http://localhost:1080/mockserver/openapi", bytes.NewReader(body))),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""specUrlOrPayload"": ""file:/path/to/openapi_petstore_example.json""
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/openapi",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/openapi")
+    .header("Content-Type", "application/json")
+    .body(r#"{
+        "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
+    }"#)
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$ch = curl_init('http://localhost:1080/mockserver/openapi');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'specUrlOrPayload' =&gt; 'file:/path/to/openapi_petstore_example.json',
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$result = curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/openapi" -d '{
-    "specUrlOrPayload": "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+    "specUrlOrPayload": "file:/path/to/openapi_petstore_example.json"
 }'</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
@@ -277,6 +561,85 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, OpenAPIExpectation
+
+client = MockServerClient("localhost", 1080)
+client.open_api_expectation(OpenAPIExpectation(
+    spec_url_or_payload="org/mockserver/openapi/openapi_petstore_example.json"
+))</code></pre>
+        <p><em>Note: classpath locations are resolved by the server-side JVM; the Python client sends the string as-is.</em></p>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.open_api_expectation(OpenAPIExpectation.new(
+  spec_url_or_payload: 'org/mockserver/openapi/openapi_petstore_example.json'
+))</code></pre>
+        <p><em>Note: classpath locations are resolved by the server-side JVM; the Ruby client sends the string as-is.</em></p>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "bytes"
+    "net/http"
+)
+
+// Classpath locations are resolved by the server-side JVM
+body := []byte(`{
+    "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+}`)
+resp, err := http.DefaultClient.Do(
+    must(http.NewRequest("PUT", "http://localhost:1080/mockserver/openapi", bytes.NewReader(body))),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// Classpath locations are resolved by the server-side JVM
+using var httpClient = new HttpClient();
+var json = @"{
+    ""specUrlOrPayload"": ""org/mockserver/openapi/openapi_petstore_example.json""
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/openapi",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">// Classpath locations are resolved by the server-side JVM
+let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/openapi")
+    .header("Content-Type", "application/json")
+    .body(r#"{
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
+    }"#)
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">// Classpath locations are resolved by the server-side JVM; the PHP client sends the string as-is
+$ch = curl_init('http://localhost:1080/mockserver/openapi');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'specUrlOrPayload' =&gt; 'org/mockserver/openapi/openapi_petstore_example.json',
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$result = curl_exec($ch);
+curl_close($ch);</code></pre>
+        <p><em>Note: classpath locations are resolved by the server-side JVM; the PHP client sends the string as-is.</em></p>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/openapi" -d '{
@@ -291,7 +654,7 @@ mockServerClient("localhost", 1080).openAPIExpectation({
     <div class="panel">
 <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .upsert(
-        openAPIExpectation(FileReader.readFileFromClassPathOrPath("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"))
+        openAPIExpectation(FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json"))
     );</code></pre>
     </div>
     <button class="accordion inner">JavaScript</button>
@@ -300,7 +663,7 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 try {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080).openAPIExpectation({
-        "specUrlOrPayload": fs.readFileSync("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json", "utf8")
+        "specUrlOrPayload": fs.readFileSync("/path/to/openapi_petstore_example.json", "utf8")
     }).then(
         function () {
             console.log("expectation created");
@@ -314,10 +677,101 @@ try {
 }</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import json
+from mockserver import MockServerClient, OpenAPIExpectation
+
+with open("/path/to/openapi_petstore_example.json") as f:
+    spec_content = f.read()
+
+client = MockServerClient("localhost", 1080)
+client.open_api_expectation(OpenAPIExpectation(
+    spec_url_or_payload=spec_content
+))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+spec_content = File.read('/path/to/openapi_petstore_example.json')
+
+client = MockServer::Client.new('localhost', 1080)
+client.open_api_expectation(OpenAPIExpectation.new(
+  spec_url_or_payload: spec_content
+))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+    "os"
+)
+
+specContent, err := os.ReadFile("/path/to/openapi_petstore_example.json")
+if err != nil {
+    log.Fatal(err)
+}
+
+payload, _ := json.Marshal(map[string]string{
+    "specUrlOrPayload": string(specContent),
+})
+resp, err := http.DefaultClient.Do(
+    must(http.NewRequest("PUT", "http://localhost:1080/mockserver/openapi", bytes.NewReader(payload))),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+var specContent = File.ReadAllText("/path/to/openapi_petstore_example.json");
+var payload = JsonSerializer.Serialize(new { specUrlOrPayload = specContent });
+using var httpClient = new HttpClient();
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/openapi",
+    new StringContent(payload, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use std::fs;
+
+let spec_content = fs::read_to_string("/path/to/openapi_petstore_example.json").unwrap();
+let payload = serde_json::json!({ "specUrlOrPayload": spec_content });
+
+let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/openapi")
+    .header("Content-Type", "application/json")
+    .json(&amp;payload)
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$specContent = file_get_contents('/path/to/openapi_petstore_example.json');
+
+$ch = curl_init('http://localhost:1080/mockserver/openapi');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'specUrlOrPayload' =&gt; $specContent,
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$result = curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/openapi" -d "{
-    \"specUrlOrPayload\": `cat /Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json`
+    \"specUrlOrPayload\": `cat /path/to/openapi_petstore_example.json`
 }"</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
@@ -722,6 +1176,58 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 
 <p>This means you can safely call <span class="inline_code">PUT /mockserver/openapi</span> on every test run or CI build &mdash; you will always end up with a consistent set of mock expectations matching the current spec, with no stale duplicates.</p>
 
+<a id="contract_testing" class="anchor" href="#contract_testing">&nbsp;</a>
+
+<h2>Contract Testing Against a Live Service</h2>
+
+<p>MockServer can run an OpenAPI specification as a set of contract tests against a real, running service. For each operation in the spec, MockServer builds a representative example request (using path, query, header, and body examples from the spec), sends it to the target service, and validates the response against the spec. This is useful for confirming that a deployed service still conforms to the contract its consumers rely on.</p>
+
+<p>Submit the request to the <span class="inline_code">PUT /mockserver/contractTest</span> endpoint with a JSON body containing:</p>
+
+<ul>
+    <li><span class="inline_code">spec</span> &mdash; required; a URL, file path, or inline JSON/YAML OpenAPI specification (the alias <span class="inline_code">specUrlOrPayload</span> is also accepted)</li>
+    <li><span class="inline_code">baseUrl</span> &mdash; required; the base URL of the service under test, e.g. <span class="inline_code">http://localhost:8080</span> (a path prefix in the base URL is prepended to each operation path)</li>
+    <li><span class="inline_code">operationId</span> &mdash; optional; restricts the run to a single operation</li>
+</ul>
+
+<p>Example request body:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "spec": "https://petstore.swagger.io/v2/swagger.json",
+    "baseUrl": "http://localhost:8080",
+    "operationId": "listPets"
+}</code></pre>
+
+<p>MockServer returns HTTP 200 with a structured pass/fail-per-operation report:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "baseUrl": "http://localhost:8080",
+    "totalOperations": 3,
+    "passed": 2,
+    "failed": 1,
+    "allPassed": false,
+    "results": [
+        {
+            "operationId": "listPets",
+            "method": "get",
+            "path": "/pets",
+            "statusCodeReceived": 200,
+            "passed": true,
+            "validationErrors": []
+        },
+        {
+            "operationId": "showPetById",
+            "method": "get",
+            "path": "/pets/{petId}",
+            "statusCodeReceived": 200,
+            "passed": false,
+            "validationErrors": ["Object instance has properties which are not allowed by the schema: [\"extra\"]"]
+        }
+    ]
+}</code></pre>
+
+<p>Each result reports the operation tested, the status code received, whether the response conformed to the spec, and any validation errors. The target host is subject to the same SSRF protection as the forward and replay paths &mdash; see <span class="inline_code">forwardProxyBlockPrivateNetworks</span>.</p>
+
 <a id="openapi_callbacks" class="anchor" href="#openapi_callbacks">&nbsp;</a>
 
 <h2>OpenAPI Callbacks (Webhooks)</h2>
@@ -796,33 +1302,207 @@ mockServerClient("localhost", 1080).openAPIExpectation({
 
 <h2>Generate Expectations From WSDL (SOAP)</h2>
 
-<p>MockServer supports <strong>WSDL 1.1</strong> documents as an alternative to OpenAPI for generating mock expectations. Submitting a WSDL causes MockServer to create one expectation per SOAP operation found across all service/port bindings in the document.</p>
+<p>MockServer supports <strong>WSDL 1.1</strong> documents for generating SOAP mock expectations. Submitting a WSDL to the <span class="inline_code">PUT /mockserver/wsdl</span> endpoint causes MockServer to create one expectation per SOAP operation found across all service/port bindings in the document.</p>
 
 <p>Both <strong>SOAP 1.1</strong> and <strong>SOAP 1.2</strong> bindings are supported. Each generated expectation:</p>
 <ul>
-    <li><strong>Matches</strong> <span class="inline_code">POST</span> requests to the path taken from the <span class="inline_code">soap:address</span> (or <span class="inline_code">soap12:address</span>) <span class="inline_code">location</span> attribute, plus one of:
+    <li><strong>Matches</strong> <span class="inline_code">POST</span> requests to the path derived from the <span class="inline_code">soap:address</span> (or <span class="inline_code">soap12:address</span>) <span class="inline_code">location</span> attribute in the WSDL, plus one of:
         <ul>
             <li>the <span class="inline_code">SOAPAction</span> header (SOAP 1.1), when a <span class="inline_code">soapAction</span> is declared on the binding operation;</li>
-            <li>the <span class="inline_code">action</span> parameter of the <span class="inline_code">content-type</span> header (SOAP 1.2), when a <span class="inline_code">soapAction</span> is declared;</li>
+            <li>the <span class="inline_code">action</span> parameter in the <span class="inline_code">content-type</span> header (SOAP 1.2), when a <span class="inline_code">soapAction</span> is declared;</li>
             <li>or an XPath body check on the operation element local-name (fallback when no SOAP action is declared in the WSDL).</li>
         </ul>
     </li>
     <li><strong>Responds</strong> with HTTP 200 and a skeleton SOAP envelope containing a <span class="inline_code">&lt;{Operation}Response/&gt;</span> element in the WSDL target namespace.</li>
 </ul>
 
-<p>The WSDL document is parsed with XXE protections (DOCTYPE and external entity resolution disabled) so that importing an untrusted WSDL cannot trigger an XML External Entity attack.</p>
+<p>The WSDL document is parsed with XXE protections (DOCTYPE and external entity resolution disabled), so importing an untrusted WSDL cannot trigger an XML External Entity (XXE) attack.</p>
 
-<p>MockServer returns HTTP 201 with the created expectations as JSON.</p>
+<p>Unlike OpenAPI, WSDL import has no dedicated typed client method — all language clients submit the raw WSDL XML directly to the REST endpoint <span class="inline_code">PUT /mockserver/wsdl</span>. MockServer returns HTTP 201 with the created expectations as JSON.</p>
 
 <a id="generate_expectations_from_wsdl_example" class="anchor" href="#generate_expectations_from_wsdl_example">&nbsp;</a>
 
-<button id="button_wsdl_rest" class="accordion">generate expectations from a WSDL document</button>
+<p>For example, given this minimal WSDL for a <span class="inline_code">WeatherService</span>:</p>
+
+<pre class="prettyprint lang-xml code"><code class="code">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+             xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+             xmlns:tns="http://example.com/weather"
+             targetNamespace="http://example.com/weather"
+             name="WeatherService"&gt;
+  &lt;message name="GetWeatherRequest"/&gt;
+  &lt;message name="GetWeatherResponse"/&gt;
+  &lt;portType name="WeatherPortType"&gt;
+    &lt;operation name="GetWeather"&gt;
+      &lt;input message="tns:GetWeatherRequest"/&gt;
+      &lt;output message="tns:GetWeatherResponse"/&gt;
+    &lt;/operation&gt;
+  &lt;/portType&gt;
+  &lt;binding name="WeatherBinding" type="tns:WeatherPortType"&gt;
+    &lt;soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/&gt;
+    &lt;operation name="GetWeather"&gt;
+      &lt;soap:operation soapAction="http://example.com/GetWeather"/&gt;
+      &lt;input&gt;&lt;soap:body use="literal"/&gt;&lt;/input&gt;
+      &lt;output&gt;&lt;soap:body use="literal"/&gt;&lt;/output&gt;
+    &lt;/operation&gt;
+  &lt;/binding&gt;
+  &lt;service name="WeatherService"&gt;
+    &lt;port name="WeatherPort" binding="tns:WeatherBinding"&gt;
+      &lt;soap:address location="http://localhost/ws/weather"/&gt;
+    &lt;/port&gt;
+  &lt;/service&gt;
+&lt;/definitions&gt;</code></pre>
+
+<p>MockServer generates an expectation that matches <span class="inline_code">POST /ws/weather</span> with <span class="inline_code">SOAPAction: "http://example.com/GetWeather"</span> and returns a skeleton SOAP response:</p>
+
+<pre class="prettyprint lang-xml code"><code class="code">&lt;soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:tns="http://example.com/weather"&gt;
+  &lt;soapenv:Body&gt;
+    &lt;tns:GetWeatherResponse/&gt;
+  &lt;/soapenv:Body&gt;
+&lt;/soapenv:Envelope&gt;</code></pre>
+
+<button id="button_wsdl_file" class="accordion">generate expectations from a WSDL file</button>
+<div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// The Java client has no dedicated WSDL method; use an HTTP client to call the REST endpoint directly
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+
+byte[] wsdlBytes = Files.readAllBytes(Paths.get("/path/to/my-service.wsdl"));
+HttpClient httpClient = HttpClient.newHttpClient();
+HttpRequest request = HttpRequest.newBuilder()
+    .uri(URI.create("http://localhost:1080/mockserver/wsdl"))
+    .header("Content-Type", "text/xml")
+    .PUT(HttpRequest.BodyPublishers.ofByteArray(wsdlBytes))
+    .build();
+HttpResponse&lt;String&gt; response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+// response.statusCode() == 201; response.body() contains the generated expectations as JSON</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">const fs = require('fs');
+const fetch = require('node-fetch'); // or use the built-in fetch in Node 18+
+
+const wsdl = fs.readFileSync('/path/to/my-service.wsdl', 'utf8');
+const response = await fetch('http://localhost:1080/mockserver/wsdl', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/xml' },
+    body: wsdl,
+});
+// response.status === 201; response.json() returns the generated expectations</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import requests
+
+with open('/path/to/my-service.wsdl', 'rb') as f:
+    wsdl = f.read()
+
+response = requests.put(
+    'http://localhost:1080/mockserver/wsdl',
+    data=wsdl,
+    headers={'Content-Type': 'text/xml'},
+)
+# response.status_code == 201; response.json() returns the generated expectations</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+
+wsdl = File.read('/path/to/my-service.wsdl')
+uri  = URI('http://localhost:1080/mockserver/wsdl')
+http = Net::HTTP.new(uri.host, uri.port)
+request = Net::HTTP::Put.new(uri.path, 'Content-Type' =&gt; 'text/xml')
+request.body = wsdl
+response = http.request(request)
+# response.code == '201'; JSON.parse(response.body) returns the generated expectations</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "bytes"
+    "net/http"
+    "os"
+)
+
+wsdl, err := os.ReadFile("/path/to/my-service.wsdl")
+if err != nil {
+    log.Fatal(err)
+}
+req, _ := http.NewRequest("PUT", "http://localhost:1080/mockserver/wsdl", bytes.NewReader(wsdl))
+req.Header.Set("Content-Type", "text/xml")
+resp, err := http.DefaultClient.Do(req)
+// resp.StatusCode == 201; decode resp.Body as JSON to read the generated expectations</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
+
+var wsdl = File.ReadAllBytes("/path/to/my-service.wsdl");
+using var httpClient = new HttpClient();
+var content = new ByteArrayContent(wsdl);
+content.Headers.ContentType = new MediaTypeHeaderValue("text/xml");
+var response = await httpClient.PutAsync("http://localhost:1080/mockserver/wsdl", content);
+// response.StatusCode == HttpStatusCode.Created (201)
+// await response.Content.ReadAsStringAsync() returns the generated expectations as JSON</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let wsdl = std::fs::read("/path/to/my-service.wsdl").unwrap();
+let client = reqwest::blocking::Client::new();
+let response = client.put("http://localhost:1080/mockserver/wsdl")
+    .header("Content-Type", "text/xml")
+    .body(wsdl)
+    .send()
+    .unwrap();
+// response.status() == 201; response.text() contains the generated expectations as JSON</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$wsdl = file_get_contents('/path/to/my-service.wsdl');
+
+$ch = curl_init('http://localhost:1080/mockserver/wsdl');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_HTTPHEADER    =&gt; ['Content-Type: text/xml'],
+    CURLOPT_POSTFIELDS    =&gt; $wsdl,
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$result = curl_exec($ch);
+$info   = curl_getinfo($ch);
+curl_close($ch);
+// $info['http_code'] == 201; $result contains the generated expectations as JSON</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/wsdl" \
+  -H "Content-Type: text/xml" \
+  --data-binary @my-service.wsdl</code></pre>
+        <p>The request body must be a raw WSDL 1.1 XML document. MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+    </div>
+</div>
+<button id="button_wsdl_inline" class="accordion">generate expectations from an inline WSDL string</button>
 <div class="panel">
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/wsdl" \
-  -H "content-type: text/xml" \
-  --data-binary @my-service.wsdl</code></pre>
-        <p>The request body must be a raw WSDL 1.1 XML document. MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+  -H "Content-Type: text/xml" \
+  -d '&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;definitions xmlns="http://schemas.xmlsoap.org/wsdl/"
+             xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+             xmlns:tns="http://example.com/weather"
+             targetNamespace="http://example.com/weather"
+             name="WeatherService"&gt;
+  ...
+&lt;/definitions&gt;'</code></pre>
+        <p>Pass the full WSDL XML as the request body with <span class="inline_code">Content-Type: text/xml</span>.</p>
     </div>
 </div>

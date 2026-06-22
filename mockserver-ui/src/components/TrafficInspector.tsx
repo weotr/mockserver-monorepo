@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useRef, memo } from 'react';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
@@ -18,13 +18,17 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import SearchIcon from '@mui/icons-material/Search';
 import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import ReplayIcon from '@mui/icons-material/Replay';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import { useDashboardStore } from '../store';
 import { useConnectionParams } from '../hooks/useConnectionParams';
+import { useDragResize } from '../hooks/useDragResize';
 import JsonViewer from './JsonViewer';
+import ErrorBoundary from './ErrorBoundary';
 import CaptureAsMockDialog from './CaptureAsMockDialog';
 import DiffRequestsDialog from './DiffRequestsDialog';
 import LlmUsageDetail from './LlmUsageDetail';
@@ -39,7 +43,10 @@ import {
 import type { ScriptedTurn } from './ConversationView';
 import type { JsonListItem } from '../types';
 import { isCapturableTraffic } from '../lib/expectationFromCapture';
-import { buildBaseUrl } from '../lib/mcpClient';
+import { replayRequests } from '../lib/replay';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import HumanErrorAlert from './HumanErrorAlert';
+import { monospaceFontFamily, transitions } from '../theme';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import {
   summarizeTraffic,
@@ -98,15 +105,7 @@ function kindColor(parsed: ParsedTraffic): 'primary' | 'secondary' | 'info' | 'd
 // Scripted turns extraction from active expectations
 // ---------------------------------------------------------------------------
 
-const SCENARIO_STATE_ORDER: Record<string, number> = { Started: 0 };
-
-function scenarioStateSortKey(state: string): number {
-  if (state in SCENARIO_STATE_ORDER) return SCENARIO_STATE_ORDER[state]!;
-  const match = /turn_(\d+)/.exec(state);
-  if (match) return parseInt(match[1]!, 10) + 1;
-  if (state === '__done') return 999999;
-  return 500000; // unknown states sort near the end
-}
+import { scenarioStateSortKey } from '../lib/scenarioState';
 
 /**
  * Gather scripted turns from expectations sharing the same scenarioName.
@@ -185,6 +184,38 @@ function gatherScriptedTurns(expectations: JsonListItem[]): ScriptedTurn[] {
 // Search match helper
 // ---------------------------------------------------------------------------
 
+// Per-item parse cache. `summarizeTraffic` fully parses + reassembles SSE streams
+// and base64-decodes bodies; the store replaces the traffic arrays on every
+// WebSocket push but preserves each unchanged item's `value` reference
+// (reconcileByKey), so caching on that reference avoids re-parsing every captured
+// request on every push and on every search keystroke. The WeakMap lets entries
+// be collected once the item object is gone.
+const summaryCache = new WeakMap<Record<string, unknown>, TrafficSummary>();
+
+function cachedSummarize(value: Record<string, unknown>): TrafficSummary {
+  const hit = summaryCache.get(value);
+  if (hit) return hit;
+  const summary = summarizeTraffic(value);
+  summaryCache.set(value, summary);
+  return summary;
+}
+
+// Per-item lowercased full-text search index. The fallback branch of
+// `matchesSearch` previously re-ran `JSON.stringify(item.value).toLowerCase()`
+// for every non-field-matching row on every search keystroke. Caching the
+// stringified+lowercased text on the item's `value` reference (preserved across
+// WebSocket pushes by reconcileByKey, like `summaryCache`) means each item is
+// stringified at most once regardless of how many keystrokes the user types.
+const searchTextCache = new WeakMap<Record<string, unknown>, string>();
+
+function cachedSearchText(value: Record<string, unknown>): string {
+  const hit = searchTextCache.get(value);
+  if (hit !== undefined) return hit;
+  const text = JSON.stringify(value).toLowerCase();
+  searchTextCache.set(value, text);
+  return text;
+}
+
 function matchesSearch(item: JsonListItem, summary: TrafficSummary, term: string): boolean {
   const lower = term.toLowerCase();
   const parts = [
@@ -196,7 +227,7 @@ function matchesSearch(item: JsonListItem, summary: TrafficSummary, term: string
     kindLabel(summary.parsed),
   ].filter(Boolean);
   if (parts.some((p) => p!.toLowerCase().includes(lower))) return true;
-  return JSON.stringify(item.value).toLowerCase().includes(lower);
+  return cachedSearchText(item.value).includes(lower);
 }
 
 // ---------------------------------------------------------------------------
@@ -205,21 +236,34 @@ function matchesSearch(item: JsonListItem, summary: TrafficSummary, term: string
 
 interface TrafficRowProps {
   summary: TrafficSummary;
+  /** Stable identity of the request this row renders; passed back to the handlers. */
+  itemKey: string;
   index: number;
   selected: boolean;
-  onClick: () => void;
+  /** Stable handler — receives this row's `itemKey`. */
+  onSelect: (key: string) => void;
   /** When set, a comparison checkbox is rendered and reflects this checked state. */
   compareMode?: boolean;
   compareChecked?: boolean;
   compareDisabled?: boolean;
-  onCompareToggle?: () => void;
+  /** Stable handler — receives this row's `itemKey`. */
+  onCompareToggle?: (key: string) => void;
 }
 
-function TrafficRow({
+// `TrafficRow` is wrapped in `React.memo` (see the `export`/assignment below) so
+// that re-rendering the parent (e.g. a search keystroke, a selection change, or a
+// WebSocket-driven list refresh) only re-renders the rows whose props actually
+// changed. For that to hold, the parent passes STABLE handlers that take the
+// row's key (`onSelect`/`onCompareToggle`) rather than fresh per-row arrow
+// closures; the per-row DOM callbacks are re-derived here with `useCallback`
+// keyed on `itemKey`, mirroring the `entryKey`/`onToggleExpand` pattern used by
+// the memoized `LogEntry`.
+function TrafficRowImpl({
   summary,
+  itemKey,
   index,
   selected,
-  onClick,
+  onSelect,
   compareMode,
   compareChecked,
   compareDisabled,
@@ -229,9 +273,15 @@ function TrafficRow({
   const tokens = getTokenSummary(summary.parsed);
   const timingLabel = getTimingLabel(summary.timing);
 
+  const handleClick = useCallback(() => onSelect(itemKey), [onSelect, itemKey]);
+  const handleCompareToggle = useCallback(
+    () => onCompareToggle?.(itemKey),
+    [onCompareToggle, itemKey],
+  );
+
   return (
     <Box
-      onClick={onClick}
+      onClick={handleClick}
       sx={{
         display: 'flex',
         alignItems: 'center',
@@ -240,6 +290,7 @@ function TrafficRow({
         py: 0.5,
         cursor: 'pointer',
         bgcolor: selected ? 'action.selected' : 'transparent',
+        transition: transitions.forProps(['background-color']),
         '&:hover': { bgcolor: selected ? 'action.selected' : 'action.hover' },
         borderBottom: 1,
         borderColor: 'divider',
@@ -253,14 +304,14 @@ function TrafficRow({
           checked={!!compareChecked}
           disabled={!compareChecked && compareDisabled}
           onClick={(e) => e.stopPropagation()}
-          onChange={() => onCompareToggle?.()}
+          onChange={handleCompareToggle}
           slotProps={{ input: { 'aria-label': `Select request ${index} to compare` } }}
           sx={{ p: 0.25, flexShrink: 0 }}
         />
       )}
       <Typography
         variant="caption"
-        sx={{ fontFamily: 'monospace', color: 'text.secondary', minWidth: 24, flexShrink: 0 }}
+        sx={{ fontFamily: monospaceFontFamily, color: 'text.secondary', minWidth: 24, flexShrink: 0 }}
       >
         {index}
       </Typography>
@@ -274,7 +325,7 @@ function TrafficRow({
       <Typography
         variant="caption"
         sx={{
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           fontWeight: 600,
           color: 'primary.main',
           flexShrink: 0,
@@ -282,19 +333,21 @@ function TrafficRow({
       >
         {summary.method ?? '?'}
       </Typography>
-      <Typography
-        variant="caption"
-        noWrap
-        sx={{
-          fontFamily: 'monospace',
-          flex: 1,
-          minWidth: 80,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-        }}
-      >
-        {summary.host ? `${summary.host}` : ''}{summary.path ?? ''}
-      </Typography>
+      <Tooltip title={`${summary.host ?? ''}${summary.path ?? ''}`}>
+        <Typography
+          variant="caption"
+          noWrap
+          sx={{
+            fontFamily: monospaceFontFamily,
+            flex: 1,
+            minWidth: 80,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {summary.host ? `${summary.host}` : ''}{summary.path ?? ''}
+        </Typography>
+      </Tooltip>
       {summary.statusCode !== null && (
         <Chip
           label={summary.statusCode}
@@ -329,6 +382,8 @@ function TrafficRow({
   );
 }
 
+const TrafficRow = memo(TrafficRowImpl);
+
 // ---------------------------------------------------------------------------
 // Messages panel: Anthropic
 // ---------------------------------------------------------------------------
@@ -341,7 +396,7 @@ function AnthropicMessagesPanel({ parsed }: { parsed: AnthropicParsed }) {
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>System</Typography>
           <Box sx={{ mt: 0.5 }}>
             {typeof parsed.system === 'string' ? (
-              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.75rem', whiteSpace: 'pre-wrap' }}>
+              <Typography variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.75rem', whiteSpace: 'pre-wrap' }}>
                 {parsed.system}
               </Typography>
             ) : (
@@ -576,7 +631,7 @@ function SseTimeline({ events }: { events: SseEvent[] }) {
             onClick={() => setExpandedIndex(expandedIndex === i ? null : i)}
           >
             <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-              <Typography variant="caption" sx={{ fontFamily: 'monospace', color: 'text.secondary', minWidth: 24 }}>
+              <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, color: 'text.secondary', minWidth: 24 }}>
                 {i + 1}
               </Typography>
               {evt.event && (
@@ -590,7 +645,7 @@ function SseTimeline({ events }: { events: SseEvent[] }) {
               <Typography
                 variant="caption"
                 noWrap
-                sx={{ fontFamily: 'monospace', fontSize: '0.65rem', color: 'text.secondary', flex: 1 }}
+                sx={{ fontFamily: monospaceFontFamily, fontSize: '0.65rem', color: 'text.secondary', flex: 1 }}
               >
                 {evt.data.length > 80 ? evt.data.slice(0, 80) + '...' : evt.data}
               </Typography>
@@ -601,7 +656,7 @@ function SseTimeline({ events }: { events: SseEvent[] }) {
               </Box>
             )}
             {expandedIndex === i && !parsedData && (
-              <Typography variant="body2" sx={{ mt: 0.5, ml: 3, fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre-wrap' }}>
+              <Typography variant="body2" sx={{ mt: 0.5, ml: 3, fontFamily: monospaceFontFamily, fontSize: '0.7rem', whiteSpace: 'pre-wrap' }}>
                 {evt.data}
               </Typography>
             )}
@@ -751,32 +806,21 @@ interface ReplayDialogProps {
 function ReplayDialog({ open, onClose, item, connectionParams }: ReplayDialogProps) {
   const [loading, setLoading] = useState(false);
   const [replayResponse, setReplayResponse] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
 
   const handleReplay = useCallback(async () => {
     setLoading(true);
     setError(null);
     setReplayResponse(null);
     try {
-      const baseUrl = buildBaseUrl(connectionParams);
       const httpRequest = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
-      const res = await fetch(`${baseUrl}/mockserver/replay`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(httpRequest),
-      });
-      const text = await res.text();
-      if (res.ok) {
-        try {
-          setReplayResponse(JSON.parse(text));
-        } catch {
-          setReplayResponse({ body: text });
-        }
-      } else {
-        setError(`Replay failed (${res.status}): ${text}`);
-      }
+      const result = await replayRequests(connectionParams, httpRequest);
+      setReplayResponse(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // Route both server rejections (ReplayError) and network failures through
+      // the shared humaniser so the displayed message is consistent and actionable,
+      // with the raw server body kept behind a Details expander.
+      setError(humanizeError(err));
     } finally {
       setLoading(false);
     }
@@ -786,21 +830,30 @@ function ReplayDialog({ open, onClose, item, connectionParams }: ReplayDialogPro
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ fontSize: '0.95rem' }}>Replay Request</DialogTitle>
       <DialogContent dividers>
-        {!replayResponse && !error && !loading && (
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Re-issue this request to its original target and view the response.
-          </Typography>
-        )}
+        {!replayResponse && !error && !loading && (() => {
+          const httpRequest = (item.value['httpRequest'] as Record<string, unknown> | undefined) ?? {};
+          const method = typeof httpRequest['method'] === 'string' ? httpRequest['method'] : 'GET';
+          const isNonGet = method !== 'GET';
+          return (
+            <>
+              <Alert severity="warning" sx={{ mb: 1 }}>
+                This will make a real outbound HTTP request to the original upstream target.
+                {isNonGet && ` The method is ${method}, which may mutate state or incur costs (e.g. LLM API charges).`}
+                {!isNonGet && ' It may incur costs if the target is a paid API (e.g. LLM provider).'}
+              </Alert>
+            </>
+          );
+        })()}
         {loading && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2 }}>
             <CircularProgress size={20} />
             <Typography variant="body2">Sending request...</Typography>
           </Box>
         )}
-        {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+        {error && <HumanErrorAlert error={error} sx={{ mb: 1 }} />}
         {replayResponse && (
           <Box sx={{ mt: 1 }}>
-            <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 600, fontSize: '0.8rem' }}>
+            <Typography variant="subtitle2" sx={{ mb: 0.5, fontWeight: 600 }}>
               Upstream Response
             </Typography>
             <JsonViewer data={replayResponse} collapsed={3} />
@@ -1007,6 +1060,37 @@ export default function TrafficInspector() {
   const selectedKey = useDashboardStore((s) => s.selectedTrafficKey);
   const setSelectedKey = useDashboardStore((s) => s.setSelectedTrafficKey);
   const connectionParams = useConnectionParams();
+  const theme = useTheme();
+  // On narrow screens the side-by-side master/detail split squashes the detail
+  // pane to a sliver; stack master-over-detail (column) on small screens.
+  const stacked = useMediaQuery(theme.breakpoints.down('md'));
+
+  // Side-by-side master/detail split width (pixels), drag-resizable via a
+  // vertical divider between the master list and the detail pane. Persisted so
+  // the chosen width survives reloads. Min keeps the list usable; max is a
+  // generous cap (the detail pane stays flex:1 and re-clamps if the row is
+  // narrower, since computeFromPointer clamps to the live container width).
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const MASTER_MIN = 260;
+  const MASTER_MAX = 900;
+  const masterWidth = useDragResize({
+    orientation: 'vertical',
+    initial: 380,
+    min: MASTER_MIN,
+    max: MASTER_MAX,
+    step: 16,
+    storageKey: 'mockserver-traffic-master-width',
+    ariaLabel: 'Resize traffic list',
+    computeFromPointer: (event) => {
+      const rect = rowRef.current?.getBoundingClientRect();
+      if (!rect) return 380;
+      // Clamp the upper bound to leave at least ~360px for the detail pane.
+      const next = event.clientX - rect.left;
+      const dynamicMax = Math.max(MASTER_MIN, rect.width - 360);
+      return Math.min(next, dynamicMax);
+    },
+  });
+
   const [captureDialogOpen, setCaptureDialogOpen] = useState(false);
   const [replayDialogOpen, setReplayDialogOpen] = useState(false);
 
@@ -1044,7 +1128,7 @@ export default function TrafficInspector() {
     [proxiedRequests, recordedRequests],
   );
   const summaries = useMemo(
-    () => allRequests.map((item) => ({ item, summary: summarizeTraffic(item.value) })),
+    () => allRequests.map((item) => ({ item, summary: cachedSummarize(item.value) })),
     [allRequests],
   );
 
@@ -1072,6 +1156,21 @@ export default function TrafficInspector() {
     [selectedKey, setSelectedKey],
   );
 
+  // Single stable per-row select handler passed to the memoized TrafficRow. In
+  // compare mode a click toggles the comparison selection; otherwise it selects
+  // the row for the detail pane. Keeping this stable (rather than a fresh arrow
+  // per row in the map below) is what lets React.memo skip unchanged rows.
+  const handleRowSelect = useCallback(
+    (key: string) => {
+      if (compareMode) {
+        toggleCompareKey(key);
+      } else {
+        handleRowClick(key);
+      }
+    },
+    [compareMode, toggleCompareKey, handleRowClick],
+  );
+
   // Resolve the two selected requests to the JSON the diff endpoint expects (the request
   // definition — `httpRequest` if present, otherwise the whole captured value). Preserve the
   // user's pick order: the first selected is "expected", the second "actual".
@@ -1095,11 +1194,18 @@ export default function TrafficInspector() {
 
   const canDiff = validCompareKeys.length === 2;
 
+  // The side-by-side master/detail split is user-resizable only when the detail
+  // pane is actually shown (not stacked, an entry selected, not comparing).
+  const resizableSplit = !stacked && Boolean(selectedEntry) && !compareMode;
+
   return (
     <Box
+      ref={rowRef}
       sx={{
         flex: 1,
         display: 'flex',
+        // Stack master-over-detail on small screens, side-by-side on md+.
+        flexDirection: stacked ? 'column' : 'row',
         gap: 1,
         p: 1,
         overflow: 'hidden',
@@ -1112,10 +1218,28 @@ export default function TrafficInspector() {
         sx={{
           display: 'flex',
           flexDirection: 'column',
-          width: selectedEntry && !compareMode ? '40%' : '100%',
-          minWidth: 300,
+          // When stacked, the list takes full width and a bounded share of the
+          // height so the detail pane below it stays usable. Side-by-side with a
+          // detail pane the width is user-resizable (pixels); otherwise full width.
+          width: stacked
+            ? '100%'
+            : resizableSplit
+              ? masterWidth.value
+              : '100%',
+          flexShrink: stacked
+            ? selectedEntry && !compareMode
+              ? 0
+              : undefined
+            : resizableSplit
+              ? 0
+              : undefined,
+          minWidth: stacked ? 0 : 300,
+          height: stacked && selectedEntry && !compareMode ? '45%' : undefined,
           overflow: 'hidden',
-          transition: 'width 0.2s ease',
+          // Disable the width transition while actively dragging so the pane
+          // tracks the pointer 1:1.
+          transition:
+            stacked || masterWidth.dragging ? undefined : 'width 0.2s ease',
         }}
       >
         <Box
@@ -1184,7 +1308,7 @@ export default function TrafficInspector() {
               onClick={() => setDiffDialogOpen(true)}
               sx={{ height: 28, px: 1, fontSize: '0.7rem', textTransform: 'none', flexShrink: 0 }}
             >
-              Diff ({compareKeys.length}/2)
+              Diff ({validCompareKeys.length}/2)
             </Button>
           )}
         </Box>
@@ -1197,21 +1321,44 @@ export default function TrafficInspector() {
             filtered.map(({ item, summary }, index) => (
               <TrafficRow
                 key={item.key}
+                itemKey={item.key}
                 summary={summary}
                 index={filtered.length - index}
-                selected={compareMode ? compareKeys.includes(item.key) : selectedKey === item.key}
-                onClick={() =>
-                  compareMode ? toggleCompareKey(item.key) : handleRowClick(item.key)
-                }
+                selected={compareMode ? validCompareKeys.includes(item.key) : selectedKey === item.key}
+                onSelect={handleRowSelect}
                 compareMode={compareMode}
-                compareChecked={compareKeys.includes(item.key)}
-                compareDisabled={compareKeys.length >= 2}
-                onCompareToggle={() => toggleCompareKey(item.key)}
+                compareChecked={validCompareKeys.includes(item.key)}
+                compareDisabled={validCompareKeys.length >= 2}
+                onCompareToggle={toggleCompareKey}
               />
             ))
           )}
         </Box>
       </Paper>
+
+      {/* Drag handle between master list and detail pane (side-by-side only). */}
+      {resizableSplit && (
+        <Box
+          data-testid="traffic-master-resizer"
+          {...masterWidth.getHandleProps()}
+          sx={{
+            flexShrink: 0,
+            width: 8,
+            mx: -0.5,
+            borderRadius: 1,
+            backgroundColor: 'transparent',
+            transition: theme.transitions.create('background-color', {
+              duration: theme.transitions.duration.shorter,
+            }),
+            '&:hover, &:focus-visible, &:active': {
+              backgroundColor: theme.palette.primary.main,
+              opacity: 0.55,
+            },
+            '&:focus-visible': { outline: 'none' },
+            cursor: 'col-resize',
+          }}
+        />
+      )}
 
       {/* Detail pane (hidden while picking requests to compare) */}
       {selectedEntry && !compareMode && (
@@ -1225,14 +1372,15 @@ export default function TrafficInspector() {
             minWidth: 0,
           }}
         >
-          <DetailPane
-            key={selectedEntry.item.key}
-            item={selectedEntry.item}
-            summary={selectedEntry.summary}
-            scriptedTurns={scriptedTurns}
-            onCaptureAsMock={() => setCaptureDialogOpen(true)}
-            onReplay={() => setReplayDialogOpen(true)}
-          />
+          <ErrorBoundary key={selectedEntry.item.key} label="detail pane">
+            <DetailPane
+              item={selectedEntry.item}
+              summary={selectedEntry.summary}
+              scriptedTurns={scriptedTurns}
+              onCaptureAsMock={() => setCaptureDialogOpen(true)}
+              onReplay={() => setReplayDialogOpen(true)}
+            />
+          </ErrorBoundary>
         </Paper>
       )}
 

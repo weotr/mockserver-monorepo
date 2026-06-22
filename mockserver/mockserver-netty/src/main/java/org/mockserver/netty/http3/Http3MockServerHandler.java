@@ -359,9 +359,31 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
 
         final Expectation matchedExpectation = consumed;
         Runnable completionCallback = () -> httpState.postProcess(matchedExpectation);
+
+        // Resolve an INBOUND_STREAM breakpoint matcher for this bidi stream. Default-off: when no
+        // matcher matches, inboundStreamId stays null and no inbound frames are parked. Mirrors the
+        // HTTP/2 GrpcBidiRouterHandler wiring so HTTP/2 and HTTP/3 bidi share identical semantics.
+        final String inboundStreamId;
+        final String inboundBreakpointClientId;
+        final String inboundBreakpointId;
+        org.mockserver.mock.breakpoint.BreakpointMatcher inboundMatcher =
+            org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance()
+                .findMatch(request, org.mockserver.mock.breakpoint.BreakpointPhase.INBOUND_STREAM);
+        if (inboundMatcher != null) {
+            inboundStreamId = "grpc-bidi-inbound-" + path + "-h3-" + UUIDService.getUUID();
+            inboundBreakpointClientId = inboundMatcher.getClientId();
+            inboundBreakpointId = inboundMatcher.getId();
+        } else {
+            inboundStreamId = null;
+            inboundBreakpointClientId = null;
+            inboundBreakpointId = null;
+        }
+
         bidiHandler = new Http3GrpcBidiStreamHandler(
             ctx, methodDescriptor, descriptorStore.getConverter(),
-            (GrpcBidiResponse) consumed.getAction(), completionCallback, mockServerLogger
+            (GrpcBidiResponse) consumed.getAction(), completionCallback, mockServerLogger,
+            configuration, inboundStreamId, inboundBreakpointClientId, inboundBreakpointId,
+            httpState.getWebSocketClientRegistry()
         );
         bidiHandler.start();
         return true;
@@ -387,7 +409,8 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
             // expectations match, and the response writer will frame
             // grpc-status correctly in trailing HEADERS.
             Http3GrpcResponseWriter grpcResponseWriter = new Http3GrpcResponseWriter(
-                configuration, mockServerLogger, ctx, descriptorStore, null, null
+                configuration, mockServerLogger, ctx, descriptorStore, null, null,
+                httpState.getWebSocketClientRegistry()
             );
             processRequestThroughPipeline(ctx, request, grpcResponseWriter);
             return;
@@ -400,7 +423,8 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
             String grpcService = grpcRequest.getFirstHeader("x-grpc-service");
             String grpcMethod = grpcRequest.getFirstHeader("x-grpc-method");
             Http3GrpcResponseWriter grpcResponseWriter = new Http3GrpcResponseWriter(
-                configuration, mockServerLogger, ctx, descriptorStore, grpcService, grpcMethod
+                configuration, mockServerLogger, ctx, descriptorStore, grpcService, grpcMethod,
+                httpState.getWebSocketClientRegistry()
             );
             processRequestThroughPipeline(ctx, grpcRequest, grpcResponseWriter);
         } catch (GrpcException e) {

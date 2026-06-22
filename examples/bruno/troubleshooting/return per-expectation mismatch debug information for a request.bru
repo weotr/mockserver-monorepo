@@ -1,0 +1,30 @@
+meta {
+  name: return per-expectation mismatch debug information for a request
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/mockserver/debugMismatch
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "method": "GET",
+    "path": "/api/unknown-endpoint"
+  }
+}
+
+docs {
+  Evaluates the supplied HttpRequest against every active expectation and returns, for each, whether it matched and the per-field differences, plus the closest match. Only HttpRequest definitions are supported (not OpenAPI definitions).
+  
+  the request to evaluate against all active expectations
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -23,6 +23,13 @@ import java.util.Objects;
  * deterministic and counts real requests across the process (see
  * {@link org.mockserver.llm.LlmQuotaRegistry}); expectations sharing a
  * {@code quotaName} share one counter.
+ * <p>
+ * A separate <em>token-based</em> quota ({@code tokenQuotaLimit} +
+ * {@code tokenQuotaWindowMillis}) models TPM/TPD limits: the cumulative token
+ * count of each response is charged against the window and a 429 is returned
+ * when the sum exceeds the limit. Both request-count and token quotas can be
+ * active simultaneously on the same profile (they use independent counters
+ * within the registry, namespaced by suffix).
  */
 public class LlmChaosProfile extends ObjectWithJsonToString {
 
@@ -43,6 +50,9 @@ public class LlmChaosProfile extends ObjectWithJsonToString {
     private Integer quotaLimit;        // stateful quota: max requests allowed per window
     private Long quotaWindowMillis;    // stateful quota: window length in milliseconds
     private Integer quotaErrorStatus;  // stateful quota: status when exceeded (default 429)
+    private Long tokenQuotaLimit;     // stateful token quota: max tokens allowed per window (TPM/TPD)
+    private Long tokenQuotaWindowMillis; // stateful token quota: window length in milliseconds
+    private String errorKind;          // optional: OVERLOAD | RATE_LIMIT | SERVER_ERROR -> emit the active provider's error body/status
 
     public static LlmChaosProfile llmChaosProfile() {
         return new LlmChaosProfile();
@@ -176,6 +186,64 @@ public class LlmChaosProfile extends ObjectWithJsonToString {
         return quotaErrorStatus;
     }
 
+    /**
+     * Maximum tokens allowed within the token quota window (TPM or TPD depending
+     * on window size). Requires {@code quotaName} and {@code tokenQuotaWindowMillis}
+     * to be set. Uses the same {@code quotaErrorStatus} and {@code retryAfter} as
+     * the request-count quota.
+     */
+    public LlmChaosProfile withTokenQuotaLimit(Long tokenQuotaLimit) {
+        if (tokenQuotaLimit != null && tokenQuotaLimit < 1) {
+            throw new IllegalArgumentException("tokenQuotaLimit must be >= 1, got " + tokenQuotaLimit);
+        }
+        this.tokenQuotaLimit = tokenQuotaLimit;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Long getTokenQuotaLimit() {
+        return tokenQuotaLimit;
+    }
+
+    /**
+     * Window length in milliseconds for the token-based quota. Requires
+     * {@code quotaName} and {@code tokenQuotaLimit} to be set.
+     */
+    public LlmChaosProfile withTokenQuotaWindowMillis(Long tokenQuotaWindowMillis) {
+        if (tokenQuotaWindowMillis != null && tokenQuotaWindowMillis < 1) {
+            throw new IllegalArgumentException("tokenQuotaWindowMillis must be >= 1, got " + tokenQuotaWindowMillis);
+        }
+        this.tokenQuotaWindowMillis = tokenQuotaWindowMillis;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Long getTokenQuotaWindowMillis() {
+        return tokenQuotaWindowMillis;
+    }
+
+    /**
+     * Optional provider-specific error shape. When set to {@code OVERLOAD},
+     * {@code RATE_LIMIT}, or {@code SERVER_ERROR}, an injected chaos / quota error
+     * emits the <em>active provider's</em> distinct error body (e.g. Anthropic's
+     * {@code overloaded_error} at HTTP 529, OpenAI's {@code rate_limit_exceeded}
+     * envelope), so client SDK retry/backoff logic that parses the body can be
+     * tested faithfully. When unset (or the provider is unknown), the generic
+     * chaos body is used and any explicit {@code errorStatus}/{@code quotaErrorStatus}
+     * still applies. An explicit status, when set, overrides the provider's natural
+     * status for the kind while keeping the provider-correct body. Case-insensitive;
+     * an unrecognised value falls back to the generic body.
+     */
+    public LlmChaosProfile withErrorKind(String errorKind) {
+        this.errorKind = errorKind;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getErrorKind() {
+        return errorKind;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -198,14 +266,17 @@ public class LlmChaosProfile extends ObjectWithJsonToString {
             Objects.equals(quotaName, that.quotaName) &&
             Objects.equals(quotaLimit, that.quotaLimit) &&
             Objects.equals(quotaWindowMillis, that.quotaWindowMillis) &&
-            Objects.equals(quotaErrorStatus, that.quotaErrorStatus);
+            Objects.equals(quotaErrorStatus, that.quotaErrorStatus) &&
+            Objects.equals(tokenQuotaLimit, that.tokenQuotaLimit) &&
+            Objects.equals(tokenQuotaWindowMillis, that.tokenQuotaWindowMillis) &&
+            Objects.equals(errorKind, that.errorKind);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
             hashCode = Objects.hash(errorStatus, retryAfter, errorProbability, truncateMode, truncateAtFraction, malformedSse, seed,
-                quotaName, quotaLimit, quotaWindowMillis, quotaErrorStatus);
+                quotaName, quotaLimit, quotaWindowMillis, quotaErrorStatus, tokenQuotaLimit, tokenQuotaWindowMillis, errorKind);
         }
         return hashCode;
     }

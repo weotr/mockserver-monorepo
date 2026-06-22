@@ -1,0 +1,31 @@
+openapi: 3.0.3
+info:
+  title: XML attribute ordering
+  version: 1.0.0
+paths:
+  /tag:
+    get:
+      operationId: getTag
+      responses:
+        '200':
+          description: a tag
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Tag'
+components:
+  schemas:
+    Tag:
+      type: object
+      xml:
+        name: Tag
+      properties:
+        # element property declared BEFORE the attribute property — the attribute
+        # must still be written immediately after the start element, not dropped
+        name:
+          type: string
+        id:
+          type: integer
+          format: int32
+          xml:
+            attribute: true

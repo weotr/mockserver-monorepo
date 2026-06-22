@@ -143,7 +143,11 @@ else
 fi
 
 log_info "Diff summary:"
-git -C "$REPO_ROOT" diff --stat
+# --no-pager: Buildkite allocates a PTY, so git's stdout is a TTY and a bare
+# `git diff --stat` launches the pager (less), which blocks on input until the
+# job hits its timeout. This is what timed out the Update Version References
+# step in release build #49.
+git -C "$REPO_ROOT" --no-pager diff --stat
 
 if is_dry_run; then
   log_dry "skip: commit + push of version references"

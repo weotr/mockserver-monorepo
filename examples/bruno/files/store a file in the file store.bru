@@ -1,0 +1,30 @@
+meta {
+  name: store a file in the file store
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/files/store
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "template.json",
+    "content": "{\"status\":\"ok\"}"
+  }
+}
+
+docs {
+  stores a file (text or base64-encoded binary) under the supplied name in the in-memory file store
+  
+  file name and content to store
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

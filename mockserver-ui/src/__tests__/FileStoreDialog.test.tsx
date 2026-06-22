@@ -55,6 +55,8 @@ describe('FileStoreDialog', () => {
   it('surfaces a server error from the list call', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error', text: async () => 'boom' }));
     renderDialog();
-    expect(await screen.findByText('boom')).toBeInTheDocument();
+    // The list call now throws the standard `MockServer returned 500: boom` shape, which the dialog
+    // surfaces through humanizeError -> a friendly 5xx message.
+    expect(await screen.findByText('The MockServer encountered an internal error.')).toBeInTheDocument();
   });
 });

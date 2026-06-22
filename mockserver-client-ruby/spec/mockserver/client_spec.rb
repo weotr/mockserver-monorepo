@@ -254,6 +254,36 @@ RSpec.describe MockServer::Client do
       req = MockServer::HttpRequest.new(path: '/test')
       expect { client.verify(req) }.to raise_error(MockServer::Error, /Failed to verify/)
     end
+
+    it 'sends httpResponse when response keyword is given' do
+      stub_request(:put, "#{base_url}/mockserver/verify")
+        .to_return(status: 202, body: '')
+
+      req = MockServer::HttpRequest.new(path: '/test')
+      resp = MockServer::HttpResponse.new(status_code: 200)
+      client.verify(req, response: resp)
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/verify")
+        .with { |r|
+          parsed = JSON.parse(r.body)
+          parsed['httpRequest']['path'] == '/test' &&
+            parsed['httpResponse']['statusCode'] == 200
+        }
+    end
+
+    it 'sends response-only verification (no request)' do
+      stub_request(:put, "#{base_url}/mockserver/verify")
+        .to_return(status: 202, body: '')
+
+      resp = MockServer::HttpResponse.new(status_code: 200)
+      client.verify(response: resp)
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/verify")
+        .with { |r|
+          parsed = JSON.parse(r.body)
+          !parsed.key?('httpRequest') && parsed['httpResponse']['statusCode'] == 200
+        }
+    end
   end
 
   # -------------------------------------------------------------------
@@ -276,6 +306,40 @@ RSpec.describe MockServer::Client do
 
       req = MockServer::HttpRequest.new(path: '/a')
       expect { client.verify_sequence(req) }.to raise_error(MockServer::VerificationError)
+    end
+
+    it 'sends index-aligned httpRequests and httpResponses' do
+      stub_request(:put, "#{base_url}/mockserver/verifySequence")
+        .to_return(status: 202, body: '')
+
+      req1 = MockServer::HttpRequest.new(path: '/a')
+      req2 = MockServer::HttpRequest.new(path: '/b')
+      resp1 = MockServer::HttpResponse.new(status_code: 200)
+      resp2 = MockServer::HttpResponse.new(status_code: 201)
+      client.verify_sequence(req1, req2, responses: [resp1, resp2])
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/verifySequence")
+        .with { |r|
+          parsed = JSON.parse(r.body)
+          parsed['httpRequests'].length == 2 &&
+            parsed['httpResponses'].length == 2 &&
+            parsed['httpResponses'][0]['statusCode'] == 200 &&
+            parsed['httpResponses'][1]['statusCode'] == 201
+        }
+    end
+
+    it 'omits httpResponses when responses keyword is not given' do
+      stub_request(:put, "#{base_url}/mockserver/verifySequence")
+        .to_return(status: 202, body: '')
+
+      req = MockServer::HttpRequest.new(path: '/a')
+      client.verify_sequence(req)
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/verifySequence")
+        .with { |r|
+          parsed = JSON.parse(r.body)
+          !parsed.key?('httpResponses')
+        }
     end
   end
 
@@ -359,6 +423,31 @@ RSpec.describe MockServer::Client do
       result = client.retrieve_recorded_expectations
       expect(result.length).to eq(1)
       expect(result[0]).to be_a(MockServer::Expectation)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # retrieve_expectations_as_code
+  # -------------------------------------------------------------------
+  describe '#retrieve_expectations_as_code' do
+    it 'returns the generated code string for the requested format' do
+      generated = 'new MockServerClient("localhost", 1080).when(request().withPath("/code"));'
+      stub_request(:put, "#{base_url}/mockserver/retrieve?format=JAVA&type=ACTIVE_EXPECTATIONS")
+        .to_return(status: 200, body: generated)
+
+      result = client.retrieve_expectations_as_code(format: 'java')
+      expect(result).to eq(generated)
+    end
+  end
+
+  describe '#retrieve_recorded_expectations_as_code' do
+    it 'returns the generated code string for the requested format' do
+      generated = "# generated python\n"
+      stub_request(:put, "#{base_url}/mockserver/retrieve?format=PYTHON&type=RECORDED_EXPECTATIONS")
+        .to_return(status: 200, body: generated)
+
+      result = client.retrieve_recorded_expectations_as_code(format: 'python')
+      expect(result).to eq(generated)
     end
   end
 
@@ -876,6 +965,109 @@ RSpec.describe MockServer::Client do
         .to_return(status: 400, body: '{"error":"bad"}')
 
       expect { client.service_chaos_status }.to raise_error(MockServer::Error, /Failed to get service chaos/)
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # gRPC descriptor management
+  # -------------------------------------------------------------------
+  describe '#upload_grpc_descriptor' do
+    # A minimal binary string standing in for a FileDescriptorSet, including a
+    # NUL byte to prove the bytes are sent verbatim (not base64-encoded).
+    let(:descriptor_bytes) { "\x0a\x07foo.proto\x00\xff".b }
+
+    it 'sends PUT to /mockserver/grpc/descriptors with raw bytes and octet-stream content type' do
+      stub_request(:put, "#{base_url}/mockserver/grpc/descriptors")
+        .to_return(status: 201, body: '')
+
+      result = client.upload_grpc_descriptor(descriptor_bytes)
+      expect(result).to be_nil
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/grpc/descriptors")
+        .with { |req|
+          req.headers['Content-Type'] == 'application/octet-stream' &&
+            req.body.b == descriptor_bytes
+        }
+    end
+
+    it 'raises ArgumentError when descriptor bytes are nil' do
+      expect { client.upload_grpc_descriptor(nil) }.to raise_error(ArgumentError)
+    end
+
+    it 'raises ArgumentError when descriptor bytes are empty' do
+      expect { client.upload_grpc_descriptor('') }.to raise_error(ArgumentError)
+    end
+
+    it 'raises Error on failure' do
+      stub_request(:put, "#{base_url}/mockserver/grpc/descriptors")
+        .to_return(status: 400, body: 'bad descriptor')
+
+      expect { client.upload_grpc_descriptor(descriptor_bytes) }
+        .to raise_error(MockServer::Error, /Failed to upload gRPC descriptor/)
+    end
+  end
+
+  describe '#retrieve_grpc_services' do
+    it 'sends PUT to /mockserver/grpc/services and returns parsed array' do
+      response_body = [
+        {
+          'name' => 'example.Greeter',
+          'methods' => [
+            {
+              'name' => 'SayHello',
+              'inputType' => 'example.HelloRequest',
+              'outputType' => 'example.HelloReply',
+              'clientStreaming' => false,
+              'serverStreaming' => false
+            }
+          ]
+        }
+      ]
+      stub_request(:put, "#{base_url}/mockserver/grpc/services")
+        .to_return(status: 200, body: JSON.generate(response_body))
+
+      result = client.retrieve_grpc_services
+
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/grpc/services")
+      expect(result).to be_an(Array)
+      expect(result.length).to eq(1)
+      expect(result[0]['name']).to eq('example.Greeter')
+      expect(result[0]['methods'][0]['name']).to eq('SayHello')
+      expect(result[0]['methods'][0]['clientStreaming']).to eq(false)
+    end
+
+    it 'returns empty array when response is empty' do
+      stub_request(:put, "#{base_url}/mockserver/grpc/services")
+        .to_return(status: 200, body: '')
+
+      expect(client.retrieve_grpc_services).to eq([])
+    end
+
+    it 'raises Error on failure' do
+      stub_request(:put, "#{base_url}/mockserver/grpc/services")
+        .to_return(status: 500, body: 'server error')
+
+      expect { client.retrieve_grpc_services }
+        .to raise_error(MockServer::Error, /Failed to retrieve gRPC services/)
+    end
+  end
+
+  describe '#clear_grpc_descriptors' do
+    it 'sends PUT to /mockserver/grpc/clear' do
+      stub_request(:put, "#{base_url}/mockserver/grpc/clear")
+        .to_return(status: 200, body: '')
+
+      result = client.clear_grpc_descriptors
+      expect(result).to be_nil
+      expect(WebMock).to have_requested(:put, "#{base_url}/mockserver/grpc/clear")
+    end
+
+    it 'raises Error on failure' do
+      stub_request(:put, "#{base_url}/mockserver/grpc/clear")
+        .to_return(status: 500, body: 'server error')
+
+      expect { client.clear_grpc_descriptors }
+        .to raise_error(MockServer::Error, /Failed to clear gRPC descriptors/)
     end
   end
 end

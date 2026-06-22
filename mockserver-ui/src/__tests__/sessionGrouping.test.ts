@@ -269,7 +269,7 @@ describe('groupBySession — cookie-keyed grouping', () => {
 // ---------------------------------------------------------------------------
 
 describe('groupBySession — expectation without isolation', () => {
-  it('sends all LLM requests to unscoped when no isolation is configured', () => {
+  it('groups unscoped LLM requests by host when no isolation is configured', () => {
     const expectations = [
       makeExpectation('__llm_conv_chat'), // no __iso= suffix
     ];
@@ -281,10 +281,65 @@ describe('groupBySession — expectation without isolation', () => {
 
     const sessions = groupBySession(requests, expectations);
 
-    // All go to unscoped since no isolation source matches
+    // All go to unscoped since no isolation source matches, but grouped
+    // by host (proxy-aware fallback)
     expect(sessions).toHaveLength(1);
     expect(sessions[0]!.scenarioName).toBe('<unscoped>');
+    // The host header is the isolation key fallback
+    expect(sessions[0]!.isolationKey).toBe('api.anthropic.com');
     expect(sessions[0]!.requests).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// groupBySession — proxy-aware fallback grouping by host
+// ---------------------------------------------------------------------------
+
+describe('groupBySession — proxy-aware host grouping', () => {
+  it('groups unscoped proxy traffic by upstream host', () => {
+    // No isolation expectations — pure proxy mode
+    const expectations: JsonListItem[] = [];
+
+    const requests = [
+      makeAnthropicRequest('req-1', [{ name: 'host', values: ['api.anthropic.com'] }]),
+      makeAnthropicRequest('req-2', [{ name: 'host', values: ['api.openai.com'] }]),
+      makeAnthropicRequest('req-3', [{ name: 'host', values: ['api.anthropic.com'] }]),
+    ];
+
+    // Patch the second request to look like OpenAI traffic
+    (requests[1]!.value['httpRequest'] as Record<string, unknown>)['path'] = '/v1/chat/completions';
+
+    const sessions = groupBySession(requests, expectations);
+
+    // Two unscoped sessions grouped by host
+    expect(sessions).toHaveLength(2);
+
+    const anthropic = sessions.find((s) => s.isolationKey === 'api.anthropic.com');
+    const openai = sessions.find((s) => s.isolationKey === 'api.openai.com');
+
+    expect(anthropic).toBeDefined();
+    expect(anthropic!.scenarioName).toBe('<unscoped>');
+    expect(anthropic!.requests).toHaveLength(2);
+
+    expect(openai).toBeDefined();
+    expect(openai!.scenarioName).toBe('<unscoped>');
+    expect(openai!.requests).toHaveLength(1);
+  });
+
+  it('puts requests without host header into plain unscoped session', () => {
+    const expectations: JsonListItem[] = [];
+
+    // Request with no host header at all
+    const requests = [
+      makeAnthropicRequest('req-1', []), // empty headers
+    ];
+
+    const sessions = groupBySession(requests, expectations);
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]!.scenarioName).toBe('<unscoped>');
+    expect(sessions[0]!.isolationKey).toBe('<unscoped>');
+    expect(sessions[0]!.requests).toHaveLength(1);
   });
 });
 

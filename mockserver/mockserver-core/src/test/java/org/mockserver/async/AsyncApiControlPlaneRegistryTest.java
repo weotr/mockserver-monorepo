@@ -65,6 +65,11 @@ public class AsyncApiControlPlaneRegistryTest {
                 // Simulate: pass when channel is "ok", fail otherwise
                 return verificationJson.contains("\"ok\"") ? null : "verification failed";
             }
+
+            @Override
+            public String generateHttpExpectations(String requestBody) {
+                return "[{\"httpRequest\":{\"path\":\"/" + requestBody + "\"}}]";
+            }
         });
 
         assertThat(registry.isAvailable(), is(true));
@@ -78,6 +83,15 @@ public class AsyncApiControlPlaneRegistryTest {
         // Verify delegates correctly
         assertThat(registry.verify("{\"channel\":\"ok\"}"), is(nullValue()));
         assertThat(registry.verify("{\"channel\":\"fail\"}"), is("verification failed"));
+
+        // generateHttpExpectations delegates correctly
+        assertThat(registry.generateHttpExpectations("channel"), is("[{\"httpRequest\":{\"path\":\"/channel\"}}]"));
+    }
+
+    @Test(expected = IllegalStateException.class)
+    public void shouldThrowGeneratingHttpExpectationsWhenNoImpl() {
+        AsyncApiControlPlaneRegistry registry = new AsyncApiControlPlaneRegistry();
+        registry.generateHttpExpectations("{}");
     }
 
     @Test

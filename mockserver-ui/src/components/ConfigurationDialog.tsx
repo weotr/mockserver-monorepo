@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Select from '@mui/material/Select';
@@ -10,18 +12,43 @@ import MenuItem from '@mui/material/MenuItem';
 import Switch from '@mui/material/Switch';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Button from '@mui/material/Button';
-import Alert from '@mui/material/Alert';
+import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Table from '@mui/material/Table';
 import TableBody from '@mui/material/TableBody';
 import TableRow from '@mui/material/TableRow';
 import TableCell from '@mui/material/TableCell';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
-import { getConfiguration, updateConfiguration, LOG_LEVELS, type Configuration } from '../lib/configuration';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import { monospaceFontFamily } from '../theme';
+import HumanErrorAlert from './HumanErrorAlert';
+import {
+  getConfiguration,
+  updateConfiguration,
+  LOG_LEVELS,
+  EDITABLE_PROPERTIES,
+  type Configuration,
+  type EditablePropertyDescriptor,
+} from '../lib/configuration';
 
 function valueToText(v: unknown): string {
   if (v == null) return '';
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
+}
+
+/** Group the descriptor list by `group` field, preserving insertion order. */
+function groupDescriptors(descriptors: readonly EditablePropertyDescriptor[]): Map<string, EditablePropertyDescriptor[]> {
+  const groups = new Map<string, EditablePropertyDescriptor[]>();
+  for (const d of descriptors) {
+    const list = groups.get(d.group);
+    if (list) {
+      list.push(d);
+    } else {
+      groups.set(d.group, [d]);
+    }
+  }
+  return groups;
 }
 
 export default function ConfigurationDialog({
@@ -33,8 +60,10 @@ export default function ConfigurationDialog({
   onClose: () => void;
   connectionParams: ConnectionParams;
 }) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [config, setConfig] = useState<Configuration | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
 
@@ -50,7 +79,7 @@ export default function ConfigurationDialog({
         setConfig(next);
         setError(null);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(humanizeError(e));
       }
     }
     void load();
@@ -64,7 +93,7 @@ export default function ConfigurationDialog({
       await updateConfiguration(connectionParams, partial);
       refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setBusy(false);
     }
@@ -74,48 +103,91 @@ export default function ConfigurationDialog({
   const detailed = config?.['detailedMatchFailures'] === true;
   const metrics = config?.['metricsEnabled'] === true;
 
-  const entries = config ? Object.entries(config).filter(([, v]) => v != null && valueToText(v) !== '') : [];
+  const editableKeys = useMemo(() => new Set(EDITABLE_PROPERTIES.map((d) => d.key)), []);
+  const grouped = useMemo(() => groupDescriptors(EDITABLE_PROPERTIES), []);
+
+  // Read-only table excludes the three bespoke controls AND all descriptor-driven keys
+  const entries = config
+    ? Object.entries(config).filter(
+        ([k, v]) =>
+          v != null &&
+          valueToText(v) !== '' &&
+          !editableKeys.has(k) &&
+          k !== 'logLevel' &&
+          k !== 'detailedMatchFailures' &&
+          k !== 'metricsEnabled',
+      )
+    : [];
+
+  const disabled = busy || !config;
+
+  const handleClose = useCallback(() => {
+    setError(null);
+    onClose();
+  }, [onClose]);
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Server configuration</DialogTitle>
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth fullScreen={fullScreen} aria-labelledby="configuration-dialog-title">
+      <DialogTitle id="configuration-dialog-title">Server configuration</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Inspect the running server configuration and change common runtime settings. Changes apply
           immediately to this server.
         </Typography>
-        {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+        {error && <HumanErrorAlert error={error} sx={{ mb: 1.5 }} />}
 
+        {/* --- Original bespoke controls --- */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1, flexWrap: 'wrap' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <Typography variant="body2">Log level</Typography>
-            <Select size="small" value={logLevel} disabled={busy || !config}
+            <Select size="small" value={logLevel} disabled={disabled}
               onChange={(e) => void apply({ logLevel: e.target.value })} sx={{ width: 120 }}>
               {LOG_LEVELS.map((l) => <MenuItem key={l} value={l}>{l}</MenuItem>)}
             </Select>
           </Box>
           <FormControlLabel
-            control={<Switch size="small" checked={detailed} disabled={busy || !config}
+            control={<Switch size="small" checked={detailed} disabled={disabled}
               onChange={(e) => void apply({ detailedMatchFailures: e.target.checked })} />}
             label={<Typography variant="body2">Detailed match failures</Typography>}
           />
           <FormControlLabel
-            control={<Switch size="small" checked={metrics} disabled={busy || !config}
+            control={<Switch size="small" checked={metrics} disabled={disabled}
               onChange={(e) => void apply({ metricsEnabled: e.target.checked })} />}
             label={<Typography variant="body2">Metrics enabled</Typography>}
           />
         </Box>
 
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1, mb: 0.5 }}>
-          All settings (read-only)
+        {/* --- Descriptor-driven editable controls (grouped) --- */}
+        {Array.from(grouped.entries()).map(([group, descriptors]) => (
+          <Box key={group} sx={{ mt: 2 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5, fontWeight: 600 }}>
+              {group}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+              {descriptors.map((d) => (
+                <EditableControl
+                  key={d.key}
+                  descriptor={d}
+                  value={config?.[d.key]}
+                  disabled={disabled}
+                  onApply={apply}
+                />
+              ))}
+            </Box>
+          </Box>
+        ))}
+
+        {/* --- Read-only table for everything else --- */}
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2, mb: 0.5 }}>
+          All other settings (read-only)
         </Typography>
         <Box sx={{ maxHeight: 320, overflow: 'auto', border: 1, borderColor: 'divider', borderRadius: 1 }}>
           <Table size="small" stickyHeader>
             <TableBody>
               {entries.map(([k, v]) => (
                 <TableRow key={k}>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', width: '45%', verticalAlign: 'top' }}>{k}</TableCell>
-                  <TableCell sx={{ fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' }}>{valueToText(v)}</TableCell>
+                  <TableCell sx={{ typography: 'subtitle2', fontWeight: 400, fontFamily: monospaceFontFamily, width: '45%', verticalAlign: 'top' }}>{k}</TableCell>
+                  <TableCell sx={{ typography: 'subtitle2', fontWeight: 400, fontFamily: monospaceFontFamily, wordBreak: 'break-all' }}>{valueToText(v)}</TableCell>
                 </TableRow>
               ))}
               {entries.length === 0 && (
@@ -126,8 +198,136 @@ export default function ConfigurationDialog({
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={handleClose}>Close</Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Generic editable-control renderer driven by a single descriptor
+// ---------------------------------------------------------------------------
+
+function EditableControl({
+  descriptor,
+  value,
+  disabled,
+  onApply,
+}: {
+  descriptor: EditablePropertyDescriptor;
+  value: unknown;
+  disabled: boolean;
+  onApply: (partial: Configuration) => Promise<void>;
+}) {
+  const { key, label, type, help } = descriptor;
+
+  if (type === 'boolean') {
+    const checked = value === true;
+    return (
+      <Tooltip title={help} arrow>
+        <FormControlLabel
+          control={
+            <Switch
+              size="small"
+              checked={checked}
+              disabled={disabled}
+              onChange={(e) => void onApply({ [key]: e.target.checked })}
+            />
+          }
+          label={<Typography variant="body2">{label}</Typography>}
+        />
+      </Tooltip>
+    );
+  }
+
+  if (type === 'number') {
+    return <NumberField configKey={key} label={label} help={help} value={value} disabled={disabled} onApply={onApply} />;
+  }
+
+  // type === 'string'
+  return <StringField configKey={key} label={label} help={help} value={value} disabled={disabled} onApply={onApply} />;
+}
+
+/**
+ * Number field with local draft state.  Resets from the server value when the
+ * prop changes (using the "store previous props" pattern — no useEffect needed).
+ */
+function NumberField({
+  configKey, label, help, value, disabled, onApply,
+}: {
+  configKey: string; label: string; help: string; value: unknown;
+  disabled: boolean; onApply: (partial: Configuration) => Promise<void>;
+}) {
+  const serverValue = typeof value === 'number' ? String(value) : '';
+  const [prev, setPrev] = useState(serverValue);
+  const [draft, setDraft] = useState(serverValue);
+
+  // Reset draft when the server value changes (after a PUT + refresh).
+  if (serverValue !== prev) {
+    setPrev(serverValue);
+    setDraft(serverValue);
+  }
+
+  const commit = useCallback(() => {
+    if (draft.trim() === '') return;          // empty → don't PUT (Number('') === 0)
+    const parsed = Number(draft);
+    if (!Number.isNaN(parsed)) {
+      void onApply({ [configKey]: parsed });
+    }
+  }, [draft, configKey, onApply]);
+
+  return (
+    <Tooltip title={help} arrow>
+      <TextField
+        size="small"
+        type="number"
+        label={label}
+        value={draft}
+        disabled={disabled}
+        sx={{ width: 160 }}
+        slotProps={{ htmlInput: { min: 0 } }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+      />
+    </Tooltip>
+  );
+}
+
+/**
+ * String text field with local draft state (same pattern as NumberField).
+ */
+function StringField({
+  configKey, label, help, value, disabled, onApply,
+}: {
+  configKey: string; label: string; help: string; value: unknown;
+  disabled: boolean; onApply: (partial: Configuration) => Promise<void>;
+}) {
+  const serverValue = typeof value === 'string' ? value : '';
+  const [prev, setPrev] = useState(serverValue);
+  const [draft, setDraft] = useState(serverValue);
+
+  if (serverValue !== prev) {
+    setPrev(serverValue);
+    setDraft(serverValue);
+  }
+
+  const commit = useCallback(() => {
+    void onApply({ [configKey]: draft });
+  }, [draft, configKey, onApply]);
+
+  return (
+    <Tooltip title={help} arrow>
+      <TextField
+        size="small"
+        label={label}
+        value={draft}
+        disabled={disabled}
+        sx={{ minWidth: 240, flexGrow: 1 }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
+      />
+    </Tooltip>
   );
 }

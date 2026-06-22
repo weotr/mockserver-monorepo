@@ -6,6 +6,7 @@ import org.mockserver.authentication.AuthenticationHandler;
 import org.mockserver.closurecallback.websocketregistry.LocalCallbackRegistry;
 import org.mockserver.closurecallback.websocketregistry.WebSocketClientRegistry;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.cors.CORSHeaders;
 import org.mockserver.file.FileStore;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
@@ -28,6 +29,7 @@ import org.mockserver.model.*;
 import org.mockserver.openapi.OpenAPIConverter;
 import org.mockserver.openapi.OpenApiSyncPlanner;
 import org.mockserver.persistence.ExpectationFileSystemPersistence;
+import org.mockserver.persistence.RecordedExpectationPostProcessor;
 import org.mockserver.proxyconfiguration.InetAddressValidator;
 import org.mockserver.persistence.ExpectationFileWatcher;
 import org.mockserver.responsewriter.ResponseWriter;
@@ -92,6 +94,9 @@ public class HttpState {
     private final RequestMatchers requestMatchers;
     // G10 phase 2a: pluggable state backend (default in-memory, clustered in 2b+)
     private final StateBackend stateBackend;
+    // ADV3: persisted, named library of reusable chaos experiment profiles
+    private final org.mockserver.mock.action.http.ChaosProfileLibrary chaosProfileLibrary;
+    private final org.mockserver.mock.action.http.LoadScenarioRegistry loadScenarioRegistry;
     private final Configuration configuration;
     // Adds CORS headers to dashboard-facing control-plane responses (e.g. service
     // chaos) so the dashboard works when served from another origin (a dev server),
@@ -107,9 +112,18 @@ public class HttpState {
     private ExpectationSerializer expectationSerializerThatSerializesBodyDefault;
     private OpenAPIExpectationSerializer openAPIExpectationSerializer;
     private ExpectationToJavaSerializer expectationToJavaSerializer;
+    private org.mockserver.serialization.code.ExpectationToJavaScriptSerializer expectationToJavaScriptSerializer;
+    private org.mockserver.serialization.code.ExpectationToPythonSerializer expectationToPythonSerializer;
+    private org.mockserver.serialization.code.ExpectationToGoSerializer expectationToGoSerializer;
+    private org.mockserver.serialization.code.ExpectationToCSharpSerializer expectationToCSharpSerializer;
+    private org.mockserver.serialization.code.ExpectationToRubySerializer expectationToRubySerializer;
+    private org.mockserver.serialization.code.ExpectationToRustSerializer expectationToRustSerializer;
+    private org.mockserver.serialization.code.ExpectationToPhpSerializer expectationToPhpSerializer;
     private org.mockserver.serialization.ExpectationExportSerializer expectationExportSerializer;
     private VerificationSerializer verificationSerializer;
     private VerificationSequenceSerializer verificationSequenceSerializer;
+    private SloCriteriaSerializer sloCriteriaSerializer;
+    private org.mockserver.serialization.LoadScenarioSerializer loadScenarioSerializer;
     private LogEntrySerializer logEntrySerializer;
     private final MemoryMonitoring memoryMonitoring;
     private OpenAPIConverter openAPIConverter;
@@ -118,6 +132,29 @@ public class HttpState {
     private HttpResponseSerializer httpResponseSerializer;
     private org.mockserver.serialization.curl.HttpRequestToCurlSerializer httpRequestToCurlSerializer;
     private AuthenticationHandler controlPlaneAuthenticationHandler;
+    // Memoized control-plane authorizer, keyed on the raw scope-mapping it was built
+    // from, so the mapping is parsed (and the authorizer allocated) once and reused
+    // across requests, but stays correct if configuration reload changes the mapping.
+    // The (authorizer, mapping) pair is held in a single immutable holder behind ONE
+    // volatile field so a concurrent reader can never observe a torn (authorizer,
+    // mismatched-mapping) pair — it reads the holder once and compares its own mapping.
+    private volatile AuthorizerHolder cachedAuthorizerHolder;
+
+    /**
+     * Immutable pairing of a {@link org.mockserver.authentication.authorization.ControlPlaneAuthorizer}
+     * with the scope mapping it was built from. Published atomically through one volatile
+     * field so a reader always sees a self-consistent pair.
+     */
+    private static final class AuthorizerHolder {
+        final java.util.Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> mapping;
+        final org.mockserver.authentication.authorization.ControlPlaneAuthorizer authorizer;
+
+        AuthorizerHolder(java.util.Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> mapping,
+                         org.mockserver.authentication.authorization.ControlPlaneAuthorizer authorizer) {
+            this.mapping = mapping;
+            this.authorizer = authorizer;
+        }
+    }
     private GrpcProtoDescriptorStore grpcDescriptorStore;
     private final FileStore fileStore = new FileStore();
     private final CrudDispatcher crudDispatcher = new CrudDispatcher();
@@ -129,6 +166,11 @@ public class HttpState {
     private volatile org.mockserver.llm.client.LlmBackend llmBackend;
     // optional — set by the runtime (NettyHttpClient) to enable PUT /mockserver/replay
     private volatile java.util.function.Function<HttpRequest, CompletableFuture<HttpResponse>> replayHandler;
+    // readiness flag — flipped true once the constructor (incl. synchronous expectation
+    // initializers / OpenAPI seeding) has completed. The liveness/status endpoints answer 200 the
+    // instant the port binds, but a readiness probe should stay not-ready until seeding finishes so
+    // an orchestrator does not route traffic before the seeded expectations exist.
+    private volatile boolean initializationComplete = false;
 
     public static void setPort(final HttpRequest request) {
         if (request != null && request.getSocketAddress() != null) {
@@ -167,6 +209,13 @@ public class HttpState {
         this.mockServerLog = new MockServerEventLog(configuration, mockServerLogger, scheduler, true);
         // G10 phase 2a: create the pluggable state backend (default in-memory, clustered in 2b+).
         this.stateBackend = StateBackendFactory.create(configuration);
+        // ADV3: persisted, named chaos-profile library backed by the state backend's
+        // CRUD-entity store (survives reset; replicates across the fleet when clustered).
+        this.chaosProfileLibrary = new org.mockserver.mock.action.http.ChaosProfileLibrary(stateBackend);
+        // Load Scenario Registry: persisted, named registry of load scenario definitions backed by the
+        // state backend's CRUD-entity store (survives reset; replicates across the fleet when clustered;
+        // preloadable at startup). Mirrors the saved chaos-profile library.
+        this.loadScenarioRegistry = new org.mockserver.mock.action.http.LoadScenarioRegistry(stateBackend);
         // G10 phase 1: obtain the expectation store via the pluggable factory (default = standard
         // in-memory RequestMatchers; an optional clustered backend can register an alternative).
         this.requestMatchers = ExpectationStoreFactory.create(configuration, mockServerLogger, scheduler, webSocketClientRegistry);
@@ -213,6 +262,7 @@ public class HttpState {
             });
         }
         Metrics.setActiveExpectationsSupplier(() -> requestMatchers.retrieveActiveExpectations(null));
+        Metrics.setClusterMemberCountSupplier(() -> stateBackend.clusterInfo().members().size());
         if (configuration.persistExpectations()) {
             this.expectationFileSystemPersistence = new ExpectationFileSystemPersistence(configuration, mockServerLogger, requestMatchers, stateBackend.blobs());
         }
@@ -244,6 +294,9 @@ public class HttpState {
             });
         }
         CrossProtocolEventBus.getInstance().setScenarioManager(requestMatchers.getScenarioManager());
+        // Preload load scenario definitions from a JSON file into the registry (LOADED state, staged but
+        // not running). Mirrors the expectation initialization-from-file mechanism.
+        preloadLoadScenarios();
         this.memoryMonitoring = new MemoryMonitoring(configuration, this.mockServerLog, this.requestMatchers);
         if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
             mockServerLogger.logEvent(
@@ -253,6 +306,20 @@ public class HttpState {
             );
         }
         initGrpcDescriptorStore();
+        // All synchronous startup work (expectation initializers, OpenAPI seeding, gRPC descriptor
+        // loading) is now complete — flip the readiness flag so the /mockserver/ready probe reports
+        // ready. Set last so a partially-constructed HttpState never reports ready.
+        this.initializationComplete = true;
+    }
+
+    /**
+     * @return true once the HttpState constructor (including synchronous expectation initializers and
+     * OpenAPI seeding) has completed. Backs the readiness probe (/mockserver/ready), which returns
+     * 503 until this is true and 200 thereafter — distinct from the liveness/status endpoints, which
+     * answer 200 the instant the port binds.
+     */
+    public boolean isInitializationComplete() {
+        return initializationComplete;
     }
 
     private void initGrpcDescriptorStore() {
@@ -323,6 +390,11 @@ public class HttpState {
 
     public void clear(HttpRequest request) {
         final String logCorrelationId = UUIDService.getUUID();
+        // Namespace-scoped clear: ?namespace=T (or the configured namespace header)
+        // removes only that tenant's expectations, leaving other namespaces and
+        // global expectations intact. Takes precedence over request-matcher / id
+        // clearing for expectations; logs are not namespaced so are left untouched.
+        String namespaceFilter = resolveNamespaceFilter(request);
         RequestDefinition requestDefinition = null;
         ExpectationId expectationId = null;
         if (isNotBlank(request.getBodyAsString())) {
@@ -347,18 +419,27 @@ public class HttpState {
                     mockServerLog.clear(requestDefinition);
                     break;
                 case EXPECTATIONS:
-                    if (expectationId != null) {
+                    if (isNotBlank(namespaceFilter)) {
+                        requestMatchers.clearByNamespace(namespaceFilter, logCorrelationId);
+                    } else if (expectationId != null) {
                         requestMatchers.clear(expectationId, logCorrelationId);
                     } else {
                         requestMatchers.clear(requestDefinition);
                     }
                     break;
                 case ALL:
-                    mockServerLog.clear(requestDefinition);
-                    if (expectationId != null) {
-                        requestMatchers.clear(expectationId, logCorrelationId);
+                    if (isNotBlank(namespaceFilter)) {
+                        // Namespace-scoped: clear only this tenant's expectations.
+                        // The event log is not namespaced, so it is intentionally
+                        // left intact to avoid clearing other tenants' request logs.
+                        requestMatchers.clearByNamespace(namespaceFilter, logCorrelationId);
                     } else {
-                        requestMatchers.clear(requestDefinition);
+                        mockServerLog.clear(requestDefinition);
+                        if (expectationId != null) {
+                            requestMatchers.clear(expectationId, logCorrelationId);
+                        } else {
+                            requestMatchers.clear(requestDefinition);
+                        }
                     }
                     break;
             }
@@ -373,6 +454,27 @@ public class HttpState {
             );
             throw new IllegalArgumentException("\"" + request.getFirstQueryStringParameter("type") + "\" is not a valid value for \"type\" parameter, only the following values are supported " + Arrays.stream(ClearType.values()).map(input -> input.name().toLowerCase()).collect(Collectors.toList()));
         }
+    }
+
+    /**
+     * Resolves the namespace (tenant) filter for a control-plane request (clear / retrieve).
+     * The {@code ?namespace=T} query parameter takes precedence; if absent, the configured
+     * {@code matchNamespaceHeader} header on the control-plane request is used. Returns null
+     * when neither is present (i.e. an unscoped, all-namespaces operation).
+     */
+    private String resolveNamespaceFilter(HttpRequest request) {
+        String namespace = request.getFirstQueryStringParameter("namespace");
+        if (isNotBlank(namespace)) {
+            return namespace;
+        }
+        String headerName = configuration.matchNamespaceHeader();
+        if (isNotBlank(headerName)) {
+            String headerValue = request.getFirstHeader(headerName);
+            if (isNotBlank(headerValue)) {
+                return headerValue;
+            }
+        }
+        return null;
     }
 
     private RequestDefinition resolveExpectationId(ExpectationId expectationId) {
@@ -398,17 +500,32 @@ public class HttpState {
         fileStore.reset();
         org.mockserver.llm.LlmQuotaRegistry.getInstance().reset();
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
+        org.mockserver.ratelimit.RateLimitRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.RecoveryAttemptRegistry.getInstance().reset();
         org.mockserver.mock.action.http.ServiceChaosRegistry.getInstance().reset();
         org.mockserver.mock.action.http.ChaosAutoHaltMonitor.getInstance().reset();
+        org.mockserver.mock.action.http.ChaosExperimentOrchestrator.getInstance().reset();
+        org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance().reset();
+        org.mockserver.slo.SloSampleStore.getInstance().reset();
+        org.mockserver.mock.action.http.LlmCostBudgetMonitor.getInstance().reset();
+        org.mockserver.mock.action.http.ForwardCircuitBreaker.getInstance().reset();
         org.mockserver.mock.action.http.TcpChaosRegistry.getInstance().reset();
+        org.mockserver.mock.action.http.PreemptionSimulator.getInstance().reset();
         org.mockserver.mock.action.http.GrpcChaosRegistry.getInstance().reset();
         org.mockserver.grpc.GrpcHealthRegistry.getInstance().reset();
+        org.mockserver.oidc.OidcAuthorizationStore.getInstance().reset();
+        org.mockserver.saml.SamlAssertionStore.getInstance().reset();
+        org.mockserver.scim.ScimResourceStore.getInstance().reset();
         org.mockserver.wasm.WasmStore.getInstance().reset();
         org.mockserver.mock.drift.DriftStore.getInstance().clear();
+        org.mockserver.mock.audit.AuditStore.getInstance().clear();
         CassetteRegistry.getInstance().reset();
         org.mockserver.mock.dns.DnsIntentRegistry.getInstance().clear();
         org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance().reset();
-        org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().reset();
+        org.mockserver.mock.breakpoint.BreakpointCallbackDispatcher.getInstance().reset();
+        org.mockserver.mock.breakpoint.StreamFrameCallbackDispatcher.getInstance().reset();
+        org.mockserver.mock.breakpoint.StreamFrameBreakpointRegistry.getInstance().reset();
+        org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().clear();
         if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -430,12 +547,18 @@ public class HttpState {
                         .setArguments(ie.getMessage())
                         .setThrowable(ie)
                 );
-                ie.printStackTrace();
             }
         });
     }
 
     public List<Expectation> add(OpenAPIExpectation openAPIExpectation) {
+        // A spec referenced by URL/file may have changed since it was last parsed and cached (the parse is
+        // LRU-cached for up to 30 minutes keyed by the reference string). Re-importing is an explicit signal
+        // to pick up the current content, so evict the cache entry first. Inline payloads are keyed by their
+        // content, so they need no eviction (a changed payload is a different key).
+        if (org.mockserver.openapi.OpenAPIParser.isSpecUrl(openAPIExpectation.getSpecUrlOrPayload())) {
+            org.mockserver.openapi.OpenAPIParser.clearCache(openAPIExpectation.getSpecUrlOrPayload());
+        }
         List<Expectation> newExpectations = getOpenAPIConverter().buildExpectations(
             openAPIExpectation.getSpecUrlOrPayload(),
             openAPIExpectation.getOperationsAndResponses(),
@@ -598,7 +721,7 @@ public class HttpState {
                 }
 
                 HttpRequest clonedRequest = debugRequest.clone();
-                MatchDifference matchDifference = new MatchDifference(true, clonedRequest);
+                MatchDifference matchDifference = new MatchDifference(true, clonedRequest).suppressMatchResultLogging();
                 boolean matches = matcher.matches(matchDifference, clonedRequest);
                 matchResult.put("matches", matches);
 
@@ -749,7 +872,7 @@ public class HttpState {
                             }
 
                             HttpRequest clonedRequest = unmatchedRequest.clone();
-                            MatchDifference matchDifference = new MatchDifference(true, clonedRequest);
+                            MatchDifference matchDifference = new MatchDifference(true, clonedRequest).suppressMatchResultLogging();
                             boolean matches = matcher.matches(matchDifference, clonedRequest);
                             totalEvaluations++;
 
@@ -868,6 +991,25 @@ public class HttpState {
                 Format format = Format.valueOf(defaultIfEmpty(request.getFirstQueryStringParameter("format").toUpperCase(), "JSON"));
                 RetrieveType type = RetrieveType.valueOf(defaultIfEmpty(request.getFirstQueryStringParameter("type").toUpperCase(), "REQUESTS"));
                 final String correlationIdFilter = request.getFirstQueryStringParameter("correlationId");
+                // Optional namespace (tenant) filter for ACTIVE_EXPECTATIONS retrieval:
+                // ?namespace=T (or the configured namespace header) returns only that
+                // tenant's expectations plus global (no-namespace) expectations.
+                final String namespaceFilter = resolveNamespaceFilter(request);
+
+                // Record-and-forward one-command round-trip (Unit R): when ?forwardUnmatchedTo=<upstream>
+                // is supplied, enable record-and-forward of unmatched requests to that upstream for the
+                // session. Subsequent traffic that matches no expectation is forwarded to the upstream and
+                // captured as a recorded expectation, which the same/next retrieve returns (deduplicated and
+                // templatized when deduplicateRecordedExpectations is on) in the requested format. Recording
+                // is inherently traffic-driven: this call only arms recording — it does not synthesise traffic.
+                final String forwardUnmatchedTo = request.getFirstQueryStringParameter("forwardUnmatchedTo");
+                if (isNotBlank(forwardUnmatchedTo)) {
+                    final HttpResponse forwardSetupError = enableRecordAndForward(forwardUnmatchedTo, logCorrelationId);
+                    if (forwardSetupError != null) {
+                        return forwardSetupError;
+                    }
+                }
+
                 switch (type) {
                     case LOGS: {
                         java.util.function.Consumer<List<LogEntry>> logsConsumer;
@@ -1034,6 +1176,17 @@ public class HttpState {
                                     httpResponseFuture.complete(response);
                                 });
                                 break;
+                            case JAVASCRIPT:
+                            case PYTHON:
+                            case GO:
+                            case CSHARP:
+                            case RUBY:
+                            case RUST:
+                            case PHP:
+                                response.withBody(format.name() + " not supported for REQUESTS (use RECORDED_EXPECTATIONS)", MediaType.create("text", "plain").withCharset(UTF_8));
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
+                                break;
                         }
                         break;
                     }
@@ -1047,7 +1200,14 @@ public class HttpState {
                             .setArguments(requestDefinition);
                         switch (format) {
                             case JAVA:
-                                response.withBody("JAVA not supported for REQUEST_RESPONSES", MediaType.create("text", "plain").withCharset(UTF_8));
+                            case JAVASCRIPT:
+                            case PYTHON:
+                            case GO:
+                            case CSHARP:
+                            case RUBY:
+                            case RUST:
+                            case PHP:
+                                response.withBody(format.name() + " not supported for REQUEST_RESPONSES", MediaType.create("text", "plain").withCharset(UTF_8));
                                 mockServerLogger.logEvent(logEntry);
                                 httpResponseFuture.complete(response);
                                 break;
@@ -1152,10 +1312,116 @@ public class HttpState {
                                 mockServerLog
                                     .retrieveRecordedExpectations(
                                         requestDefinition,
-                                        requests -> {
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
                                             response.withBody(
                                                 getExpectationToJavaSerializer().serialize(requests),
                                                 MediaType.create("application", "java").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case JAVASCRIPT:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToJavaScriptSerializer().serialize(requests),
+                                                MediaType.create("application", "javascript").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case PYTHON:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToPythonSerializer().serialize(requests),
+                                                MediaType.create("text", "x-python").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case GO:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToGoSerializer().serialize(requests),
+                                                MediaType.create("text", "x-go").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case CSHARP:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToCSharpSerializer().serialize(requests),
+                                                MediaType.create("text", "x-csharp").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case RUBY:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToRubySerializer().serialize(requests),
+                                                MediaType.create("text", "x-ruby").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case RUST:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToRustSerializer().serialize(requests),
+                                                MediaType.create("text", "x-rust").withCharset(UTF_8)
+                                            );
+                                            mockServerLogger.logEvent(logEntry);
+                                            httpResponseFuture.complete(response);
+                                        }
+                                    );
+                                break;
+                            case PHP:
+                                mockServerLog
+                                    .retrieveRecordedExpectations(
+                                        requestDefinition,
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
+                                            response.withBody(
+                                                getExpectationToPhpSerializer().serialize(requests),
+                                                MediaType.create("application", "x-httpd-php").withCharset(UTF_8)
                                             );
                                             mockServerLogger.logEvent(logEntry);
                                             httpResponseFuture.complete(response);
@@ -1166,7 +1432,8 @@ public class HttpState {
                                 mockServerLog
                                     .retrieveRecordedExpectations(
                                         requestDefinition,
-                                        requests -> {
+                                        rawRequests -> {
+                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
                                             response.withBody(
                                                 getExpectationSerializerThatSerializesBodyDefault().serialize(requests),
                                                 MediaType.JSON_UTF_8
@@ -1191,7 +1458,8 @@ public class HttpState {
                                     );
                                 break;
                             case OPENAPI:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, expectations -> {
+                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
+                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
                                     response.withBody(
                                         getExpectationExportSerializer().serializeAsOpenApi(expectations),
                                         MediaType.JSON_UTF_8
@@ -1201,7 +1469,8 @@ public class HttpState {
                                 });
                                 break;
                             case POSTMAN:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, expectations -> {
+                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
+                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
                                     response.withBody(
                                         getExpectationExportSerializer().serializeAsPostmanCollection(expectations),
                                         MediaType.JSON_UTF_8
@@ -1211,7 +1480,8 @@ public class HttpState {
                                 });
                                 break;
                             case BRUNO:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, expectations -> {
+                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
+                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
                                     response
                                         .withBody(getExpectationExportSerializer().serializeAsBrunoCollection(expectations))
                                         .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
@@ -1221,7 +1491,8 @@ public class HttpState {
                                 });
                                 break;
                             case HAR:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, expectations -> {
+                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
+                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
                                     response.withBody(
                                         getHarConverter().serialize(expectationsToLogEvents(expectations)),
                                         MediaType.JSON_UTF_8
@@ -1240,9 +1511,37 @@ public class HttpState {
                     }
                     case ACTIVE_EXPECTATIONS: {
                         List<Expectation> expectations = requestMatchers.retrieveActiveExpectations(requestDefinition);
+                        if (isNotBlank(namespaceFilter)) {
+                            // Tenant view: keep this namespace's expectations plus global
+                            // (no-namespace) expectations; hide other tenants' expectations.
+                            expectations = expectations.stream()
+                                .filter(expectation -> isBlank(expectation.getNamespace()) || namespaceFilter.equals(expectation.getNamespace()))
+                                .collect(Collectors.toList());
+                        }
                         switch (format) {
                             case JAVA:
                                 response.withBody(getExpectationToJavaSerializer().serialize(expectations), MediaType.create("application", "java").withCharset(UTF_8));
+                                break;
+                            case JAVASCRIPT:
+                                response.withBody(getExpectationToJavaScriptSerializer().serialize(expectations), MediaType.create("application", "javascript").withCharset(UTF_8));
+                                break;
+                            case PYTHON:
+                                response.withBody(getExpectationToPythonSerializer().serialize(expectations), MediaType.create("text", "x-python").withCharset(UTF_8));
+                                break;
+                            case GO:
+                                response.withBody(getExpectationToGoSerializer().serialize(expectations), MediaType.create("text", "x-go").withCharset(UTF_8));
+                                break;
+                            case CSHARP:
+                                response.withBody(getExpectationToCSharpSerializer().serialize(expectations), MediaType.create("text", "x-csharp").withCharset(UTF_8));
+                                break;
+                            case RUBY:
+                                response.withBody(getExpectationToRubySerializer().serialize(expectations), MediaType.create("text", "x-ruby").withCharset(UTF_8));
+                                break;
+                            case RUST:
+                                response.withBody(getExpectationToRustSerializer().serialize(expectations), MediaType.create("text", "x-rust").withCharset(UTF_8));
+                                break;
+                            case PHP:
+                                response.withBody(getExpectationToPhpSerializer().serialize(expectations), MediaType.create("application", "x-httpd-php").withCharset(UTF_8));
                                 break;
                             case JSON:
                                 response.withBody(getExpectationSerializer().serialize(expectations), MediaType.JSON_UTF_8);
@@ -1387,6 +1686,9 @@ public class HttpState {
     public boolean handle(HttpRequest request, ResponseWriter responseWriter, boolean warDeployment) {
 
         request.withLogCorrelationId(UUIDService.getUUID());
+        if (request.getReceivedTimestamp() == null) {
+            request.withReceivedTimestamp(org.mockserver.time.EpochService.currentTimeMillis());
+        }
         setPort(request);
 
         if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
@@ -1486,6 +1788,39 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/graphql", "/graphql")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String path = request.getFirstQueryStringParameter("path");
+                        // SDL / introspection documents are raw text (not JSON/XML), so read the
+                        // body verbatim to preserve the exact schema the user submitted.
+                        List<Expectation> upsertedExpectations = add(
+                            new org.mockserver.graphql.GraphQLExpectationGenerator()
+                                .generate(request.getBodyAsString(), path)
+                                .toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for graphql expectation:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            iae.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/oidc", "/oidc")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1538,31 +1873,140 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/saml", "/saml")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        org.mockserver.saml.SamlProviderConfiguration samlConfig;
+                        if (requestBody == null || requestBody.trim().isEmpty()) {
+                            samlConfig = new org.mockserver.saml.SamlProviderConfiguration();
+                        } else {
+                            samlConfig = ObjectMapperFactory.createObjectMapper()
+                                .readValue(requestBody, org.mockserver.saml.SamlProviderConfiguration.class);
+                        }
+                        List<Expectation> upsertedExpectations = add(
+                            new org.mockserver.saml.SamlProviderGenerator()
+                                .generate(samlConfig)
+                                .toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for saml provider:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            iae.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for saml provider:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            e.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/scim", "/scim")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        org.mockserver.scim.ScimProviderConfiguration scimConfig;
+                        if (requestBody == null || requestBody.trim().isEmpty()) {
+                            scimConfig = new org.mockserver.scim.ScimProviderConfiguration();
+                        } else {
+                            scimConfig = ObjectMapperFactory.createObjectMapper()
+                                .readValue(requestBody, org.mockserver.scim.ScimProviderConfiguration.class);
+                        }
+                        List<Expectation> upsertedExpectations = add(
+                            new org.mockserver.scim.ScimProviderGenerator()
+                                .generate(scimConfig)
+                                .toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for scim provider:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            iae.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for scim provider:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(
+                            request,
+                            BAD_REQUEST,
+                            e.getMessage(),
+                            MediaType.create("text", "plain").toString()
+                        );
+                    }
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/import", "/import")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     try {
                         String requestBody = request.getBodyAsJsonOrXmlString();
                         if (requestBody == null || requestBody.trim().isEmpty()) {
-                            throw new IllegalArgumentException("import request body is required — must be a HAR or Postman collection JSON document");
+                            throw new IllegalArgumentException("import request body is required — must be a HAR, Postman collection or Pact contract JSON document");
                         }
                         String formatParam = request.getFirstQueryStringParameter("format");
+                        org.mockserver.imports.ImportRedaction.Options redactionOptions = buildImportRedactionOptions(request);
                         List<Expectation> importedExpectations;
                         if ("har".equalsIgnoreCase(formatParam)) {
-                            importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody);
+                            importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody, redactionOptions);
                         } else if ("postman".equalsIgnoreCase(formatParam)) {
-                            importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody);
+                            importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody, redactionOptions);
+                        } else if ("pact".equalsIgnoreCase(formatParam)) {
+                            importedExpectations = new org.mockserver.mock.pact.PactImporter().importExpectations(requestBody, redactionOptions);
                         } else if (formatParam != null && !formatParam.isEmpty()) {
-                            throw new IllegalArgumentException("unsupported import format: " + formatParam + " (supported formats: har, postman)");
+                            throw new IllegalArgumentException("unsupported import format: " + formatParam + " (supported formats: har, postman, pact)");
                         } else {
                             // Auto-detect format from JSON structure
                             com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(requestBody);
                             if (!rootNode.path("log").path("entries").isMissingNode()) {
-                                importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody);
+                                importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody, redactionOptions);
                             } else if (!rootNode.path("info").isMissingNode() && !rootNode.path("item").isMissingNode()) {
-                                importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody);
+                                importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody, redactionOptions);
+                            } else if (!rootNode.path("interactions").isMissingNode() && rootNode.path("interactions").isArray()) {
+                                importedExpectations = new org.mockserver.mock.pact.PactImporter().importExpectations(requestBody, redactionOptions);
                             } else {
-                                throw new IllegalArgumentException("unable to auto-detect import format — use ?format=har or ?format=postman query parameter");
+                                throw new IllegalArgumentException("unable to auto-detect import format — use ?format=har, ?format=postman or ?format=pact query parameter");
                             }
                         }
                         List<Expectation> upsertedExpectations = add(
@@ -1599,6 +2043,107 @@ public class HttpState {
                             e.getMessage(),
                             MediaType.create("text", "plain").toString()
                         );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/baseline/compare", "/baseline/compare")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        if (requestBody == null || requestBody.trim().isEmpty()) {
+                            throw new IllegalArgumentException("baseline compare request body is required — must be a JSON document with a \"baseline\" (and optional \"current\") array of expectations");
+                        }
+                        com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(requestBody);
+                        com.fasterxml.jackson.databind.JsonNode baselineNode = rootNode.get("baseline");
+                        if (baselineNode == null || baselineNode.isNull()) {
+                            throw new IllegalArgumentException("baseline compare request body must contain a \"baseline\" array of expectations");
+                        }
+                        List<Expectation> baselineExpectations = java.util.Arrays.asList(
+                            getExpectationSerializer().deserializeArray(baselineNode.toString(), true));
+
+                        List<Expectation> currentExpectations;
+                        com.fasterxml.jackson.databind.JsonNode currentNode = rootNode.get("current");
+                        if (currentNode == null || currentNode.isNull()) {
+                            // no current supplied — diff against the live recorded expectations
+                            currentExpectations = requestMatchers.retrieveActiveExpectations(null);
+                        } else {
+                            currentExpectations = java.util.Arrays.asList(
+                                getExpectationSerializer().deserializeArray(currentNode.toString(), true));
+                        }
+
+                        org.mockserver.mock.diff.BaselineDiffReport report =
+                            new org.mockserver.mock.diff.BaselineDiffer().diffExpectations(baselineExpectations, currentExpectations);
+
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(OK.code())
+                            .withBody(ObjectMapperFactory.createObjectMapper().writeValueAsString(report), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for baseline compare:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(request, BAD_REQUEST, iae.getMessage(), MediaType.create("text", "plain").toString());
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for baseline compare:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(request, BAD_REQUEST, e.getMessage(), MediaType.create("text", "plain").toString());
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/contractTest", "/contractTest")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    handleContractTest(request, responseWriter, canHandle);
+                } else {
+                    canHandle.complete(true);
+                }
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/pact/import", "/pact/import")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        if (requestBody == null || requestBody.trim().isEmpty()) {
+                            throw new IllegalArgumentException("Pact import request body is required — must be a Pact v3 contract JSON document");
+                        }
+                        org.mockserver.imports.ImportRedaction.Options redactionOptions = buildImportRedactionOptions(request);
+                        List<Expectation> importedExpectations = new org.mockserver.mock.pact.PactImporter()
+                            .importExpectations(requestBody, redactionOptions);
+                        List<Expectation> upsertedExpectations = add(
+                            importedExpectations.toArray(new Expectation[0])
+                        );
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for pact import:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(request, BAD_REQUEST, iae.getMessage(), MediaType.create("text", "plain").toString());
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request for pact import:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(request, BAD_REQUEST, e.getMessage(), MediaType.create("text", "plain").toString());
                     }
                 }
                 canHandle.complete(true);
@@ -1685,6 +2230,41 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (chaosProfileName(request, "PUT", "/chaosExperiment/profiles/") != null) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosProfileSave(request, chaosProfileName(request, "PUT", "/chaosExperiment/profiles/"))), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/chaosExperiment", "/chaosExperiment")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosExperimentPut(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/loadScenario/start", "/loadScenario/start")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioStart(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/loadScenario/stop", "/loadScenario/stop")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioStop(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/loadScenario", "/loadScenario")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioPut(request)), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/serviceChaos", "/serviceChaos")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1696,6 +2276,13 @@ public class HttpState {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosPut(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/preemption", "/preemption")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handlePreemptionPut(request)), true);
                 }
                 canHandle.complete(true);
 
@@ -1713,6 +2300,13 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/asyncapi/http", "/asyncapi/http")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleAsyncApiHttpImport(request)), true);
+                }
+                canHandle.complete(true);
+
             } else if (request.matches("PUT", PATH_PREFIX + "/asyncapi", "/asyncapi")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -1720,31 +2314,31 @@ public class HttpState {
                 }
                 canHandle.complete(true);
 
-            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/continue", "/breakpoint/continue")) {
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/matcher/remove", "/breakpoint/matcher/remove")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointContinue(request)), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointMatcherRemove(request)), true);
                 }
                 canHandle.complete(true);
 
-            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/modify", "/breakpoint/modify")) {
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/matcher/clear", "/breakpoint/matcher/clear")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointModify(request)), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointMatcherClear()), true);
                 }
                 canHandle.complete(true);
 
-            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/abort", "/breakpoint/abort")) {
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/matchers", "/breakpoint/matchers")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointAbort(request)), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointMatcherList()), true);
                 }
                 canHandle.complete(true);
 
-            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint", "/breakpoint")) {
+            } else if (request.matches("PUT", PATH_PREFIX + "/breakpoint/matcher", "/breakpoint/matcher")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointList()), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointMatcherRegister(request)), true);
                 }
                 canHandle.complete(true);
 
@@ -1798,6 +2392,13 @@ public class HttpState {
                 } else {
                     canHandle.complete(true);
                 }
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/verifySLO", "/verifySLO")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleVerifySlo(request)), true);
+                }
+                canHandle.complete(true);
 
             } else if (request.matches("PUT", PATH_PREFIX + "/crud", "/crud")) {
 
@@ -2093,15 +2694,55 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/config", "/config")) {
+                // Effective configuration: each property's resolved value and the source tier that
+                // supplied it, with sensitive values redacted (mirrors the --print-config CLI flag).
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, response()
+                        .withStatusCode(OK.code())
+                        .withBody(ConfigurationProperties.effectiveConfigurationAsJson(), MediaType.JSON_UTF_8)), true);
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/cassettes", "/cassettes")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleCassettesGet()), true);
                 }
                 return true;
             }
-            if (request.matches("GET", PATH_PREFIX + "/breakpoint", "/breakpoint")) {
+            if (request.matches("GET", PATH_PREFIX + "/breakpoint/matchers", "/breakpoint/matchers")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
-                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointList()), true);
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleBreakpointMatcherList()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/chaosExperiment/profiles", "/chaosExperiment/profiles")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosProfileList()), true);
+                }
+                return true;
+            }
+            if (chaosProfileName(request, "GET", "/chaosExperiment/profiles/") != null) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosProfileGet(chaosProfileName(request, "GET", "/chaosExperiment/profiles/"))), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/chaosExperiment", "/chaosExperiment")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosExperimentGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/loadScenario", "/loadScenario")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioGet()), true);
+                }
+                return true;
+            }
+            if (loadScenarioName(request, "GET") != null) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioGetOne(loadScenarioName(request, "GET"))), true);
                 }
                 return true;
             }
@@ -2114,6 +2755,12 @@ public class HttpState {
             if (request.matches("GET", PATH_PREFIX + "/tcpChaos", "/tcpChaos")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleTcpChaosGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/preemption", "/preemption")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handlePreemptionGet()), true);
                 }
                 return true;
             }
@@ -2170,9 +2817,21 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/audit", "/audit")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleAuditGet(request)), true);
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/grpc/health", "/grpc/health")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleGrpcHealthGet()), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/cluster", "/cluster")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleClusterGet()), true);
                 }
                 return true;
             }
@@ -2231,9 +2890,59 @@ public class HttpState {
                 }
                 return true;
             }
+            if (chaosProfileName(request, "DELETE", "/chaosExperiment/profiles/") != null) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosProfileDelete(chaosProfileName(request, "DELETE", "/chaosExperiment/profiles/"))), true);
+                }
+                return true;
+            }
+            if (request.matches("DELETE", PATH_PREFIX + "/chaosExperiment", "/chaosExperiment")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosExperimentDelete()), true);
+                }
+                return true;
+            }
+            if (request.matches("DELETE", PATH_PREFIX + "/loadScenario", "/loadScenario")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioDeleteAll()), true);
+                }
+                return true;
+            }
+            if (loadScenarioName(request, "DELETE") != null) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioDeleteOne(loadScenarioName(request, "DELETE"))), true);
+                }
+                return true;
+            }
             if (request.matches("DELETE", PATH_PREFIX + "/cassettes", "/cassettes")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleCassettesDelete(request)), true);
+                }
+                return true;
+            }
+            if (request.matches("DELETE", PATH_PREFIX + "/preemption", "/preemption")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handlePreemptionDelete()), true);
+                }
+                return true;
+            }
+            return false;
+
+        } else if (request.matches("POST")) {
+
+            if (chaosProfileName(request, "POST", "/chaosExperiment/apply/") != null) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosProfileApply(request, chaosProfileName(request, "POST", "/chaosExperiment/apply/"))), true);
+                }
+                return true;
+            }
+            if (request.matches("POST", PATH_PREFIX + "/wasm/test", "/wasm/test")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    if (!configuration.wasmEnabled()) {
+                        responseWriter.writeResponse(request, FORBIDDEN, "WASM support is disabled; set wasmEnabled=true to enable", MediaType.create("text", "plain").toString());
+                    } else {
+                        responseWriter.writeResponse(request, withDashboardCORS(request, handleWasmTest(request)), true);
+                    }
                 }
                 return true;
             }
@@ -2245,6 +2954,87 @@ public class HttpState {
 
         }
 
+    }
+
+    /**
+     * Test a WASM module against a sample request without a live expectation.
+     * <p>
+     * Accepts {@code { "module": "<base64>", "request": { method, path, headers, body } }}
+     * and returns {@code { "matched": true|false }}, so IDEs/users can validate a module
+     * against a sample request. Fails closed: invalid modules report {@code matched=false}.
+     */
+    private HttpResponse handleWasmTest(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody(objectMapper.createObjectNode().put("error", "request body is required with a 'module' field").toString(), MediaType.JSON_UTF_8);
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            String moduleField = node.has("module") && !node.get("module").isNull() ? node.get("module").asText() : null;
+            byte[] wasmBytes;
+            if (isNotBlank(moduleField)) {
+                try {
+                    wasmBytes = java.util.Base64.getDecoder().decode(moduleField);
+                } catch (IllegalArgumentException e) {
+                    return response()
+                        .withStatusCode(BAD_REQUEST.code())
+                        .withBody(objectMapper.createObjectNode().put("error", "'module' must be base64-encoded WASM bytes").toString(), MediaType.JSON_UTF_8);
+                }
+            } else if (node.has("moduleName") && !node.get("moduleName").isNull()) {
+                String moduleName = node.get("moduleName").asText();
+                wasmBytes = org.mockserver.wasm.WasmStore.getInstance().get(moduleName);
+                if (wasmBytes == null) {
+                    return response()
+                        .withStatusCode(NOT_FOUND.code())
+                        .withBody(objectMapper.createObjectNode().put("error", "WASM module '" + moduleName + "' not found").toString(), MediaType.JSON_UTF_8);
+                }
+            } else {
+                return response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody(objectMapper.createObjectNode().put("error", "either 'module' (base64) or 'moduleName' (loaded module) is required").toString(), MediaType.JSON_UTF_8);
+            }
+
+            com.fasterxml.jackson.databind.JsonNode requestNode = node.get("request");
+            String method = "";
+            String path = "";
+            String sampleBody = null;
+            org.mockserver.wasm.WasmRequest wasmRequest;
+            if (requestNode != null && requestNode.isObject()) {
+                method = requestNode.has("method") && !requestNode.get("method").isNull() ? requestNode.get("method").asText() : "";
+                path = requestNode.has("path") && !requestNode.get("path").isNull() ? requestNode.get("path").asText() : "";
+                sampleBody = requestNode.has("body") && !requestNode.get("body").isNull() ? requestNode.get("body").asText() : null;
+                wasmRequest = new org.mockserver.wasm.WasmRequest(method, path, null, sampleBody);
+                com.fasterxml.jackson.databind.JsonNode headersNode = requestNode.get("headers");
+                if (headersNode != null && headersNode.isObject()) {
+                    java.util.Iterator<String> names = headersNode.fieldNames();
+                    while (names.hasNext()) {
+                        String name = names.next();
+                        com.fasterxml.jackson.databind.JsonNode valuesNode = headersNode.get(name);
+                        if (valuesNode != null && valuesNode.isArray()) {
+                            for (com.fasterxml.jackson.databind.JsonNode v : valuesNode) {
+                                wasmRequest.withHeader(name, v.isNull() ? null : v.asText());
+                            }
+                        } else if (valuesNode != null) {
+                            wasmRequest.withHeader(name, valuesNode.isNull() ? null : valuesNode.asText());
+                        }
+                    }
+                }
+            } else {
+                wasmRequest = org.mockserver.wasm.WasmRequest.ofBody(sampleBody);
+            }
+
+            boolean matched = new org.mockserver.wasm.WasmRuntime(wasmBytes).callMatch(wasmRequest);
+            return response()
+                .withStatusCode(OK.code())
+                .withBody(objectMapper.createObjectNode().put("matched", matched).toString(), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.createObjectNode().put("error", "failed to test WASM module: " + e.getMessage()).toString(), MediaType.JSON_UTF_8);
+        }
     }
 
     private HttpResponse handleClockPut(HttpRequest request) {
@@ -2524,6 +3314,732 @@ public class HttpState {
         }
     }
 
+    // --- Chaos Experiment endpoint helpers ---
+
+    private HttpResponse handleChaosExperimentPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return chaosExperimentError(objectMapper, "request body is required with an experiment definition");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentDefinition definition =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentDefinition.fromJson(node);
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator orchestrator =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.getInstance();
+            String error = orchestrator.start(definition);
+            if (error != null) {
+                return chaosExperimentError(objectMapper, error);
+            }
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("started chaos experiment:{}")
+                        .setArguments(definition.name)
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "started");
+            result.put("name", definition.name);
+            result.put("stages", definition.stages.size());
+            result.put("loop", definition.loop);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return chaosExperimentError(objectMapper, "invalid experiment definition: " + e.getMessage());
+        } catch (Exception e) {
+            return chaosExperimentError(objectMapper, "failed to process chaos experiment request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle {@code PUT /mockserver/verifySLO}: parse the body into an
+     * {@link org.mockserver.slo.SloCriteria}, evaluate it against the recorded
+     * samples, and respond with the {@link org.mockserver.slo.SloVerdict} JSON.
+     *
+     * <p>Status mapping: {@code 200 OK} for a PASS or INCONCLUSIVE verdict,
+     * {@code 406 NOT_ACCEPTABLE} for a FAIL verdict (so a CI gate can assert on
+     * the status code alone), {@code 400 BAD_REQUEST} for a malformed body or
+     * when SLO tracking is disabled. The body is always JSON.
+     */
+    private HttpResponse handleVerifySlo(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            if (!configuration.sloTrackingEnabled()) {
+                return sloError(objectMapper, "SLO tracking not enabled (set sloTrackingEnabled=true)");
+            }
+            org.mockserver.slo.SloCriteria criteria = getSloCriteriaSerializer().deserialize(request.getBodyAsJsonOrXmlString());
+            org.mockserver.slo.SloVerdict verdict = new org.mockserver.slo.SloEvaluator().evaluate(criteria);
+            int statusCode = verdict.getResult() == org.mockserver.slo.SloVerdict.Result.FAIL
+                ? NOT_ACCEPTABLE.code()
+                : OK.code();
+            return response().withStatusCode(statusCode)
+                .withBody(getSloCriteriaSerializer().serialize(verdict), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return sloError(objectMapper, "invalid SLO criteria: " + e.getMessage());
+        } catch (Exception e) {
+            return sloError(objectMapper, "failed to process SLO verify request: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse sloError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        com.fasterxml.jackson.databind.node.ObjectNode errorNode = objectMapper.createObjectNode();
+        errorNode.put("error", message);
+        String body;
+        try {
+            body = objectMapper.writeValueAsString(errorNode);
+        } catch (Exception e) {
+            body = "{\"error\":\"failed to render SLO error\"}";
+        }
+        return response().withStatusCode(BAD_REQUEST.code())
+            .withBody(body, MediaType.JSON_UTF_8);
+    }
+
+    private HttpResponse handleChaosExperimentGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator orchestrator =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.getInstance();
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentStatus status = orchestrator.getStatus();
+            if (status == null) {
+                com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+                result.put("status", "none");
+                return response().withStatusCode(OK.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(status.toJson()), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get chaos experiment status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleChaosExperimentDelete() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator orchestrator =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.getInstance();
+            orchestrator.stop();
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setMessageFormat("stopped chaos experiment")
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "stopped");
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to stop chaos experiment\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse chaosExperimentError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process chaos experiment request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- Load Scenario endpoint helpers ---
+
+    /**
+     * Handle {@code PUT /mockserver/loadScenario}: deserialize the body into a
+     * {@link org.mockserver.load.LoadScenario} and <em>load</em> (register) it into the registry under
+     * its {@code name}. Loading does NOT run the scenario — it is staged in the {@code LOADED} state,
+     * ready to be triggered by {@code PUT /mockserver/loadScenario/start}. Loading is allowed even when
+     * {@code loadGenerationEnabled} is false (no traffic is generated). Returns 200 with
+     * {@code {status:"loaded", name, state:"LOADED"}} on success, or 400 with {@code {error}} when the
+     * scenario is invalid or exceeds a configured cap.
+     */
+    private HttpResponse handleLoadScenarioPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return loadScenarioError(objectMapper, "request body is required with a load scenario definition");
+            }
+            org.mockserver.load.LoadScenario scenario = getLoadScenarioSerializer().deserialize(body);
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.setConfiguration(configuration);
+            // Validate the definition (name, steps, profile, caps) before registering so a bad scenario
+            // fails at load time, not at trigger time.
+            String error = orchestrator.validate(scenario);
+            if (error != null) {
+                return loadScenarioError(objectMapper, error);
+            }
+            // Store the normalised definition (re-serialised so the registry round-trips the exact
+            // author shape, including startDelayMillis) keyed by name; loading the same name replaces.
+            com.fasterxml.jackson.databind.JsonNode definition =
+                objectMapper.readTree(getLoadScenarioSerializer().serialize(scenario));
+            loadScenarioRegistry.load(scenario.getName(), definition);
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("loaded load scenario:{}")
+                        .setArguments(scenario.getName())
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "loaded");
+            result.put("name", scenario.getName());
+            result.put("state", loadScenarioStateFor(scenario.getName()).name());
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return loadScenarioError(objectMapper, "invalid load scenario definition: " + e.getMessage());
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to process load scenario request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle {@code GET /mockserver/loadScenario}: list ALL registered scenarios, each with its
+     * lifecycle {@code state}, {@code startDelayMillis}, full {@code definition} and — when active or
+     * recently run — the live status fields.
+     */
+    private HttpResponse handleLoadScenarioGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode scenarios = result.putArray("scenarios");
+            for (String name : loadScenarioRegistry.list()) {
+                scenarios.add(loadScenarioNode(objectMapper, name));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to list load scenarios\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    /** Handle {@code GET /mockserver/loadScenario/{name}}: one scenario (definition + state + status), 404 if absent. */
+    private HttpResponse handleLoadScenarioGetOne(String name) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            if (!loadScenarioRegistry.contains(name)) {
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "no load scenario named '" + name + "'")), MediaType.JSON_UTF_8);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    loadScenarioNode(objectMapper, name)), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to get load scenario: " + e.getMessage());
+        }
+    }
+
+    /** Handle {@code DELETE /mockserver/loadScenario/{name}}: remove from the registry (stop it if running). */
+    private HttpResponse handleLoadScenarioDeleteOne(String name) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.stop(name);
+            orchestrator.evictTerminalSeries(name);
+            boolean removed = loadScenarioRegistry.delete(name);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", removed ? "deleted" : "absent");
+            result.put("name", name);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to delete load scenario: " + e.getMessage());
+        }
+    }
+
+    /** Handle {@code DELETE /mockserver/loadScenario}: clear the whole registry (stop all running). */
+    private HttpResponse handleLoadScenarioDeleteAll() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.stopAll();
+            for (String name : loadScenarioRegistry.list()) {
+                orchestrator.evictTerminalSeries(name);
+            }
+            loadScenarioRegistry.clear();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "cleared");
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to clear load scenarios: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle {@code PUT /mockserver/loadScenario/start}: trigger one or more registered scenarios to
+     * run. Body is {@code {"names":["a","b"]}} or {@code {"name":"a"}}. Requires
+     * {@code loadGenerationEnabled} (else 403); 404 if a name is not registered; 400 if it would exceed
+     * the concurrent-scenario cap. Each scenario honours its own {@code startDelayMillis}.
+     */
+    private HttpResponse handleLoadScenarioStart(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            if (!configuration.loadGenerationEnabled()) {
+                return response().withStatusCode(FORBIDDEN.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "load generation not enabled (set loadGenerationEnabled=true)")), MediaType.JSON_UTF_8);
+            }
+            java.util.List<String> names = parseLoadScenarioNames(objectMapper, request.getBodyAsJsonOrXmlString(), false);
+            if (names.isEmpty()) {
+                return loadScenarioError(objectMapper, "request body must specify 'name' or 'names' of registered scenario(s) to start");
+            }
+            // Validate all names are registered before starting any (all-or-nothing on the unknown-name
+            // check, so a typo does not partially start a batch).
+            for (String name : names) {
+                if (!loadScenarioRegistry.contains(name)) {
+                    return response().withStatusCode(NOT_FOUND.code())
+                        .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                            objectMapper.createObjectNode().put("error", "no load scenario named '" + name + "'")), MediaType.JSON_UTF_8);
+                }
+            }
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.setConfiguration(configuration);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode started = result.putArray("started");
+            for (String name : names) {
+                org.mockserver.load.LoadScenario scenario =
+                    getLoadScenarioSerializer().deserialize(loadScenarioRegistry.get(name).get().toString());
+                String error = orchestrator.start(scenario, null);
+                if (error != null) {
+                    return loadScenarioError(objectMapper, error);
+                }
+                com.fasterxml.jackson.databind.node.ObjectNode entry = started.addObject();
+                entry.put("name", name);
+                entry.put("state", loadScenarioStateFor(name).name());
+            }
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("started load scenario(s):{}")
+                        .setArguments(names)
+                );
+            }
+            result.put("status", "started");
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return loadScenarioError(objectMapper, "invalid load scenario start request: " + e.getMessage());
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to start load scenario(s): " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle {@code PUT /mockserver/loadScenario/stop}: stop one or more running scenarios. Body is
+     * {@code {"names":[...]}}, {@code {"all":true}}, or an empty body (stop all running). Stopped
+     * scenarios stay registered (state {@code STOPPED}) and can be re-started.
+     */
+    private HttpResponse handleLoadScenarioStop(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            String body = request.getBodyAsJsonOrXmlString();
+            java.util.List<String> names = parseLoadScenarioNames(objectMapper, body, true);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode stopped = result.putArray("stopped");
+            if (names == null) {
+                // 'all' or empty body: stop every running scenario.
+                for (String name : loadScenarioRegistry.list()) {
+                    if (orchestrator.isActive(name)) {
+                        orchestrator.stop(name);
+                        com.fasterxml.jackson.databind.node.ObjectNode entry = stopped.addObject();
+                        entry.put("name", name);
+                        entry.put("state", loadScenarioStateFor(name).name());
+                    }
+                }
+            } else {
+                for (String name : names) {
+                    orchestrator.stop(name);
+                    com.fasterxml.jackson.databind.node.ObjectNode entry = stopped.addObject();
+                    entry.put("name", name);
+                    entry.put("state", loadScenarioStateFor(name).name());
+                }
+            }
+            result.put("status", "stopped");
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return loadScenarioError(objectMapper, "invalid load scenario stop request: " + e.getMessage());
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to stop load scenario(s): " + e.getMessage());
+        }
+    }
+
+    /**
+     * Parse the {@code names}/{@code name}/{@code all} body of a start/stop request. When
+     * {@code allowAll} and the body is empty or {@code {"all":true}}, returns {@code null} to signal
+     * "all". Otherwise returns the list of names (possibly empty).
+     */
+    private java.util.List<String> parseLoadScenarioNames(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String body, boolean allowAll) throws Exception {
+        if (isBlank(body)) {
+            return allowAll ? null : new java.util.ArrayList<>();
+        }
+        com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+        if (allowAll && node.has("all") && node.get("all").asBoolean(false)) {
+            return null;
+        }
+        java.util.List<String> names = new java.util.ArrayList<>();
+        if (node.has("names") && node.get("names").isArray()) {
+            node.get("names").forEach(n -> {
+                if (n != null && n.isTextual() && !n.asText().isBlank()) {
+                    names.add(n.asText());
+                }
+            });
+        } else if (node.has("name") && node.get("name").isTextual()) {
+            names.add(node.get("name").asText());
+        }
+        if (allowAll && names.isEmpty()) {
+            return null;
+        }
+        return names;
+    }
+
+    /**
+     * Build the JSON node for a single registered scenario: name, lifecycle state, startDelayMillis,
+     * the full definition, and the live/terminal status fields when present.
+     */
+    private com.fasterxml.jackson.databind.node.ObjectNode loadScenarioNode(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String name) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
+        node.put("name", name);
+        node.put("state", loadScenarioStateFor(name).name());
+        com.fasterxml.jackson.databind.JsonNode definition = loadScenarioRegistry.get(name)
+            .<com.fasterxml.jackson.databind.JsonNode>map(d -> d).orElse(null);
+        long startDelayMillis = definition != null && definition.has("startDelayMillis")
+            ? definition.get("startDelayMillis").asLong(0) : 0;
+        node.put("startDelayMillis", startDelayMillis);
+        if (definition != null) {
+            node.set("definition", definition);
+        }
+        org.mockserver.mock.action.http.LoadScenarioOrchestrator.LoadScenarioStatus status =
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance().statusFor(name);
+        if (status != null) {
+            node.put("elapsedMillis", status.elapsedMillis);
+            node.put("currentVus", status.currentVus);
+            if (status.stageIndex >= 0) {
+                node.put("stageIndex", status.stageIndex);
+            }
+            if (status.stageType != null) {
+                node.put("stageType", status.stageType);
+                node.put("currentTarget", status.currentTarget);
+            }
+            node.put("requestsSent", status.requestsSent);
+            node.put("succeeded", status.succeeded);
+            node.put("failed", status.failed);
+            node.put("p50Millis", status.p50Millis);
+            node.put("p95Millis", status.p95Millis);
+            node.put("p99Millis", status.p99Millis);
+            node.put("runId", status.runId);
+            node.put("startedAt", status.startedAtEpochMillis);
+            if (status.endedAtEpochMillis != null) {
+                node.put("endedAt", status.endedAtEpochMillis);
+            }
+            if (status.labels != null && !status.labels.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ObjectNode labelsNode = node.putObject("labels");
+                status.labels.forEach(labelsNode::put);
+            }
+        }
+        return node;
+    }
+
+    /**
+     * Resolve the lifecycle state of a registered scenario: the live run's state when active or its
+     * retained terminal state when recently run, else {@code LOADED} (registered, idle).
+     */
+    private org.mockserver.load.LoadScenarioState loadScenarioStateFor(String name) {
+        org.mockserver.mock.action.http.LoadScenarioOrchestrator.LoadScenarioStatus status =
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance().statusFor(name);
+        return status != null ? status.state : org.mockserver.load.LoadScenarioState.LOADED;
+    }
+
+    /**
+     * If {@code request} is the given {@code method} on a path {@code /mockserver/loadScenario/{name}}
+     * (with or without the prefix) where {name} is a single non-reserved segment, returns the decoded
+     * {name}; otherwise {@code null}. {@code start} and {@code stop} are reserved sub-paths and never
+     * matched as a name.
+     */
+    private String loadScenarioName(HttpRequest request, String method) {
+        if (!request.getMethod().getValue().equals(method)) {
+            return null;
+        }
+        String prefix = "/loadScenario/";
+        String path = request.getPath().getValue();
+        String rest = null;
+        if (path.startsWith(PATH_PREFIX + prefix)) {
+            rest = path.substring((PATH_PREFIX + prefix).length());
+        } else if (path.startsWith(prefix)) {
+            rest = path.substring(prefix.length());
+        }
+        if (rest == null || rest.isEmpty() || rest.contains("/")) {
+            return null;
+        }
+        String decoded;
+        try {
+            decoded = java.net.URLDecoder.decode(rest, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            decoded = rest;
+        }
+        if ("start".equals(decoded) || "stop".equals(decoded)) {
+            return null;
+        }
+        return decoded;
+    }
+
+    /**
+     * Preload load scenario definitions from {@code loadScenarioInitializationJsonPath} into the
+     * registry (LOADED state) at startup. Mirrors the expectation initialization-from-file mechanism.
+     * Fail-soft: a malformed file logs a WARN and is skipped rather than aborting startup.
+     */
+    private void preloadLoadScenarios() {
+        String path = configuration.loadScenarioInitializationJsonPath();
+        if (isBlank(path)) {
+            return;
+        }
+        try {
+            String json = org.mockserver.file.FileReader.readFileFromClassPathOrPath(path);
+            if (isBlank(json)) {
+                return;
+            }
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(json);
+            java.util.List<com.fasterxml.jackson.databind.JsonNode> definitions = new java.util.ArrayList<>();
+            if (root.isArray()) {
+                root.forEach(definitions::add);
+            } else if (root.isObject()) {
+                definitions.add(root);
+            }
+            org.mockserver.serialization.LoadScenarioSerializer serializer = getLoadScenarioSerializer();
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.setConfiguration(configuration);
+            int loaded = 0;
+            for (com.fasterxml.jackson.databind.JsonNode def : definitions) {
+                try {
+                    org.mockserver.load.LoadScenario scenario = serializer.deserialize(def.toString());
+                    String error = orchestrator.validate(scenario);
+                    if (error != null) {
+                        if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                            mockServerLogger.logEvent(new LogEntry()
+                                .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION).setLogLevel(Level.WARN)
+                                .setMessageFormat("skipping invalid preloaded load scenario '" + scenario.getName() + "': " + error));
+                        }
+                        continue;
+                    }
+                    com.fasterxml.jackson.databind.JsonNode normalised = objectMapper.readTree(serializer.serialize(scenario));
+                    loadScenarioRegistry.load(scenario.getName(), normalised);
+                    loaded++;
+                } catch (Exception inner) {
+                    if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                        mockServerLogger.logEvent(new LogEntry()
+                            .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION).setLogLevel(Level.WARN)
+                            .setMessageFormat("exception while preloading a load scenario, skipping it")
+                            .setThrowable(inner));
+                    }
+                }
+            }
+            if (loaded > 0 && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(new LogEntry()
+                    .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION).setLogLevel(Level.INFO)
+                    .setMessageFormat("preloaded " + loaded + " load scenario(s) from:{}")
+                    .setArguments(path));
+            }
+        } catch (Throwable throwable) {
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(new LogEntry()
+                    .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION).setLogLevel(Level.WARN)
+                    .setMessageFormat("exception while preloading load scenarios, ignoring file:{}")
+                    .setArguments(path).setThrowable(throwable));
+            }
+        }
+    }
+
+    private HttpResponse loadScenarioError(com.fasterxml.jackson.databind.ObjectMapper objectMapper, String message) {
+        try {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                    objectMapper.createObjectNode().put("error", message)), MediaType.JSON_UTF_8);
+        } catch (Exception jsonError) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process load scenario request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    // --- ADV3: saved chaos profile library endpoints ---
+
+    /**
+     * If {@code request} is the given {@code method} on a path that is
+     * {@code prefix}{name} (with or without the {@code /mockserver} prefix),
+     * returns the URL-decoded {name} segment; otherwise returns {@code null}.
+     * Returns {@code null} for an empty or multi-segment trailing path so that a
+     * bare {@code .../profiles} (no name) does not match a {name} route.
+     */
+    private String chaosProfileName(HttpRequest request, String method, String prefix) {
+        if (!request.getMethod().getValue().equals(method)) {
+            return null;
+        }
+        String path = request.getPath().getValue();
+        String rest = null;
+        if (path.startsWith(PATH_PREFIX + prefix)) {
+            rest = path.substring((PATH_PREFIX + prefix).length());
+        } else if (path.startsWith(prefix)) {
+            rest = path.substring(prefix.length());
+        }
+        if (rest == null || rest.isEmpty() || rest.contains("/")) {
+            return null;
+        }
+        try {
+            return java.net.URLDecoder.decode(rest, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return rest;
+        }
+    }
+
+    private HttpResponse handleChaosProfileSave(HttpRequest request, String name) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return chaosExperimentError(objectMapper, "request body is required with a chaos profile (experiment) definition");
+            }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            // Validate it parses as an experiment definition before saving so a malformed
+            // profile fails at save time rather than at apply time.
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentDefinition.fromJson(node);
+            chaosProfileLibrary.save(name, node);
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("saved chaos profile:{}")
+                        .setArguments(name)
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "saved");
+            result.put("name", name);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return chaosExperimentError(objectMapper, "invalid chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return chaosExperimentError(objectMapper, "failed to save chaos profile: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleChaosProfileList() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            com.fasterxml.jackson.databind.node.ArrayNode names = result.putArray("profiles");
+            for (String name : chaosProfileLibrary.list()) {
+                names.add(name);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return chaosExperimentError(objectMapper, "failed to list chaos profiles: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleChaosProfileGet(String name) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            java.util.Optional<com.fasterxml.jackson.databind.node.ObjectNode> profile = chaosProfileLibrary.get(name);
+            if (profile.isEmpty()) {
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "no chaos profile named '" + name + "'")), MediaType.JSON_UTF_8);
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(profile.get()), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return chaosExperimentError(objectMapper, "failed to get chaos profile: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleChaosProfileDelete(String name) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            boolean removed = chaosProfileLibrary.delete(name);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", removed ? "deleted" : "absent");
+            result.put("name", name);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return chaosExperimentError(objectMapper, "failed to delete chaos profile: " + e.getMessage());
+        }
+    }
+
+    private HttpResponse handleChaosProfileApply(HttpRequest request, String name) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            java.util.Optional<com.fasterxml.jackson.databind.node.ObjectNode> profile = chaosProfileLibrary.get(name);
+            if (profile.isEmpty()) {
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "no chaos profile named '" + name + "'")), MediaType.JSON_UTF_8);
+            }
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentDefinition definition =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentDefinition.fromJson(profile.get());
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator orchestrator =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.getInstance();
+            String error = orchestrator.start(definition);
+            if (error != null) {
+                return chaosExperimentError(objectMapper, error);
+            }
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("applied saved chaos profile:{}")
+                        .setArguments(name)
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "started");
+            result.put("name", definition.name);
+            result.put("stages", definition.stages.size());
+            result.put("loop", definition.loop);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return chaosExperimentError(objectMapper, "invalid saved chaos profile: " + e.getMessage());
+        } catch (Exception e) {
+            return chaosExperimentError(objectMapper, "failed to apply chaos profile: " + e.getMessage());
+        }
+    }
+
     // --- TCP Chaos endpoint helpers ---
 
     private HttpResponse handleTcpChaosPut(HttpRequest request) {
@@ -2669,6 +4185,85 @@ public class HttpState {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to process TCP chaos request\"}", MediaType.JSON_UTF_8);
         }
+    }
+
+    // --- Preemption / SIGTERM simulation endpoint helpers ---
+
+    private HttpResponse handlePreemptionPut(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.model.PreemptionRequest preemptionRequest;
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                // an empty body starts a preemption with all defaults (drain = stopDrainMillis, mode = both)
+                preemptionRequest = org.mockserver.model.PreemptionRequest.preemptionRequest();
+            } else {
+                preemptionRequest = objectMapper.readValue(body, org.mockserver.model.PreemptionRequest.class);
+                if (preemptionRequest == null) {
+                    preemptionRequest = org.mockserver.model.PreemptionRequest.preemptionRequest();
+                }
+            }
+            org.mockserver.model.PreemptionRequest effective =
+                org.mockserver.mock.action.http.PreemptionSimulator.getInstance().start(preemptionRequest);
+            // No start-time channel orchestration: the cordon state is now authoritative, and an HTTP/2
+            // GOAWAY (when the mode includes it) is emitted lazily by HttpRequestHandler on the next
+            // request that hits a cordoned connection, so no per-channel registry is required.
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(new LogEntry()
+                    .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                    .setLogLevel(Level.INFO)
+                    .setHttpRequest(request)
+                    .setMessageFormat("started preemption simulation (mode " + effective.getMode()
+                        + ", drain " + effective.getDrainMillis() + "ms"
+                        + (effective.getTtlMillis() != null && effective.getTtlMillis() > 0 ? ", ttl " + effective.getTtlMillis() + "ms" : "") + ")"));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(preemptionStatusNode(objectMapper)), MediaType.JSON_UTF_8);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"invalid preemption request: " + sanitizeJsonError(e.getMessage()) + "\"}", MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to process preemption request\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handlePreemptionGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(preemptionStatusNode(objectMapper)), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get preemption status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handlePreemptionDelete() {
+        // Idempotent uncordon: a 200 whether or not a simulation was active.
+        org.mockserver.mock.action.http.PreemptionSimulator.getInstance().uncordon();
+        return response().withStatusCode(OK.code())
+            .withBody("{\"state\":\"inactive\"}", MediaType.JSON_UTF_8);
+    }
+
+    private com.fasterxml.jackson.databind.node.ObjectNode preemptionStatusNode(com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+        org.mockserver.mock.action.http.PreemptionSimulator simulator = org.mockserver.mock.action.http.PreemptionSimulator.getInstance();
+        com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+        result.put("state", simulator.state());
+        result.put("inFlight", simulator.inFlight());
+        result.put("drainRemainingMillis", simulator.drainRemainingMillis());
+        org.mockserver.model.PreemptionRequest.Mode mode = simulator.getMode();
+        if (mode != null) {
+            result.put("mode", mode.name());
+        }
+        return result;
+    }
+
+    private static String sanitizeJsonError(String message) {
+        if (message == null) {
+            return "unparseable JSON";
+        }
+        return message.replace("\"", "'").replace("\n", " ").replace("\r", " ");
     }
 
     // --- gRPC Chaos endpoint helpers ---
@@ -3345,6 +4940,35 @@ public class HttpState {
         }
     }
 
+    private HttpResponse handleClusterGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.state.ClusterInfo clusterInfo = stateBackend.clusterInfo();
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("clustered", clusterInfo.clustered());
+            result.put("nodeId", clusterInfo.nodeId());
+            result.put("coordinator", clusterInfo.coordinator());
+            if (clusterInfo.clusterName() != null) {
+                result.put("clusterName", clusterInfo.clusterName());
+            }
+            result.put("memberCount", clusterInfo.members().size());
+            com.fasterxml.jackson.databind.node.ArrayNode membersArray = objectMapper.createArrayNode();
+            for (org.mockserver.state.ClusterInfo.Member member : clusterInfo.members()) {
+                com.fasterxml.jackson.databind.node.ObjectNode memberNode = objectMapper.createObjectNode();
+                memberNode.put("id", member.id());
+                memberNode.put("coordinator", member.coordinator());
+                memberNode.put("local", member.local());
+                membersArray.add(memberNode);
+            }
+            result.set("members", membersArray);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get cluster status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
     private HttpResponse handleDriftGet(HttpRequest request) {
         com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
         try {
@@ -3415,17 +5039,311 @@ public class HttpState {
         }
     }
 
-    private boolean controlPlaneRequestAuthenticated(HttpRequest request, ResponseWriter responseWriter) {
+    /**
+     * The single control-plane gate: authenticates the request and, when
+     * {@code controlPlaneAuthorizationEnabled} is on, authorizes it (coarse read/mutate
+     * role check), auditing the outcome. Returns true to proceed; on failure writes the
+     * 401/403 response itself and returns false.
+     * <p>
+     * Public so control-plane choke points serviced directly in the Netty layer (e.g.
+     * {@code PUT /mockserver/configuration}, which mutates live configuration outside
+     * {@link #handle}) route through the SAME authn + authz + audit decision rather than
+     * calling the legacy boolean authentication SPI directly — which would authenticate
+     * but skip Wave-2 authorization, letting a read-only principal mutate. Operations
+     * dispatched through {@link #handle} already call this internally.
+     */
+    public boolean controlPlaneRequestAuthenticated(HttpRequest request, ResponseWriter responseWriter) {
         try {
-            if (controlPlaneAuthenticationHandler == null || controlPlaneAuthenticationHandler.controlPlaneRequestAuthenticated(request)) {
+            org.mockserver.authentication.AuthenticationResult authenticationResult =
+                controlPlaneAuthenticationHandler == null
+                    ? org.mockserver.authentication.AuthenticationResult.authenticated(null, "none", java.util.Map.of(), java.util.Set.of())
+                    : controlPlaneAuthenticationHandler.authenticate(request);
+            if (authenticationResult.isAuthenticated()) {
+                if (configuration.controlPlaneAuthorizationEnabled() && !controlPlaneAuthorized(request, authenticationResult)) {
+                    // verified principal, but its scopes/groups do not grant a role that
+                    // satisfies the operation's required role: deny with a generic 403 and
+                    // record the denial. The detail (granted vs required role) is logged
+                    // server-side only so authorization policy is not disclosed to the client.
+                    recordAudit(request, authenticationResult, "FORBIDDEN");
+                    responseWriter.writeResponse(request, FORBIDDEN, "Forbidden for control plane", MediaType.create("text", "plain").toString());
+                    return false;
+                }
+                recordAudit(request, authenticationResult, "AUTHORIZED");
                 return true;
             }
         } catch (AuthenticationException authenticationException) {
-            responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane - " + authenticationException.getMessage(), MediaType.create("text", "plain").toString());
+            if (authenticationException.isClientSafeMessage()) {
+                responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane - " + authenticationException.getMessage(), MediaType.create("text", "plain").toString());
+            } else {
+                // OIDC path: log the detailed reason server-side only and return a generic
+                // body so the expected issuer/audience/scopes are not disclosed to the client.
+                mockServerLogger.logEvent(
+                    new org.mockserver.log.model.LogEntry()
+                        .setLogLevel(org.slf4j.event.Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("control plane request failed authentication:{}")
+                        .setArguments(authenticationException.getMessage())
+                        .setThrowable(authenticationException)
+                );
+                responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane", MediaType.create("text", "plain").toString());
+            }
             return false;
         }
         responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane", MediaType.create("text", "plain").toString());
         return false;
+    }
+
+    private static final java.util.Set<String> CONTROL_PLANE_READ_PUTS = new java.util.HashSet<>(java.util.Arrays.asList(
+        "retrieve", "verify", "verifySequence", "verifySLO", "diff", "explainUnmatched", "debugMismatch", "files/retrieve", "files/list"
+    ));
+
+    /**
+     * Coarse role-based authorization decision for an already-AUTHENTICATED control-plane
+     * request, gated by {@code controlPlaneAuthorizationEnabled}. Maps the verified
+     * principal's scopes/groups through {@code controlPlaneScopeMapping} into granted
+     * roles, computes the operation's required role from the existing read/mutate split
+     * ({@link #isControlPlaneRead}), and returns whether the granted roles satisfy it.
+     * <p>
+     * Fail-closed: a principal with no mapped role is denied every mutation (and every
+     * read unless it has a READ-or-higher role). Authorization therefore requires a
+     * verified principal whose scopes are mapped — i.e. control-plane OIDC authentication
+     * should be enabled. The denial detail is logged at INFO server-side only.
+     */
+    private boolean controlPlaneAuthorized(HttpRequest request, org.mockserver.authentication.AuthenticationResult authenticationResult) {
+        org.mockserver.authentication.authorization.ControlPlaneAuthorizer authorizer = controlPlaneAuthorizer();
+        String method = request.getMethod() != null ? request.getMethod().getValue() : "";
+        String operation = auditOperation(request.getPath() != null ? request.getPath().getValue() : "");
+        boolean isRead = isControlPlaneRead(method, operation);
+        java.util.Set<String> scopes = authenticationResult != null ? authenticationResult.getScopes() : java.util.Set.of();
+        boolean authorized = authorizer.isAuthorized(scopes, isRead);
+        if (!authorized && mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.INFO)
+                    .setHttpRequest(request)
+                    .setMessageFormat("control plane request forbidden:{}")
+                    .setArguments("principal granted roles " + authorizer.grantedRoles(scopes) + " do not satisfy required role " + authorizer.requiredRole(isRead) + " for " + method + " " + operation)
+            );
+        }
+        return authorized;
+    }
+
+    /**
+     * Returns the {@link org.mockserver.authentication.authorization.ControlPlaneAuthorizer}
+     * for the current scope mapping, parsing the mapping (and allocating the authorizer)
+     * once and reusing it across requests. Re-derives only when the mapping the cached
+     * authorizer was built from differs (by value) from the current mapping, so a
+     * configuration reload that changes the mapping is honoured without re-parsing on
+     * every control-plane request. Cheap reference-equality fast path for the common case
+     * where {@code controlPlaneScopeMapping()} returns the same instance each call.
+     */
+    private org.mockserver.authentication.authorization.ControlPlaneAuthorizer controlPlaneAuthorizer() {
+        java.util.Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> mapping = configuration.controlPlaneScopeMapping();
+        // Read the holder ONCE: its (authorizer, mapping) pair is always self-consistent.
+        AuthorizerHolder holder = cachedAuthorizerHolder;
+        if (holder != null && (holder.mapping == mapping || (holder.mapping != null && holder.mapping.equals(mapping)))) {
+            return holder.authorizer;
+        }
+        // Mapping changed (or first use): rebuild the immutable holder and publish it
+        // atomically through the single volatile field. The rebuild is idempotent and the
+        // authorizer immutable, so a concurrent racing rebuild is harmless.
+        org.mockserver.authentication.authorization.ControlPlaneAuthorizer authorizer =
+            new org.mockserver.authentication.authorization.ControlPlaneAuthorizer(mapping);
+        cachedAuthorizerHolder = new AuthorizerHolder(mapping, authorizer);
+        return authorizer;
+    }
+
+    /**
+     * Best-effort, fail-soft audit of a control-plane operation. Records redacted,
+     * structural metadata only (never headers or bodies) into the bounded in-memory
+     * {@link org.mockserver.mock.audit.AuditStore}. Off by default — when
+     * {@code controlPlaneAuditEnabled} is false this is a no-op and the control-plane
+     * operation behaves byte-for-byte identically. Never throws into the request path.
+     * <p>
+     * When the authentication handler produced a VERIFIED principal (e.g. an OIDC-verified
+     * {@code sub} with source {@code verified-oidc}), records that principal/source instead
+     * of the unverified best-effort extraction. When {@code authenticationResult} is null or
+     * carries no principal (e.g. auth disabled, or a legacy boolean handler), falls back to
+     * the unchanged {@link #bestEffortPrincipal} behaviour.
+     * <p>
+     * The {@code outcome} is "AUTHORIZED" for a permitted operation or "FORBIDDEN" when
+     * control-plane authorization denied an authenticated principal.
+     */
+    private void recordAudit(HttpRequest request, org.mockserver.authentication.AuthenticationResult authenticationResult, String outcome) {
+        try {
+            if (request == null || !configuration.controlPlaneAuditEnabled()) {
+                return;
+            }
+            String method = request.getMethod() != null ? request.getMethod().getValue() : "";
+            String rawPath = request.getPath() != null ? request.getPath().getValue() : "";
+            String operation = auditOperation(rawPath);
+            // Reads are skipped by default (controlPlaneAuditReads), but a FORBIDDEN
+            // outcome is a security-relevant denial and is always recorded when auditing
+            // is enabled, even for a read.
+            if (!"FORBIDDEN".equals(outcome) && !configuration.controlPlaneAuditReads() && isControlPlaneRead(method, operation)) {
+                return;
+            }
+            String sourceAddress = request.getRemoteAddress();
+            if (sourceAddress == null || sourceAddress.isEmpty()) {
+                sourceAddress = "unknown";
+            }
+            String[] principalAndSource =
+                authenticationResult != null && authenticationResult.getPrincipal() != null
+                    ? new String[]{authenticationResult.getPrincipal(), authenticationResult.getPrincipalSource()}
+                    : bestEffortPrincipal(request);
+            org.mockserver.mock.audit.AuditEntry entry = new org.mockserver.mock.audit.AuditEntry(
+                org.mockserver.time.EpochService.currentTimeMillis(),
+                method,
+                rawPath,
+                operation,
+                sourceAddress,
+                principalAndSource[0],
+                principalAndSource[1],
+                outcome,
+                null
+            );
+            org.mockserver.mock.audit.AuditStore.getInstance().add(entry);
+            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request())
+                        .setMessageFormat("control-plane audit{}")
+                        .setArguments(" " + method + " " + operation + " from " + sourceAddress + " as " + principalAndSource[0] + " (" + principalAndSource[1] + ") -> " + outcome)
+                );
+            }
+        } catch (Throwable throwable) {
+            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.TRACE)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.TRACE)
+                        .setLogLevel(Level.TRACE)
+                        .setMessageFormat("exception recording control-plane audit entry - " + throwable.getMessage())
+                );
+            }
+        }
+    }
+
+    /**
+     * Derives the logical operation name from a control-plane path: strips
+     * {@link #PATH_PREFIX} and any query string, then returns the path remainder
+     * with leading slash removed (e.g. {@code /mockserver/clear?type=all} ->
+     * {@code clear}). Returns "" if the path is not under the control-plane prefix.
+     */
+    private static String auditOperation(String rawPath) {
+        if (rawPath == null) {
+            return "";
+        }
+        int query = rawPath.indexOf('?');
+        String path = query >= 0 ? rawPath.substring(0, query) : rawPath;
+        if (path.startsWith(PATH_PREFIX + "/")) {
+            return path.substring(PATH_PREFIX.length() + 1);
+        }
+        if (path.startsWith("/")) {
+            return path.substring(1);
+        }
+        return path;
+    }
+
+    private static boolean isControlPlaneRead(String method, String operation) {
+        if ("GET".equalsIgnoreCase(method)) {
+            return true;
+        }
+        return "PUT".equalsIgnoreCase(method) && CONTROL_PLANE_READ_PUTS.contains(operation);
+    }
+
+    /**
+     * Best-effort, UNVERIFIED principal extraction. From an {@code Authorization:
+     * Bearer <jwt>} header it base64-decodes the JWT payload segment and reads
+     * {@code sub} (NO signature verification); else from an mTLS client certificate
+     * chain it reads the subject CN; else returns {@code anonymous/none}. The raw
+     * token is never stored. Any failure yields {@code anonymous/none}.
+     *
+     * @return a 2-element array: [principal, principalSource]
+     */
+    private static String[] bestEffortPrincipal(HttpRequest request) {
+        try {
+            String authorization = request.getFirstHeader("Authorization");
+            if (authorization != null && authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
+                String token = authorization.substring(7).trim();
+                String[] segments = token.split("\\.");
+                if (segments.length >= 2) {
+                    byte[] payload = java.util.Base64.getUrlDecoder().decode(padBase64(segments[1]));
+                    com.fasterxml.jackson.databind.JsonNode node = ObjectMapperFactory.createObjectMapper().readTree(payload);
+                    com.fasterxml.jackson.databind.JsonNode sub = node.get("sub");
+                    if (sub != null && sub.isTextual() && !sub.asText().isEmpty()) {
+                        return new String[]{sub.asText(), "jwt"};
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // fall through to mTLS / anonymous
+        }
+        try {
+            java.util.List<org.mockserver.model.X509Certificate> chain = request.getClientCertificateChain();
+            if (chain != null && !chain.isEmpty()) {
+                String dn = chain.get(0).getSubjectDistinguishedName();
+                String cn = extractCommonName(dn);
+                if (cn != null && !cn.isEmpty()) {
+                    return new String[]{cn, "mtls"};
+                }
+            }
+        } catch (Throwable ignored) {
+            // fall through to anonymous
+        }
+        return new String[]{"anonymous", "none"};
+    }
+
+    private static String padBase64(String segment) {
+        int pad = segment.length() % 4;
+        if (pad == 0) {
+            return segment;
+        }
+        StringBuilder builder = new StringBuilder(segment);
+        for (int i = pad; i < 4; i++) {
+            builder.append('=');
+        }
+        return builder.toString();
+    }
+
+    private static String extractCommonName(String distinguishedName) {
+        if (distinguishedName == null) {
+            return null;
+        }
+        for (String part : distinguishedName.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.regionMatches(true, 0, "CN=", 0, 3)) {
+                return trimmed.substring(3);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Handles GET /mockserver/audit — returns the most-recent control-plane audit
+     * entries as a JSON array, newest first. Honours {@code ?limit=<n>} (default
+     * 200, capped at 1000). Mirrors {@link #handleDriftGet(HttpRequest)}.
+     */
+    private HttpResponse handleAuditGet(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            int limit = 200;
+            String limitParam = request.getFirstQueryStringParameter("limit");
+            if (limitParam != null && !limitParam.isEmpty()) {
+                try {
+                    limit = Math.min(1000, Integer.parseInt(limitParam));
+                } catch (NumberFormatException ignored) {
+                    // use default
+                }
+            }
+            List<org.mockserver.mock.audit.AuditEntry> entries = org.mockserver.mock.audit.AuditStore.getInstance().getRecent(limit);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(entries), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to retrieve audit entries\"}", MediaType.JSON_UTF_8);
+        }
     }
 
     @SuppressWarnings("rawtypes")
@@ -3506,6 +5424,222 @@ public class HttpState {
      * Requests whose body exceeds this cap are rejected with 413 Payload Too Large.
      */
     private static final int REPLAY_MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+
+    /**
+     * Run OpenAPI contract tests against a live service. The control-plane request body is a JSON
+     * document containing:
+     * <ul>
+     *   <li>{@code spec} (or {@code specUrlOrPayload}) — required; a URL, file path, or inline JSON/YAML OpenAPI spec</li>
+     *   <li>{@code baseUrl} — required; the base URL of the service under test e.g. {@code http://localhost:8080}</li>
+     *   <li>{@code operationId} — optional; restricts the run to a single operation</li>
+     * </ul>
+     * <p>For each operation in the spec a representative example request is built, sent to the target
+     * service (reusing the wired HTTP client via {@link #replayHandler}), and the response is validated
+     * against the spec. A structured pass/fail-per-operation report is returned as JSON.</p>
+     * <p>The same SSRF policy applied to the forward/replay path is enforced against the resolved target
+     * host before any request is sent.</p>
+     */
+    private void handleContractTest(HttpRequest controlPlaneRequest, ResponseWriter responseWriter, CompletableFuture<Boolean> canHandle) {
+        try {
+            if (replayHandler == null) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"contract testing is not available — no HTTP client has been wired\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            String body = controlPlaneRequest.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required — must be a JSON document with a \\\"spec\\\" (URL or inline spec) and a \\\"baseUrl\\\"\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(body);
+            String spec = textOrNull(rootNode, "spec");
+            if (isBlank(spec)) {
+                spec = textOrNull(rootNode, "specUrlOrPayload");
+            }
+            String baseUrl = textOrNull(rootNode, "baseUrl");
+            String operationIdFilter = textOrNull(rootNode, "operationId");
+
+            if (isBlank(spec)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain a \\\"spec\\\" — a URL, file path, or inline OpenAPI spec\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+            if (isBlank(baseUrl)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain a \\\"baseUrl\\\" — the base URL of the service under test\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            final java.net.URI target;
+            try {
+                target = new java.net.URI(baseUrl.trim());
+            } catch (java.net.URISyntaxException e) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":" + jsonEncodeString("invalid baseUrl: " + e.getMessage()) + "}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+            final String targetHost = target.getHost();
+            if (isBlank(targetHost)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"baseUrl must include a host e.g. http://localhost:8080\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            // SSRF protection: validate the target host against the same policy enforced by the
+            // normal forward and replay paths.
+            try {
+                InetAddressValidator.validateForwardTarget(configuration, targetHost);
+            } catch (IllegalArgumentException blocked) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setMessageFormat("contract test blocked by SSRF policy:{}")
+                        .setArguments(blocked.getMessage())
+                );
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(FORBIDDEN.code())
+                    .withBody("{\"error\":" + jsonEncodeString("contract test blocked by SSRF policy: " + blocked.getMessage()) + "}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            final boolean https = "https".equalsIgnoreCase(target.getScheme());
+            final int targetPort = target.getPort() != -1 ? target.getPort() : (https ? 443 : 80);
+            final String contextPath = target.getRawPath() != null && !"/".equals(target.getRawPath())
+                ? org.apache.commons.lang3.StringUtils.removeEnd(target.getRawPath(), "/") : "";
+            final long timeoutMillis = configuration.maxSocketTimeoutInMillis();
+
+            final String specRef = spec;
+
+            // The contract-test run drives a per-operation loop, each iteration of which BLOCKS on the
+            // wired async HTTP client (.get(timeoutMillis)). This must NOT run on the Netty event-loop
+            // (worker) thread: because the outbound NettyHttpClient shares the same workerGroup, the
+            // outbound I/O can be assigned to the very thread parked in .get() — self-deadlocking the
+            // event loop — and even without that it holds the worker thread for the full
+            // maxSocketTimeout × operationCount, starving every connection pinned to that thread.
+            // Offload the entire run onto the scheduler's (non-I/O) executor and complete canHandle /
+            // write the response from that worker, mirroring the async pattern of handleReplay.
+            scheduler.getExecutorService().submit(() -> {
+                try {
+                    // HTTP sender: targets each example request at the service-under-test and blocks on
+                    // the wired async HTTP client. Runs on the off-loop worker thread; no breakpoints apply.
+                    java.util.function.Function<HttpRequest, HttpResponse> httpSender = exampleRequest -> {
+                        HttpRequest outbound = exampleRequest
+                            .withSocketAddress(targetHost, targetPort, https ? SocketAddress.Scheme.HTTPS : SocketAddress.Scheme.HTTP)
+                            .withSecure(https)
+                            .withHeader(HOST.toString(), targetPort == (https ? 443 : 80) ? targetHost : (targetHost + ":" + targetPort));
+                        if (!contextPath.isEmpty()) {
+                            String path = outbound.getPath() != null ? outbound.getPath().getValue() : "/";
+                            outbound.withPath(contextPath + path);
+                        }
+                        try {
+                            HttpResponse upstream = replayHandler.apply(outbound)
+                                .get(timeoutMillis, MILLISECONDS);
+                            return upstream != null ? upstream : response().withStatusCode(0);
+                        } catch (Exception e) {
+                            throw new RuntimeException("failed to send contract-test request to " + baseUrl + ": " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()), e);
+                        }
+                    };
+
+                    List<org.mockserver.openapi.OpenApiContractTest.ContractTestResult> results =
+                        new org.mockserver.openapi.OpenApiContractTest(mockServerLogger)
+                            .runContractTests(specRef, baseUrl, operationIdFilter, httpSender);
+
+                    int passed = 0;
+                    for (org.mockserver.openapi.OpenApiContractTest.ContractTestResult result : results) {
+                        if (result.isPassed()) {
+                            passed++;
+                        }
+                    }
+                    com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                    com.fasterxml.jackson.databind.node.ObjectNode reportNode = objectMapper.createObjectNode();
+                    reportNode.put("baseUrl", baseUrl);
+                    reportNode.put("totalOperations", results.size());
+                    reportNode.put("passed", passed);
+                    reportNode.put("failed", results.size() - passed);
+                    reportNode.put("allPassed", passed == results.size());
+                    com.fasterxml.jackson.databind.node.ArrayNode resultsNode = reportNode.putArray("results");
+                    for (org.mockserver.openapi.OpenApiContractTest.ContractTestResult result : results) {
+                        com.fasterxml.jackson.databind.node.ObjectNode resultNode = resultsNode.addObject();
+                        resultNode.put("operationId", result.getOperationId());
+                        resultNode.put("method", result.getMethod());
+                        resultNode.put("path", result.getPath());
+                        resultNode.put("statusCodeReceived", result.getStatusCodeReceived());
+                        resultNode.put("passed", result.isPassed());
+                        com.fasterxml.jackson.databind.node.ArrayNode errorsNode = resultNode.putArray("validationErrors");
+                        if (result.getValidationErrors() != null) {
+                            for (String error : result.getValidationErrors()) {
+                                errorsNode.add(error);
+                            }
+                        }
+                    }
+
+                    responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                        .withStatusCode(OK.code())
+                        .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(reportNode), MediaType.JSON_UTF_8)), true);
+                } catch (Exception e) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.ERROR)
+                            .setHttpRequest(controlPlaneRequest)
+                            .setMessageFormat("exception handling contract test request:{}error:{}")
+                            .setArguments(controlPlaneRequest, e.getMessage())
+                            .setThrowable(e)
+                    );
+                    responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                        .withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":" + jsonEncodeString(e.getMessage() != null ? e.getMessage() : "unknown error") + "}", MediaType.JSON_UTF_8)), true);
+                } finally {
+                    canHandle.complete(true);
+                }
+            });
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setHttpRequest(controlPlaneRequest)
+                    .setMessageFormat("exception handling contract test request:{}error:{}")
+                    .setArguments(controlPlaneRequest, e.getMessage())
+                    .setThrowable(e)
+            );
+            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":" + jsonEncodeString(e.getMessage() != null ? e.getMessage() : "unknown error") + "}", MediaType.JSON_UTF_8)), true);
+            canHandle.complete(true);
+        }
+    }
+
+    /**
+     * Package-private test hook: invokes {@link #handleContractTest} directly so tests can observe
+     * that the handler offloads its blocking per-operation work off the calling (event-loop) thread
+     * rather than running it inline.
+     */
+    void handleContractTestForTest(HttpRequest controlPlaneRequest, ResponseWriter responseWriter, CompletableFuture<Boolean> canHandle) {
+        handleContractTest(controlPlaneRequest, responseWriter, canHandle);
+    }
+
+    /**
+     * Returns the text value of a JSON field, or {@code null} if the field is absent, null, or not textual.
+     */
+    private static String textOrNull(com.fasterxml.jackson.databind.JsonNode rootNode, String fieldName) {
+        com.fasterxml.jackson.databind.JsonNode node = rootNode.get(fieldName);
+        return node != null && !node.isNull() ? node.asText() : null;
+    }
 
     /**
      * Re-issue a previously recorded/proxied request to its target and return
@@ -3643,6 +5777,78 @@ public class HttpState {
     }
 
     /**
+     * Arms record-and-forward of unmatched requests to {@code upstream} for the session — the
+     * server-side half of the one-command record round-trip exposed via
+     * {@code GET /mockserver/retrieve?type=RECORDED_EXPECTATIONS&forwardUnmatchedTo=<upstream>}.
+     * <p>
+     * {@code upstream} may be a bare {@code host}, {@code host:port}, or a full URL
+     * ({@code http://host:port} / {@code https://host:port}). The host is SSRF-validated against the
+     * same policy enforced by the normal forward and replay paths <em>before</em> any state is mutated.
+     * On success the proxy-remote host/port and {@code attemptToProxyIfNoMatchingExpectation} flag are
+     * set so that subsequent unmatched traffic is forwarded to the upstream and recorded.
+     *
+     * @return {@code null} on success, or a populated error {@link HttpResponse} (BAD_REQUEST / FORBIDDEN)
+     * to return directly when the upstream is malformed or blocked by SSRF policy.
+     */
+    private HttpResponse enableRecordAndForward(String upstream, String logCorrelationId) {
+        final String host;
+        final int port;
+        final boolean https;
+        try {
+            final String trimmed = upstream.trim();
+            if (trimmed.contains("://")) {
+                final java.net.URI uri = new java.net.URI(trimmed);
+                host = uri.getHost();
+                https = "https".equalsIgnoreCase(uri.getScheme());
+                port = uri.getPort() != -1 ? uri.getPort() : (https ? 443 : 80);
+            } else {
+                final String[] hostPort = HttpRequest.splitHostPort(trimmed);
+                host = hostPort[0];
+                https = false;
+                port = hostPort.length > 1 && isNotBlank(hostPort[1]) ? Integer.parseInt(hostPort[1]) : 80;
+            }
+        } catch (Exception parseError) {
+            return response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":" + jsonEncodeString("invalid forwardUnmatchedTo value: " + parseError.getMessage()) + "}", MediaType.JSON_UTF_8);
+        }
+        if (isBlank(host)) {
+            return response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"forwardUnmatchedTo must include a host e.g. localhost:8080 or http://localhost:8080\"}", MediaType.JSON_UTF_8);
+        }
+
+        // SSRF protection: validate the upstream host against the same policy enforced by the
+        // normal forward and replay paths before mutating any configuration / connecting.
+        try {
+            InetAddressValidator.validateForwardTarget(configuration, host);
+        } catch (IllegalArgumentException blocked) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setCorrelationId(logCorrelationId)
+                    .setMessageFormat("record-and-forward blocked by SSRF policy:{}")
+                    .setArguments(blocked.getMessage())
+            );
+            return response()
+                .withStatusCode(FORBIDDEN.code())
+                .withBody("{\"error\":" + jsonEncodeString("record-and-forward blocked by SSRF policy: " + blocked.getMessage()) + "}", MediaType.JSON_UTF_8);
+        }
+
+        configuration.proxyRemoteHost(host);
+        configuration.proxyRemotePort(port);
+        configuration.attemptToProxyIfNoMatchingExpectation(true);
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setType(LogEntry.LogMessageType.INFO)
+                .setLogLevel(Level.INFO)
+                .setCorrelationId(logCorrelationId)
+                .setMessageFormat("enabled record-and-forward of unmatched requests to upstream " + host + ":" + port + (https ? " (https)" : ""))
+        );
+        return null;
+    }
+
+    /**
      * JSON-encode a string value (with surrounding quotes) using Jackson so that
      * special characters (quotes, backslashes, newlines, control chars) are
      * properly escaped — replacing the naive {@code .replace("\"","'")} pattern.
@@ -3707,11 +5913,97 @@ public class HttpState {
         return expectationToJavaSerializer;
     }
 
+    private org.mockserver.serialization.code.ExpectationToJavaScriptSerializer getExpectationToJavaScriptSerializer() {
+        if (this.expectationToJavaScriptSerializer == null) {
+            this.expectationToJavaScriptSerializer = new org.mockserver.serialization.code.ExpectationToJavaScriptSerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToJavaScriptSerializer;
+    }
+
+    private org.mockserver.serialization.code.ExpectationToPythonSerializer getExpectationToPythonSerializer() {
+        if (this.expectationToPythonSerializer == null) {
+            this.expectationToPythonSerializer = new org.mockserver.serialization.code.ExpectationToPythonSerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToPythonSerializer;
+    }
+
+    private org.mockserver.serialization.code.ExpectationToGoSerializer getExpectationToGoSerializer() {
+        if (this.expectationToGoSerializer == null) {
+            this.expectationToGoSerializer = new org.mockserver.serialization.code.ExpectationToGoSerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToGoSerializer;
+    }
+
+    private org.mockserver.serialization.code.ExpectationToCSharpSerializer getExpectationToCSharpSerializer() {
+        if (this.expectationToCSharpSerializer == null) {
+            this.expectationToCSharpSerializer = new org.mockserver.serialization.code.ExpectationToCSharpSerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToCSharpSerializer;
+    }
+
+    private org.mockserver.serialization.code.ExpectationToRubySerializer getExpectationToRubySerializer() {
+        if (this.expectationToRubySerializer == null) {
+            this.expectationToRubySerializer = new org.mockserver.serialization.code.ExpectationToRubySerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToRubySerializer;
+    }
+
+    private org.mockserver.serialization.code.ExpectationToRustSerializer getExpectationToRustSerializer() {
+        if (this.expectationToRustSerializer == null) {
+            this.expectationToRustSerializer = new org.mockserver.serialization.code.ExpectationToRustSerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToRustSerializer;
+    }
+
+    private org.mockserver.serialization.code.ExpectationToPhpSerializer getExpectationToPhpSerializer() {
+        if (this.expectationToPhpSerializer == null) {
+            this.expectationToPhpSerializer = new org.mockserver.serialization.code.ExpectationToPhpSerializer(getExpectationSerializerThatSerializesBodyDefault());
+        }
+        return expectationToPhpSerializer;
+    }
+
     private org.mockserver.serialization.ExpectationExportSerializer getExpectationExportSerializer() {
         if (this.expectationExportSerializer == null) {
             this.expectationExportSerializer = new org.mockserver.serialization.ExpectationExportSerializer(mockServerLogger);
         }
         return expectationExportSerializer;
+    }
+
+    /**
+     * Apply the opt-in recorded-expectation post-processor (deduplicate +
+     * templatize) to a retrieved list of recorded expectations when
+     * {@code configuration.deduplicateRecordedExpectations()} is enabled. When the
+     * flag is off (the default) the input list is returned unchanged, so the
+     * retrieved output is byte-for-byte identical to historical behaviour.
+     *
+     * @param expectations the recorded expectations as retrieved from the event log
+     * @return the post-processed list when the flag is on, otherwise the input list
+     */
+    private List<Expectation> postProcessRecordedExpectations(List<Expectation> expectations) {
+        List<Expectation> processed = expectations;
+        if (Boolean.TRUE.equals(configuration.deduplicateRecordedExpectations())) {
+            int inputCount = processed == null ? 0 : processed.size();
+            boolean templatizeValues = Boolean.TRUE.equals(configuration.templatizeRecordedValues());
+            processed = RecordedExpectationPostProcessor.deduplicateAndTemplatize(processed, templatizeValues);
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(LogEntry.LogMessageType.INFO)
+                    .setLogLevel(Level.INFO)
+                    .setMessageFormat("deduplicated and templatized recorded expectations from " + inputCount + " to " + processed.size())
+            );
+        }
+        if (Boolean.TRUE.equals(configuration.redactSecretsInRecordedExpectations()) && processed != null && !processed.isEmpty()) {
+            Expectation[] redacted = new org.mockserver.fixture.FixtureRedactor()
+                .redact(processed.toArray(new Expectation[0]), true);
+            processed = new java.util.ArrayList<>(java.util.Arrays.asList(redacted));
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(LogEntry.LogMessageType.INFO)
+                    .setLogLevel(Level.INFO)
+                    .setMessageFormat("redacted secrets in " + processed.size() + " recorded expectations")
+            );
+        }
+        return processed;
     }
 
     /**
@@ -3751,6 +6043,20 @@ public class HttpState {
             this.verificationSequenceSerializer = new VerificationSequenceSerializer(mockServerLogger);
         }
         return verificationSequenceSerializer;
+    }
+
+    private SloCriteriaSerializer getSloCriteriaSerializer() {
+        if (this.sloCriteriaSerializer == null) {
+            this.sloCriteriaSerializer = new SloCriteriaSerializer(mockServerLogger);
+        }
+        return sloCriteriaSerializer;
+    }
+
+    private org.mockserver.serialization.LoadScenarioSerializer getLoadScenarioSerializer() {
+        if (this.loadScenarioSerializer == null) {
+            this.loadScenarioSerializer = new org.mockserver.serialization.LoadScenarioSerializer(mockServerLogger);
+        }
+        return loadScenarioSerializer;
     }
 
     private LogEntrySerializer getLogEntrySerializer() {
@@ -3836,6 +6142,45 @@ public class HttpState {
         }
     }
 
+    private HttpResponse handleAsyncApiHttpImport(HttpRequest request) {
+        try {
+            org.mockserver.async.AsyncApiControlPlaneRegistry registry = org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance();
+            if (!registry.isAvailable()) {
+                return response().withStatusCode(NOT_IMPLEMENTED.code())
+                    .withBody("{\"error\":\"AsyncAPI messaging module is not available — mockserver-async is not on the classpath\"}", MediaType.JSON_UTF_8);
+            }
+            String body = request.getBodyAsString();
+            if (body == null || body.isBlank()) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain an AsyncAPI spec (JSON/YAML) or {spec, channelPathPrefix}\"}", MediaType.JSON_UTF_8);
+            }
+            String expectationsJson = registry.generateHttpExpectations(body);
+            List<Expectation> upsertedExpectations = add(getExpectationSerializer().deserializeArray(expectationsJson, false));
+            return response().withStatusCode(CREATED.code())
+                .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(errorJson(String.valueOf(e.getMessage())), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody(errorJson("failed to import AsyncAPI spec as HTTP expectations: " + e.getMessage()), MediaType.JSON_UTF_8);
+        }
+    }
+
+    /**
+     * Build a {@code {"error": "..."}} JSON body, escaping the message via Jackson so that
+     * arbitrary exception text (quotes, backslashes, control characters) cannot corrupt the
+     * JSON structure.
+     */
+    private static String errorJson(String message) {
+        try {
+            return ObjectMapperFactory.createObjectMapper()
+                .writeValueAsString(java.util.Collections.singletonMap("error", message));
+        } catch (Exception e) {
+            return "{\"error\":\"error serializing error message\"}";
+        }
+    }
+
     private HttpResponse handleAsyncApiGet() {
         try {
             org.mockserver.async.AsyncApiControlPlaneRegistry registry = org.mockserver.async.AsyncApiControlPlaneRegistry.getInstance();
@@ -3852,6 +6197,43 @@ public class HttpState {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to get AsyncAPI status: " + message.replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
         }
+    }
+
+    /**
+     * Build {@link org.mockserver.imports.ImportRedaction.Options} from the
+     * {@code PUT /mockserver/import} query parameters:
+     * <ul>
+     *     <li>{@code redactSensitiveData} — boolean, defaults to {@code true}; when
+     *     {@code false} the import is kept verbatim (redaction disabled).</li>
+     *     <li>{@code additionalRedactedHeaders} — comma-separated extra header names
+     *     to redact on top of the defaults.</li>
+     *     <li>{@code additionalRedactedBodyFields} — comma-separated extra JSON body
+     *     field names to redact on top of the defaults.</li>
+     * </ul>
+     */
+    private static org.mockserver.imports.ImportRedaction.Options buildImportRedactionOptions(HttpRequest request) {
+        String redactSensitiveData = request.getFirstQueryStringParameter("redactSensitiveData");
+        boolean enabled = !"false".equalsIgnoreCase(redactSensitiveData);
+        org.mockserver.imports.ImportRedaction.Options options = enabled
+            ? org.mockserver.imports.ImportRedaction.Options.enabled()
+            : org.mockserver.imports.ImportRedaction.Options.disabled();
+        options.withAdditionalSensitiveHeaders(splitCommaSeparated(request.getFirstQueryStringParameter("additionalRedactedHeaders")));
+        options.withAdditionalSensitiveBodyFields(splitCommaSeparated(request.getFirstQueryStringParameter("additionalRedactedBodyFields")));
+        return options;
+    }
+
+    private static List<String> splitCommaSeparated(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<String> result = new ArrayList<>();
+        for (String part : value.split(",")) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                result.add(trimmed);
+            }
+        }
+        return result;
     }
 
     private HttpResponse handlePactVerify(HttpRequest request) {
@@ -3909,50 +6291,191 @@ public class HttpState {
         }
     }
 
-    // --- breakpoint control endpoints ---
+    // --- breakpoint matcher control endpoints ---
 
-    private HttpResponse handleBreakpointList() {
+    private HttpResponse handleBreakpointMatcherRegister(HttpRequest request) {
         com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
         try {
-            org.mockserver.mock.breakpoint.BreakpointRegistry registry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
-            com.fasterxml.jackson.databind.node.ArrayNode exchanges = objectMapper.createArrayNode();
-            for (java.util.Map.Entry<String, org.mockserver.mock.breakpoint.PausedExchange> entry : registry.entries().entrySet()) {
-                org.mockserver.mock.breakpoint.PausedExchange paused = entry.getValue();
-                com.fasterxml.jackson.databind.node.ObjectNode node = objectMapper.createObjectNode();
-                node.put("id", paused.getCorrelationId());
-                node.put("phase", paused.getPhase().name());
-                node.put("ageMillis", paused.ageMillis());
-                if (paused.getMatchedExpectationId() != null) {
-                    node.put("expectationId", paused.getMatchedExpectationId());
-                }
-                HttpRequest req = paused.getCapturedRequest();
-                if (req != null) {
-                    com.fasterxml.jackson.databind.node.ObjectNode requestSummary = objectMapper.createObjectNode();
-                    if (req.getMethod() != null) {
-                        requestSummary.put("method", req.getMethod().getValue());
-                    }
-                    if (req.getPath() != null) {
-                        requestSummary.put("path", req.getPath().getValue());
-                    }
-                    node.set("request", requestSummary);
-                }
-                // include response summary for RESPONSE-phase exchanges
-                if (paused.getPhase() == org.mockserver.mock.breakpoint.PausedExchange.Phase.RESPONSE && paused.getCapturedResponse() != null) {
-                    HttpResponse resp = paused.getCapturedResponse();
-                    com.fasterxml.jackson.databind.node.ObjectNode responseSummary = objectMapper.createObjectNode();
-                    if (resp.getStatusCode() != null) {
-                        responseSummary.put("statusCode", resp.getStatusCode());
-                    }
-                    if (resp.getReasonPhrase() != null) {
-                        responseSummary.put("reasonPhrase", resp.getReasonPhrase());
-                    }
-                    node.set("response", responseSummary);
-                }
-                exchanges.add(node);
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required with 'httpRequest' and 'phases' fields\"}", MediaType.JSON_UTF_8);
             }
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+
+            // validate httpRequest
+            com.fasterxml.jackson.databind.JsonNode httpRequestNode = node.get("httpRequest");
+            if (httpRequestNode == null || httpRequestNode.isNull() || httpRequestNode.isMissingNode()
+                || (httpRequestNode.isObject() && httpRequestNode.isEmpty())) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'httpRequest' field is required and must not be empty\"}", MediaType.JSON_UTF_8);
+            }
+
+            // validate phases
+            com.fasterxml.jackson.databind.JsonNode phasesNode = node.get("phases");
+            if (phasesNode == null || phasesNode.isNull() || phasesNode.isMissingNode() || !phasesNode.isArray() || phasesNode.isEmpty()) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'phases' field is required and must be a non-empty array\"}", MediaType.JSON_UTF_8);
+            }
+
+            java.util.Set<org.mockserver.mock.breakpoint.BreakpointPhase> phases = java.util.EnumSet.noneOf(org.mockserver.mock.breakpoint.BreakpointPhase.class);
+            for (com.fasterxml.jackson.databind.JsonNode phaseElement : phasesNode) {
+                String phaseName = phaseElement.asText(null);
+                if (isBlank(phaseName)) {
+                    return response().withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":\"each element in 'phases' must be a non-empty string\"}", MediaType.JSON_UTF_8);
+                }
+                try {
+                    phases.add(org.mockserver.mock.breakpoint.BreakpointPhase.valueOf(phaseName));
+                } catch (IllegalArgumentException e) {
+                    return response().withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":\"unknown phase '" + phaseName.replace("\"", "'") + "'; valid phases are: "
+                            + java.util.Arrays.toString(org.mockserver.mock.breakpoint.BreakpointPhase.values()) + "\"}", MediaType.JSON_UTF_8);
+                }
+            }
+
+            // deserialize the request matcher
+            RequestDefinition requestMatcher = getRequestDefinitionSerializer().deserialize(objectMapper.writeValueAsString(httpRequestNode));
+
+            // clientId is REQUIRED — breakpoints are always dispatched over the callback WS
+            com.fasterxml.jackson.databind.JsonNode clientIdNode = node.get("clientId");
+            String clientId = (clientIdNode != null && !clientIdNode.isNull() && clientIdNode.isTextual())
+                ? clientIdNode.asText(null) : null;
+            if (clientId == null || clientId.isBlank()) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'clientId' field is required (must be the callback WebSocket client id)\"}", MediaType.JSON_UTF_8);
+            }
+
+            // optional skipCount — conditional (Nth-hit) breakpoint: do not pause
+            // on the first skipCount matching hits; absent/null => pause every time.
+            com.fasterxml.jackson.databind.JsonNode skipCountNode = node.get("skipCount");
+            Integer skipCount = null;
+            if (skipCountNode != null && !skipCountNode.isNull() && !skipCountNode.isMissingNode()) {
+                if (!skipCountNode.isIntegralNumber() || !skipCountNode.canConvertToInt() || skipCountNode.asInt() < 0) {
+                    return response().withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":\"'skipCount' must be a non-negative integer\"}", MediaType.JSON_UTF_8);
+                }
+                int sc = skipCountNode.asInt();
+                skipCount = sc > 0 ? sc : null;
+            }
+
+            // optional response-content conditions — RESPONSE-phase only: pause only when
+            // the response status code falls within [responseStatusCodeMin, responseStatusCodeMax]
+            // (inclusive) and/or the response body matches the responseBodyContains regex.
+            // Absent => pause regardless of response content (legacy behaviour).
+            Integer responseStatusCodeMin = null;
+            com.fasterxml.jackson.databind.JsonNode minNode = node.get("responseStatusCodeMin");
+            if (minNode != null && !minNode.isNull() && !minNode.isMissingNode()) {
+                if (!minNode.isIntegralNumber() || !minNode.canConvertToInt()) {
+                    return response().withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":\"'responseStatusCodeMin' must be an integer\"}", MediaType.JSON_UTF_8);
+                }
+                responseStatusCodeMin = minNode.asInt();
+            }
+            Integer responseStatusCodeMax = null;
+            com.fasterxml.jackson.databind.JsonNode maxNode = node.get("responseStatusCodeMax");
+            if (maxNode != null && !maxNode.isNull() && !maxNode.isMissingNode()) {
+                if (!maxNode.isIntegralNumber() || !maxNode.canConvertToInt()) {
+                    return response().withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":\"'responseStatusCodeMax' must be an integer\"}", MediaType.JSON_UTF_8);
+                }
+                responseStatusCodeMax = maxNode.asInt();
+            }
+            if (responseStatusCodeMin != null && responseStatusCodeMax != null && responseStatusCodeMin > responseStatusCodeMax) {
+                return response().withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"'responseStatusCodeMin' must not be greater than 'responseStatusCodeMax'\"}", MediaType.JSON_UTF_8);
+            }
+            String responseBodyContains = null;
+            com.fasterxml.jackson.databind.JsonNode bodyContainsNode = node.get("responseBodyContains");
+            if (bodyContainsNode != null && !bodyContainsNode.isNull() && !bodyContainsNode.isMissingNode()) {
+                if (!bodyContainsNode.isTextual()) {
+                    return response().withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":\"'responseBodyContains' must be a string\"}", MediaType.JSON_UTF_8);
+                }
+                String bc = bodyContainsNode.asText();
+                if (!bc.isEmpty()) {
+                    try {
+                        java.util.regex.Pattern.compile(bc);
+                    } catch (java.util.regex.PatternSyntaxException e) {
+                        return response().withStatusCode(BAD_REQUEST.code())
+                            .withBody("{\"error\":\"'responseBodyContains' is not a valid regular expression\"}", MediaType.JSON_UTF_8);
+                    }
+                    responseBodyContains = bc;
+                }
+            }
+
+            // register
+            String id = org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance()
+                .register(requestMatcher, phases, clientId, skipCount,
+                    responseStatusCodeMin, responseStatusCodeMax, responseBodyContains, configuration, mockServerLogger);
+
+            // build response
             com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
-            result.set("pausedExchanges", exchanges);
-            result.put("count", registry.size());
+            result.put("id", id);
+            com.fasterxml.jackson.databind.node.ArrayNode phasesArray = objectMapper.createArrayNode();
+            for (org.mockserver.mock.breakpoint.BreakpointPhase phase : phases) {
+                phasesArray.add(phase.name());
+            }
+            result.set("phases", phasesArray);
+            result.put("clientId", clientId);
+            if (skipCount != null) {
+                result.put("skipCount", skipCount);
+            }
+            if (responseStatusCodeMin != null) {
+                result.put("responseStatusCodeMin", responseStatusCodeMin);
+            }
+            if (responseStatusCodeMax != null) {
+                result.put("responseStatusCodeMax", responseStatusCodeMax);
+            }
+            if (responseBodyContains != null) {
+                result.put("responseBodyContains", responseBodyContains);
+            }
+
+            return response().withStatusCode(CREATED.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return breakpointErrorResponse(objectMapper, e);
+        }
+    }
+
+    private HttpResponse handleBreakpointMatcherList() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.breakpoint.BreakpointMatcherRegistry registry = org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance();
+            com.fasterxml.jackson.databind.node.ArrayNode matchersArray = objectMapper.createArrayNode();
+            for (org.mockserver.mock.breakpoint.BreakpointMatcher matcher : registry.entries()) {
+                com.fasterxml.jackson.databind.node.ObjectNode matcherNode = objectMapper.createObjectNode();
+                matcherNode.put("id", matcher.getId());
+
+                // serialize the request matcher
+                String requestJson = getRequestDefinitionSerializer().serialize(true, matcher.getRequestMatcher());
+                matcherNode.set("httpRequest", objectMapper.readTree(requestJson));
+
+                com.fasterxml.jackson.databind.node.ArrayNode phasesArray = objectMapper.createArrayNode();
+                for (org.mockserver.mock.breakpoint.BreakpointPhase phase : matcher.getPhases()) {
+                    phasesArray.add(phase.name());
+                }
+                matcherNode.set("phases", phasesArray);
+                if (matcher.getClientId() != null) {
+                    matcherNode.put("clientId", matcher.getClientId());
+                }
+                if (matcher.getSkipCount() != null) {
+                    matcherNode.put("skipCount", matcher.getSkipCount());
+                }
+                if (matcher.getResponseStatusCodeMin() != null) {
+                    matcherNode.put("responseStatusCodeMin", matcher.getResponseStatusCodeMin());
+                }
+                if (matcher.getResponseStatusCodeMax() != null) {
+                    matcherNode.put("responseStatusCodeMax", matcher.getResponseStatusCodeMax());
+                }
+                if (matcher.getResponseBodyContains() != null) {
+                    matcherNode.put("responseBodyContains", matcher.getResponseBodyContains());
+                }
+                matchersArray.add(matcherNode);
+            }
+
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.set("matchers", matchersArray);
             return response().withStatusCode(OK.code())
                 .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
         } catch (Exception e) {
@@ -3960,7 +6483,7 @@ public class HttpState {
         }
     }
 
-    private HttpResponse handleBreakpointContinue(HttpRequest request) {
+    private HttpResponse handleBreakpointMatcherRemove(HttpRequest request) {
         com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
         try {
             String body = request.getBodyAsJsonOrXmlString();
@@ -3974,104 +6497,38 @@ public class HttpState {
                 return response().withStatusCode(BAD_REQUEST.code())
                     .withBody("{\"error\":\"'id' field is required\"}", MediaType.JSON_UTF_8);
             }
-            boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveContinue(id);
-            if (!resolved) {
+
+            boolean removed = org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().remove(id);
+            if (!removed) {
                 com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
-                errNode.put("error", "no paused exchange found with id: " + id);
+                errNode.put("error", "breakpoint matcher not found");
+                errNode.put("id", id);
                 return response().withStatusCode(NOT_FOUND.code())
-                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(errNode), MediaType.JSON_UTF_8);
             }
-            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
-            resultNode.put("status", "continued");
-            resultNode.put("id", id);
+
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "removed");
+            result.put("id", id);
             return response().withStatusCode(OK.code())
-                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
         } catch (Exception e) {
             return breakpointErrorResponse(objectMapper, e);
         }
     }
 
-    private HttpResponse handleBreakpointModify(HttpRequest request) {
+    private HttpResponse handleBreakpointMatcherClear() {
         com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
         try {
-            String body = request.getBodyAsJsonOrXmlString();
-            if (isBlank(body)) {
-                return response().withStatusCode(BAD_REQUEST.code())
-                    .withBody("{\"error\":\"request body is required with 'id' and either 'httpRequest' or 'httpResponse' field\"}", MediaType.JSON_UTF_8);
-            }
-            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
-            String id = node.path("id").asText(null);
-            if (isBlank(id)) {
-                return response().withStatusCode(BAD_REQUEST.code())
-                    .withBody("{\"error\":\"'id' field is required\"}", MediaType.JSON_UTF_8);
-            }
+            org.mockserver.mock.breakpoint.BreakpointMatcherRegistry registry = org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance();
+            int count = registry.size();
+            registry.clear();
 
-            // Determine whether this is a request-phase or response-phase modify
-            boolean hasRequest = node.hasNonNull("httpRequest");
-            boolean hasResponse = node.hasNonNull("httpResponse");
-
-            if (!hasRequest && !hasResponse) {
-                return response().withStatusCode(BAD_REQUEST.code())
-                    .withBody("{\"error\":\"either 'httpRequest' (for request-phase) or 'httpResponse' (for response-phase) is required for modify\"}", MediaType.JSON_UTF_8);
-            }
-
-            boolean resolved;
-            if (hasResponse) {
-                // Response-phase modify: write a replacement response
-                HttpResponse modifiedResponse = getHttpResponseSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpResponse")));
-                resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveModifyResponse(id, modifiedResponse);
-            } else {
-                // Request-phase modify: forward a replacement request (A1a behaviour)
-                HttpRequest modifiedRequest = getHttpRequestSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpRequest")));
-                resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveModify(id, modifiedRequest);
-            }
-
-            if (!resolved) {
-                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
-                errNode.put("error", "no paused exchange found with id: " + id);
-                return response().withStatusCode(NOT_FOUND.code())
-                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
-            }
-            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
-            resultNode.put("status", "modified");
-            resultNode.put("id", id);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "cleared");
+            result.put("count", count);
             return response().withStatusCode(OK.code())
-                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
-        } catch (Exception e) {
-            return breakpointErrorResponse(objectMapper, e);
-        }
-    }
-
-    private HttpResponse handleBreakpointAbort(HttpRequest request) {
-        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
-        try {
-            String body = request.getBodyAsJsonOrXmlString();
-            if (isBlank(body)) {
-                return response().withStatusCode(BAD_REQUEST.code())
-                    .withBody("{\"error\":\"request body is required with an 'id' field\"}", MediaType.JSON_UTF_8);
-            }
-            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
-            String id = node.path("id").asText(null);
-            if (isBlank(id)) {
-                return response().withStatusCode(BAD_REQUEST.code())
-                    .withBody("{\"error\":\"'id' field is required\"}", MediaType.JSON_UTF_8);
-            }
-            HttpResponse abortResponse = null;
-            if (node.hasNonNull("httpResponse")) {
-                abortResponse = getHttpResponseSerializer().deserialize(objectMapper.writeValueAsString(node.get("httpResponse")));
-            }
-            boolean resolved = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance().resolveAbort(id, abortResponse);
-            if (!resolved) {
-                com.fasterxml.jackson.databind.node.ObjectNode errNode = objectMapper.createObjectNode();
-                errNode.put("error", "no paused exchange found with id: " + id);
-                return response().withStatusCode(NOT_FOUND.code())
-                    .withBody(objectMapper.writeValueAsString(errNode), MediaType.JSON_UTF_8);
-            }
-            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
-            resultNode.put("status", "aborted");
-            resultNode.put("id", id);
-            return response().withStatusCode(OK.code())
-                .withBody(objectMapper.writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
         } catch (Exception e) {
             return breakpointErrorResponse(objectMapper, e);
         }

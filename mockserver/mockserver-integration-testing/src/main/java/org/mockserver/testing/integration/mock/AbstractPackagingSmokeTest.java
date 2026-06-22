@@ -9,7 +9,7 @@ import org.mockserver.model.*;
 import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.verify.VerificationTimes;
 
-import static junit.framework.TestCase.assertEquals;
+import static org.junit.Assert.assertEquals;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;

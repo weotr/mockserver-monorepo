@@ -3,6 +3,8 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Button from '@mui/material/Button';
 import TextField from '@mui/material/TextField';
 import Tabs from '@mui/material/Tabs';
@@ -33,6 +35,8 @@ import {
   registerServerCassette,
   deleteServerCassette,
 } from '../lib/cassetteServer';
+import { humanizeError } from '../lib/errorMessage';
+import { monospaceFontFamily } from '../theme';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -85,14 +89,14 @@ function ListTab({
       <Table size="small">
         <TableHead>
           <TableRow>
-            <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Filename</TableCell>
-            <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Path</TableCell>
-            <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }} align="right">
+            <TableCell sx={{ typography: 'subtitle2' }}>Filename</TableCell>
+            <TableCell sx={{ typography: 'subtitle2' }}>Path</TableCell>
+            <TableCell sx={{ typography: 'subtitle2' }} align="right">
               Expectations
             </TableCell>
-            <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Last Used</TableCell>
-            <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }}>Origin</TableCell>
-            <TableCell sx={{ fontWeight: 600, fontSize: '0.75rem' }} align="center">
+            <TableCell sx={{ typography: 'subtitle2' }}>Last Used</TableCell>
+            <TableCell sx={{ typography: 'subtitle2' }}>Origin</TableCell>
+            <TableCell sx={{ typography: 'subtitle2' }} align="center">
               Actions
             </TableCell>
           </TableRow>
@@ -100,18 +104,18 @@ function ListTab({
         <TableBody>
           {cassettes.map((c) => (
             <TableRow key={c.path}>
-              <TableCell sx={{ fontSize: '0.75rem', fontFamily: 'monospace' }}>
+              <TableCell sx={{ typography: 'subtitle2', fontWeight: 400, fontFamily: monospaceFontFamily }}>
                 {c.filename}
               </TableCell>
-              <TableCell sx={{ fontSize: '0.7rem', fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <TableCell sx={{ typography: 'caption', fontFamily: monospaceFontFamily, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 <Tooltip title={c.path}>
                   <span>{c.path}</span>
                 </Tooltip>
               </TableCell>
-              <TableCell align="right" sx={{ fontSize: '0.75rem' }}>
+              <TableCell align="right" sx={{ typography: 'subtitle2', fontWeight: 400 }}>
                 {c.expectationCount >= 0 ? c.expectationCount : '?'}
               </TableCell>
-              <TableCell sx={{ fontSize: '0.7rem' }}>
+              <TableCell sx={{ typography: 'caption' }}>
                 {c.lastUsed ? new Date(c.lastUsed).toLocaleString() : 'N/A'}
               </TableCell>
               <TableCell>
@@ -120,7 +124,7 @@ function ListTab({
                   size="small"
                   color={c.origin === 'recorded' ? 'primary' : 'secondary'}
                   variant="outlined"
-                  sx={{ height: 18, fontSize: '0.6rem' }}
+                  sx={{ height: 18, typography: 'caption' }}
                 />
               </TableCell>
               <TableCell align="center">
@@ -191,7 +195,7 @@ function RecordTab({
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(humanizeError(err).message);
     } finally {
       setRecording(false);
     }
@@ -283,7 +287,7 @@ function LoadTab({
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(humanizeError(err).message);
     } finally {
       setLoading(false);
     }
@@ -451,7 +455,7 @@ export function CassetteManagerBody({
       <Tabs
         value={tab}
         onChange={(_, v: number) => setTab(v)}
-        sx={{ mb: 2, minHeight: 32, '& .MuiTab-root': { minHeight: 32, py: 0.5, fontSize: '0.8rem' } }}
+        sx={{ mb: 2, minHeight: 32, '& .MuiTab-root': { minHeight: 32, py: 0.5, typography: 'body2' } }}
       >
         {tabLabels.map((label) => (
           <Tab key={label} label={label} />
@@ -467,12 +471,15 @@ export function CassetteManagerBody({
 }
 
 export default function CassetteManager({ open, onClose, connectionParams }: CassetteManagerProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   return (
     <Dialog
       open={open}
       onClose={onClose}
       maxWidth="md"
       fullWidth
+      fullScreen={fullScreen}
       aria-labelledby="cassette-manager-title"
     >
       <DialogTitle id="cassette-manager-title">Cassette Manager</DialogTitle>

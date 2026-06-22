@@ -72,4 +72,59 @@ class ForwardChainExpectation
         $this->expectation->httpError($error);
         return $this->client->upsertExpectation($this->expectation);
     }
+
+    /**
+     * Respond with a Server-Sent Events (SSE) stream.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function respondWithSse(HttpSseResponse $sseResponse): array
+    {
+        $this->expectation->httpSseResponse($sseResponse);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+
+    /**
+     * Respond by upgrading to a WebSocket and sending the given messages.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function respondWithWebSocket(HttpWebSocketResponse $webSocketResponse): array
+    {
+        $this->expectation->httpWebSocketResponse($webSocketResponse);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+
+    /**
+     * Respond with a gRPC server-stream.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function respondWithGrpcStream(GrpcStreamResponse $grpcStreamResponse): array
+    {
+        $this->expectation->grpcStreamResponse($grpcStreamResponse);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+
+    /**
+     * Respond with a raw binary payload.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function respondWithBinary(BinaryResponse $binaryResponse): array
+    {
+        $this->expectation->binaryResponse($binaryResponse);
+        return $this->client->upsertExpectation($this->expectation);
+    }
+
+    /**
+     * Respond with a DNS answer.
+     *
+     * @return array The created expectation(s) as returned by the server.
+     */
+    public function respondWithDns(DnsResponse $dnsResponse): array
+    {
+        $this->expectation->dnsResponse($dnsResponse);
+        return $this->client->upsertExpectation($this->expectation);
+    }
 }

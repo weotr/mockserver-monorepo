@@ -25,11 +25,15 @@ import static org.mockserver.model.NottableString.string;
 public class HttpResponse extends Action<HttpResponse> implements HttpMessage<HttpResponse, BodyWithContentType> {
     private int hashCode;
     private Integer statusCode;
+    private String statusCodeRange;
     private String reasonPhrase;
     private BodyWithContentType body;
+    private String generateFromSchema;
     private Headers headers;
+    private Headers trailers;
     private Cookies cookies;
     private ConnectionOptions connectionOptions;
+    private RecoverAfter recoverAfter;
     private Integer streamId = null;
     private Timing timing;
     private transient StreamingBody streamingBody;
@@ -79,6 +83,32 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
 
     public Integer getStatusCode() {
         return statusCode;
+    }
+
+    /**
+     * A status-code range or numeric-operator expression used <b>only when verifying</b> a recorded
+     * response (it is never written to the wire when serving). When set it drives status matching in
+     * place of an exact {@link #withStatusCode(Integer)} comparison. Supported forms:
+     * <ul>
+     *   <li>class range — a single digit followed by {@code XX} (case-insensitive), e.g. {@code "2XX"}
+     *       matches {@code 200..299}, {@code "5xx"} matches {@code 500..599};</li>
+     *   <li>numeric operator — a leading comparison operator and a number, e.g. {@code ">= 400"},
+     *       {@code "> 200"}, {@code "< 300"}, {@code "<= 204"}, {@code "== 201"}.</li>
+     * </ul>
+     * When {@code statusCodeRange} is null/blank the exact {@link #getStatusCode()} value is used,
+     * preserving the historical exact-match behaviour. When both are set the range takes precedence
+     * for matching and the exact {@link #getStatusCode()} is not consulted.
+     *
+     * @param statusCodeRange a status-code range ({@code "2XX"}) or operator ({@code ">= 400"}) expression
+     */
+    public HttpResponse withStatusCodeRange(String statusCodeRange) {
+        this.statusCodeRange = statusCodeRange;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getStatusCodeRange() {
+        return statusCodeRange;
     }
 
     /**
@@ -206,6 +236,29 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
         } else {
             return null;
         }
+    }
+
+    /**
+     * Provide an inline <a href="https://json-schema.org">JSON Schema</a> (a plain JSON Schema object,
+     * <b>not</b> a full OpenAPI document) from which a schema-valid response body is generated at
+     * response time. The same example-generation engine used for OpenAPI responses is reused, so the
+     * generated body honours {@code type}, {@code required}, {@code enum}, {@code default}, arrays and
+     * nested objects.
+     * <p>
+     * This is additive: it only takes effect when the response has no explicit body. An explicit body
+     * (set via any {@code withBody(...)} overload) always wins.
+     *
+     * @param generateFromSchema an inline JSON Schema, e.g.
+     *                           {@code "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}}}"}
+     */
+    public HttpResponse withGenerateFromSchema(String generateFromSchema) {
+        this.generateFromSchema = generateFromSchema;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getGenerateFromSchema() {
+        return generateFromSchema;
     }
 
     public Headers getHeaders() {
@@ -410,6 +463,127 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
         }
     }
 
+    public Headers getTrailers() {
+        return this.trailers;
+    }
+
+    private Headers getOrCreateTrailers() {
+        if (this.trailers == null) {
+            this.trailers = new Headers();
+            this.hashCode = 0;
+        }
+        return this.trailers;
+    }
+
+    /**
+     * The trailing headers (HTTP trailers) to send after the response body. Trailers
+     * are emitted as protocol-appropriate trailing headers: a chunked trailer section
+     * for HTTP/1.1 (with an automatic {@code Trailer} header and chunked transfer-encoding),
+     * a trailing HEADERS frame for HTTP/2, and a trailing HEADERS frame for HTTP/3.
+     * <p>
+     * On HTTP/1.1 trailers force {@code Transfer-Encoding: chunked} (RFC 7230 section 3.3.1 --
+     * trailers and a fixed {@code Content-Length} are mutually exclusive); any explicit
+     * {@code Content-Length} you set is dropped from a trailer-carrying HTTP/1.1 response.
+     * <p>
+     * Null or empty trailers result in no trailers being sent (the default behaviour).
+     *
+     * @param trailers a Headers object holding the trailing header fields
+     */
+    public HttpResponse withTrailers(Headers trailers) {
+        if (trailers == null || trailers.isEmpty()) {
+            this.trailers = null;
+        } else {
+            this.trailers = trailers;
+        }
+        this.hashCode = 0;
+        return this;
+    }
+
+    /**
+     * The trailing headers to send as a list of Header objects
+     *
+     * @param trailers a list of Header objects
+     */
+    public HttpResponse withTrailers(List<Header> trailers) {
+        getOrCreateTrailers().withEntries(trailers);
+        this.hashCode = 0;
+        return this;
+    }
+
+    /**
+     * The trailing headers to send as a varargs of Header objects
+     *
+     * @param trailers varargs of Header objects
+     */
+    public HttpResponse withTrailers(Header... trailers) {
+        getOrCreateTrailers().withEntries(trailers);
+        this.hashCode = 0;
+        return this;
+    }
+
+    /**
+     * Add a trailing header to send as a Header object, if a trailer with
+     * the same name already exists this will NOT be modified but
+     * two trailers will exist
+     *
+     * @param trailer a Header object
+     */
+    public HttpResponse withTrailer(Header trailer) {
+        getOrCreateTrailers().withEntry(trailer);
+        this.hashCode = 0;
+        return this;
+    }
+
+    /**
+     * Add a trailing header to send, if a trailer with
+     * the same name already exists this will NOT be modified but
+     * two trailers will exist
+     *
+     * @param name   the trailer name
+     * @param values the trailer values
+     */
+    public HttpResponse withTrailer(String name, String... values) {
+        if (values.length == 0) {
+            values = new String[]{".*"};
+        }
+        getOrCreateTrailers().withEntry(name, values);
+        this.hashCode = 0;
+        return this;
+    }
+
+    /**
+     * Add a trailing header to send, if a trailer with
+     * the same name already exists this will NOT be modified but
+     * two trailers will exist
+     *
+     * @param name   the trailer name as a NottableString
+     * @param values the trailer values which can be a varags of NottableStrings
+     */
+    public HttpResponse withTrailer(NottableString name, NottableString... values) {
+        if (values.length == 0) {
+            values = new NottableString[]{string(".*")};
+        }
+        getOrCreateTrailers().withEntry(header(name, values));
+        this.hashCode = 0;
+        return this;
+    }
+
+    public List<Header> getTrailerList() {
+        if (this.trailers != null) {
+            return this.trailers.getEntries();
+        } else {
+            return Collections.emptyList();
+        }
+    }
+
+    public Multimap<NottableString, NottableString> getTrailerMultimap() {
+        if (this.trailers != null) {
+            return this.trailers.getMultimap();
+        } else {
+            return null;
+        }
+    }
+
 
     public Cookies getCookies() {
         return this.cookies;
@@ -550,6 +724,26 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
         return connectionOptions;
     }
 
+    /**
+     * Attach a retry/backoff recovery primitive: serve a failure response for the first
+     * {@code failTimes} matches, then serve this configured response. Lets a client's
+     * retry/backoff logic be tested deterministically against a transiently-failing
+     * dependency. A {@code null} {@code recoverAfter} (the default) is inert and leaves
+     * this response unchanged.
+     *
+     * @param recoverAfter the recovery primitive, or {@code null} for no recovery behaviour
+     * @see RecoverAfter
+     */
+    public HttpResponse withRecoverAfter(RecoverAfter recoverAfter) {
+        this.recoverAfter = recoverAfter;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public RecoverAfter getRecoverAfter() {
+        return recoverAfter;
+    }
+
     public HttpResponse withStreamId(Integer streamId) {
         this.streamId = streamId;
         this.hashCode = 0;
@@ -598,12 +792,16 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
     public HttpResponse shallowClone() {
         return response()
             .withStatusCode(statusCode)
+            .withStatusCodeRange(statusCodeRange)
             .withReasonPhrase(reasonPhrase)
             .withBody(body)
+            .withGenerateFromSchema(generateFromSchema)
             .withHeaders(headers)
+            .withTrailers(trailers)
             .withCookies(cookies)
             .withDelay(getDelay())
             .withConnectionOptions(connectionOptions)
+            .withRecoverAfter(recoverAfter)
             .withStreamId(streamId)
             .withTiming(timing);
     }
@@ -613,18 +811,26 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
     public HttpResponse clone() {
         return response()
             .withStatusCode(statusCode)
+            .withStatusCodeRange(statusCodeRange)
             .withReasonPhrase(reasonPhrase)
             .withBody(body)
+            .withGenerateFromSchema(generateFromSchema)
             .withHeaders(headers != null ? headers.clone() : null)
+            .withTrailers(trailers != null ? trailers.clone() : null)
             .withCookies(cookies != null ? cookies.clone() : null)
             .withDelay(getDelay())
             .withConnectionOptions(connectionOptions)
+            .withRecoverAfter(recoverAfter)
             .withStreamId(streamId)
             .withTiming(timing)
             .withStreamingBody(streamingBody);
     }
 
     public HttpResponse update(HttpResponse responseOverride, HttpResponseModifier responseModifier) {
+        return update(responseOverride, responseModifier, null);
+    }
+
+    public HttpResponse update(HttpResponse responseOverride, HttpResponseModifier responseModifier, HttpRequest request) {
         if (responseOverride != null) {
             if (responseOverride.getStatusCode() != null) {
                 withStatusCode(responseOverride.getStatusCode());
@@ -635,11 +841,17 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
             for (Header header : responseOverride.getHeaderList()) {
                 getOrCreateHeaders().replaceEntry(header);
             }
+            for (Header trailer : responseOverride.getTrailerList()) {
+                getOrCreateTrailers().replaceEntry(trailer);
+            }
             for (Cookie cookie : responseOverride.getCookieList()) {
                 withCookie(cookie);
             }
             if (responseOverride.getBody() != null) {
                 withBody(responseOverride.getBody());
+            }
+            if (responseOverride.getGenerateFromSchema() != null) {
+                withGenerateFromSchema(responseOverride.getGenerateFromSchema());
             }
             if (responseOverride.getConnectionOptions() != null) {
                 withConnectionOptions(responseOverride.getConnectionOptions());
@@ -653,12 +865,7 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
             this.hashCode = 0;
         }
         if (responseModifier != null) {
-            if (responseModifier.getHeaders() != null) {
-                withHeaders(responseModifier.getHeaders().update(getHeaders()));
-            }
-            if (responseModifier.getCookies() != null) {
-                withCookies(responseModifier.getCookies().update(getCookies()));
-            }
+            responseModifier.applyTo(this, request);
         }
         return this;
     }
@@ -679,18 +886,22 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
         }
         HttpResponse that = (HttpResponse) o;
         return Objects.equals(statusCode, that.statusCode) &&
+            Objects.equals(statusCodeRange, that.statusCodeRange) &&
             Objects.equals(reasonPhrase, that.reasonPhrase) &&
             Objects.equals(body, that.body) &&
+            Objects.equals(generateFromSchema, that.generateFromSchema) &&
             Objects.equals(headers, that.headers) &&
+            Objects.equals(trailers, that.trailers) &&
             Objects.equals(cookies, that.cookies) &&
             Objects.equals(connectionOptions, that.connectionOptions) &&
+            Objects.equals(recoverAfter, that.recoverAfter) &&
             Objects.equals(streamId, that.streamId);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), statusCode, reasonPhrase, body, headers, cookies, connectionOptions, streamId);
+            hashCode = Objects.hash(super.hashCode(), statusCode, statusCodeRange, reasonPhrase, body, generateFromSchema, headers, trailers, cookies, connectionOptions, recoverAfter, streamId);
         }
         return hashCode;
     }

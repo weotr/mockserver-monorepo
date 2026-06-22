@@ -4,13 +4,17 @@ import CardContent from '@mui/material/CardContent';
 import CardActions from '@mui/material/CardActions';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
+import Link from '@mui/material/Link';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
-import PlayCircleIcon from '@mui/icons-material/PlayCircle';
-import MenuBookIcon from '@mui/icons-material/MenuBook';
+import PauseCircleIcon from '@mui/icons-material/PauseCircle';
+import TrendingUpIcon from '@mui/icons-material/TrendingUp';
+import SavingsIcon from '@mui/icons-material/Savings';
+import BoltIcon from '@mui/icons-material/Bolt';
 import { useState } from 'react';
 import OpenApiImportDialog from './OpenApiImportDialog';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
+import { useDashboardStore, type ViewMode } from '../store';
 
 interface OnboardingPanelProps {
   connectionParams: ConnectionParams;
@@ -20,38 +24,119 @@ interface ActionCardProps {
   icon: React.ReactNode;
   title: string;
   description: string;
-  action: React.ReactNode;
+  actionLabel: string;
+  onAction: () => void;
 }
 
-function ActionCard({ icon, title, description, action }: ActionCardProps) {
+function ActionCard({ icon, title, description, actionLabel, onAction }: ActionCardProps) {
   return (
     <Card
       variant="outlined"
-      sx={{
-        flex: '1 1 260px',
-        maxWidth: 340,
+      sx={(theme) => ({
+        flex: '1 1 0',
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
-      }}
+        transition: theme.transitions.create(['transform', 'box-shadow', 'border-color'], {
+          duration: theme.transitions.duration.shorter,
+        }),
+        '&:hover': {
+          transform: 'translateY(-3px)',
+          boxShadow: 4,
+          borderColor: 'primary.main',
+        },
+      })}
     >
-      <CardContent sx={{ flex: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+      <CardContent sx={{ flex: 1, p: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.75 }}>
           {icon}
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
             {title}
           </Typography>
         </Box>
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="caption" component="p" color="text.secondary" sx={{ lineHeight: 1.45 }}>
           {description}
         </Typography>
       </CardContent>
-      <CardActions sx={{ px: 2, pb: 2 }}>{action}</CardActions>
+      <CardActions sx={{ px: 1.5, pb: 1.5, pt: 0 }}>
+        <Button size="small" variant="contained" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      </CardActions>
     </Card>
   );
 }
 
+const OTHER_TABS: { view: ViewMode; label: string; description: string }[] = [
+  { view: 'dashboard', label: 'Dashboard', description: 'active mocks & live event log' },
+  { view: 'library', label: 'Library', description: 'import / export, Postman, WSDL, HAR' },
+  { view: 'verification', label: 'Verification', description: 'assert which requests were received' },
+  { view: 'drift', label: 'Drift', description: 'spot when an upstream API changes' },
+  { view: 'async', label: 'Async', description: 'Kafka / MQTT / AMQP broker mocking' },
+  { view: 'metrics', label: 'Metrics', description: 'Prometheus stats' },
+];
+
 export default function OnboardingPanel({ connectionParams }: OnboardingPanelProps) {
   const [openApiOpen, setOpenApiOpen] = useState(false);
+  const setView = useDashboardStore((s) => s.setView);
+
+  const go = (view: ViewMode) => () => setView(view);
+
+  // The six key features, rendered as tiles on wide screens and as a compact
+  // bulleted list on narrow ones (mobile / the IDE-embedded dashboard).
+  // Ordered to lead with the most common first task (Mocking) and otherwise
+  // follow the AppBar tab order (Traffic, Breakpoints, Chaos, Performance,
+  // LLM Optimise) so the onboarding and the navigation tell a consistent story.
+  const primaryActions: ActionCardProps[] = [
+    {
+      icon: <UploadFileIcon color="primary" />,
+      title: 'Mocking',
+      description:
+        'Build mock responses by hand, or import an OpenAPI / Swagger spec, Postman collection, WSDL, or HAR file to generate stubs automatically.',
+      actionLabel: 'Import OpenAPI',
+      onAction: () => setOpenApiOpen(true),
+    },
+    {
+      icon: <SwapHorizIcon color="primary" />,
+      title: 'Debugging Proxy',
+      description:
+        'Sit MockServer between your app and a real API to record, inspect, and replay live traffic — and validate or rewrite it on the way through.',
+      actionLabel: 'View Traffic',
+      onAction: go('traffic'),
+    },
+    {
+      icon: <PauseCircleIcon color="primary" />,
+      title: 'Breakpoints',
+      description:
+        'Pause requests and responses mid-flight — proxied, mocked, or unmatched — then inspect, edit, continue, or abort them.',
+      actionLabel: 'Open Breakpoints',
+      onAction: go('breakpoints'),
+    },
+    {
+      icon: <BoltIcon color="primary" />,
+      title: 'Chaos Testing',
+      description:
+        'Inject latency, errors, and dropped connections to test how your system copes when the APIs it depends on misbehave.',
+      actionLabel: 'Open Chaos',
+      onAction: go('chaos'),
+    },
+    {
+      icon: <TrendingUpIcon color="primary" />,
+      title: 'Performance Testing',
+      description:
+        'Inject load against any target — drive traffic at a chosen arrival rate, ramp it up and down, and watch live throughput and latency.',
+      actionLabel: 'Open Performance',
+      onAction: go('performance'),
+    },
+    {
+      icon: <SavingsIcon color="primary" />,
+      title: 'LLM Optimise',
+      description:
+        'Capture LLM traffic through the proxy, then analyse it to optimise prompts, inference cost, safety, and speed.',
+      actionLabel: 'Open LLM Optimise',
+      onAction: go('optimise'),
+    },
+  ];
 
   return (
     <Box
@@ -71,87 +156,95 @@ export default function OnboardingPanel({ connectionParams }: OnboardingPanelPro
       <Typography
         variant="body1"
         color="text.secondary"
-        sx={{ mb: 4, maxWidth: 600, textAlign: 'center' }}
+        sx={{ mb: 4, maxWidth: 640, textAlign: 'center' }}
       >
-        No expectations or traffic recorded yet. Pick an action below to get
-        started, or switch to any tab when you are ready.
+        Mock, proxy, and debug HTTP, HTTPS, and other APIs. These are the key
+        things you can do — open any one below, or use the tabs above for the
+        full feature set.
       </Typography>
 
-      <Box
-        sx={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 2,
-          justifyContent: 'center',
-          maxWidth: 1100,
-        }}
-      >
-        <ActionCard
-          icon={<UploadFileIcon color="primary" />}
-          title="Import an OpenAPI Spec"
-          description="Upload an OpenAPI / Swagger definition and MockServer will generate stubs for every endpoint automatically."
-          action={
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<UploadFileIcon />}
-              onClick={() => setOpenApiOpen(true)}
-            >
-              Import OpenAPI
-            </Button>
-          }
-        />
+      {/* Responsive switch keyed off the CONTAINER width, not the viewport. The
+          dashboard is embedded in a narrow IDE tool window (JCEF) whose CSS
+          viewport stays wide regardless of the visible panel size, so a viewport
+          media query never fires there. A container query reacts to the actual
+          panel width, so this behaves the same in a browser and in the IDE.
+          Tiles are the default and only collapse to the bulleted list when the
+          panel is narrow — so an engine without container-query support (older
+          browsers, jsdom in tests) falls back to tiles rather than nothing. */}
+      <Box sx={{ containerType: 'inline-size', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        {/* Wide panels: feature tiles side by side. */}
+        <Box
+          sx={{
+            display: 'flex',
+            '@container (max-width: 899.98px)': { display: 'none' },
+            flexWrap: 'nowrap',
+            gap: 1.5,
+            alignItems: 'stretch',
+            justifyContent: 'center',
+            width: '100%',
+            maxWidth: 1320,
+          }}
+        >
+          {primaryActions.map((action) => (
+            <ActionCard key={action.title} {...action} />
+          ))}
+        </Box>
 
-        <ActionCard
-          icon={<SwapHorizIcon color="primary" />}
-          title="Record Live Traffic"
-          description="Run MockServer as a proxy to capture real API traffic. Start with the --proxyRemoteHost and --proxyRemotePort flags, or use the docker-compose proxy recipe."
-          action={
-            <Button
-              size="small"
-              variant="outlined"
-              href="https://www.mock-server.com/mock_server/self_hosting_mockserver.html"
-              target="_blank"
-              rel="noopener"
-            >
-              Proxy setup guide
-            </Button>
-          }
-        />
+        {/* Narrow panels (mobile / IDE-embedded): a compact bulleted list, since
+            six tiles side by side become unreadably squished. */}
+        <Box
+          component="ul"
+          sx={{
+            display: 'none',
+            '@container (max-width: 899.98px)': { display: 'block' },
+            m: 0,
+            pl: 3,
+            width: '100%',
+            maxWidth: 760,
+          }}
+        >
+          {primaryActions.map((action) => (
+            <Box component="li" key={action.title} sx={{ mb: 1 }}>
+              <Link
+                component="button"
+                type="button"
+                onClick={action.onAction}
+                sx={{ verticalAlign: 'baseline', fontWeight: 600 }}
+              >
+                {action.title}
+              </Link>
+              <Typography component="span" variant="body2" color="text.secondary">
+                {' '}— {action.description}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </Box>
 
-        <ActionCard
-          icon={<PlayCircleIcon color="primary" />}
-          title="Try a Quick-Start Recipe"
-          description="Spin up a ready-made docker-compose example: mock from OpenAPI, record-replay proxy, validation proxy, or chaos proxy."
-          action={
-            <Button
-              size="small"
-              variant="outlined"
-              href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose"
-              target="_blank"
-              rel="noopener"
-            >
-              View recipes
-            </Button>
-          }
-        />
-
-        <ActionCard
-          icon={<MenuBookIcon color="primary" />}
-          title="Explore the Dashboard"
-          description="Learn about all the features available in the dashboard: live traffic inspection, mock composition, chaos testing, drift detection, and more."
-          action={
-            <Button
-              size="small"
-              variant="outlined"
-              href="https://www.mock-server.com/mock_server/mockserver_ui.html"
-              target="_blank"
-              rel="noopener"
-            >
-              Dashboard docs
-            </Button>
-          }
-        />
+      <Box sx={{ mt: 4, maxWidth: 760, width: '100%' }}>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          More in the tabs above (or see{' '}
+          <Link
+            href="https://www.mock-server.com/mock_server/mockserver_ui.html"
+            target="_blank"
+            rel="noopener"
+          >
+            UI docs
+          </Link>
+          ):
+        </Typography>
+        <Box component="ul" sx={{ m: 0, pl: 3 }}>
+          {OTHER_TABS.map((tab) => (
+            <Box component="li" key={tab.view} sx={{ mb: 0.5 }}>
+              <Link component="button" type="button" onClick={go(tab.view)} sx={{ verticalAlign: 'baseline' }}>
+                {tab.label}
+              </Link>
+              <Typography component="span" variant="body2" color="text.secondary">
+                {' '}— {tab.description}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
       </Box>
 
       <OpenApiImportDialog

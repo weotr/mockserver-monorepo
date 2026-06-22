@@ -1,0 +1,19 @@
+{
+  "consumer": {"name": "frontend"},
+  "provider": {"name": "users-service"},
+  "interactions": [
+    {
+      "description": "get user 1 when it exists",
+      "providerStates": [
+        {"name": "a user with id 1 exists", "params": {"id": 1}}
+      ],
+      "request": {"method": "GET", "path": "/api/users/1"},
+      "response": {
+        "status": 200,
+        "headers": {"content-type": ["application/json"]},
+        "body": {"id": 1, "name": "Alice"}
+      }
+    }
+  ],
+  "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}

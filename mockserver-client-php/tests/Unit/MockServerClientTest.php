@@ -141,6 +141,7 @@ class MockServerClientTest extends TestCase
         $this->assertSame('GET', $body['httpRequest']['method']);
         $this->assertSame('/hello', $body['httpRequest']['path']);
         $this->assertSame(1, $body['times']['atLeast']);
+        $this->assertArrayNotHasKey('httpResponse', $body);
     }
 
     public function testVerifyThrowsOnFailure(): void
@@ -157,6 +158,165 @@ class MockServerClientTest extends TestCase
             VerificationTimes::atLeast(1)
         );
     }
+
+    // -----------------------------------------------------------------
+    // Response Verification
+    // -----------------------------------------------------------------
+
+    public function testVerifyWithResponseSendsCorrectPayload(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verify(
+            HttpRequest::request()->method('GET')->path('/hello'),
+            VerificationTimes::exactly(1),
+            HttpResponse::response()->statusCode(200)->body('world'),
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame('/mockserver/verify', $history[0]['request']->getUri()->getPath());
+        $this->assertSame('GET', $body['httpRequest']['method']);
+        $this->assertSame('/hello', $body['httpRequest']['path']);
+        $this->assertSame(200, $body['httpResponse']['statusCode']);
+        $this->assertSame('world', $body['httpResponse']['body']);
+        $this->assertSame(1, $body['times']['atLeast']);
+        $this->assertSame(1, $body['times']['atMost']);
+    }
+
+    public function testVerifyWithResponseWithoutTimesDefaults(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verify(
+            HttpRequest::request()->path('/hello'),
+            null,
+            HttpResponse::response()->statusCode(200),
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertArrayHasKey('httpRequest', $body);
+        $this->assertArrayHasKey('httpResponse', $body);
+        $this->assertArrayNotHasKey('times', $body);
+    }
+
+    public function testVerifyWithResponseThrowsOnFailure(): void
+    {
+        $client = $this->createClientWithMock([
+            new Response(406, [], 'Response not matched'),
+        ]);
+
+        $this->expectException(VerificationException::class);
+        $this->expectExceptionMessage('Response not matched');
+
+        $client->verify(
+            HttpRequest::request()->path('/hello'),
+            null,
+            HttpResponse::response()->statusCode(404),
+        );
+    }
+
+    public function testVerifyRequestAndResponseDelegatesToVerify(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifyRequestAndResponse(
+            HttpRequest::request()->method('POST')->path('/api'),
+            HttpResponse::response()->statusCode(201)->header('X-Custom', 'yes'),
+            VerificationTimes::atLeast(2),
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame('/mockserver/verify', $history[0]['request']->getUri()->getPath());
+        $this->assertSame('POST', $body['httpRequest']['method']);
+        $this->assertSame('/api', $body['httpRequest']['path']);
+        $this->assertSame(201, $body['httpResponse']['statusCode']);
+        $this->assertSame(['yes'], $body['httpResponse']['headers']['X-Custom']);
+        $this->assertSame(2, $body['times']['atLeast']);
+    }
+
+    public function testVerifyResponseOnlySendsNoHttpRequest(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifyResponse(
+            HttpResponse::response()->statusCode(200)->body('ok'),
+            VerificationTimes::atMost(5),
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame('/mockserver/verify', $history[0]['request']->getUri()->getPath());
+        $this->assertArrayNotHasKey('httpRequest', $body);
+        $this->assertSame(200, $body['httpResponse']['statusCode']);
+        $this->assertSame('ok', $body['httpResponse']['body']);
+        $this->assertSame(5, $body['times']['atMost']);
+    }
+
+    public function testVerifyResponseOnlyWithoutTimes(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifyResponse(
+            HttpResponse::response()->statusCode(500),
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertArrayNotHasKey('httpRequest', $body);
+        $this->assertSame(500, $body['httpResponse']['statusCode']);
+        $this->assertArrayNotHasKey('times', $body);
+    }
+
+    public function testVerifyResponseOnlyThrowsOnFailure(): void
+    {
+        $client = $this->createClientWithMock([
+            new Response(406, [], 'No matching response found'),
+        ]);
+
+        $this->expectException(VerificationException::class);
+        $this->expectExceptionMessage('No matching response found');
+
+        $client->verifyResponse(
+            HttpResponse::response()->statusCode(200),
+        );
+    }
+
+    public function testVerifyWithResponseHeadersMatcher(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifyResponse(
+            HttpResponse::response()
+                ->statusCode(200)
+                ->header('Content-Type', 'application/json')
+                ->header('X-Request-Id', 'abc-123'),
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame(200, $body['httpResponse']['statusCode']);
+        $this->assertSame(['application/json'], $body['httpResponse']['headers']['Content-Type']);
+        $this->assertSame(['abc-123'], $body['httpResponse']['headers']['X-Request-Id']);
+    }
+
+    // -----------------------------------------------------------------
+    // Sequence Verification (existing + response-aware)
+    // -----------------------------------------------------------------
 
     public function testVerifySequenceSendsCorrectPayload(): void
     {
@@ -175,6 +335,7 @@ class MockServerClientTest extends TestCase
         $this->assertCount(2, $body['httpRequests']);
         $this->assertSame('/first', $body['httpRequests'][0]['path']);
         $this->assertSame('/second', $body['httpRequests'][1]['path']);
+        $this->assertArrayNotHasKey('httpResponses', $body);
     }
 
     public function testVerifySequenceThrowsOnFailure(): void
@@ -189,6 +350,130 @@ class MockServerClientTest extends TestCase
             HttpRequest::request()->path('/a'),
             HttpRequest::request()->path('/b')
         );
+    }
+
+    public function testVerifySequenceWithResponsesSendsCorrectPayload(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifySequenceWithResponses(
+            [
+                HttpRequest::request()->method('GET')->path('/first'),
+                HttpRequest::request()->method('POST')->path('/second'),
+            ],
+            [
+                HttpResponse::response()->statusCode(200),
+                HttpResponse::response()->statusCode(201),
+            ],
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame('/mockserver/verifySequence', $history[0]['request']->getUri()->getPath());
+
+        // Requests
+        $this->assertCount(2, $body['httpRequests']);
+        $this->assertSame('/first', $body['httpRequests'][0]['path']);
+        $this->assertSame('GET', $body['httpRequests'][0]['method']);
+        $this->assertSame('/second', $body['httpRequests'][1]['path']);
+        $this->assertSame('POST', $body['httpRequests'][1]['method']);
+
+        // Responses (index-aligned)
+        $this->assertCount(2, $body['httpResponses']);
+        $this->assertSame(200, $body['httpResponses'][0]['statusCode']);
+        $this->assertSame(201, $body['httpResponses'][1]['statusCode']);
+    }
+
+    public function testVerifySequenceWithResponsesThrowsOnMismatchedArrayLengths(): void
+    {
+        $client = $this->createClientWithMock([]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('same length');
+
+        $client->verifySequenceWithResponses(
+            [HttpRequest::request()->path('/a')],
+            [
+                HttpResponse::response()->statusCode(200),
+                HttpResponse::response()->statusCode(201),
+            ],
+        );
+    }
+
+    public function testVerifySequenceWithResponsesThrowsOnFailure(): void
+    {
+        $client = $this->createClientWithMock([
+            new Response(406, [], 'Sequence with responses not found'),
+        ]);
+
+        $this->expectException(VerificationException::class);
+        $this->expectExceptionMessage('Sequence with responses not found');
+
+        $client->verifySequenceWithResponses(
+            [HttpRequest::request()->path('/a')],
+            [HttpResponse::response()->statusCode(200)],
+        );
+    }
+
+    public function testVerifySequenceWithResponsesNullRequestOmitted(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifySequenceWithResponses(
+            [
+                HttpRequest::request()->path('/known'),
+                null,
+            ],
+            [
+                HttpResponse::response()->statusCode(200),
+                HttpResponse::response()->statusCode(404),
+            ],
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+
+        // httpRequests should be present (at least one non-null request)
+        $this->assertArrayHasKey('httpRequests', $body);
+        $this->assertCount(2, $body['httpRequests']);
+        $this->assertSame('/known', $body['httpRequests'][0]['path']);
+        // Second request is an empty object (placeholder for index alignment)
+        $this->assertEmpty((array) $body['httpRequests'][1]);
+
+        // httpResponses always present
+        $this->assertCount(2, $body['httpResponses']);
+        $this->assertSame(200, $body['httpResponses'][0]['statusCode']);
+        $this->assertSame(404, $body['httpResponses'][1]['statusCode']);
+    }
+
+    public function testVerifySequenceWithAllNullRequestsOmitsHttpRequests(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(202, []),
+        ], $history);
+
+        $client->verifySequenceWithResponses(
+            [null, null],
+            [
+                HttpResponse::response()->statusCode(200),
+                HttpResponse::response()->statusCode(201),
+            ],
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+
+        // httpRequests omitted when all entries are null
+        $this->assertArrayNotHasKey('httpRequests', $body);
+
+        // httpResponses still present
+        $this->assertCount(2, $body['httpResponses']);
+        $this->assertSame(200, $body['httpResponses'][0]['statusCode']);
+        $this->assertSame(201, $body['httpResponses'][1]['statusCode']);
     }
 
     public function testClearSendsRequest(): void
@@ -287,6 +572,37 @@ class MockServerClientTest extends TestCase
 
         $this->assertSame([], $result);
         $this->assertStringContainsString('type=RECORDED_EXPECTATIONS', (string) $history[0]['request']->getUri());
+    }
+
+    public function testRetrieveExpectationsAsCode(): void
+    {
+        $history = [];
+        $generated = 'new MockServerClient("localhost", 1080)->when(...);';
+        $client = $this->createClientWithMock([
+            new Response(200, [], $generated),
+        ], $history);
+
+        $result = $client->retrieveExpectationsAsCode('java');
+
+        $this->assertSame($generated, $result);
+        $uri = (string) $history[0]['request']->getUri();
+        $this->assertStringContainsString('type=ACTIVE_EXPECTATIONS', $uri);
+        $this->assertStringContainsString('format=JAVA', $uri);
+    }
+
+    public function testRetrieveRecordedExpectationsAsCode(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '# generated python'),
+        ], $history);
+
+        $result = $client->retrieveRecordedExpectationsAsCode('python');
+
+        $this->assertSame('# generated python', $result);
+        $uri = (string) $history[0]['request']->getUri();
+        $this->assertStringContainsString('type=RECORDED_EXPECTATIONS', $uri);
+        $this->assertStringContainsString('format=PYTHON', $uri);
     }
 
     public function testRetrieveLogMessages(): void

@@ -1,6 +1,6 @@
 ---
 title: MockServer Clients
-description: Control MockServer from Java, JavaScript, Python, Ruby, or the REST API to create expectations, verify requests, and retrieve recorded traffic.
+description: Control MockServer from Java, JavaScript, Python, Ruby, Go, .NET, Rust, PHP, or the REST API to create expectations, verify requests, and retrieve recorded traffic.
 layout: page
 pageOrder: 3
 section: 'Getting Started'
@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-05-12T00:00:00+00:00
+  lastmod: 2026-06-10T00:00:00+00:00
 ---
 
 <p>MockServer can be controlled in the following ways:</p>
@@ -19,10 +19,15 @@ sitemap:
 	<li><a href="#javascript-mockserver-client">JavaScript</a> (both browser API & Node.js module)</li>
 	<li><a href="#python-mockserver-client">Python</a> (sync and async)</li>
 	<li><a href="#ruby-mockserver-client">Ruby</a></li>
+	<li><a href="#go-mockserver-client">Go</a></li>
+	<li><a href="#dotnet-mockserver-client">.NET</a></li>
+	<li><a href="#rust-mockserver-client">Rust</a></li>
+	<li><a href="#php-mockserver-client">PHP</a></li>
 </ul>
 
 <p>The following activities are supported:</p>
 <ul>
+    <li><a href="/mock_server/running_mock_server.html#client_library_launcher">starting a local MockServer</a> by downloading and launching the self-contained platform binary (Node, Python, Ruby, Go, .NET and Rust clients)</li>
     <li><a href="#button_client_create_expectation">creating expectations</a></li>
     <li><a href="#button_client_verify_reqs">verifying which requests have been received</a></li>
     <li><a href="#button_client_clear">clearing</a> or <a href="#button_client_reset">resetting</a> recorded request, expectations or logs (selectively)</li>
@@ -55,6 +60,38 @@ sitemap:
     <li><a href="#button_client_create_expectation"><strong>org.mockserver.integration.ClientAndServer</strong></a> - starts a local MockServer instance and makes HTTP requests to it</li>
 </ul>
 
+<p>Install via Maven:</p>
+
+<pre class="prettyprint code"><code class="code">&lt;dependency&gt;
+    &lt;groupId&gt;org.mock-server&lt;/groupId&gt;
+    &lt;artifactId&gt;mockserver-client-java&lt;/artifactId&gt;
+    &lt;version&gt;{{ site.mockserver_version }}&lt;/version&gt;
+&lt;/dependency&gt;</code></pre>
+
+<p>Create an expectation:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
+
+new MockServerClient(&quot;localhost&quot;, 1080)
+    .when(
+        request().withMethod(&quot;GET&quot;).withPath(&quot;/hello&quot;)
+    )
+    .respond(
+        response().withStatusCode(200).withBody(&quot;world&quot;)
+    );</code></pre>
+
+<p>Verify a request was received:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.HttpRequest.request;
+import org.mockserver.verify.VerificationTimes;
+
+new MockServerClient(&quot;localhost&quot;, 1080)
+    .verify(
+        request().withPath(&quot;/some/path&quot;),
+        VerificationTimes.atLeast(1)
+    );</code></pre>
+
 <a id="javascript-mockserver-client" class="anchor" href="#javascript-mockserver-client">&nbsp;</a>
 
 <h2>JavaScript Client</h2>
@@ -69,6 +106,30 @@ sitemap:
 <p>To include the browser based client in an HTML page as follows:</p>
 
 <pre class="prettyprint lang-java code"><code class="code">&lt;script src=&quot;https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver-client-node/mockServerClient.js&quot;&gt;&lt;/script&gt;</code></pre>
+
+<p>Or install the Node.js module via npm:</p>
+
+<pre class="prettyprint code"><code class="code">npm install mockserver-client --save-dev</code></pre>
+
+<p>Create an expectation:</p>
+
+<pre class="prettyprint lang-javascript code"><code class="code">const mockServerClient = require('mockserver-client').mockServerClient;
+
+mockServerClient(&quot;localhost&quot;, 1080).mockAnyResponse({
+    httpRequest: { method: &quot;GET&quot;, path: &quot;/hello&quot; },
+    httpResponse: { statusCode: 200, body: &quot;world&quot; }
+});</code></pre>
+
+<p>Verify a request was received:</p>
+
+<pre class="prettyprint lang-javascript code"><code class="code">const mockServerClient = require('mockserver-client').mockServerClient;
+
+mockServerClient(&quot;localhost&quot;, 1080)
+    .verify({ path: &quot;/some/path&quot; }, 1)
+    .then(
+        function () { /* request was received at least once */ },
+        function () { /* verification failed */ }
+    );</code></pre>
 
 <a id="python-mockserver-client" class="anchor" href="#python-mockserver-client">&nbsp;</a>
 
@@ -164,6 +225,198 @@ rescue MockServer::ConnectionError => e
 end</code></pre>
 
 <p>Requires Ruby &gt;= 3.0.</p>
+
+<a id="go-mockserver-client" class="anchor" href="#go-mockserver-client">&nbsp;</a>
+
+<h2>Go Client</h2>
+
+<p>The Go client provides a fluent builder API with zero third-party dependencies (standard library only):</p>
+
+<ul>
+    <li><strong>mockserver.Client</strong> - makes HTTP requests to a remote MockServer instance</li>
+</ul>
+
+<p>Install via <span class="inline_code">go get</span>:</p>
+
+<pre class="prettyprint code"><code class="code">go get github.com/mock-server/mockserver-monorepo/mockserver-client-go</code></pre>
+
+<p>Create an expectation using the fluent API:</p>
+
+<pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().Method("GET").Path("/hello"),
+).Respond(
+    mockserver.Response().StatusCode(200).Body("world"),
+)</code></pre>
+
+<p>Verification failures return a <span class="inline_code">*mockserver.VerificationError</span>:</p>
+
+<pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.AtLeast(1),
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+
+<p>Requires Go &gt;= 1.21.</p>
+
+<p><em>Available from MockServer {{ site.mockserver_version }} — the module is published (tag <span class="inline_code">mockserver-client-go/v{{ site.mockserver_version }}</span>) with that release.</em></p>
+
+<a id="dotnet-mockserver-client" class="anchor" href="#dotnet-mockserver-client">&nbsp;</a>
+
+<h2>.NET Client</h2>
+
+<p>The .NET client provides a fluent builder API with synchronous and async variants for all operations:</p>
+
+<ul>
+    <li><strong>MockServerClient</strong> - makes HTTP requests to a remote MockServer instance</li>
+</ul>
+
+<p>The NuGet package is <span class="inline_code">MockServerClient</span> (the C# namespace remains <span class="inline_code">MockServer.Client</span>). Install via <span class="inline_code">dotnet add</span>:</p>
+
+<pre class="prettyprint code"><code class="code">dotnet add package MockServerClient</code></pre>
+
+<p>Or via PackageReference in your <span class="inline_code">.csproj</span>:</p>
+
+<pre class="prettyprint code"><code class="code">&lt;PackageReference Include=&quot;MockServerClient&quot; Version=&quot;{{ site.mockserver_version }}&quot; /&gt;</code></pre>
+
+<p><em>Available from MockServer {{ site.mockserver_version }} — the <span class="inline_code">MockServerClient</span> package is published to NuGet with that release.</em></p>
+
+<p>Create an expectation using the fluent API:</p>
+
+<pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request()
+        .WithMethod("GET")
+        .WithPath("/hello")
+).Respond(
+    HttpResponse.Response()
+        .WithStatusCode(200)
+        .WithBody("world")
+);</code></pre>
+
+<p>Verification failures throw <span class="inline_code">VerificationException</span>. Connection failures throw <span class="inline_code">MockServerClientException</span>:</p>
+
+<pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+using MockServer.Client.Exceptions;
+
+try
+{
+    using var client = new MockServerClient("localhost", 1080);
+    client.Verify(
+        HttpRequest.Request().WithPath("/some/path"),
+        VerificationTimes.AtLeastTimes(1)
+    );
+}
+catch (VerificationException e)
+{
+    Console.WriteLine($"Verification failed: {e.Message}");
+}
+catch (MockServerClientException e)
+{
+    Console.WriteLine($"Connection failed: {e.Message}");
+}</code></pre>
+
+<p>Supports .NET Standard 2.0 (.NET Framework 4.6.1+, .NET Core 2.0+, and Mono 5.4+) and .NET 8.0.</p>
+
+<a id="rust-mockserver-client" class="anchor" href="#rust-mockserver-client">&nbsp;</a>
+
+<h2>Rust Client</h2>
+
+<p>The Rust client provides a fluent builder API using the blocking <span class="inline_code">reqwest</span> client:</p>
+
+<ul>
+    <li><strong>MockServerClient</strong> - makes HTTP requests to a remote MockServer instance</li>
+</ul>
+
+<p>Add to your <span class="inline_code">Cargo.toml</span>:</p>
+
+<pre class="prettyprint code"><code class="code">[dev-dependencies]
+mockserver-client = "7.0"</code></pre>
+
+<p>Create an expectation using the fluent API:</p>
+
+<pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(HttpRequest::new().method("GET").path("/hello"))
+    .respond(HttpResponse::new().status_code(200).body("world"))
+    .unwrap();</code></pre>
+
+<p>Verification failures return <span class="inline_code">Err(Error::VerificationFailure)</span>:</p>
+
+<pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify(
+    HttpRequest::new().path("/some/path"),
+    VerificationTimes::at_least(1),
+).unwrap();</code></pre>
+
+<p>Requires Rust 2021 edition.</p>
+
+<p><em>Available from MockServer {{ site.mockserver_version }} — the <span class="inline_code">mockserver-client</span> crate is published to crates.io with that release.</em></p>
+
+<a id="php-mockserver-client" class="anchor" href="#php-mockserver-client">&nbsp;</a>
+
+<h2>PHP Client</h2>
+
+<p>The PHP client provides a fluent builder API using Guzzle for HTTP transport:</p>
+
+<ul>
+    <li><strong>MockServerClient</strong> - makes HTTP requests to a remote MockServer instance</li>
+</ul>
+
+<p>Install via Composer:</p>
+
+<pre class="prettyprint code"><code class="code">composer require mock-server/mockserver-client</code></pre>
+
+<p>Create an expectation using the fluent API:</p>
+
+<pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()-&gt;method('GET')-&gt;path('/hello')
+)-&gt;respond(
+    HttpResponse::response()-&gt;statusCode(200)-&gt;body('world')
+);</code></pre>
+
+<p>Verification failures throw <span class="inline_code">MockServer\Exception\VerificationException</span>. Connection failures throw <span class="inline_code">MockServer\Exception\ConnectionException</span>:</p>
+
+<pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+use MockServer\Exception\VerificationException;
+use MockServer\Exception\ConnectionException;
+
+try {
+    $client = new MockServerClient('localhost', 1080);
+    $client-&gt;verify(
+        HttpRequest::request()-&gt;path('/some/path'),
+        VerificationTimes::atLeast(1)
+    );
+} catch (VerificationException $e) {
+    echo "Verification failed: " . $e-&gt;getMessage();
+} catch (ConnectionException $e) {
+    echo "Connection failed: " . $e-&gt;getMessage();
+}</code></pre>
+
+<p>Requires PHP &gt;= 8.1.</p>
+
+<p><em>Available from MockServer {{ site.mockserver_version }} — the <span class="inline_code">mock-server/mockserver-client</span> package is published to Packagist with that release.</em></p>
 
 <a id="client-code-examples" class="anchor" href="#client-code-examples">&nbsp;</a>
 
@@ -300,6 +553,73 @@ client.when(
   HttpResponse.new(body: 'some_response_body')
 )</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().
+        Method("GET").
+        Path("/view/cart").
+        Cookie("session", "4930456C-C718-476F-971F-CB8E047AB349").
+        QueryStringParameter("cartId", "055CA455-1DF7-45BB-8535-4F83E7266092"),
+).Respond(
+    mockserver.Response().Body("some_response_body"),
+)</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+// .NET client uses raw JSON for cookie matchers
+client.Upsert(new Expectation
+{
+    HttpRequest = new HttpRequest
+    {
+        Method = "GET",
+        Path = "/view/cart",
+        QueryStringParameters = new Dictionary&lt;string, List&lt;string&gt;&gt;
+        {
+            { "cartId", new List&lt;string&gt; { "055CA455-1DF7-45BB-8535-4F83E7266092" } }
+        }
+    },
+    HttpResponse = new HttpResponse { Body = "some_response_body" }
+});</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(
+    HttpRequest::new()
+        .method("GET")
+        .path("/view/cart")
+        .query_param("cartId", "055CA455-1DF7-45BB-8535-4F83E7266092"),
+).respond(
+    HttpResponse::new().body("some_response_body"),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;method('GET')
+        -&gt;path('/view/cart')
+        -&gt;cookie('session', '4930456C-C718-476F-971F-CB8E047AB349')
+        -&gt;queryStringParameter('cartId', '055CA455-1DF7-45BB-8535-4F83E7266092')
+)-&gt;respond(
+    HttpResponse::response()-&gt;body('some_response_body')
+);</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -422,6 +742,72 @@ client.when(
   HttpResponse.new(body: 'some_response_body')
 )</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080, mockserver.WithTLS())
+client.When(
+    mockserver.Request().
+        Method("GET").
+        Path("/view/cart").
+        Cookie("session", "4930456C-C718-476F-971F-CB8E047AB349").
+        QueryStringParameter("cartId", "055CA455-1DF7-45BB-8535-4F83E7266092"),
+).Respond(
+    mockserver.Response().Body("some_response_body"),
+)</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080, secure: true);
+client.When(
+    HttpRequest.Request()
+        .WithMethod("GET")
+        .WithPath("/view/cart")
+        .WithQueryStringParameter("cartId", "055CA455-1DF7-45BB-8535-4F83E7266092")
+).Respond(
+    HttpResponse.Response().WithBody("some_response_body")
+);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+
+let client = ClientBuilder::new("localhost", 1080)
+    .secure(true)
+    .tls_verify(false)
+    .build()
+    .unwrap();
+client.when(
+    HttpRequest::new()
+        .method("GET")
+        .path("/view/cart")
+        .query_param("cartId", "055CA455-1DF7-45BB-8535-4F83E7266092"),
+).respond(
+    HttpResponse::new().body("some_response_body"),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$client = new MockServerClient('localhost', 1080, secure: true, guzzleOptions: [
+    'verify' =&gt; false,
+]);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;method('GET')
+        -&gt;path('/view/cart')
+        -&gt;queryStringParameter('cartId', '055CA455-1DF7-45BB-8535-4F83E7266092')
+)-&gt;respond(
+    HttpResponse::response()-&gt;body('some_response_body')
+);</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -k -X PUT "https://localhost:1080/mockserver/expectation" -d '{
@@ -517,6 +903,52 @@ client.verify(
   HttpRequest.new(path: '/some/path'),
   times: VerificationTimes.at_least(2)
 )</code></pre>
+        </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.ExactlyTimes(2),
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpRequest.Request().WithPath("/some/path"),
+    VerificationTimes.ExactlyTimes(2)
+);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify(
+    HttpRequest::new().path("/some/path"),
+    VerificationTimes::exactly(2),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/some/path'),
+    VerificationTimes::exactly(2)
+);</code></pre>
         </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
@@ -630,6 +1062,55 @@ client.verify_sequence(
   HttpRequest.new(path: '/some/path/three')
 )</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.VerifySequence(
+    mockserver.Request().Path("/some/path/one"),
+    mockserver.Request().Path("/some/path/two"),
+    mockserver.Request().Path("/some/path/three"),
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.VerifySequence(
+    HttpRequest.Request().WithPath("/some/path/one"),
+    HttpRequest.Request().WithPath("/some/path/two"),
+    HttpRequest.Request().WithPath("/some/path/three")
+);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify_sequence(vec![
+    HttpRequest::new().path("/some/path/one"),
+    HttpRequest::new().path("/some/path/two"),
+    HttpRequest::new().path("/some/path/three"),
+]).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verifySequence(
+    HttpRequest::request()-&gt;path('/some/path/one'),
+    HttpRequest::request()-&gt;path('/some/path/two'),
+    HttpRequest::request()-&gt;path('/some/path/three')
+);</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verifySequence" -d '{
@@ -722,6 +1203,47 @@ recorded_requests = client.retrieve_recorded_requests(
   request: HttpRequest.new(path: '/some/path', method: 'POST')
 )</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+recordedRequests, err := client.RetrieveRecordedRequests(
+    mockserver.Request().Path("/some/path").Method("POST"),
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+var recordedRequests = client.RetrieveRecordedRequests(
+    HttpRequest.Request().WithPath("/some/path").WithMethod("POST")
+);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let recorded_requests = client.retrieve_recorded_requests(
+    Some(&amp;HttpRequest::new().path("/some/path").method("POST")),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$recordedRequests = $client-&gt;retrieveRecordedRequests(
+    HttpRequest::request()-&gt;path('/some/path')-&gt;method('POST')
+);</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUESTS" -d '{
@@ -804,6 +1326,47 @@ client = MockServer::Client.new('localhost', 1080)
 recorded_expectations = client.retrieve_recorded_expectations(
   request: HttpRequest.new(path: '/some/path', method: 'POST')
 )</code></pre>
+        </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+recordedExpectations, err := client.RetrieveRecordedExpectations(
+    mockserver.Request().Path("/some/path").Method("POST"),
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+var recordedExpectations = client.RetrieveRecordedExpectations(
+    HttpRequest.Request().WithPath("/some/path").WithMethod("POST")
+);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let recorded_expectations = client.retrieve_recorded_expectations(
+    Some(&amp;HttpRequest::new().path("/some/path").method("POST")),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$recordedExpectations = $client-&gt;retrieveRecordedExpectations(
+    HttpRequest::request()-&gt;path('/some/path')-&gt;method('POST')
+);</code></pre>
         </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
@@ -894,6 +1457,47 @@ log_messages = client.retrieve_log_messages(
   request: HttpRequest.new(path: '/some/path', method: 'POST')
 )</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+logMessages, err := client.RetrieveLogMessages(
+    mockserver.Request().Path("/some/path").Method("POST"),
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+var logMessages = client.RetrieveLogMessages(
+    HttpRequest.Request().WithPath("/some/path").WithMethod("POST")
+);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let log_messages = client.retrieve_log_messages(
+    Some(&amp;HttpRequest::new().path("/some/path").method("POST")),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$logMessages = $client-&gt;retrieveLogMessages(
+    HttpRequest::request()-&gt;path('/some/path')-&gt;method('POST')
+);</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=LOGS" -d '{
@@ -968,6 +1572,45 @@ include MockServer
 
 client = MockServer::Client.new('localhost', 1080)
 client.clear(HttpRequest.new(path: '/some/path'))</code></pre>
+        </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Clear(
+    mockserver.Request().Path("/some/path"),
+    mockserver.ClearAll,
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Clear(HttpRequest.Request().WithPath("/some/path"));</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.clear(
+    Some(&amp;HttpRequest::new().path("/some/path")),
+    None,
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;clear(HttpRequest::request()-&gt;path('/some/path'));</code></pre>
         </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
@@ -1045,6 +1688,45 @@ include MockServer
 client = MockServer::Client.new('localhost', 1080)
 client.clear(HttpRequest.new(path: '/some/path'), type: 'LOG')</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Clear(
+    mockserver.Request().Path("/some/path"),
+    mockserver.ClearLog,
+)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Clear(HttpRequest.Request().WithPath("/some/path"), type: "log");</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, ClearType};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.clear(
+    Some(&amp;HttpRequest::new().path("/some/path")),
+    Some(ClearType::Log),
+).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;clear(HttpRequest::request()-&gt;path('/some/path'), 'LOG');</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/clear?type=log" -d '{
@@ -1106,6 +1788,37 @@ client.reset()</code></pre>
 client = MockServer::Client.new('localhost', 1080)
 client.reset</code></pre>
         </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Reset()
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Reset();</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.reset().unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;reset();</code></pre>
+        </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/reset</code></pre>
@@ -1138,6 +1851,37 @@ bound_ports = client.bind(0)</code></pre>
 
 client = MockServer::Client.new('localhost', 1080)
 bound_ports = client.bind(0)</code></pre>
+        </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+boundPorts, err := client.Bind(0)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var boundPorts = client.Bind(0);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let bound_ports = client.bind(&amp;[0]).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$boundPorts = $client-&gt;bind(0);</code></pre>
         </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">
@@ -1176,6 +1920,37 @@ bound_ports = client.bind(1081, 1082)</code></pre>
 
 client = MockServer::Client.new('localhost', 1080)
 bound_ports = client.bind(1081, 1082)</code></pre>
+        </div>
+        <button class="accordion inner">Go</button>
+        <div class="panel">
+            <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+boundPorts, err := client.Bind(1081, 1082)
+if err != nil {
+    log.Fatal(err)
+}</code></pre>
+        </div>
+        <button class="accordion inner">.NET</button>
+        <div class="panel">
+            <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var boundPorts = client.Bind(1081, 1082);</code></pre>
+        </div>
+        <button class="accordion inner">Rust</button>
+        <div class="panel">
+            <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let bound_ports = client.bind(&amp;[1081, 1082]).unwrap();</code></pre>
+        </div>
+        <button class="accordion inner">PHP</button>
+        <div class="panel">
+            <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$boundPorts = $client-&gt;bind(1081, 1082);</code></pre>
         </div>
         <button class="accordion inner">REST API</button>
         <div class="panel">

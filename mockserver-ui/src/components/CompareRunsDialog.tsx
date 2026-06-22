@@ -3,6 +3,8 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Button from '@mui/material/Button';
 import TextField from '@mui/material/TextField';
 import Box from '@mui/material/Box';
@@ -17,6 +19,7 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Paper from '@mui/material/Paper';
 import { useDashboardStore } from '../store';
+import { monospaceFontFamily } from '../theme';
 import { groupBySession, shortenScenarioName, type Session } from '../lib/sessionGrouping';
 import {
   extractTrajectory,
@@ -107,7 +110,7 @@ function ToolCallChain({
                 sx={{
                   height: 20,
                   fontSize: '0.6rem',
-                  fontFamily: 'monospace',
+                  fontFamily: monospaceFontFamily,
                   '& .MuiChip-label': { px: 0.5 },
                 }}
               />
@@ -155,16 +158,16 @@ function TokenTable({ report }: { report: DiffReport }) {
           {report.tokenTrajectory.map((entry) => (
             <TableRow key={entry.turn}>
               <TableCell sx={{ fontSize: '0.7rem' }}>{entry.turn}</TableCell>
-              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>
+              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: monospaceFontFamily }}>
                 {entry.aInput ?? '-'}
               </TableCell>
-              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>
+              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: monospaceFontFamily }}>
                 {entry.aOutput ?? '-'}
               </TableCell>
-              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>
+              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: monospaceFontFamily }}>
                 {entry.bInput ?? '-'}
               </TableCell>
-              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: 'monospace' }}>
+              <TableCell align="right" sx={{ fontSize: '0.7rem', fontFamily: monospaceFontFamily }}>
                 {entry.bOutput ?? '-'}
               </TableCell>
             </TableRow>
@@ -245,7 +248,7 @@ export function CompareRunsBody() {
       {/* Session selectors */}
       <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
         <TextField
-          label="Run A"
+          label="Trace A"
           size="small"
           select
           fullWidth
@@ -256,7 +259,7 @@ export function CompareRunsBody() {
             inputLabel: { shrink: true },
           }}
         >
-          <option value="">— select a session —</option>
+          <option value="">— select a trace —</option>
           {sessions.map((s) => (
             <option key={sessionKey(s)} value={sessionKey(s)}>
               {sessionLabel(s)}
@@ -264,7 +267,7 @@ export function CompareRunsBody() {
           ))}
         </TextField>
         <TextField
-          label="Run B"
+          label="Trace B"
           size="small"
           select
           fullWidth
@@ -275,7 +278,7 @@ export function CompareRunsBody() {
             inputLabel: { shrink: true },
           }}
         >
-          <option value="">— select a session —</option>
+          <option value="">— select a trace —</option>
           {sessions.map((s) => (
             <option key={sessionKey(s)} value={sessionKey(s)}>
               {sessionLabel(s)}
@@ -288,9 +291,9 @@ export function CompareRunsBody() {
       {(!runA || !runB) && (
         <Box sx={{ textAlign: 'center', py: 4 }}>
           <Typography variant="body2" color="text.secondary">
-            {!runA && !runB && 'Choose two captured sessions to compare.'}
-            {runA && !runB && 'Run A selected — choose Run B to compare.'}
-            {!runA && runB && 'Run B selected — choose Run A to compare.'}
+            {!runA && !runB && 'Choose two captured traces to compare.'}
+            {runA && !runB && 'Trace A selected — choose Trace B to compare.'}
+            {!runA && runB && 'Trace B selected — choose Trace A to compare.'}
           </Typography>
         </Box>
       )}
@@ -318,12 +321,15 @@ export function CompareRunsBody() {
 }
 
 export default function CompareRunsDialog({ open, onClose }: CompareRunsDialogProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   return (
     <Dialog
       open={open}
       onClose={onClose}
       maxWidth="lg"
       fullWidth
+      fullScreen={fullScreen}
       aria-labelledby="compare-runs-title"
     >
       <DialogTitle id="compare-runs-title">Compare Runs</DialogTitle>

@@ -50,11 +50,15 @@ describe('parsePrometheusText', () => {
     expect(metricValue(samples, 'does_not_exist', -1)).toBe(-1);
   });
 
-  it('handles +Inf / -Inf / NaN values', () => {
-    const samples = parsePrometheusText('a_inf +Inf\nb_ninf -Inf\nc_nan NaN\n');
-    expect(metricValue(samples, 'a_inf')).toBe(Number.POSITIVE_INFINITY);
-    expect(metricValue(samples, 'b_ninf')).toBe(Number.NEGATIVE_INFINITY);
-    expect(Number.isNaN(metricValue(samples, 'c_nan'))).toBe(true);
+  it('skips non-finite (+Inf / -Inf / NaN) sample values so they cannot poison charts', () => {
+    const samples = parsePrometheusText('a_inf +Inf\nb_ninf -Inf\nc_nan NaN\nd_ok 7\n');
+    // Non-finite values are dropped: no MockServer metric value is legitimately
+    // infinite, and retaining ±Inf breaks chart auto-scaling and toFixed.
+    expect(findSample(samples, 'a_inf')).toBeUndefined();
+    expect(findSample(samples, 'b_ninf')).toBeUndefined();
+    expect(findSample(samples, 'c_nan')).toBeUndefined();
+    // Finite samples on surrounding lines still parse.
+    expect(metricValue(samples, 'd_ok')).toBe(7);
   });
 
   it('ignores an optional trailing timestamp', () => {

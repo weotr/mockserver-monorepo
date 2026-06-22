@@ -9,17 +9,29 @@
     "body": {
       "$ref": "#/definitions/bodyWithContentType"
     },
+    "generateFromSchema": {
+      "type": "string"
+    },
     "cookies": {
       "$ref": "#/definitions/keyToValue"
     },
     "connectionOptions": {
       "$ref": "#/definitions/connectionOptions"
     },
+    "recoverAfter": {
+      "$ref": "#/definitions/recoverAfter"
+    },
     "headers": {
+      "$ref": "#/definitions/keyToMultiValue"
+    },
+    "trailers": {
       "$ref": "#/definitions/keyToMultiValue"
     },
     "statusCode": {
       "type": "integer"
+    },
+    "statusCodeRange": {
+      "type": "string"
     },
     "reasonPhrase": {
       "type": "string"

@@ -42,6 +42,13 @@ page at http://checkstyle.sourceforge.net/config.html -->
             <property name="severity" value="error"/>
         </module>
 
+        <module name="UnusedImports">
+            <!-- Checks for unused import statements. processJavadoc keeps imports
+                 referenced only from Javadoc {@link} from being flagged. -->
+            <property name="processJavadoc" value="true"/>
+            <property name="severity" value="error"/>
+        </module>
+
         <module name="CustomImportOrder">
             <property name="separateLineBetweenGroups" value="true"/>
             <property name="customImportOrderRules" value="THIRD_PARTY_PACKAGE###SPECIAL_IMPORTS###STANDARD_JAVA_PACKAGE###STATIC"/>
@@ -132,6 +139,25 @@ page at http://checkstyle.sourceforge.net/config.html -->
 
         <module name="UpperEll">
             <!-- Checks that long constants are defined with an upper ell.-->
+            <property name="severity" value="error"/>
+        </module>
+
+        <module name="EmptyCatchBlock">
+            <!-- Catch blocks must not be silently empty. A deliberate ignore is
+                 allowed when documented with a comment OR when the exception
+                 variable is named expected/ignore/ignored. -->
+            <property name="exceptionVariableName" value="expected|ignore|ignored"/>
+            <property name="severity" value="error"/>
+        </module>
+
+        <module name="RegexpSinglelineJava">
+            <!-- Ban the no-arg Throwable.printStackTrace(): it writes to stderr and
+                 bypasses the MockServerLogger/slf4j logging convention. Log the
+                 throwable instead. The explicit printStackTrace(stream/writer) form
+                 (used by the CLI and test log capture) is intentionally allowed. -->
+            <property name="format" value="\.printStackTrace\(\s*\)"/>
+            <property name="message" value="Do not use the no-arg printStackTrace(); log the throwable via MockServerLogger or slf4j instead."/>
+            <property name="ignoreComments" value="true"/>
             <property name="severity" value="error"/>
         </module>
 

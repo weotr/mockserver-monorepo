@@ -178,6 +178,74 @@ describe('LibraryView export controls', () => {
     expect(downloadButton()).toHaveTextContent('mockserver-traffic.curl.sh');
   });
 
+  it('offers JavaScript and Python client code only for expectations', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    // Default scope = recorded requests: no JS/Python code option.
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    expect(screen.queryByRole('option', { name: 'JavaScript client code' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Python client code' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    // Switch to expectations: both appear.
+    await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    expect(screen.getByRole('option', { name: 'JavaScript client code' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Python client code' })).toBeInTheDocument();
+  });
+
+  it('offers Go, C#, Ruby, Rust and PHP client code for expectations', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    expect(screen.getByRole('option', { name: 'Go client code' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'C# client code' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Ruby client code' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Rust client code' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'PHP client code' })).toBeInTheDocument();
+  });
+
+  it('drives format=GO / RUBY / PHP on the retrieve call for the new languages', async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:fake');
+    URL.revokeObjectURL = vi.fn();
+
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    await user.click(screen.getByRole('option', { name: 'Go client code' }));
+    expect(downloadButton()).toHaveTextContent('mockserver-expectations.go');
+    await user.click(downloadButton());
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/retrieve'));
+      expect(call!.url).toBe('http://localhost:1080/mockserver/retrieve?type=ACTIVE_EXPECTATIONS&format=GO');
+    });
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('offers verification code in all languages only for recorded requests', async () => {
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    // Default scope = recorded requests: verification options present.
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    expect(screen.getByRole('option', { name: 'Verification code (Java)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Verification code (Go)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Verification code (Rust)' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    // Active expectations scope: no verification options.
+    await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    expect(screen.queryByRole('option', { name: 'Verification code (Java)' })).not.toBeInTheDocument();
+  });
+
   it('resets an expectations-only format back to JSON when switching to requests', async () => {
     const user = userEvent.setup();
     render(<LibraryView connectionParams={connectionParams} />);
@@ -319,6 +387,104 @@ describe('LibraryView export download', () => {
 
     URL.createObjectURL = originalCreateObjectURL;
     URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('Selecting JavaScript drives format=JAVASCRIPT on the retrieve call', async () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:fake');
+    URL.revokeObjectURL = vi.fn();
+
+    const user = userEvent.setup();
+    render(<LibraryView connectionParams={connectionParams} />);
+    await switchToExport(user);
+    await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+    await user.click(screen.getByRole('combobox', { name: 'Format' }));
+    await user.click(screen.getByRole('option', { name: 'JavaScript client code' }));
+    expect(downloadButton()).toHaveTextContent('mockserver-expectations.js');
+    await user.click(downloadButton());
+    await waitFor(() => {
+      const call = fetchCalls.find((c) => c.url.includes('/mockserver/retrieve'));
+      expect(call).toBeTruthy();
+      expect(call!.url).toBe('http://localhost:1080/mockserver/retrieve?type=ACTIVE_EXPECTATIONS&format=JAVASCRIPT');
+    });
+
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  });
+
+  it('Copy as code fetches the code text and writes it to the clipboard', async () => {
+    stubFetch(200, "mockServerClient(\"localhost\", 1080).mockAnyResponse({});");
+    const writeText = vi.fn(async () => undefined);
+    const user = userEvent.setup();
+    // Override clipboard after userEvent.setup() (which installs its own stub). Capture the original
+    // descriptor and restore it in finally so this override does not leak into later tests
+    // (vi.unstubAllGlobals does not track Object.defineProperty on navigator).
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      render(<LibraryView connectionParams={connectionParams} />);
+      await switchToExport(user);
+      await user.click(screen.getByRole('radio', { name: 'Active expectations' }));
+      await user.click(screen.getByRole('combobox', { name: 'Format' }));
+      await user.click(screen.getByRole('option', { name: 'Python client code' }));
+      await user.click(screen.getByRole('button', { name: /Copy as code/ }));
+      await waitFor(() => {
+        const call = fetchCalls.find((c) => c.url.includes('/mockserver/retrieve'));
+        expect(call!.url).toBe('http://localhost:1080/mockserver/retrieve?type=ACTIVE_EXPECTATIONS&format=PYTHON');
+        expect(writeText).toHaveBeenCalledWith('mockServerClient("localhost", 1080).mockAnyResponse({});');
+      });
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      } else {
+        delete (navigator as { clipboard?: unknown }).clipboard;
+      }
+    }
+  });
+
+  it('Verification code copies client-side verify(...) generated from retrieved request JSON', async () => {
+    // The server returns recorded request/response pairs as JSON; the dashboard runs
+    // verificationCodegen over them rather than asking the server for verify code.
+    stubFetch(200, [
+      { httpRequest: { method: 'GET', path: '/alpha' }, httpResponse: { statusCode: 200 } },
+      { httpRequest: { method: 'POST', path: '/beta' }, httpResponse: { statusCode: 201 } },
+    ]);
+    const writeText = vi.fn<(text: string) => Promise<undefined>>(async () => undefined);
+    const user = userEvent.setup();
+    // Override clipboard AFTER userEvent.setup() (which installs its own stub).
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true, writable: true });
+    try {
+      render(<LibraryView connectionParams={connectionParams} />);
+      await switchToExport(user);
+      // Default scope = recorded requests.
+      await user.click(screen.getByRole('combobox', { name: 'Format' }));
+      await user.click(screen.getByRole('option', { name: 'Verification code (Java)' }));
+      await user.click(screen.getByRole('button', { name: /Copy as code/ }));
+      await waitFor(() => {
+        // It retrieves the request/response pairs as JSON (not a server verify format).
+        const call = fetchCalls.find((c) => c.url.includes('/mockserver/retrieve'));
+        expect(call!.url).toBe('http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES&format=JSON');
+        expect(writeText).toHaveBeenCalled();
+      });
+      const generated = writeText.mock.calls[0]![0];
+      // One Java verify(...) call per recorded request, asserting at-least-once.
+      expect(generated).toContain('mockServerClient');
+      expect(generated).toContain('VerificationTimes.atLeast(1)');
+      expect(generated).toContain('/alpha');
+      expect(generated).toContain('/beta');
+    } finally {
+      if (originalClipboard) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      } else {
+        delete (navigator as { clipboard?: unknown }).clipboard;
+      }
+    }
   });
 
   it('Export triggers a browser download with the correct filename', async () => {

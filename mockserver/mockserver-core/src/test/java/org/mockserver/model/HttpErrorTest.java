@@ -41,6 +41,51 @@ public class HttpErrorTest {
     }
 
     @Test
+    public void streamErrorIsNullByDefault() {
+        assertThat(error().getStreamError(), is(org.hamcrest.CoreMatchers.nullValue()));
+    }
+
+    @Test
+    public void returnsStreamErrorFromRawCode() {
+        assertThat(new HttpError().withStreamError(0x7L).getStreamError(), is(0x7L));
+    }
+
+    @Test
+    public void returnsStreamErrorFromWellKnownCode() {
+        assertThat(new HttpError().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM).getStreamError(), is(0x7L));
+        assertThat(new HttpError().withStreamError(HttpError.StreamErrorCode.H3_REQUEST_CANCELLED).getStreamError(), is(0x10cL));
+    }
+
+    @Test
+    public void returnsStreamErrorFromCodeName() {
+        assertThat(new HttpError().withStreamErrorCodeName("REFUSED_STREAM").getStreamError(), is(0x7L));
+        assertThat(new HttpError().withStreamErrorCodeName("h3_request_cancelled").getStreamError(), is(0x10cL));
+    }
+
+    @Test
+    public void rejectsUnknownStreamErrorCodeName() {
+        try {
+            new HttpError().withStreamErrorCodeName("NOT_A_REAL_CODE");
+            org.junit.Assert.fail("expected IllegalArgumentException");
+        } catch (IllegalArgumentException expected) {
+            assertThat(expected.getMessage().contains("NOT_A_REAL_CODE"), is(true));
+        }
+    }
+
+    @Test
+    public void streamErrorAffectsEqualsAndHashCode() {
+        assertThat(error().withStreamError(0x7L), is(error().withStreamError(0x7L)));
+        assertThat(error().withStreamError(0x7L), not(error().withStreamError(0x8L)));
+        assertThat(error().withStreamError(0x7L), not(error()));
+        assertThat(error().withStreamError(0x7L).hashCode(), is(error().withStreamError(0x7L).hashCode()));
+    }
+
+    @Test
+    public void includesStreamErrorInToString() {
+        assertThat(error().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM).toString().contains("\"streamError\" : 7"), is(true));
+    }
+
+    @Test
     public void shouldReturnFormattedRequestInToString() {
         assertThat(error()
                 .withDelay(TimeUnit.DAYS, 10)

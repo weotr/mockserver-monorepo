@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.*;
 
+import java.net.URI;
 import java.util.*;
 
 import static org.mockserver.model.HttpRequest.request;
@@ -23,6 +24,9 @@ public class A2aMockBuilder {
     private final List<A2aSkillDefinition> skills = new ArrayList<>();
     private final List<A2aTaskHandler> taskHandlers = new ArrayList<>();
     private String defaultTaskResponse = "Task completed successfully";
+    private boolean streaming = false;
+    private String streamingMethod = "message/stream";
+    private String pushNotificationUrl;
 
     private A2aMockBuilder() {
     }
@@ -67,6 +71,43 @@ public class A2aMockBuilder {
         return this;
     }
 
+    /**
+     * Advertise and mock the A2A streaming capability. When enabled the agent card reports
+     * {@code capabilities.streaming: true} and a streaming JSON-RPC method (default
+     * {@code message/stream}, see {@link #withStreamingMethod(String)}) returns an
+     * SSE stream of {@code TaskStatusUpdateEvent} and {@code TaskArtifactUpdateEvent}
+     * chunks, each wrapped in a JSON-RPC 2.0 response envelope.
+     */
+    public A2aMockBuilder withStreaming() {
+        this.streaming = true;
+        return this;
+    }
+
+    /**
+     * Override the JSON-RPC method that triggers the streaming response. The A2A specification
+     * uses {@code message/stream}; the legacy method name is {@code tasks/sendSubscribe}.
+     * Implies {@link #withStreaming()}.
+     */
+    public A2aMockBuilder withStreamingMethod(String method) {
+        this.streamingMethod = method;
+        this.streaming = true;
+        return this;
+    }
+
+    /**
+     * Advertise and mock A2A push notifications. When configured the agent card reports
+     * {@code capabilities.pushNotifications: true}, the {@code tasks/pushNotificationConfig/set}
+     * method echoes the registered config, and each {@code tasks/send} additionally POSTs the
+     * completed task (the A2A push-notification payload) to the supplied webhook URL while still
+     * returning the JSON-RPC task response to the caller.
+     *
+     * @param webhookUrl absolute webhook URL (e.g. {@code http://localhost:1234/a2a/callback})
+     */
+    public A2aMockBuilder withPushNotifications(String webhookUrl) {
+        this.pushNotificationUrl = webhookUrl;
+        return this;
+    }
+
     public A2aSkillBuilder withSkill(String id) {
         return new A2aSkillBuilder(this, id);
     }
@@ -88,7 +129,16 @@ public class A2aMockBuilder {
             expectations.add(buildCustomTaskHandler(handler));
         }
 
-        expectations.add(buildTasksSendExpectation());
+        if (streaming) {
+            expectations.add(buildStreamingExpectation());
+        }
+
+        if (pushNotificationUrl != null) {
+            expectations.add(buildPushNotificationConfigExpectation());
+            expectations.add(buildPushNotificationDeliveryExpectation());
+        } else {
+            expectations.add(buildTasksSendExpectation());
+        }
         expectations.add(buildTasksGetExpectation());
         expectations.add(buildTasksCancelExpectation());
 
@@ -139,7 +189,7 @@ public class A2aMockBuilder {
             "\"description\": \"" + escapeJson(agentDescription) + "\", " +
             "\"version\": \"" + escapeJson(agentVersion) + "\", " +
             "\"url\": \"" + escapeJson(url) + "\", " +
-            "\"capabilities\": {\"streaming\": false, \"pushNotifications\": false, \"stateTransitionHistory\": false}, " +
+            "\"capabilities\": {\"streaming\": " + streaming + ", \"pushNotifications\": " + (pushNotificationUrl != null) + ", \"stateTransitionHistory\": false}, " +
             "\"skills\": " + skillsJson + "}";
 
         return Expectation.when(
@@ -172,6 +222,88 @@ public class A2aMockBuilder {
         ).thenRespond(template(VELOCITY, velocityJsonRpcResponse(resultJson)));
     }
 
+    private Expectation buildStreamingExpectation() {
+        String text = escapeJson(defaultTaskResponse);
+        String taskId = "mock-task-id";
+
+        // A2A streaming: each SSE event data is a JSON-RPC 2.0 response envelope wrapping a
+        // TaskStatusUpdateEvent or TaskArtifactUpdateEvent. The JSON-RPC id is not known at
+        // build time, so a stable placeholder is used (streaming clients correlate by stream).
+        SseEvent statusWorking = SseEvent.sseEvent()
+            .withEvent("message")
+            .withData("{\"jsonrpc\": \"2.0\", \"id\": \"1\", \"result\": " +
+                "{\"taskId\": \"" + taskId + "\", \"kind\": \"status-update\", " +
+                "\"status\": {\"state\": \"working\"}, \"final\": false}}");
+
+        SseEvent artifactUpdate = SseEvent.sseEvent()
+            .withEvent("message")
+            .withData("{\"jsonrpc\": \"2.0\", \"id\": \"1\", \"result\": " +
+                "{\"taskId\": \"" + taskId + "\", \"kind\": \"artifact-update\", " +
+                "\"artifact\": {\"parts\": [{\"type\": \"text\", \"text\": \"" + text + "\"}]}}}");
+
+        SseEvent statusCompleted = SseEvent.sseEvent()
+            .withEvent("message")
+            .withData("{\"jsonrpc\": \"2.0\", \"id\": \"1\", \"result\": " +
+                "{\"taskId\": \"" + taskId + "\", \"kind\": \"status-update\", " +
+                "\"status\": {\"state\": \"completed\"}, \"final\": true}}");
+
+        HttpSseResponse sseResponse = HttpSseResponse.sseResponse()
+            .withStatusCode(200)
+            .withEvents(statusWorking, artifactUpdate, statusCompleted)
+            .withCloseConnection(true);
+
+        Expectation expectation = Expectation.when(
+            request().withMethod("POST").withPath(path).withBody(jsonRpc(streamingMethod))
+        );
+        expectation.thenRespondWithSse(sseResponse);
+        return expectation;
+    }
+
+    private Expectation buildPushNotificationConfigExpectation() {
+        // Echo the registered push-notification config back as the JSON-RPC result.
+        String resultJson = "{\"url\": \"" + escapeVelocity(escapeJson(pushNotificationUrl)) + "\"}";
+        return Expectation.when(
+            request().withMethod("POST").withPath(path).withBody(jsonRpc("tasks/pushNotificationConfig/set"))
+        ).thenRespond(template(VELOCITY, velocityJsonRpcResponse(resultJson)));
+    }
+
+    private Expectation buildPushNotificationDeliveryExpectation() {
+        // When push notifications are configured, a tasks/send both returns the JSON-RPC task
+        // response to the caller AND POSTs the completed task (the push-notification payload) to
+        // the configured webhook URL. This is modelled with an override-forwarded-request: the
+        // request override targets the webhook (literal body), and a Velocity response *template*
+        // produces the caller's JSON-RPC response so the request's id is echoed back.
+        WebhookTarget target = WebhookTarget.parse(pushNotificationUrl);
+
+        // Literal webhook POST body — no Velocity engine runs over a request override, so only
+        // JSON escaping is applied. The push payload carries no JSON-RPC id (server-initiated).
+        String pushBody = "{\"jsonrpc\": \"2.0\", \"result\": " + buildTaskResultJsonRaw(defaultTaskResponse, false) + "}";
+
+        HttpRequest webhookRequest = request()
+            .withMethod("POST")
+            .withPath(target.path)
+            .withSocketAddress(target.host, target.port,
+                target.secure ? SocketAddress.Scheme.HTTPS : SocketAddress.Scheme.HTTP)
+            .withSecure(target.secure)
+            .withHeader("Host", target.hostHeader())
+            .withHeader("Content-Type", "application/json")
+            .withBody(pushBody);
+
+        // Caller response — a Velocity template so $!{request.jsonRpcRawId} echoes the request id,
+        // matching the non-push tasks/send contract.
+        HttpTemplate clientResponseTemplate = template(VELOCITY,
+            velocityJsonRpcResponse(buildTaskResultJson(defaultTaskResponse, false)));
+
+        Expectation expectation = Expectation.when(
+            request().withMethod("POST").withPath(path).withBody(jsonRpc("tasks/send"))
+        );
+        expectation.thenForward(
+            HttpOverrideForwardedRequest.forwardOverriddenRequest(webhookRequest)
+                .withResponseTemplate(clientResponseTemplate)
+        );
+        return expectation;
+    }
+
     private Expectation buildCustomTaskHandler(A2aTaskHandler handler) {
         String escapedPattern = handler.messagePattern.replace("/", "\\/");
         escapedPattern = escapedPattern.replace("\n", "\\n").replace("\r", "\\r").replace("\0", "");
@@ -184,10 +316,23 @@ public class A2aMockBuilder {
     }
 
     private String buildTaskResultJson(String responseText, boolean isError) {
+        // For Velocity-templated response bodies: the text must survive the Velocity engine, so
+        // metacharacters are escaped here and un-escaped by the template engine at response time.
+        return taskResultJson(escapeVelocity(escapeJson(responseText)), isError);
+    }
+
+    private String buildTaskResultJsonRaw(String responseText, boolean isError) {
+        // For literal (non-templated) response bodies (e.g. the webhook POST payload), where no
+        // Velocity engine runs, only JSON escaping is applied — Velocity escaping would corrupt
+        // any '$' / '#' into "${esc.d}" / "${esc.h}".
+        return taskResultJson(escapeJson(responseText), isError);
+    }
+
+    private String taskResultJson(String escapedText, boolean isError) {
         String state = isError ? "failed" : "completed";
         return "{\"id\": \"mock-task-id\", " +
             "\"status\": {\"state\": \"" + state + "\"}, " +
-            "\"artifacts\": [{\"parts\": [{\"type\": \"text\", \"text\": \"" + escapeVelocity(escapeJson(responseText)) + "\"}]}]}";
+            "\"artifacts\": [{\"parts\": [{\"type\": \"text\", \"text\": \"" + escapedText + "\"}]}]}";
     }
 
     private String velocityJsonRpcResponse(String resultJson) {
@@ -239,6 +384,43 @@ public class A2aMockBuilder {
             this.messagePattern = messagePattern;
             this.responseText = responseText;
             this.isError = isError;
+        }
+    }
+
+    static class WebhookTarget {
+        final String host;
+        final int port;
+        final boolean secure;
+        final String path;
+
+        private WebhookTarget(String host, int port, boolean secure, String path) {
+            this.host = host;
+            this.port = port;
+            this.secure = secure;
+            this.path = path;
+        }
+
+        String hostHeader() {
+            return host + ":" + port;
+        }
+
+        static WebhookTarget parse(String url) {
+            URI uri = URI.create(url);
+            String scheme = uri.getScheme();
+            boolean secure = "https".equalsIgnoreCase(scheme);
+            String host = uri.getHost();
+            if (host == null) {
+                throw new IllegalArgumentException("Invalid push-notification webhook URL (no host): " + url);
+            }
+            int port = uri.getPort();
+            if (port == -1) {
+                port = secure ? 443 : 80;
+            }
+            String path = uri.getRawPath();
+            if (path == null || path.isEmpty()) {
+                path = "/";
+            }
+            return new WebhookTarget(host, port, secure, path);
         }
     }
 

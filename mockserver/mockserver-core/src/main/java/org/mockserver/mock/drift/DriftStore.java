@@ -83,6 +83,7 @@ public class DriftStore {
             lock.writeLock().unlock();
         }
         PercentileTracker.getInstance().clear();
+        DriftAlertNotifier.getInstance().reset();
     }
 
     public int size() {

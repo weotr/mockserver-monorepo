@@ -93,6 +93,43 @@ public class PortUnificationH2cPipelineTest {
     }
 
     /**
+     * SEC-05: after switching to cleartext HTTP/2 (h2c), the pipeline must record HTTP/2 as the
+     * channel's negotiated protocol from the trusted server-side preface detection (there is no ALPN
+     * for h2c). This is what lets the request mapper recognise genuine h2c and capture the HTTP/2 stream
+     * id without trusting a client-supplied x-http2-stream-id header — a plain HTTP/1.1 client never
+     * reaches switchToH2c, so it can never get this trusted signal set.
+     */
+    @Test
+    public void shouldRecordHttp2AsNegotiatedProtocolForH2c() {
+        boolean original = ConfigurationProperties.grpcBidiStreamingEnabled();
+        try {
+            ConfigurationProperties.grpcBidiStreamingEnabled(false);
+            Configuration config = configuration();
+
+            EmbeddedChannel channel = new EmbeddedChannel();
+            channel.pipeline().addLast(new MockServerUnificationInitializer(
+                config,
+                mock(LifeCycle.class),
+                new HttpState(config, new MockServerLogger(), mock(Scheduler.class)),
+                mock(HttpActionHandler.class),
+                null
+            ));
+
+            // Send the HTTP/2 cleartext preface — triggers switchToH2c
+            channel.writeInbound(Unpooled.wrappedBuffer(H2C_PREFACE.getBytes(StandardCharsets.US_ASCII)));
+
+            // The trusted, server-side negotiated protocol must now report HTTP/2 for this h2c channel
+            assertThat("h2c channel should report HTTP/2 as its negotiated protocol",
+                org.mockserver.socket.tls.SniHandler.getALPNProtocol(new MockServerLogger(), channel.pipeline().firstContext()),
+                is(org.mockserver.model.Protocol.HTTP_2));
+
+            channel.finishAndReleaseAll();
+        } finally {
+            ConfigurationProperties.grpcBidiStreamingEnabled(original);
+        }
+    }
+
+    /**
      * Verifies that the default value of grpcBidiStreamingEnabled is false.
      * Belt-and-braces: even if the ConfigurationTest in mockserver-core covers this,
      * we verify here at the netty layer that the flag is indeed off by default.

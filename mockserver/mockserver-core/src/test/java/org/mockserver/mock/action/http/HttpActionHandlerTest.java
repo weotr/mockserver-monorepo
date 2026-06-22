@@ -4,6 +4,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.util.Attribute;
 import org.junit.*;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
@@ -17,6 +18,7 @@ import org.mockserver.mock.HttpState;
 import org.mockserver.mock.crud.CrudDispatcher;
 import org.mockserver.model.*;
 import org.mockserver.responsewriter.ResponseWriter;
+import org.mockserver.responsewriter.StreamErrorWriter;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.curl.HttpRequestToCurlSerializer;
 import org.mockserver.time.FixedTime;
@@ -120,7 +122,7 @@ public class HttpActionHandlerTest {
         expectation = new Expectation(request).thenRespond(response);
 
         when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
-        when(mockHttpResponseActionHandler.handle(any(HttpResponse.class))).thenReturn(response);
+        when(mockHttpResponseActionHandler.handle(any(HttpResponse.class), any(HttpRequest.class), any(RequestDefinition.class))).thenReturn(response);
         when(mockHttpResponseTemplateActionHandler.handle(any(HttpTemplate.class), any(HttpRequest.class))).thenReturn(response);
         when(mockHttpResponseClassCallbackActionHandler.handle(any(HttpClassCallback.class), any(HttpRequest.class))).thenReturn(response);
         when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(httpForwardActionResult);
@@ -140,7 +142,7 @@ public class HttpActionHandlerTest {
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
 
         // then
-        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockHttpResponseActionHandler).handle(eq(response), any(HttpRequest.class), any(RequestDefinition.class));
         verify(mockResponseWriter).writeResponse(request, this.response, false);
         verify(mockServerLogger).logEvent(
             new LogEntry()
@@ -179,7 +181,7 @@ public class HttpActionHandlerTest {
 
         // then
         verify(mockNettyHttpClient).sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class));
-        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockHttpResponseActionHandler).handle(eq(response), any(HttpRequest.class), any(RequestDefinition.class));
         verify(mockResponseWriter).writeResponse(request, response, false);
     }
 
@@ -197,7 +199,7 @@ public class HttpActionHandlerTest {
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
 
         // then the primary action is never dispatched and a 502 is returned
-        verify(mockHttpResponseActionHandler, never()).handle(any(HttpResponse.class));
+        verify(mockHttpResponseActionHandler, never()).handle(any(HttpResponse.class), any(HttpRequest.class), any(RequestDefinition.class));
         verify(mockResponseWriter).writeResponse(eq(request), argThat(r -> r != null && r.getStatusCode() == 502), eq(false));
         // and the expectation is still post-processed so matcher state is cleaned up on abort
         verify(mockHttpStateHandler).postProcess(expectation);
@@ -217,7 +219,7 @@ public class HttpActionHandlerTest {
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
 
         // then the failure is swallowed and the primary response is still returned
-        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockHttpResponseActionHandler).handle(eq(response), any(HttpRequest.class), any(RequestDefinition.class));
         verify(mockResponseWriter).writeResponse(request, response, false);
     }
 
@@ -236,8 +238,79 @@ public class HttpActionHandlerTest {
 
         // then a non-blocking before-action does not gate the response (no blocking timeout call)
         verify(mockNettyHttpClient, never()).sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class));
-        verify(mockHttpResponseActionHandler).handle(response);
+        verify(mockHttpResponseActionHandler).handle(eq(response), any(HttpRequest.class), any(RequestDefinition.class));
         verify(mockResponseWriter).writeResponse(request, response, false);
+    }
+
+    @Test
+    public void shouldFireAfterActionWebhookAfterResponseIsWritten() {
+        // given - an expectation that responds AND fires an outbound webhook after responding
+        HttpRequest webhook = request("/after-webhook");
+        expectation = new Expectation(request)
+            .withAfterActions(AfterAction.afterAction().withHttpRequest(webhook))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        CompletableFuture<HttpResponse> webhookFuture = new CompletableFuture<>();
+        webhookFuture.complete(response("webhook_ok"));
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class))).thenReturn(webhookFuture);
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then the primary response is returned promptly
+        verify(mockHttpResponseActionHandler).handle(eq(response), any(HttpRequest.class), any(RequestDefinition.class));
+        verify(mockResponseWriter).writeResponse(request, response, false);
+        // and the after-action webhook is fired to the configured URL (asynchronously, after the response)
+        verify(mockNettyHttpClient, timeout(5000)).sendRequest(argThat(r -> r != null && "/after-webhook".equals(r.getPath().getValue())));
+        // and the webhook fired strictly after the response was written
+        InOrder inOrder = inOrder(mockResponseWriter, mockNettyHttpClient);
+        inOrder.verify(mockResponseWriter).writeResponse(request, response, false);
+        inOrder.verify(mockNettyHttpClient).sendRequest(any(HttpRequest.class));
+    }
+
+    @Test
+    public void shouldNotFailPrimaryResponseWhenAfterActionWebhookTargetUnreachable() {
+        // given - the webhook target is unreachable (the async send fails)
+        HttpRequest webhook = request("/after-webhook");
+        expectation = new Expectation(request)
+            .withAfterActions(AfterAction.afterAction().withHttpRequest(webhook))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        CompletableFuture<HttpResponse> failedFuture = new CompletableFuture<>();
+        failedFuture.completeExceptionally(new RuntimeException("webhook target unreachable"));
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class))).thenReturn(failedFuture);
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then the primary response is still returned (fire-and-forget: the failure does not propagate)
+        verify(mockHttpResponseActionHandler).handle(eq(response), any(HttpRequest.class), any(RequestDefinition.class));
+        verify(mockResponseWriter).writeResponse(request, response, false);
+        // and the webhook was attempted (then its failure swallowed)
+        verify(mockNettyHttpClient, timeout(5000)).sendRequest(any(HttpRequest.class));
+    }
+
+    @Test
+    public void shouldDelayAfterActionWebhookByConfiguredDelay() {
+        // given - an after-action webhook with an explicit delay
+        HttpRequest webhook = request("/after-webhook");
+        expectation = new Expectation(request)
+            .withAfterActions(AfterAction.afterAction().withHttpRequest(webhook).withDelay(milliseconds(300)))
+            .thenRespond(response);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        CompletableFuture<HttpResponse> webhookFuture = new CompletableFuture<>();
+        webhookFuture.complete(response("webhook_ok"));
+        when(mockNettyHttpClient.sendRequest(any(HttpRequest.class))).thenReturn(webhookFuture);
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then the response is written promptly (not delayed by the webhook)
+        verify(mockResponseWriter).writeResponse(request, response, false);
+        // and the webhook is NOT fired immediately (still within the configured delay window)
+        verify(mockNettyHttpClient, after(100).never()).sendRequest(any(HttpRequest.class));
+        // but it does eventually fire once the delay elapses
+        verify(mockNettyHttpClient, timeout(5000)).sendRequest(any(HttpRequest.class));
     }
 
     @Test
@@ -349,7 +422,7 @@ public class HttpActionHandlerTest {
                 .setMessageFormat("returning response:{}for request:{}for action:{}from expectation:{}")
                 .setArguments(response, request, callback, expectation.getId())
         );
-        verify(scheduler).schedule(any(Runnable.class), eq(true), eq(milliseconds(1)));
+        verify(scheduler).scheduleLocalCallback(any(Runnable.class), eq(true), eq(milliseconds(1)));
         verify(scheduler).schedule(any(Runnable.class), eq(true), eq(milliseconds(0)));
     }
 
@@ -400,16 +473,19 @@ public class HttpActionHandlerTest {
                 .setMessageFormat(RECEIVED_REQUEST_MESSAGE_FORMAT)
                 .setArguments(request)
         );
+        // the LOGGED forwarded response carries the internal upstream round-trip header
+        // (here 0ms — the mocked response has no Timing); the client response stays clean
+        HttpResponse loggedResponse = response.clone().withHeader("x-mockserver-response-time-ms", "0");
         verify(mockServerLogger).logEvent(
             new LogEntry()
                 .setLogLevel(INFO)
                 .setType(FORWARDED_REQUEST)
                 .setHttpRequest(request)
-                .setHttpResponse(response)
-                .setExpectation(request, response)
+                .setHttpResponse(loggedResponse)
+                .setExpectation(request, loggedResponse)
                 .setExpectationId(expectation.getAction().getExpectationId())
                 .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}")
-                .setArguments(response, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
+                .setArguments(loggedResponse, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
         );
         verify(httpRequestToCurlSerializer).toCurl(forwardedHttpRequest, remoteAddress);
     }
@@ -436,16 +512,17 @@ public class HttpActionHandlerTest {
                 .setMessageFormat(RECEIVED_REQUEST_MESSAGE_FORMAT)
                 .setArguments(request)
         );
+        HttpResponse loggedResponse = response.clone().withHeader("x-mockserver-response-time-ms", "0");
         verify(mockServerLogger).logEvent(
             new LogEntry()
                 .setLogLevel(INFO)
                 .setType(FORWARDED_REQUEST)
                 .setHttpRequest(request)
-                .setHttpResponse(response)
-                .setExpectation(request, response)
+                .setHttpResponse(loggedResponse)
+                .setExpectation(request, loggedResponse)
                 .setExpectationId(expectation.getAction().getExpectationId())
                 .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}")
-                .setArguments(response, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
+                .setArguments(loggedResponse, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
         );
         verify(httpRequestToCurlSerializer).toCurl(forwardedHttpRequest, remoteAddress);
     }
@@ -515,16 +592,17 @@ public class HttpActionHandlerTest {
                 .setMessageFormat(RECEIVED_REQUEST_MESSAGE_FORMAT)
                 .setArguments(request)
         );
+        HttpResponse loggedResponse = response.clone().withHeader("x-mockserver-response-time-ms", "0");
         verify(mockServerLogger).logEvent(
             new LogEntry()
                 .setLogLevel(INFO)
                 .setType(FORWARDED_REQUEST)
                 .setHttpRequest(request)
-                .setHttpResponse(response)
-                .setExpectation(request, response)
+                .setHttpResponse(loggedResponse)
+                .setExpectation(request, loggedResponse)
                 .setExpectationId(expectation.getAction().getExpectationId())
                 .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}")
-                .setArguments(response, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
+                .setArguments(loggedResponse, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
         );
         verify(httpRequestToCurlSerializer).toCurl(forwardedHttpRequest, remoteAddress);
     }
@@ -574,16 +652,17 @@ public class HttpActionHandlerTest {
                 .setMessageFormat(RECEIVED_REQUEST_MESSAGE_FORMAT)
                 .setArguments(request)
         );
+        HttpResponse loggedResponse = response.clone().withHeader("x-mockserver-response-time-ms", "0");
         verify(mockServerLogger).logEvent(
             new LogEntry()
                 .setLogLevel(INFO)
                 .setType(FORWARDED_REQUEST)
                 .setHttpRequest(request)
-                .setHttpResponse(response)
-                .setExpectation(request, response)
+                .setHttpResponse(loggedResponse)
+                .setExpectation(request, loggedResponse)
                 .setExpectationId(expectation.getAction().getExpectationId())
                 .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}")
-                .setArguments(response, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
+                .setArguments(loggedResponse, forwardedHttpRequest, "curl -v 'http://" + remoteAddress.getHostName() + ":" + remoteAddress.getPort() + "/'", expectation.getAction(), expectation.getId())
         );
         verify(httpRequestToCurlSerializer).toCurl(forwardedHttpRequest, remoteAddress);
     }
@@ -601,7 +680,7 @@ public class HttpActionHandlerTest {
         actionHandler.processAction(request, mockResponseWriter, mockChannelHandlerContext, new HashSet<>(), false, true);
 
         // then
-        verify(mockHttpErrorActionHandler).handle(error, mockChannelHandlerContext);
+        verify(mockHttpErrorActionHandler).handle(error, request, mockChannelHandlerContext);
         verify(mockServerLogger).logEvent(
             new LogEntry()
                 .setType(RECEIVED_REQUEST)
@@ -620,6 +699,72 @@ public class HttpActionHandlerTest {
                 .setMessageFormat("returning error:{}for request:{}for action:{}from expectation:{}")
                 .setArguments(error, request, error, expectation.getId())
         );
+    }
+
+    /**
+     * INC fix: prove that the ERROR-action dispatch funnel ({@code HttpActionHandler.dispatchErrorAction})
+     * delegates a stream error to the active {@link ResponseWriter} when it can reset its own transport
+     * stream (the HTTP/3 case, where the writer implements {@link StreamErrorWriter}), rather than going
+     * through the netty {@link HttpErrorActionHandler}. This is the wiring the HTTP/3 integration test
+     * (which calls Http3ResponseWriter directly) does not exercise.
+     */
+    @Test
+    public void shouldDelegateStreamErrorToStreamErrorWriterWhenResponseWriterSupportsIt() {
+        // given - an error action carrying a stream error and a ResponseWriter that can reset its stream
+        HttpError error = error().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM);
+        expectation = new Expectation(request).thenError(error);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        StreamErrorAwareResponseWriter streamErrorWriter = mock(StreamErrorAwareResponseWriter.class);
+        ChannelHandlerContext mockChannelHandlerContext = mock(ChannelHandlerContext.class);
+
+        // when
+        actionHandler.processAction(request, streamErrorWriter, mockChannelHandlerContext, new HashSet<>(), false, true);
+
+        // then - the reset is delegated to the writer with the configured code, NOT to HttpErrorActionHandler
+        verify(streamErrorWriter).writeStreamError(0x7L);
+        verify(mockHttpErrorActionHandler, never()).handle(any(HttpError.class), any(HttpRequest.class), any(ChannelHandlerContext.class));
+        verify(mockServerLogger).logEvent(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(EXPECTATION_RESPONSE)
+                .setHttpRequest(request)
+                .setHttpError(error)
+                .setExpectationId(expectation.getAction().getExpectationId())
+                .setMessageFormat("returning error:{}for request:{}for action:{}from expectation:{}")
+                .setArguments(error, request, error, expectation.getId())
+        );
+    }
+
+    /**
+     * INC fix (companion): when the active {@link ResponseWriter} cannot reset its own stream (it does
+     * not implement {@link StreamErrorWriter} — the HTTP/1.1 and HTTP/2 cases), a stream error is handled
+     * by the netty {@link HttpErrorActionHandler} (which resets the HTTP/2 stream or drops the
+     * connection), not by the writer.
+     */
+    @Test
+    public void shouldHandleStreamErrorViaHttpErrorActionHandlerWhenResponseWriterCannotResetStream() {
+        // given - an error action carrying a stream error and a plain ResponseWriter (not StreamErrorWriter)
+        HttpError error = error().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM);
+        expectation = new Expectation(request).thenError(error);
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        ResponseWriter plainResponseWriter = mock(ResponseWriter.class);
+        ChannelHandlerContext mockChannelHandlerContext = mock(ChannelHandlerContext.class);
+
+        // when
+        actionHandler.processAction(request, plainResponseWriter, mockChannelHandlerContext, new HashSet<>(), false, true);
+
+        // then - the netty HttpErrorActionHandler applies the reset/connection-drop
+        verify(mockHttpErrorActionHandler).handle(error, request, mockChannelHandlerContext);
+    }
+
+    /**
+     * Test double that is both a {@link ResponseWriter} and a {@link StreamErrorWriter}, so Mockito can
+     * mock the HTTP/3-style writer used to verify {@code dispatchErrorAction} delegation.
+     */
+    public static abstract class StreamErrorAwareResponseWriter extends ResponseWriter implements StreamErrorWriter {
+        protected StreamErrorAwareResponseWriter() {
+            super(null, null);
+        }
     }
 
     @Test
@@ -686,15 +831,16 @@ public class HttpActionHandlerTest {
                 .setMessageFormat(RECEIVED_REQUEST_MESSAGE_FORMAT)
                 .setArguments(request)
         );
+        HttpResponse loggedResponse = response.clone().withHeader("x-mockserver-response-time-ms", "0");
         verify(mockServerLogger).logEvent(
             new LogEntry()
                 .setLogLevel(INFO)
                 .setType(FORWARDED_REQUEST)
                 .setHttpRequest(request)
-                .setHttpResponse(response)
-                .setExpectation(request, response)
+                .setHttpResponse(loggedResponse)
+                .setExpectation(request, loggedResponse)
                 .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                .setArguments(response, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                .setArguments(loggedResponse, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
         );
     }
 

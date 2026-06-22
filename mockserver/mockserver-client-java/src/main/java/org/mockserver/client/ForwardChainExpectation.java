@@ -17,7 +17,6 @@ import org.mockserver.model.*;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.uuid.UUIDService;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Future;
 
@@ -129,6 +128,60 @@ public class ForwardChainExpectation {
 
     public ForwardChainExpectation withResponseMode(org.mockserver.mock.ResponseMode responseMode) {
         expectation.withResponseMode(responseMode);
+        return this;
+    }
+
+    /**
+     * Set a list of responses for stateful / multi-response selection. The list takes priority
+     * over a singular response and is selected from according to the expectation's
+     * {@link org.mockserver.mock.ResponseMode} (sequential by default).
+     *
+     * @param httpResponses the list of responses to select from
+     */
+    public ForwardChainExpectation withHttpResponses(List<HttpResponse> httpResponses) {
+        expectation.thenRespond(httpResponses);
+        return this;
+    }
+
+    /**
+     * Set the relative weight of each response in {@code httpResponses} (index-aligned), used when
+     * {@link org.mockserver.mock.ResponseMode#WEIGHTED} selection is active.
+     *
+     * @param responseWeights the index-aligned relative weights
+     */
+    public ForwardChainExpectation withResponseWeights(List<Integer> responseWeights) {
+        expectation.withResponseWeights(responseWeights);
+        return this;
+    }
+
+    /**
+     * Set the number of matches served by each response before advancing to the next, used when
+     * {@link org.mockserver.mock.ResponseMode#SWITCH} selection is active (default 1).
+     *
+     * @param switchAfter the number of matches per response block (must be &gt;= 1)
+     */
+    public ForwardChainExpectation withSwitchAfter(Integer switchAfter) {
+        expectation.withSwitchAfter(switchAfter);
+        return this;
+    }
+
+    /**
+     * Add a single cross-protocol scenario correlation to this expectation.
+     *
+     * @param crossProtocolScenario the cross-protocol scenario to add
+     */
+    public ForwardChainExpectation withCrossProtocolScenario(CrossProtocolScenario crossProtocolScenario) {
+        expectation.withCrossProtocolScenario(crossProtocolScenario);
+        return this;
+    }
+
+    /**
+     * Set the list of cross-protocol scenario correlations for this expectation.
+     *
+     * @param crossProtocolScenarios the cross-protocol scenarios
+     */
+    public ForwardChainExpectation withCrossProtocolScenarios(List<CrossProtocolScenario> crossProtocolScenarios) {
+        expectation.withCrossProtocolScenarios(crossProtocolScenarios);
         return this;
     }
 

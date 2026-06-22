@@ -197,10 +197,10 @@ public class OpenApiSyncPlannerTest {
     // ---- specKeyFromHash tests ----
 
     @Test
-    public void shouldReturnEightCharHexHash() {
+    public void shouldReturnSixteenCharHexHash() {
         String hash = specKeyFromHash("some-payload");
-        assertThat(hash.length(), is(8));
-        assertThat(hash, matchesPattern("[0-9a-f]{8}"));
+        assertThat(hash.length(), is(16));
+        assertThat(hash, matchesPattern("[0-9a-f]{16}"));
     }
 
     @Test
@@ -215,7 +215,7 @@ public class OpenApiSyncPlannerTest {
 
     @Test
     public void shouldHandleNullPayload() {
-        assertThat(specKeyFromHash(null), is("00000000"));
+        assertThat(specKeyFromHash(null), is("0000000000000000"));
     }
 
     // ---- namespacePrefix tests ----
@@ -223,5 +223,66 @@ public class OpenApiSyncPlannerTest {
     @Test
     public void shouldBuildNamespacePrefix() {
         assertThat(namespacePrefix("petstore"), is("openapi:petstore:"));
+    }
+
+    // ---- deriveSpecKey tests (collision-resistant identity) ----
+
+    @Test
+    public void shouldCombineTitleAndSourceHash() {
+        String key = deriveSpecKey("Swagger Petstore", "some-payload");
+        assertThat(key, startsWith("swagger_petstore_"));
+        assertThat(key, matchesPattern("swagger_petstore_[0-9a-f]{16}"));
+    }
+
+    @Test
+    public void shouldFallBackToHashOnlyWhenTitleBlank() {
+        String key = deriveSpecKey(null, "some-payload");
+        assertThat(key, matchesPattern("[0-9a-f]{16}"));
+        assertThat(deriveSpecKey("   ", "some-payload"), is(key));
+    }
+
+    @Test
+    public void shouldDeriveSameKeyForSameSource() {
+        // invariant 3 at the identity level: same source -> same namespace -> incremental sync still prunes
+        assertThat(deriveSpecKey("Foo", "payload-1"), is(deriveSpecKey("Foo", "payload-1")));
+    }
+
+    @Test
+    public void shouldDeriveDistinctKeysForDifferentSourcesWithSameTitle() {
+        // invariant 1 at the identity level: distinct specs sharing a title must NOT collide
+        String keyA = deriveSpecKey("Shared Title", "payload-A");
+        String keyB = deriveSpecKey("Shared Title", "payload-B");
+        assertThat(keyA, startsWith("shared_title_"));
+        assertThat(keyB, startsWith("shared_title_"));
+        assertThat(keyA, is(not(keyB)));
+    }
+
+    @Test
+    public void shouldDeriveDistinctKeysForDifferentUrlsWithSameTitle() {
+        String keyA = deriveSpecKey("Shared Title", "https://example.com/a.json");
+        String keyB = deriveSpecKey("Shared Title", "https://example.com/b.json");
+        assertThat(keyA, is(not(keyB)));
+    }
+
+    // ---- cross-spec prune safety (invariant 1) at the planner level ----
+
+    @Test
+    public void shouldNotPruneOtherSpecWhenItSharesSanitizedTitleButNotHash() {
+        // Two specs share the sanitized title "shared_title" but have distinct source hashes.
+        String specAKey = deriveSpecKey("Shared Title", "payload-A");
+        String specBKey = deriveSpecKey("Shared Title", "payload-B");
+        String specAOp = namespacePrefix(specAKey) + "opA";
+        String specBOp = namespacePrefix(specBKey) + "opB";
+
+        // Importing spec B: existing has both A's and B's ops; new import is only B's namespace.
+        Set<String> existing = Set.of(specAOp, specBOp);
+        Set<String> newIds = Set.of(specBOp);
+        Set<String> prefixes = Set.of(namespacePrefix(specBKey));
+
+        Set<String> pruned = idsToPrune(existing, newIds, prefixes);
+
+        // spec A's expectation must survive
+        assertThat(pruned, not(hasItem(specAOp)));
+        assertThat(pruned, is(empty()));
     }
 }

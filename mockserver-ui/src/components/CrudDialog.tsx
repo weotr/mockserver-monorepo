@@ -9,8 +9,13 @@ import TextField from '@mui/material/TextField';
 import MenuItem from '@mui/material/MenuItem';
 import Button from '@mui/material/Button';
 import Alert from '@mui/material/Alert';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { registerCrudResource, type CrudConfig, type CrudResult } from '../lib/crud';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import HumanErrorAlert from './HumanErrorAlert';
+import { monospaceFontFamily } from '../theme';
 
 export default function CrudDialog({
   open,
@@ -21,13 +26,16 @@ export default function CrudDialog({
   onClose: () => void;
   connectionParams: ConnectionParams;
 }) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
+
   const [basePath, setBasePath] = useState('');
   const [idField, setIdField] = useState('');
   const [idStrategy, setIdStrategy] = useState<'AUTO_INCREMENT' | 'UUID'>('AUTO_INCREMENT');
   const [initialData, setInitialData] = useState('');
 
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
   const [result, setResult] = useState<CrudResult | null>(null);
 
   const submit = useCallback(async () => {
@@ -36,7 +44,7 @@ export default function CrudDialog({
 
     const trimmedBasePath = basePath.trim();
     if (!trimmedBasePath) {
-      setError('basePath is required.');
+      setError({ message: 'basePath is required.' });
       return;
     }
 
@@ -47,12 +55,12 @@ export default function CrudDialog({
       try {
         const parsed: unknown = JSON.parse(trimmedData);
         if (!Array.isArray(parsed)) {
-          setError('initialData must be a JSON array.');
+          setError({ message: 'initialData must be a JSON array.' });
           return;
         }
         parsedInitialData = parsed;
       } catch {
-        setError('initialData is not valid JSON.');
+        setError({ message: 'initialData is not valid JSON.' });
         return;
       }
     }
@@ -67,22 +75,32 @@ export default function CrudDialog({
     try {
       setResult(await registerCrudResource(connectionParams, config));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setBusy(false);
     }
   }, [connectionParams, basePath, idField, idStrategy, initialData]);
 
+  const handleClose = useCallback(() => {
+    setBasePath('');
+    setIdField('');
+    setIdStrategy('AUTO_INCREMENT');
+    setInitialData('');
+    setError(null);
+    setResult(null);
+    onClose();
+  }, [onClose]);
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Register CRUD resource</DialogTitle>
+    <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth fullScreen={fullScreen} aria-labelledby="crud-dialog-title">
+      <DialogTitle id="crud-dialog-title">Register CRUD resource</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Register auto-CRUD expectations for a resource path — GET, POST, PUT, and DELETE
           endpoints with automatic ID management. Leave optional fields blank to use server
           defaults.
         </Typography>
-        {error && <Alert severity="error" sx={{ mb: 1.5 }}>{error}</Alert>}
+        {error && <HumanErrorAlert error={error} sx={{ mb: 1.5 }} />}
         {result && (
           <Alert severity="success" sx={{ mb: 1.5 }}>
             Registered CRUD resource at <strong>{result.basePath}</strong> ({result.idStrategy}, {result.itemCount} item{result.itemCount === 1 ? '' : 's'}).
@@ -91,28 +109,31 @@ export default function CrudDialog({
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
           <TextField
             size="small"
-            label="basePath"
+            label="Resource path"
             required
             placeholder="/api/users"
+            helperText="The base path the CRUD endpoints are mounted under."
             value={basePath}
             onChange={(e) => setBasePath(e.target.value)}
           />
-          <Box sx={{ display: 'flex', gap: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <TextField
               size="small"
-              label="idField"
+              label="ID field name"
               placeholder="id"
+              helperText="Property used as each item's identifier (default: id)."
               value={idField}
               onChange={(e) => setIdField(e.target.value)}
-              sx={{ flex: 1 }}
+              sx={{ flex: 1, minWidth: { xs: '100%', sm: 140 } }}
             />
             <TextField
               size="small"
-              label="idStrategy"
+              label="ID strategy"
               select
+              helperText="How new item IDs are generated."
               value={idStrategy}
               onChange={(e) => setIdStrategy(e.target.value as 'AUTO_INCREMENT' | 'UUID')}
-              sx={{ width: 180 }}
+              sx={{ width: { xs: '100%', sm: 180 } }}
             >
               <MenuItem value="AUTO_INCREMENT">AUTO_INCREMENT</MenuItem>
               <MenuItem value="UUID">UUID</MenuItem>
@@ -120,19 +141,20 @@ export default function CrudDialog({
           </Box>
           <TextField
             size="small"
-            label="initialData (JSON array, optional)"
+            label="Seed data (JSON array)"
             multiline
             minRows={3}
             maxRows={10}
             placeholder={'[\n  { "name": "Alice" },\n  { "name": "Bob" }\n]'}
+            helperText="Optional JSON array of items to pre-populate the resource."
             value={initialData}
             onChange={(e) => setInitialData(e.target.value)}
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, typography: 'body2' } } }}
           />
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={handleClose}>Close</Button>
         <Button variant="contained" disabled={busy} onClick={() => void submit()}>Register</Button>
       </DialogActions>
     </Dialog>

@@ -44,6 +44,9 @@ public class OpenAiLlmClient extends AbstractLlmClient {
     public Completion parseCompletionResponse(HttpResponse response) {
         JsonNode root = readBody(response);
         Completion completion = Completion.completion();
+        if (root.hasNonNull("model")) {
+            completion.withModel(root.path("model").asText());
+        }
         JsonNode choice = root.path("choices").path(0);
         JsonNode message = choice.path("message");
         if (message.hasNonNull("content")) {
@@ -60,6 +63,14 @@ public class OpenAiLlmClient extends AbstractLlmClient {
             }
             if (usageNode.has("completion_tokens")) {
                 usage.withOutputTokens(usageNode.path("completion_tokens").asInt());
+            }
+            JsonNode promptDetails = usageNode.path("prompt_tokens_details");
+            if (promptDetails.isObject() && promptDetails.has("cached_tokens")) {
+                usage.withCachedInputTokens(promptDetails.path("cached_tokens").asInt());
+            }
+            JsonNode completionDetails = usageNode.path("completion_tokens_details");
+            if (completionDetails.isObject() && completionDetails.has("reasoning_tokens")) {
+                usage.withReasoningTokens(completionDetails.path("reasoning_tokens").asInt());
             }
             completion.withUsage(usage);
         }

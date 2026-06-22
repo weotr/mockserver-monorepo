@@ -35,6 +35,92 @@ fn main() -> mockserver_client::Result<()> {
 }
 ```
 
+## LLM and MCP mocking
+
+The [`llm`](src/llm.rs) and [`mcp`](src/mcp.rs) modules provide fluent builders that
+produce the same expectation wire JSON as the Java, Node, and Python clients, so a
+mock scripted from Rust behaves identically to one scripted from any other client.
+
+### LLM completions, embeddings, conversations, and failover
+
+```rust
+use mockserver_client::llm::{
+    completion, conversation, embedding, header, llm_failover, llm_mock, turn, usage, Provider,
+};
+
+// A single chat-completion mock (action carried in `httpLlmResponse`).
+llm_mock("/v1/chat/completions")
+    .with_provider(Provider::OPENAI)
+    .with_model("gpt-4o")
+    .responding_with(completion().with_text("Hello!").with_usage(usage().with_output_tokens(3)))
+    .apply_to(&client)?;
+
+// An embedding mock (clears any completion).
+llm_mock("/v1/embeddings")
+    .with_provider(Provider::OPENAI)
+    .responding_with(embedding().with_dimensions(1536).with_deterministic_from_input(true))
+    .apply_to(&client)?;
+
+// A multi-turn conversation using MockServer scenario-state advancement.
+conversation()
+    .with_path("/v1/chat/completions")
+    .with_provider(Provider::ANTHROPIC)
+    .isolate_by(header("x-session-id")) // optional per-session isolation
+    .turn(turn().responding_with(completion().with_text("Hi, how can I help?")))
+    .turn(
+        turn()
+            .when_latest_message_contains("weather")
+            .responding_with(completion().with_text("It's sunny.")),
+    )
+    .apply_to(&client)?;
+
+// Fail N times (with default provider-shaped error bodies), then succeed.
+llm_failover()
+    .with_path("/v1/chat/completions")
+    .with_provider(Provider::OPENAI)
+    .fail_with_count(429, 2) // coalesced into one expectation with times = 2
+    .fail_with(500)
+    .then_respond_with(completion().with_text("Recovered"))
+    .apply_to(&client)?;
+```
+
+`provider` is serialised UPPERCASE (`OPENAI`, `ANTHROPIC`, ...). Conversation turns
+advance through scenario states `Started -> turn_1 -> ... -> __done`. Each builder also
+has a `build()` method returning the raw `serde_json::Value`(s) if you want to inspect
+or submit them yourself via `client.upsert_raw(...)`.
+
+### MCP (Model Context Protocol) servers
+
+`mcp_mock` builds the set of expectations needed to emulate a Streamable-HTTP MCP
+server speaking JSON-RPC 2.0 (`initialize`, `ping`, `notifications/initialized`,
+`tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`,
+`prompts/get`). Responses use Velocity templates that echo the inbound JSON-RPC id.
+
+```rust
+use mockserver_client::mcp::mcp_mock;
+use mockserver_client::llm::Role;
+
+mcp_mock("/mcp")
+    .with_server_name("MyServer")
+    .with_tool("get_weather")
+        .with_description("Get the weather for a city")
+        .with_input_schema(r#"{"type":"object","properties":{"city":{"type":"string"}}}"#)
+        .responding_with("72F and sunny", false)
+        .and()
+    .with_resource("file:///config.json")
+        .with_name("config")
+        .with_content(r#"{"debug":true}"#)
+        .and()
+    .with_prompt("greeting")
+        .with_argument("name", Some("who to greet".to_string()), true)
+        .responding_with(Role::ASSISTANT, "Hello there")
+        .and()
+    .apply_to(&client)?;
+```
+
+Use `mcp_mock_default()` for the default `/mcp` path. `build()` returns the ordered
+`Vec<serde_json::Value>` of expectations.
+
 ## Features
 
 - **Fluent builder API** — `client.when(request).respond(response)`
@@ -43,8 +129,10 @@ fn main() -> mockserver_client::Result<()> {
 - **Retrieve** — recorded requests, active expectations, recorded expectations, logs
 - **Clear / Reset** — by request matcher, by expectation ID, or full reset
 - **Status / Bind** — query ports, bind additional ports
+- **LLM and MCP builders** — fluent `llm` / `mcp` mock builders, wire-identical to the other clients
 - **Blocking (synchronous)** — uses `reqwest` blocking client; no async runtime needed
 - **TLS support** — optional HTTPS with configurable certificate verification
+- **Secured control plane** — `control_plane_bearer_token(..)` (JWT auth), `ca_cert_pem_path(..)` / `ca_cert_pem(..)` (trust a server CA), and `client_cert_pem(cert, key)` (mTLS)
 
 ## API Overview
 
@@ -99,6 +187,112 @@ println!("Listening on: {:?}", ports.ports);
 // Reset everything
 client.reset()?;
 ```
+
+### Interactive Breakpoints
+
+Register breakpoint matchers to pause forwarded/proxied traffic at REQUEST, RESPONSE, RESPONSE_STREAM, or INBOUND_STREAM phases. A callback WebSocket connection is opened automatically.
+
+```rust
+use mockserver_client::*;
+
+let client = ClientBuilder::new("localhost", 1080).build()?;
+
+// REQUEST-only breakpoint
+let id = client.add_request_breakpoint(
+    HttpRequest::new().path("/api/.*"),
+    Box::new(|req| Some(req)),  // continue with original
+)?;
+
+// REQUEST + RESPONSE breakpoint
+let id2 = client.add_request_response_breakpoint(
+    HttpRequest::new().path("/api/.*"),
+    Box::new(|req| Some(req)),
+    Box::new(|_req, resp| Some(resp)),
+)?;
+
+// Streaming breakpoint
+let id3 = client.add_stream_breakpoint(
+    HttpRequest::new().path("/stream/.*"),
+    &[phase::RESPONSE_STREAM],
+    Box::new(|frame| {
+        Some(StreamFrameDecision::continue_frame(&frame.correlation_id))
+    }),
+)?;
+
+// Manage matchers
+let list = client.list_breakpoint_matchers()?;
+client.remove_breakpoint_matcher(&id)?;
+client.clear_breakpoint_matchers()?;
+client.close_breakpoint_websocket();
+```
+
+**Stream frame decisions:** `StreamFrameDecision::continue_frame`, `::modify`, `::drop_frame`, `::inject`, `::close`.
+
+## Start / Launch MockServer
+
+The Rust client can download and launch a local MockServer instance directly -- no Java installation and no Docker required. The launcher downloads a self-contained platform bundle (`mockserver-<version>-<os>-<arch>`) from the GitHub Release, verifies its SHA-256, caches it per-user, and starts it.
+
+### Quick start
+
+```rust
+use mockserver_client::launcher;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut handle = launcher::start(1080)?;
+    println!("MockServer running on port {}", handle.port());
+
+    // ... use MockServer ...
+
+    handle.stop()?;
+    Ok(())
+}
+```
+
+### Just ensure the binary is present
+
+```rust
+let launcher_path = launcher::ensure_launcher()?;
+println!("Launcher at: {}", launcher_path.display());
+```
+
+### Specify a version
+
+```rust
+let mut handle = launcher::start_with_version(
+    "7.1.0", 1080, &launcher::EnsureOptions::default()
+)?;
+```
+
+### API reference
+
+| Function / Type | Description |
+|---|---|
+| `launcher::ensure_launcher()` | Download, verify, cache the default-version binary, and return the launcher `PathBuf`. |
+| `launcher::ensure_binary(version, opts)` | Same as above, but for a specific version. |
+| `launcher::start(port)` | Ensure the binary and start MockServer at the default version. Returns a `ServerHandle`. |
+| `launcher::start_with_version(version, port, opts)` | Start MockServer at a specific version. Returns a `ServerHandle`. |
+| `launcher::ServerHandle` | Handle to the running process. Methods: `stop()`, `wait()`, `port()`. |
+| `launcher::VERSION` | The default MockServer version, derived from `Cargo.toml` at compile time via `env!("CARGO_PKG_VERSION")`. |
+
+### Supported platforms
+
+| OS | Architecture |
+|---|---|
+| Linux | x86_64, aarch64 |
+| macOS (darwin) | x86_64, aarch64 |
+| Windows | x86_64, aarch64 |
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `MOCKSERVER_BINARY_BASE_URL` | Mirror host for the release assets (corporate / air-gapped networks) |
+| `MOCKSERVER_BINARY_CACHE` | Override the cache directory (default: `~/.cache/mockserver/binaries` on Unix) |
+| `MOCKSERVER_SKIP_BINARY_DOWNLOAD` | Fail instead of downloading (use with a pre-seeded cache in CI) |
+
+### Version
+
+By default the launcher downloads the MockServer version matching this crate (derived from `Cargo.toml` at compile time via `env!("CARGO_PKG_VERSION")`). Pass an explicit version to override.
 
 ## Building
 

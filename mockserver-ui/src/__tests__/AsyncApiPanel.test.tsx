@@ -138,7 +138,29 @@ describe('AsyncApiPanel', () => {
     render(<AsyncApiPanel connectionParams={params} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Network error/)).toBeInTheDocument();
+      expect(screen.getByText(/Could not load async status/)).toBeInTheDocument();
     });
+    // Humanised network-failure copy rather than the raw exception text.
+    expect(screen.getByText(/Couldn’t reach the MockServer/)).toBeInTheDocument();
+  });
+
+  it('auto-refreshes the broker status on an interval without a manual click', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ loaded: false, channels: [], recordedMessages: [] }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<AsyncApiPanel connectionParams={params} />);
+
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(1));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

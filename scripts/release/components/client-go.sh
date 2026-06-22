@@ -29,38 +29,34 @@ skip_unless_release_type "client-go" full,post-maven
 
 log_step "Publish Go client $RELEASE_VERSION (dry-run=$DRY_RUN)"
 
-MODULE_DIR="$REPO_ROOT/mockserver-client-go"
 TAG="mockserver-client-go/v${RELEASE_VERSION}"
 
-if ! command -v go >/dev/null 2>&1; then
-  log_info "WARNING: 'go' not found on PATH — skipping client-go publish (non-fatal)"
-  exit 0
-fi
-
-# Validate module builds
-log_info "Validating Go module"
-(cd "$MODULE_DIR" && go vet ./...) || {
-  log_info "WARNING: go vet failed — skipping client-go publish (non-fatal)"
-  exit 0
-}
+# Validate the module in a pinned golang container — no host 'go' required.
+# HARD: a vet failure aborts the step (it used to silently skip when 'go' was
+# absent on the release agent, which is why the Go client never published).
+log_info "Validating Go module (go vet) in $GO_IMAGE"
+in_docker "$GO_IMAGE" -w /build/mockserver-client-go -- go vet ./...
 
 if is_dry_run; then
-  log_dry "skip: git tag $TAG + push"
-  log_dry "skip: trigger proxy indexing"
+  log_dry "skip: git tag $TAG + push + proxy indexing"
   exit 0
 fi
 
-# Tag and push
-log_info "Tagging $TAG"
-git_tag_and_push "$TAG" || {
-  log_info "WARNING: could not push tag $TAG — skipping (non-fatal)"
-  exit 0
-}
+# Tag + push is the actual publish (Go's proxy indexes public tags). HARD-fail,
+# with retry to ride out transient git/network errors.
+log_info "Tagging + pushing $TAG"
+retry 3 5 -- git_tag_and_push "$TAG"
 
-# Trigger proxy indexing (best-effort)
-log_info "Triggering Go module proxy indexing"
-GOPROXY=https://proxy.golang.org GO111MODULE=on \
-  go list -m "github.com/mock-server/mockserver-monorepo/mockserver-client-go@v${RELEASE_VERSION}" 2>/dev/null || \
-  log_info "  proxy indexing trigger returned non-zero (may take time to propagate)"
+# Nudge the Go module proxy to index. pkg.go.dev indexing is eventually-consistent
+# and genuinely lags, so this is best-effort: retry, then tolerate (the tag — the
+# real publish — is already pushed). Surfaced with a warning, never silently
+# swallowed.
+log_info "Triggering Go module proxy indexing in $GO_IMAGE"
+if ! retry 3 5 -- in_docker "$GO_IMAGE" \
+     -e GOPROXY=https://proxy.golang.org -e GO111MODULE=on \
+     -w /build/mockserver-client-go -- \
+     go list -m "github.com/mock-server/mockserver-monorepo/mockserver-client-go@v${RELEASE_VERSION}"; then
+  log_info ":warning: proxy indexing nudge failed after retries — non-fatal (tag pushed; pkg.go.dev indexes on first fetch)"
+fi
 
 log_info "Go client publish complete"

@@ -31,6 +31,7 @@ import org.mockserver.model.GrpcBidiRule;
 import org.mockserver.model.GrpcStreamMessage;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
+import org.mockserver.model.HttpTemplate;
 import org.mockserver.model.NottableString;
 import org.mockserver.netty.HttpRequestHandler;
 import org.mockserver.netty.unification.TraceContextHandler;
@@ -535,6 +536,67 @@ public class GrpcBidiInterleavingMultiplexTest {
             trailing.headers().get(GrpcStatusMapper.GRPC_STATUS_HEADER).toString(), is("0"));
         assertThat("trailing grpc-message should be 'all done'",
             trailing.headers().get(GrpcStatusMapper.GRPC_MESSAGE_HEADER).toString(), is("all done"));
+
+        for (Object frame : outbound) {
+            if (frame instanceof Http2DataFrame) {
+                ((Http2DataFrame) frame).release();
+            }
+        }
+        channel.finishAndReleaseAll();
+    }
+
+    /**
+     * WS2.6: a bidi rule response with a {@code VELOCITY} templateType is rendered against the
+     * matched inbound message end-to-end through the handler, so the reply can echo/derive fields
+     * from the request. A sibling static response (no templateType) in the same rule is emitted
+     * unchanged.
+     */
+    @Test
+    public void shouldRenderTemplatedResponseAgainstInboundMessage() {
+        GrpcProtoDescriptorStore store = loadDescriptorStore();
+        GrpcJsonMessageConverter converter = store.getConverter();
+        Descriptors.MethodDescriptor chatMethod = store.getMethod("com.example.grpc.GreetingService", "Chat");
+
+        GrpcBidiResponse config = GrpcBidiResponse.grpcBidiResponse()
+            .withRule(GrpcBidiRule.grpcBidiRule(".*")
+                .withResponse(GrpcStreamMessage
+                    .grpcStreamMessage("{\"greeting\": \"Hi $jsonPath.find(\"$.name\")\"}")
+                    .withTemplateType(HttpTemplate.TemplateType.VELOCITY))
+                .withResponse("{\"greeting\": \"static reply\"}"))
+            .withStatusName("OK");
+
+        List<Object> outbound = new ArrayList<>();
+        FrameCaptureHandler captureHandler = new FrameCaptureHandler(outbound);
+        EmbeddedChannel channel = new EmbeddedChannel(
+            captureHandler,
+            new GrpcBidiStreamHandler(chatMethod, converter, config)
+        );
+
+        // HEADERS (no eager messages)
+        DefaultHttp2Headers reqHeaders = new DefaultHttp2Headers();
+        reqHeaders.method("POST");
+        reqHeaders.path("/com.example.grpc.GreetingService/Chat");
+        reqHeaders.set("content-type", GrpcStatusMapper.GRPC_CONTENT_TYPE);
+        channel.writeInbound(new DefaultHttp2HeadersFrame(reqHeaders, false));
+
+        // DATA(Alice, endStream=true)
+        byte[] proto = converter.toProtobuf("{\"name\":\"Alice\"}", chatMethod.getInputType());
+        channel.writeInbound(new DefaultHttp2DataFrame(Unpooled.wrappedBuffer(GrpcFrameCodec.encode(proto)), true));
+
+        // outbound: initial HEADERS, templated DATA, static DATA, trailing HEADERS
+        assertThat("should have 4 outbound frames", outbound.size(), is(4));
+
+        Http2DataFrame templatedData = (Http2DataFrame) outbound.get(1);
+        byte[] templatedBytes = new byte[templatedData.content().readableBytes()];
+        templatedData.content().readBytes(templatedBytes);
+        String templatedJson = converter.toJson(GrpcFrameCodec.decode(templatedBytes).get(0), chatMethod.getOutputType());
+        assertThat("templated response should echo the inbound name", templatedJson, containsString("Hi Alice"));
+
+        Http2DataFrame staticData = (Http2DataFrame) outbound.get(2);
+        byte[] staticBytes = new byte[staticData.content().readableBytes()];
+        staticData.content().readBytes(staticBytes);
+        String staticJson = converter.toJson(GrpcFrameCodec.decode(staticBytes).get(0), chatMethod.getOutputType());
+        assertThat("static response should be emitted unchanged", staticJson, containsString("static reply"));
 
         for (Object frame : outbound) {
             if (frame instanceof Http2DataFrame) {
@@ -1255,7 +1317,7 @@ public class GrpcBidiInterleavingMultiplexTest {
             new org.mockserver.grpc.IncrementalGrpcFrameDecoder(16);
 
         GrpcBidiStreamHandler handler = new GrpcBidiStreamHandler(
-            chatMethod, converter, null, bidiConfig, smallDecoder, () -> callbackInvoked.set(true)
+            chatMethod, converter, null, bidiConfig, smallDecoder, () -> callbackInvoked.set(true), null, null, null, null, null
         );
 
         EmbeddedChannel channel = new EmbeddedChannel(captureHandler, handler);

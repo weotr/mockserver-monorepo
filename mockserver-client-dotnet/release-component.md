@@ -18,8 +18,8 @@ sed -i "s|<Version>.*</Version>|<Version>${VERSION}</Version>|" \
 # Build and pack
 dotnet pack src/MockServer.Client/MockServer.Client.csproj -c Release -o ./artifacts
 
-# Push to NuGet
-dotnet nuget push ./artifacts/MockServer.Client.${VERSION}.nupkg \
+# Push to NuGet (PackageId is MockServerClient; assembly/namespace stay MockServer.Client)
+dotnet nuget push ./artifacts/MockServerClient.${VERSION}.nupkg \
   --api-key "$NUGET_API_KEY" \
   --source https://api.nuget.org/v3/index.json \
   --skip-duplicate
@@ -35,7 +35,7 @@ dotnet nuget push ./artifacts/MockServer.Client.${VERSION}.nupkg \
 
 ```bash
 # dotnet-client: verify published to NuGet
-curl -sf "https://api.nuget.org/v3-flatcontainer/mockserver.client/${RELEASE_VERSION}/mockserver.client.${RELEASE_VERSION}.nupkg" \
+curl -sf "https://api.nuget.org/v3-flatcontainer/mockserverclient/${RELEASE_VERSION}/mockserverclient.${RELEASE_VERSION}.nupkg" \
   -o /dev/null \
   && echo "dotnet-client: OK (NuGet ${RELEASE_VERSION})" \
   || echo "dotnet-client: FAILED (not found on NuGet)"

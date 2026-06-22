@@ -7,5 +7,7 @@ public enum Provider {
     GEMINI,
     BEDROCK,
     AZURE_OPENAI,
-    OLLAMA
+    OLLAMA,
+    COHERE,
+    VOYAGE
 }

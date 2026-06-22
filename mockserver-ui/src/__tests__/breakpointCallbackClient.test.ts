@@ -1,0 +1,586 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  BreakpointCallbackClient,
+  _resetBreakpointCallbackClient,
+  type PausedItem,
+  type CallbackClientState,
+  type WsEnvelope,
+} from '../lib/breakpointCallbackClient';
+
+// ---------------------------------------------------------------------------
+// MockWebSocket
+// ---------------------------------------------------------------------------
+
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  url: string;
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  sentMessages: string[] = [];
+
+  CONNECTING = 0;
+  OPEN = 1;
+  CLOSING = 2;
+  CLOSED = 3;
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  send(data: string) {
+    this.sentMessages.push(data);
+  }
+
+  close() {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+
+  simulateOpen() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+
+  simulateMessage(data: unknown) {
+    this.onmessage?.({ data: JSON.stringify(data) });
+  }
+
+  simulateClose() {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+}
+
+const params = { host: '127.0.0.1', port: '1080', secure: false };
+
+beforeEach(() => {
+  MockWebSocket.instances = [];
+  vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
+  _resetBreakpointCallbackClient();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('BreakpointCallbackClient', () => {
+  it('connects to the callback websocket endpoint', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect(params);
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:1080/_mockserver_callback_websocket');
+    client.disconnect();
+  });
+
+  it('uses wss for secure connections', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect({ ...params, secure: true });
+
+    expect(MockWebSocket.instances[0]!.url).toBe('wss://127.0.0.1:1080/_mockserver_callback_websocket');
+    client.disconnect();
+  });
+
+  it('includes basePath in the URL', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect({ ...params, basePath: '/prefix' });
+
+    expect(MockWebSocket.instances[0]!.url).toBe('ws://127.0.0.1:1080/prefix/_mockserver_callback_websocket');
+    client.disconnect();
+  });
+
+  it('reads clientId from WebSocketClientIdDTO and transitions to connected', () => {
+    const client = new BreakpointCallbackClient();
+    const states: CallbackClientState[] = [];
+    client.onStateChange((s) => states.push(s));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    // Send clientId DTO
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'test-client-123' }),
+    });
+
+    expect(client.clientId).toBe('test-client-123');
+    expect(client.state).toBe('connected');
+    expect(states).toContain('connecting');
+    expect(states).toContain('connected');
+    client.disconnect();
+  });
+
+  it('dispatches REQUEST phase paused items', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    // Simulate a REQUEST-phase push
+    ws.simulateMessage({
+      type: 'org.mockserver.model.HttpRequest',
+      value: JSON.stringify({
+        method: 'GET',
+        path: '/api/test',
+        headers: {
+          'WebSocketCorrelationId': ['corr-123'],
+          'X-MockServer-BreakpointId': ['bp-456'],
+        },
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]!.phase).toBe('REQUEST');
+    if (items[0]!.phase === 'REQUEST') {
+      expect(items[0]!.correlationId).toBe('corr-123');
+      expect(items[0]!.breakpointId).toBe('bp-456');
+      expect(items[0]!.request.method).toBe('GET');
+      expect(items[0]!.request.path).toBe('/api/test');
+    }
+    client.disconnect();
+  });
+
+  it('dispatches RESPONSE phase paused items', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.model.HttpRequestAndHttpResponse',
+      value: JSON.stringify({
+        httpRequest: {
+          method: 'POST',
+          path: '/api/data',
+          headers: {
+            'WebSocketCorrelationId': ['corr-789'],
+            'X-MockServer-BreakpointId': ['bp-abc'],
+          },
+        },
+        httpResponse: {
+          statusCode: 200,
+          reasonPhrase: 'OK',
+          body: '{"data":"test"}',
+        },
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]!.phase).toBe('RESPONSE');
+    if (items[0]!.phase === 'RESPONSE') {
+      expect(items[0]!.correlationId).toBe('corr-789');
+      expect(items[0]!.breakpointId).toBe('bp-abc');
+      expect(items[0]!.response?.statusCode).toBe(200);
+    }
+    client.disconnect();
+  });
+
+  it('dispatches FRAME phase paused items', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.PausedStreamFrameDTO',
+      value: JSON.stringify({
+        correlationId: 'frame-corr-1',
+        streamId: 'stream-1',
+        sequenceNumber: 0,
+        direction: 'OUTBOUND',
+        phase: 'RESPONSE_STREAM',
+        body: btoa('data: hello'),
+        requestMethod: 'GET',
+        requestPath: '/events',
+        breakpointId: 'bp-frame',
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]!.phase).toBe('RESPONSE_STREAM');
+    if (items[0]!.phase === 'RESPONSE_STREAM') {
+      expect(items[0]!.frame.correlationId).toBe('frame-corr-1');
+      expect(items[0]!.frame.streamId).toBe('stream-1');
+      expect(items[0]!.breakpointId).toBe('bp-frame');
+    }
+    client.disconnect();
+  });
+
+  it('resolves a REQUEST phase by sending HttpRequest envelope', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    client.resolveRequest('corr-123', { method: 'POST', path: '/modified' });
+
+    expect(ws.sentMessages).toHaveLength(1);
+    const envelope = JSON.parse(ws.sentMessages[0]!) as WsEnvelope;
+    expect(envelope.type).toBe('org.mockserver.model.HttpRequest');
+
+    const inner = JSON.parse(envelope.value) as Record<string, unknown>;
+    expect(inner.method).toBe('POST');
+    expect(inner.path).toBe('/modified');
+    // Correlation id should be echoed in headers
+    const headers = inner.headers as Record<string, string[]>;
+    expect(headers['WebSocketCorrelationId']).toEqual(['corr-123']);
+
+    client.disconnect();
+  });
+
+  it('resolves a REQUEST phase abort by sending HttpResponse envelope', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    client.resolveRequest('corr-456', { statusCode: 503, body: 'Aborted' });
+
+    const envelope = JSON.parse(ws.sentMessages[0]!) as WsEnvelope;
+    expect(envelope.type).toBe('org.mockserver.model.HttpResponse');
+
+    const inner = JSON.parse(envelope.value) as Record<string, unknown>;
+    expect(inner.statusCode).toBe(503);
+
+    client.disconnect();
+  });
+
+  it('resolves a RESPONSE phase by sending HttpResponse envelope', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    client.resolveResponse('corr-789', { statusCode: 200, body: '{"modified":true}' });
+
+    const envelope = JSON.parse(ws.sentMessages[0]!) as WsEnvelope;
+    expect(envelope.type).toBe('org.mockserver.model.HttpResponse');
+
+    const inner = JSON.parse(envelope.value) as Record<string, unknown>;
+    expect(inner.statusCode).toBe(200);
+    const headers = inner.headers as Record<string, string[]>;
+    expect(headers['WebSocketCorrelationId']).toEqual(['corr-789']);
+
+    client.disconnect();
+  });
+
+  it('resolves a stream frame with a decision', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    client.resolveFrame({ correlationId: 'frame-1', action: 'MODIFY', body: btoa('modified') });
+
+    const envelope = JSON.parse(ws.sentMessages[0]!) as WsEnvelope;
+    expect(envelope.type).toBe('org.mockserver.serialization.model.StreamFrameDecisionDTO');
+
+    const inner = JSON.parse(envelope.value) as Record<string, unknown>;
+    expect(inner.correlationId).toBe('frame-1');
+    expect(inner.action).toBe('MODIFY');
+    expect(inner.body).toBe(btoa('modified'));
+
+    client.disconnect();
+  });
+
+  it('transitions to disconnected on WS close and clears clientId', () => {
+    const client = new BreakpointCallbackClient();
+    const states: CallbackClientState[] = [];
+    client.onStateChange((s) => states.push(s));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    expect(client.state).toBe('connected');
+    expect(client.clientId).toBe('c1');
+
+    ws.simulateClose();
+
+    expect(client.state).toBe('disconnected');
+    expect(client.clientId).toBeNull();
+    client.disconnect();
+  });
+
+  it('does not send when WS is not open', () => {
+    const client = new BreakpointCallbackClient();
+    client.connect(params);
+
+    // WS is still in CONNECTING state (readyState=0)
+    client.resolveRequest('corr-1', { method: 'GET' });
+
+    const ws = MockWebSocket.instances[0]!;
+    expect(ws.sentMessages).toHaveLength(0);
+    client.disconnect();
+  });
+
+  it('ignores messages with unknown type', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.model.UnknownType',
+      value: '{}',
+    });
+
+    expect(items).toHaveLength(0);
+    client.disconnect();
+  });
+
+  it('ignores malformed messages', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+
+    // Simulate raw non-JSON message
+    ws.onmessage?.({ data: 'not json' });
+
+    expect(items).toHaveLength(0);
+    client.disconnect();
+  });
+
+  it('dispatches INBOUND_STREAM frame items', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.PausedStreamFrameDTO',
+      value: JSON.stringify({
+        correlationId: 'frame-inbound-1',
+        streamId: 'ws-inbound-1',
+        sequenceNumber: 0,
+        direction: 'INBOUND',
+        phase: 'INBOUND_STREAM',
+        body: btoa('client message'),
+        requestMethod: 'GET',
+        requestPath: '/ws',
+        breakpointId: 'bp-inbound',
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]!.phase).toBe('INBOUND_STREAM');
+    if (items[0]!.phase === 'INBOUND_STREAM') {
+      expect(items[0]!.frame.direction).toBe('INBOUND');
+    }
+    client.disconnect();
+  });
+
+  // ---- requestTimestamp extraction ----
+
+  it('extracts requestTimestamp from REQUEST phase header', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.model.HttpRequest',
+      value: JSON.stringify({
+        method: 'GET',
+        path: '/api/ts-test',
+        headers: {
+          'WebSocketCorrelationId': ['corr-ts-1'],
+          'X-MockServer-BreakpointId': ['bp-1'],
+          'X-MockServer-RequestTimestamp': ['1717000000000'],
+        },
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]!.phase).toBe('REQUEST');
+    if (items[0]!.phase === 'REQUEST') {
+      expect(items[0]!.requestTimestamp).toBe(1717000000000);
+    }
+    client.disconnect();
+  });
+
+  it('extracts requestTimestamp from RESPONSE phase header', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.model.HttpRequestAndHttpResponse',
+      value: JSON.stringify({
+        httpRequest: {
+          method: 'POST',
+          path: '/api/resp-ts',
+          headers: {
+            'WebSocketCorrelationId': ['corr-ts-2'],
+            'X-MockServer-BreakpointId': ['bp-2'],
+            'X-MockServer-RequestTimestamp': ['1717000000123'],
+          },
+        },
+        httpResponse: { statusCode: 200 },
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]!.phase).toBe('RESPONSE');
+    if (items[0]!.phase === 'RESPONSE') {
+      expect(items[0]!.requestTimestamp).toBe(1717000000123);
+    }
+    client.disconnect();
+  });
+
+  it('sets requestTimestamp to null when header is missing', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.model.HttpRequest',
+      value: JSON.stringify({
+        method: 'GET',
+        path: '/api/no-ts',
+        headers: {
+          'WebSocketCorrelationId': ['corr-no-ts'],
+        },
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    if (items[0]!.phase === 'REQUEST') {
+      expect(items[0]!.requestTimestamp).toBeNull();
+    }
+    client.disconnect();
+  });
+
+  it('parses requestTimestamp on PausedStreamFrame from server', () => {
+    const client = new BreakpointCallbackClient();
+    const items: PausedItem[] = [];
+    client.onPausedItem((item) => items.push(item));
+    client.connect(params);
+
+    const ws = MockWebSocket.instances[0]!;
+    ws.simulateOpen();
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.WebSocketClientIdDTO',
+      value: JSON.stringify({ clientId: 'c1' }),
+    });
+
+    ws.simulateMessage({
+      type: 'org.mockserver.serialization.model.PausedStreamFrameDTO',
+      value: JSON.stringify({
+        correlationId: 'frame-ts-1',
+        streamId: 'stream-ts-1',
+        sequenceNumber: 0,
+        direction: 'OUTBOUND',
+        phase: 'RESPONSE_STREAM',
+        body: btoa('hello'),
+        requestMethod: 'GET',
+        requestPath: '/events',
+        breakpointId: 'bp-frame-ts',
+        requestTimestamp: 1717000000789,
+      }),
+    });
+
+    expect(items).toHaveLength(1);
+    if (items[0]!.phase === 'RESPONSE_STREAM') {
+      expect(items[0]!.frame.requestTimestamp).toBe(1717000000789);
+    }
+    client.disconnect();
+  });
+});

@@ -137,6 +137,65 @@ public class LRUCacheTest {
     }
 
     @Test
+    public void shouldComputeAndCacheOnceOnGetOrCompute() {
+        // given
+        LRUCache<String, String> lruCache = new LRUCache<>(mockServerLogger, 5, MINUTES.toMillis(10));
+        java.util.concurrent.atomic.AtomicInteger computeCount = new java.util.concurrent.atomic.AtomicInteger();
+
+        // when - same key looked up twice
+        String first = lruCache.getOrCompute("k", k -> {
+            computeCount.incrementAndGet();
+            return "v";
+        });
+        String second = lruCache.getOrCompute("k", k -> {
+            computeCount.incrementAndGet();
+            return "other";
+        });
+
+        // then - computed exactly once; both callers get the first value; it is now in the cache
+        assertThat(first, is("v"));
+        assertThat(second, is("v"));
+        assertThat(computeCount.get(), is(1));
+        assertThat(lruCache.get("k"), is("v"));
+    }
+
+    @Test
+    public void getOrComputeShouldRespectLocalSizeBound() {
+        // given - capacity 2
+        LRUCache<String, String> lruCache = new LRUCache<>(mockServerLogger, 2, MINUTES.toMillis(10));
+
+        // when - three distinct keys computed
+        lruCache.getOrCompute("one", k -> "a");
+        lruCache.getOrCompute("two", k -> "b");
+        lruCache.getOrCompute("three", k -> "c");
+
+        // then - the just-inserted key is retained (never self-evicted) and the bound is enforced
+        // (oldest evicted); the queue and map stay in lock-step so the evicted key is genuinely gone
+        assertThat(lruCache.get("three"), is("c"));
+        assertThat(lruCache.get("one"), is(nullValue()));
+    }
+
+    @Test
+    public void getOrComputeShouldRecomputeAfterEviction() {
+        // given - capacity 1, so each new key evicts the previous one
+        LRUCache<String, String> lruCache = new LRUCache<>(mockServerLogger, 1, MINUTES.toMillis(10));
+        java.util.concurrent.atomic.AtomicInteger computeCount = new java.util.concurrent.atomic.AtomicInteger();
+
+        // when - "a" computed, evicted by "b", then "a" requested again
+        lruCache.getOrCompute("a", k -> "va" + computeCount.incrementAndGet());
+        lruCache.getOrCompute("b", k -> "vb" + computeCount.incrementAndGet());
+        String aAgain = lruCache.getOrCompute("a", k -> "va" + computeCount.incrementAndGet());
+
+        // then - "a" was genuinely evicted (queue/map in lock-step), so it recomputes rather than
+        // returning a stale still-mapped value: 3 computations total
+        assertThat(aAgain, is("va3"));
+        assertThat(computeCount.get(), is(3));
+        // and the bound holds: only the most-recent key remains
+        assertThat(lruCache.get("a"), is("va3"));
+        assertThat(lruCache.get("b"), is(nullValue()));
+    }
+
+    @Test
     public void shouldClearGlobally() {
         // given
         LRUCache<String, Object> lruCacheOne = new LRUCache<>(mockServerLogger, 5, MINUTES.toMillis(10));

@@ -1,0 +1,14 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/mcp",
+    "body": {
+      "type": "JSON_PATH",
+      "jsonPath": "$[?(@.method == 'tools/call' && @.params.name == 'get_weather')]"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"content\": [{\"type\": \"text\", \"text\": \"72F and sunny\"}], \"isError\": false}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}

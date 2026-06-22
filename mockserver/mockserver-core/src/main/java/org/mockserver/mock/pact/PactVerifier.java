@@ -73,54 +73,89 @@ public class PactVerifier {
         List<InteractionResult> results = new ArrayList<>();
         boolean allVerified = true;
 
-        for (JsonNode interactionNode : interactionsNode) {
-            String description = interactionNode.has("description")
-                ? interactionNode.get("description").asText()
-                : "(unnamed interaction)";
+        // Snapshot the live Pact provider-state scenario so verification (which activates each
+        // interaction's provider state as it goes) leaves the data-plane scenario unchanged.
+        final org.mockserver.mock.ScenarioManager scenarioManager = requestMatchers.getScenarioManager();
+        final String priorState = scenarioManager.getState(PactProviderStates.SCENARIO_NAME);
 
-            JsonNode requestNode = interactionNode.get("request");
-            if (requestNode == null) {
-                results.add(new InteractionResult(description, false, "interaction has no request definition"));
-                allVerified = false;
-                continue;
+        try {
+            for (JsonNode interactionNode : interactionsNode) {
+                String description = interactionNode.has("description")
+                    ? interactionNode.get("description").asText()
+                    : "(unnamed interaction)";
+
+                JsonNode requestNode = interactionNode.get("request");
+                if (requestNode == null) {
+                    results.add(new InteractionResult(description, false, "interaction has no request definition"));
+                    allVerified = false;
+                    continue;
+                }
+
+                HttpRequest pactRequest = buildHttpRequest(requestNode);
+
+                // Honour the interaction's provider state ("given ...") before matching: the
+                // provider-state callback. Activating it sets the well-known Pact scenario into the
+                // required state so that a state-gated expectation imported from this contract
+                // becomes serviceable (to this verification and to concurrent data-plane traffic).
+                String providerState = PactProviderStates.gatingStateOf(interactionNode);
+                PactProviderStates.activate(scenarioManager, providerState);
+
+                // Find matching expectations using the read-only forward-matching method.
+                List<Expectation> matchingExpectations = requestMatchers.retrieveExpectationsMatchingRequest(pactRequest);
+
+                // retrieveExpectationsMatchingRequest matches on request fields only and does NOT
+                // apply the scenario gate, so a scenario-gated expectation could be returned even
+                // when its required provider state is not active. Filter to expectations whose
+                // provider state is satisfied (stateless expectations always pass) so verification
+                // respects provider states.
+                Expectation matchedExpectation = firstWithSatisfiedState(matchingExpectations, providerState);
+
+                if (matchedExpectation == null) {
+                    String reason;
+                    if (matchingExpectations.isEmpty()) {
+                        reason = "no matching expectation found";
+                    } else if (providerState != null) {
+                        reason = "no matching expectation found for provider state '" + providerState + "'";
+                    } else {
+                        reason = "matching expectation found but it requires a provider state not declared by this interaction";
+                    }
+                    results.add(new InteractionResult(description, false, reason));
+                    allVerified = false;
+                    continue;
+                }
+
+                // Check that the expectation has a static response action
+                HttpResponse expectedMockResponse = representativeResponse(matchedExpectation);
+                if (expectedMockResponse == null) {
+                    results.add(new InteractionResult(description, false,
+                        "unverifiable (non-static action) — only response expectations can be verified against a Pact contract"));
+                    allVerified = false;
+                    continue;
+                }
+
+                // Compare the Pact interaction's expected response with the expectation's response
+                JsonNode pactResponseNode = interactionNode.get("response");
+                if (pactResponseNode == null) {
+                    results.add(new InteractionResult(description, false, "interaction has no response definition"));
+                    allVerified = false;
+                    continue;
+                }
+
+                String mismatchReason = compareResponses(pactResponseNode, expectedMockResponse);
+                if (mismatchReason != null) {
+                    results.add(new InteractionResult(description, false, mismatchReason));
+                    allVerified = false;
+                } else {
+                    results.add(new InteractionResult(description, true, null));
+                }
             }
-
-            HttpRequest pactRequest = buildHttpRequest(requestNode);
-
-            // Find matching expectations using the read-only forward-matching method
-            List<Expectation> matchingExpectations = requestMatchers.retrieveExpectationsMatchingRequest(pactRequest);
-
-            if (matchingExpectations.isEmpty()) {
-                results.add(new InteractionResult(description, false, "no matching expectation found"));
-                allVerified = false;
-                continue;
-            }
-
-            Expectation matchedExpectation = matchingExpectations.get(0);
-
-            // Check that the expectation has a static response action
-            HttpResponse expectedMockResponse = representativeResponse(matchedExpectation);
-            if (expectedMockResponse == null) {
-                results.add(new InteractionResult(description, false,
-                    "unverifiable (non-static action) — only response expectations can be verified against a Pact contract"));
-                allVerified = false;
-                continue;
-            }
-
-            // Compare the Pact interaction's expected response with the expectation's response
-            JsonNode pactResponseNode = interactionNode.get("response");
-            if (pactResponseNode == null) {
-                results.add(new InteractionResult(description, false, "interaction has no response definition"));
-                allVerified = false;
-                continue;
-            }
-
-            String mismatchReason = compareResponses(pactResponseNode, expectedMockResponse);
-            if (mismatchReason != null) {
-                results.add(new InteractionResult(description, false, mismatchReason));
-                allVerified = false;
+        } finally {
+            // Restore the Pact provider-state scenario to whatever it was before verification, so a
+            // read-only verify() never leaves residual state on the live data-plane matcher.
+            if (org.mockserver.mock.ScenarioManager.STARTED.equals(priorState)) {
+                scenarioManager.clear(PactProviderStates.SCENARIO_NAME);
             } else {
-                results.add(new InteractionResult(description, true, null));
+                scenarioManager.setState(PactProviderStates.SCENARIO_NAME, priorState);
             }
         }
 
@@ -294,6 +329,38 @@ public class PactVerifier {
             return "body mismatch: expected '" + truncate(pactBodyStr) + "' but was '" + truncate(mockBodyStr) + "'";
         }
         return null;
+    }
+
+    /**
+     * Returns the first expectation whose provider-state gate is satisfied for the interaction being
+     * verified, or null if none qualify. An expectation gated on MockServer's Pact provider-state
+     * scenario ({@link PactProviderStates#SCENARIO_NAME}) only qualifies when its required state
+     * equals the interaction's provider state; an expectation with no Pact provider-state gate (or
+     * gated on a different scenario) always qualifies, preserving the prior stateless behaviour.
+     *
+     * @param matchingExpectations the request-field matches returned by the matcher
+     * @param providerState        the interaction's provider state, or null when stateless
+     * @return the first qualifying expectation, or null
+     */
+    private static Expectation firstWithSatisfiedState(List<Expectation> matchingExpectations, String providerState) {
+        for (Expectation expectation : matchingExpectations) {
+            if (providerStateSatisfied(expectation, providerState)) {
+                return expectation;
+            }
+        }
+        return null;
+    }
+
+    private static boolean providerStateSatisfied(Expectation expectation, String providerState) {
+        if (!PactProviderStates.SCENARIO_NAME.equals(expectation.getScenarioName())) {
+            // not gated on a Pact provider state — unaffected
+            return true;
+        }
+        String required = expectation.getScenarioState();
+        if (required == null) {
+            return true;
+        }
+        return required.equals(providerState);
     }
 
     /**

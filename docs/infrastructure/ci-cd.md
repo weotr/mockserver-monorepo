@@ -11,8 +11,6 @@ graph LR
 Build & Test"]
         BK_MAVEN["Docker Push
 Maven CI Image"]
-        BK_RELEASE["Docker Push
-Release Image"]
         BK_CLEANUP["PR Cleanup
 Cancel & Delete"]
     end
@@ -29,7 +27,6 @@ Auto-indexed"]
 
     BK -->|runs on| EC2[AWS EC2 Agents]
     BK_MAVEN -->|pushes to| DH[Docker Hub]
-    BK_RELEASE -->|pushes to| DH
     BK_CLEANUP -->|triggered by| GH_WH[GitHub Webhook]
     GA_CODEQL -->|reports to| GH_SEC[GitHub Security]
 ```
@@ -85,9 +82,17 @@ against rules"}
     MATCH -->|container_integration_tests/| CONTAINER["trigger: mockserver-container-tests"]
     MATCH -->|jekyll-www.mock-server.com/| WEBSITE["trigger: mockserver-website"]
     MATCH -->|docker_build/maven/| BUILD_IMG["trigger: mockserver-build-image"]
-    MATCH -->|.buildkite/ .github/ terraform/ etc.| INFRA["trigger: mockserver-infra"]
+    MATCH -->|".buildkite/ .github/ terraform/ scripts/ examples/ OpenAPI spec etc."| INFRA["trigger: mockserver-infra"]
     MATCH -->|no match| DEFAULT["inline: no-op step"]
 ```
+
+The `mockserver-infra` pipeline (`pipeline-infra.yml`) runs lightweight validation
+steps in Docker: opencode config lint, shell-script lint, Dockerfile sync, Helm
+chart validation, and **API-collection validation**. The collection step
+(`collections-validate.sh`) regenerates the Postman and Bruno collections from the
+OpenAPI spec and fails if the committed `examples/postman/**` or `examples/bruno/**`
+have drifted — so `examples/` and `jekyll-www.mock-server.com/mockserver-openapi.yaml`
+also route to this pipeline.
 
 ### Buildkite Pipelines
 
@@ -107,14 +112,13 @@ All pipelines are managed via Terraform in `terraform/buildkite-pipelines/pipeli
 | `mockserver-website` | `pipeline-website.yml` | Orchestrator | Jekyll site build |
 | `mockserver-infra` | `pipeline-infra.yml` | Orchestrator | Infrastructure validation |
 | `mockserver-build-image` | `docker-push-maven.yml` | Orchestrator + Manual | Build/push maven CI image |
-| `mockserver-release-image` | `docker-push-release.yml` | Manual | Build/push release image |
 | `mockserver-release` | `release-pipeline.yml` | Manual | Automated release pipeline (TOTP, Maven Central, maven-plugin, Docker Hub + ECR Public, npm, Helm, Javadoc, SwaggerHub, website, JSON Schema, PyPI, RubyGems, GitHub Release, optional versioned site) |
 | `mockserver-cleanup` | `pipeline-cleanup.yml` | GitHub webhook + scheduled | Clean up builds for closed PRs |
 | `mockserver-perf-regression` | `pipeline-perf-test.yml` | Daily Buildkite schedule (04:00 UTC) | Daily performance-regression pipeline — guard + k6 run + JMH microbench + rolling-baseline compare |
 
 A single commit can trigger multiple child pipelines if it changes files in multiple areas. For example, a commit touching both `mockserver/` and `mockserver-ui/` triggers both `mockserver-java` and `mockserver-ui` pipelines.
 
-All pipelines have `cancel_intermediate_builds` and `skip_intermediate_builds` enabled. When a new build arrives for the same branch (e.g. Dependabot rebases a PR), Buildkite automatically cancels any running builds and skips queued builds for that branch. Native trigger steps automatically cancel child builds when the parent build is cancelled.
+All pipelines have `cancel_intermediate_builds` and `skip_intermediate_builds` enabled, but cancellation of **running** builds is scoped to non-master branches via `cancel_intermediate_builds_branch_filter = "!master"` (set uniformly in `terraform/buildkite-pipelines/pipelines.tf`). When a new build arrives for the same **feature/PR** branch (e.g. Dependabot rebases a PR), Buildkite cancels the running build to save agent VMs, and native trigger steps cancel the child builds too. On **master**, running builds are never cancelled: they always run to completion and report true pass/fail. Cancelling a master build mid-run would (a) leave that commit untested and (b) surface as a misleading failure on the parent pipeline whose trigger step was waiting on the cancelled child. Queued (not-yet-started) builds are still skipped on all branches — those report as "skipped" (neutral), not red.
 
 ### Closed PR Build Cleanup
 
@@ -207,6 +211,8 @@ flowchart TD
     master only"]
     CTESTS --> PUSH["7. Build and push :snapshot
     master only"]
+    PUSH --> BUNDLES["8. Publish snapshot binary bundles
+    master only, soft_fail"]
 ```
 
 #### Step 1: Validate Config
@@ -231,13 +237,23 @@ Runs `.buildkite/scripts/steps/java-build.sh`, which executes the full Maven bui
 
 Uses the `junit-annotate` plugin to parse `**/target/*-reports/TEST-*.xml` and add test result annotations to the Buildkite build page. Runs with `continue_on_failure: true` so annotations appear even on test failures.
 
-#### Steps 5–7: Master-Only Steps
+#### Steps 5–8: Master-Only Steps
 
-On `master` only, three additional steps run sequentially:
+On `master` only, four additional steps run sequentially:
 
 - **Deploy snapshot:** `.buildkite/scripts/steps/java-deploy-snapshot.sh` — publishes SNAPSHOT artifacts to Sonatype
 - **Container integration tests:** `.buildkite/scripts/steps/container-tests-run.sh` — runs Docker Compose and Helm integration tests
 - **Build and push :snapshot:** `.buildkite/scripts/steps/java-docker-push-snapshot.sh` — builds and pushes the `:snapshot` and `:mockserver-snapshot` Docker images (`:latest` is only pushed during releases)
+- **Publish snapshot binary bundles** (`soft_fail`): `.buildkite/scripts/steps/java-publish-snapshot-bundles.sh` — builds JVM-less binary bundles for all platforms (linux/x86_64, linux/aarch64, darwin/x86_64, darwin/aarch64, windows/x86_64) using `scripts/build-all-bundles.sh` and uploads them to `s3://aws-binaries-mockserver/mockserver-<POM_VERSION>/`, served at `https://downloads.mock-server.com/mockserver-<POM_VERSION>/...`. Each master build overwrites the previous snapshot bundles. This provides working download URLs for the Go/.NET/Rust/Ruby/Python binary client launchers between releases. **No GitHub token is required** — the upload uses the agent's IAM instance role; the default-queue role needs `s3:PutObject` on `arn:aws:s3:::aws-binaries-mockserver/*` (provisioned via Terraform in `terraform/buildkite-agents/`). Releases still use GitHub Releases (via the release pipeline). The `jlink` cross-build needs JDK 21, which this step **bootstraps on demand** (downloads Temurin 21 for the host and passes it via `JAVA_HOME` to `build-all-bundles.sh` for that one invocation) — the **Maven build keeps running on JDK 17**, so the Java-17 floor is still enforced and this step never changes the Maven JDK. Master-only (`if: build.branch == 'master'`) and `soft_fail: true`, so **PR builds never publish** and bundle-build failures never redden master.
+
+#### Spot Resilience (agent-lost auto-retry)
+
+The `default` agent queue is a mix of on-demand and Spot instances (see [aws-infrastructure.md](aws-infrastructure.md#scaling-behaviour)). When AWS reclaims a Spot instance mid-build, the Buildkite agent is lost and the running job ends with **exit status `-1`** (or `255`) — an infrastructure kill, not a test failure. The Maven build runs 15–25 minutes, so a reclaim part-way through used to fail the whole build and require a manual re-run (~2 Spot evictions/day were observed).
+
+Two complementary mitigations:
+
+- **`automatic_retry` on agent-lost** — the long, non-`soft_fail` command steps (`:maven: build`, deploy snapshot, container integration tests, build-and-push `:snapshot`) declare `retry.automatic` for `exit_status: -1` and `255` (`limit: 2`). A Spot reclaim silently re-queues the job onto a fresh agent instead of reddening the build. **Real test failures exit `1` and are NOT retried**, so this never masks genuine breakage.
+- **Higher on-demand ratio** — the default queue's `on_demand_percentage` was raised from 20% to 60% so a long build is much less likely to land on a Spot instance in the first place (the on-demand base capacity of 1 is unchanged).
 
 ### Python and Ruby Client Integration Tests
 
@@ -274,37 +290,39 @@ The pipeline has two steps separated by a `- wait` directive:
 1. **Build:** `.buildkite/scripts/steps/maven-image-build.sh` builds the `mockserver/mockserver:maven` image
 2. **Push** (master only): `.buildkite/scripts/steps/maven-image-push.sh` authenticates to Docker Hub via AWS Secrets Manager (`mockserver-build/dockerhub`) and pushes the image
 
-### Release Image Push Pipeline
+### Release Image Push (Docker step of the release pipeline)
 
-**File:** `.buildkite/docker-push-release.yml`
+**Script:** `scripts/release/components/docker.sh`, invoked as the `:docker: Docker Image` step of `release-pipeline.yml` (`release-runner.sh docker`).
 
-**Trigger:** Manual (during release process, step 7)
+**Trigger:** Runs automatically as part of the `mockserver-release` pipeline — there is no separate manual image pipeline.
 
-**Queue:** `release` — runs on the release agent queue so it has access to release secrets.
+**Queue:** `release` — needs `mockserver-release/cosign-key` (image signing) and the release-scoped Docker Hub / ECR push credentials.
 
-Builds and pushes the production MockServer Docker images as multi-arch images (`linux/amd64` + `linux/arm64` via QEMU). Three image variants are published: main, GraalJS, and webhook.
+Builds and pushes the production MockServer Docker images as multi-arch images (`linux/amd64` + `linux/arm64` via QEMU). Four image variants are published: main, GraalJS, clustered, and webhook. After push, each image is cosign-signed by digest, and the same digests are mirrored to GHCR.
 
-Set the `RELEASE_TAG` environment variable when triggering the build (e.g., `mockserver-7.0.0`). If triggered from a git tag, `BUILDKITE_TAG` is used as fallback.
+The `RELEASE_VERSION` / tag is derived from the release pipeline context.
 
 Tags pushed per image:
-- `mockserver/mockserver:mockserver-X.Y.Z` + `:X.Y.Z` (main + GraalJS variants)
+- `mockserver/mockserver:mockserver-X.Y.Z` + `:X.Y.Z` + `:latest` (main, GraalJS, clustered variants)
 - `mockserver/mockserver-webhook:mockserver-X.Y.Z` + `:X.Y.Z` (admission webhook)
-- Same tags to ECR Public (URI resolved dynamically via `aws ecr-public describe-repositories`)
+- Same tags to ECR Public (URI resolved dynamically via `aws ecr-public describe-repositories`) and mirrored to GHCR
 
 ```mermaid
 flowchart LR
-    TRIGGER["Manual trigger
-RELEASE_TAG=mockserver-X.Y.Z"] --> LOGIN["Docker Hub + ECR login
+    TRIGGER["release-runner.sh docker
+(release pipeline step)"] --> LOGIN["Docker Hub + ECR login
 via Secrets Manager"]
     LOGIN --> ECR_RESOLVE["Resolve ECR URI dynamically
 ecr-public describe-repositories"]
     ECR_RESOLVE --> BUILD["docker buildx build
 linux/amd64 + linux/arm64"]
-    BUILD --> PUSH["Push main + GraalJS + webhook
-:mockserver-X.Y.Z + :X.Y.Z"]
+    BUILD --> PUSH["Push main + GraalJS + clustered + webhook
+:mockserver-X.Y.Z + :X.Y.Z + :latest"]
+    PUSH --> SIGN["cosign sign by digest
++ mirror digests to GHCR"]
 ```
 
-The ECR repository URI is resolved at runtime via `aws ecr-public describe-repositories` rather than hardcoded — the registry alias is AWS-assigned and must not be hardcoded (`.buildkite/scripts/steps/docker-push-release.sh`).
+The ECR repository URI is resolved at runtime via `aws ecr-public describe-repositories` rather than hardcoded — the registry alias is AWS-assigned and must not be hardcoded (`scripts/release/components/docker.sh`).
 
 ### Release Pipeline Security
 
@@ -540,7 +558,7 @@ When multiple commits land on `master` in quick succession (e.g. from concurrent
 | 2 | ~12 | 0 of 10 (starvation) |
 | 3 | ~18 | 0 of 10 (starvation, queued jobs can't start) |
 
-Cancel/skip intermediate builds is set to `!master` (disabled on master) because enabling it on master would cause legitimate builds to be dropped. Child pipelines (`mockserver-infra`, `mockserver-container-tests`) have empty filters (cancel/skip enabled on all branches), but the parent pipeline's trigger jobs still hold agents.
+Cancel intermediate (running) builds is set to `!master` (disabled on master) on **every** pipeline because cancelling on master drops legitimate builds and shows misleading failures. This filter is now applied uniformly in Terraform (`terraform/buildkite-pipelines/pipelines.tf`). Previously several child pipelines (`mockserver-container-tests`, `mockserver-performance-test`, `mockserver-infra`, the per-client and release pipelines) had empty filters — so a fresh master commit cancelled the previous still-running build before it could report, which was especially disruptive for the long-running container-tests (~20m) and performance-test pipelines. The parent pipeline's trigger jobs still hold a (cheap, `trigger`-queue) agent while waiting on children.
 
 ### Why Not Native Trigger Steps
 

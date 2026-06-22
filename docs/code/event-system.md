@@ -180,6 +180,8 @@ Static predicates filter log entries for different retrieval operations:
 | `expectationLogPredicate` | `EXPECTATION_RESPONSE`, `FORWARDED_REQUEST` |
 | `notDeletedPredicate` | Any non-deleted entry |
 
+**Filter ordering matters for CPU (issue #2359).** When a retrieve also applies an `HttpRequestMatcher`, the cheap type/not-deleted predicate is applied **before** the matcher. The matcher clones the request and runs full field-by-field matching, so running it first would evaluate it against deleted tombstones and wrong-type entries that are then discarded — making each `/retrieve` cost grow with total log size as the log fills toward `maxLogEntries` (and `clear` at `INFO` only tombstones entries, leaving them in the deque). Keep the predicate filter first when adding or changing a retrieve path. For the same reason, `clear` skips entries already marked deleted rather than re-matching them on every clear.
+
 ### Unmatched Request Retrieval
 
 `MockServerEventLog.retrieveUnmatchedRequests(limit, Consumer<List<LogEntry>>)` retrieves the most recent `NO_MATCH_RESPONSE` log entries (requests that matched no expectation). It drains the disruptor first to ensure all pending events are processed, then iterates the event log in reverse order (most recent first) to return up to `limit` entries (capped at 100). This is used by `HttpState.explainUnmatched()` and the MCP `explain_unmatched_requests` tool to provide post-hoc mismatch diagnostics without requiring users to reconstruct the failing request.
@@ -220,6 +222,106 @@ sequenceDiagram
 - `atMost(n)` — n or fewer
 - `between(min, max)` — within range
 
+#### Verify by Disposition
+
+`Verification.withDisposition(Disposition)` narrows a request-count verification to only those requests handled with a particular disposition:
+
+| Disposition | Counts log entries of type | Meaning |
+|-------------|----------------------------|---------|
+| `FORWARDED` | `FORWARDED_REQUEST` | request was forwarded/proxied to an upstream server |
+| `MOCKED` | `EXPECTATION_RESPONSE` | request matched an expectation and got a mocked response |
+| (unset) | `RECEIVED_REQUEST` | every received request (original behaviour) |
+
+When a disposition is set, `MockServerEventLog.retrieveRequests(Verification, ...)` swaps `requestLogPredicate` for `forwardedRequestLogPredicate` or `mockedRequestLogPredicate` (both exclude `NO_MATCH_RESPONSE`, MockServer's own auto-404). The disposition is serialized as the `disposition` field on the verification JSON (enum `MOCKED`/`FORWARDED`). It applies to the request-count path only — it is ignored for response verification (`httpResponse` set) and expectation-id verification.
+
+#### Soft / Collecting Verify (`verifyAll`)
+
+`MockServerClient.verifyAll(Verification...)` runs every supplied verification client-side and, instead of throwing on the first failure like `verify(...)`, collects all failure messages and throws a single `AssertionError` listing every mismatch. This is purely a client convenience — each verification is still sent through the standard `PUT /mockserver/verify` path; no server change is involved.
+
+### Response Verification
+
+When `Verification.httpResponse` is non-null, the verification switches from the request-only path to a response-aware path that counts matching **request-response pairs** rather than received requests.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant HS as HttpState
+    participant EL as MockServerEventLog
+    participant RB as Ring Buffer
+
+    C->>HS: PUT /mockserver/verify (with httpResponse)
+    HS->>EL: verify(Verification)
+    EL->>RB: Publish RUNNABLE
+    RB->>RB: Consumer thread runs verifyResponse logic
+
+    Note over RB: 1. retrieveRequestResponses() using responseVerificationLogPredicate (excludes NO_MATCH_RESPONSE)
+    Note over RB: 2. Map LogEntry → LogEventRequestAndResponse (request + response pair)
+    Note over RB: 3. If httpRequest set, filter pairs by HttpRequestMatcher
+    Note over RB: 4. Build HttpResponseMatcher from httpResponse template
+    Note over RB: 5. Filter pairs by responseMatcher.matches(pair.getHttpResponse())
+    Note over RB: 6. Check VerificationTimes.matches(matchingPairs.size())
+
+    alt Count matches
+        RB->>EL: Log VERIFICATION_PASSED
+        EL-->>C: 202 Accepted (empty body)
+    else Count mismatch
+        RB->>RB: Serialize actual responses for error message
+        RB->>EL: Log VERIFICATION_FAILED
+        EL-->>C: 406 Not Acceptable ("Response not found ..." message)
+    end
+```
+
+**Dispatch logic** in `MockServerEventLog.verify(Verification, Consumer<String>)`:
+
+```java
+if (verification.getHttpResponse() != null) {
+    verifyResponse(verification, logCorrelationId, resultConsumer);
+} else {
+    verifyRequest(verification, logCorrelationId, resultConsumer);
+}
+```
+
+The `verifyResponse` path uses `responseVerificationLogPredicate` — an alias for `expectationLogPredicate` — which passes only `EXPECTATION_RESPONSE` and `FORWARDED_REQUEST` entries. It deliberately **excludes** `NO_MATCH_RESPONSE` (MockServer's own auto-generated 404 for unmatched requests), so a template such as `response().withStatusCode(404)` does not accidentally count MockServer's own no-match responses. The `requestResponseLogPredicate` used by `/retrieve` is intentionally broader (includes `NO_MATCH_RESPONSE`); the verification predicate is a separate alias so future changes to one do not silently affect the other.
+
+#### Response Matching Semantics
+
+`HttpResponseMatcher` (`mockserver-core/src/main/java/org/mockserver/matchers/HttpResponseMatcher.java`) is a self-contained matcher built from the `HttpResponse` template in a `Verification` or `VerificationSequence`. Every field is optional: an unset field imposes no constraint, so a null template matches any response.
+
+| Field | Matching strategy | Notes |
+|-------|-------------------|-------|
+| `statusCode` | Exact integer equality | Not used when `statusCodeRange` is set |
+| `statusCodeRange` | `StatusCodeMatcher` — class range or numeric operator | See below |
+| `reasonPhrase` | `RegexStringMatcher` — string or regex | Respects `matchExactCase` (see below) |
+| `headers` | `MultiValueMapMatcher` — subset match, extra response headers allowed | Notted key/value strings supported |
+| `cookies` | `HashMapMatcher` — subset match, extra cookies allowed | Same semantics as request cookie matching; notted values supported |
+| `body` | `BodyMatching` dispatch — full parity with request body matching | See below |
+
+**Status-code range / operator matching (`statusCodeRange`)** — `StatusCodeMatcher` supports three forms:
+
+- **Exact** (default): when `statusCodeRange` is absent/blank, exact `Integer` equality is used.
+- **Class range**: a single digit followed by `XX` (case-insensitive), e.g. `"2XX"` or `"5xx"`, matches the range `[N00, N99]`.
+- **Numeric operator**: a leading comparison operator followed by a number, e.g. `">= 400"`, `"> 200"`, `"< 300"`, `"<= 204"`, `"== 201"`. Delegated to `NumericComparisonMatcher`.
+
+When both `statusCode` and `statusCodeRange` are set on the template, `statusCodeRange` takes priority (the matcher is built from it). An unparseable `statusCodeRange` expression is a clean non-match (logged at DEBUG; never throws).
+
+**`matchExactCase` scope** — the `reasonPhrase` matcher honours the `matchExactCase` configuration flag: when `true`, the reason-phrase comparison is case-sensitive. This mirrors the request-side behaviour for method, path, and string-body. Header names/values, cookie names/values, and query parameters are always matched case-insensitively regardless of this flag. The flag has no effect on `statusCode`/`statusCodeRange` (numeric) or on control-plane operations (clear/retrieve).
+
+**Body matching** — response body matching shares `BodyMatching` (`mockserver-core/src/main/java/org/mockserver/matchers/BodyMatching.java`) with request matching. This means:
+
+- All body matcher types are supported: string, regex, sub-string, JSON, JSON Schema, JSONPath, XML, XML Schema, GraphQL, JSON-RPC, binary, multipart.
+- `optional: true` body template matches a response with no body.
+- XML and form actual bodies are converted to JSON before JSON-family matching.
+- Binary matchers try the decompressed bytes; for response bodies (no compressed-original representation) only one byte array is tried.
+- An absent actual body is a clean non-match for JSON/XML matchers (no internal NPE).
+
+**`detailedVerificationFailures` now covers response verification** — when `detailedVerificationFailures` is `true` and a response verification fails, MockServer appends a field-level closest-response diff to the error message. It scores recorded responses by how many fields differ from the template, picks the closest one, and lists the differing fields with expected-vs-found values. This is diagnostic only and never changes the pass/fail result.
+
+**Intentional asymmetries vs. request matching** — features present on the request side that are absent from response matching:
+
+- There is no top-level `not(...)` on a response template. The `HttpResponse` model has no `isNot()` method. Per-field negation (notted header/cookie strings and body `not`) still works.
+- `connectionOptions` and HTTP trailers are not matched; they are action-configuration fields, not observable response properties.
+- Control-plane operations (clear, retrieve) do not apply `matchExactCase`.
+
 ### Sequence Verification
 
 Sequence verification checks that requests were received in a specific order:
@@ -235,7 +337,21 @@ sequenceDiagram
 
 Verification can be done by request matcher or by expectation ID.
 
+**Field-level closest-match diff on sequence failure** — when `detailedVerificationFailures` is enabled (on by default) and a request-matcher sequence step fails to find a match, the failure message appends a `closest match diff:` block for that specific step (via the same `buildClosestMatchDiff` used by single-request verify), naming the differing fields (method/path/headers/body/...) for the closest recorded request. Response-aware sequences append the analogous `buildClosestResponseMatchDiff` for the failing step's response template. The expectation-ID path appends no diff (steps match by recorded expectation id, not request fields). The diff is diagnostic only; when `detailedVerificationFailures` is disabled the legacy message format is unchanged.
+
 **Request matcher count verification** filters `RECEIVED_REQUEST` entries. **Expectation ID verification** retrieves entries matching `expectationLogPredicate` (includes `EXPECTATION_RESPONSE`, `FORWARDED_REQUEST`). **Sequence verification** scans recorded requests in order rather than counting.
+
+#### Response-Aware Sequence Verification
+
+When `VerificationSequence.httpResponses` is non-empty, sequence verification switches to a response-aware path that checks both requests and responses at each step:
+
+1. Validates inputs: an entirely-empty sequence (no expectation IDs, no requests, no responses) is rejected; when both `httpRequests` and `httpResponses` are non-empty they must be the same length, otherwise the sequence is rejected (a mismatched-length sequence previously padded with null and silently passed the unspecified steps — this is no longer allowed).
+2. Retrieves all recorded request-response pairs via `retrieveRequestResponses()` using `responseVerificationLogPredicate` (excludes `NO_MATCH_RESPONSE`).
+3. Iterates `stepCount = httpResponses.size()` steps; `httpRequests` may be empty (response-only sequence).
+4. At each step, creates an `HttpRequestMatcher` from `httpRequests[i]` (if present) and an `HttpResponseMatcher` from `httpResponses[i]`; a null matcher acts as a wildcard for that side.
+5. Uses a forward-scanning pointer (`pairLogCounter`) that only advances — order is preserved.
+6. A step passes when both matchers match the same `LogEventRequestAndResponse` entry: `requestMatches && responseMatches`.
+7. If any step fails to find a match after the previous step's position, the sequence verification fails; the failure message serializes the response side (not the request side) to make the failure actionable.
 
 ### Verification in Parallel Testing
 
@@ -259,7 +375,15 @@ Verification can be done by request matcher or by expectation ID.
   - Unique headers or query parameters in matchers
   - Avoid broad matchers like only `path("/api")` in parallel tests
 - **Be careful with `clear()` / `reset()`** — they affect all tests sharing the instance
-- **Retry verification with backoff** if testing asynchronous systems where you need to wait for the application to send requests:
+- **Retry verification with backoff** if testing asynchronous systems where you need to wait for the application to send requests. The Java client has this built in via timeout-aware overloads (no external retry helper needed):
+  ```java
+  // Eventual verification: poll until the request arrives or the timeout expires
+  mockServerClient.verify(request, VerificationTimes.once(), Duration.ofSeconds(5));
+
+  // Negative-within-timeout: assert no matching request arrives during the window
+  mockServerClient.verifyNever(request, Duration.ofSeconds(2));
+  ```
+  These poll the standard `PUT /mockserver/verify` endpoint client-side with a 100 ms backoff (`MockServerClient.verify(Verification, Duration)` / `verifyNever(Verification, Duration)`); there is no server-side wait. The equivalent with an external library is:
   ```java
   // Wait for application under test to send request, not for MockServer to process it
   Awaitility.await()
@@ -275,6 +399,64 @@ Verification can be done by request matcher or by expectation ID.
   ```
 
 See consumer documentation at [/mock_server/verification.html#how_verification_works](https://www.mock-server.com/mock_server/verification.html#how_verification_works) for user-facing guidance.
+
+## Retrieve Formats (Expectation Code Generation)
+
+`PUT /mockserver/retrieve?type=<scope>&format=<format>` converts recorded or active state into a
+chosen representation. The `format` query parameter maps to the `Format` enum
+(`mockserver-core/.../model/Format.java`) via `Format.valueOf(param.toUpperCase())`, defaulting to
+`JSON`. `HttpState.retrieve()` dispatches on `(scope, format)` in four `switch(format)` blocks —
+one per scope: `REQUESTS`, `REQUEST_RESPONSES`, `RECORDED_EXPECTATIONS`, `ACTIVE_EXPECTATIONS`.
+
+| Format | Scopes producing code/output | Content-Type | Generator |
+|--------|------------------------------|--------------|-----------|
+| `JAVA` | recorded + active expectations | `application/java` | `ExpectationToJavaSerializer` (typed builder DSL) |
+| `JAVASCRIPT` | recorded + active expectations | `application/javascript` | `ExpectationToJavaScriptSerializer` |
+| `PYTHON` | recorded + active expectations | `text/x-python` | `ExpectationToPythonSerializer` |
+| `GO` | recorded + active expectations | `text/x-go` | `ExpectationToGoSerializer` |
+| `CSHARP` | recorded + active expectations | `text/x-csharp` | `ExpectationToCSharpSerializer` |
+| `RUBY` | recorded + active expectations | `text/x-ruby` | `ExpectationToRubySerializer` |
+| `RUST` | recorded + active expectations | `text/x-rust` | `ExpectationToRustSerializer` |
+| `PHP` | recorded + active expectations | `application/x-httpd-php` | `ExpectationToPhpSerializer` |
+| `JSON` | all | `application/json` | `ExpectationSerializer` / `RequestDefinitionSerializer` |
+
+**Why the non-Java languages are cheap.** Unlike the Java client (which needs the typed builder DSL,
+hence the ~20-class `*ToJavaSerializer` family), every other official client accepts an expectation as
+a JSON object. So each `ExpectationTo<Lang>Serializer` (all in `org.mockserver.serialization.code`)
+reuses the existing JSON serialization (the same `ExpectationSerializer` used for `format=json`) and
+wraps each expectation in the language's real upsert call plus an import/instantiation preamble — one
+call per expectation. The embedded JSON is byte-identical to `format=json`, so the generated code
+round-trips through the real clients.
+
+- **JavaScript**: `const { mockServerClient } = require('mockserver-client');` then one
+  `mockServerClient("localhost", 1080).mockAnyResponse(<expectation JSON>);` per expectation.
+- **Python**: `import json` / `from mockserver import MockServerClient, Expectation` then one
+  `client.upsert(Expectation.from_dict(json.loads("""<expectation JSON>""")));` per expectation.
+- **Go**: `mockserver.New("localhost", 1080)` then `json.Unmarshal([]byte(`​`<JSON>`​`), &e); client.Upsert(e)`.
+  A Go raw-string (backtick) literal carries the JSON; it falls back to a double-quoted interpreted
+  string if the JSON contains a backtick.
+- **C#**: `new MockServerClient("localhost", 1080)` then
+  `client.Upsert(JsonSerializer.Deserialize<Expectation>(@"<JSON>", jsonOptions));`. The JSON sits in a
+  C# verbatim string (`@"..."`, double-quotes doubled).
+- **Ruby**: `require 'mockserver-client'` then
+  `client.upsert(MockServer::Expectation.from_hash(JSON.parse(<<JSON)));` with the JSON in a heredoc.
+- **Rust**: `ClientBuilder::new("localhost", 1080).build()?` then
+  `client.upsert(&[serde_json::from_str::<Expectation>(r#"<JSON>"#)?])?;`. The hash count of the raw
+  string is bumped if the JSON contains a quote-followed-by-hashes terminator.
+- **PHP**: `new MockServerClient('localhost', 1080)` then
+  `$client->upsertExpectation(Expectation::fromArray(json_decode(<<<'JSON' ... JSON, true)));`. The JSON
+  sits in a nowdoc (no interpolation). The PHP client's `Expectation::fromArray()` factory stores the
+  decoded array verbatim and replays it from `toArray()`, so every field round-trips without a typed
+  field-by-field inverse.
+
+Each generator escapes the embedded JSON for its language's string literal, so hostile values (quotes,
+backslashes, newlines, and the language's own raw-string/heredoc terminator) copy-paste cleanly. These
+are all expectation-scope formats; for `REQUESTS`/`REQUEST_RESPONSES` they return a clear "not
+supported" message, exactly as `JAVA` does for `REQUEST_RESPONSES`. The dashboard surfaces these via
+Library → Export (format dropdown + "Copy as code" button). The same Export tab also offers
+**verification code** for the recorded-requests scope in Java, JavaScript, Python, Go, C#, Ruby and
+Rust — that code is generated client-side in the dashboard (by `verificationCodegen.ts`) from the
+retrieved request JSON, one `verify(...)` per request, rather than by a server-side serializer.
 
 ## Persistence System
 
@@ -359,11 +541,36 @@ Thread names follow the pattern `MockServer-<name><N>`. The pool uses `CallerRun
 
 `MemoryMonitoring` implements both `MockServerLogListener` and `MockServerMatcherListener` to track JVM memory usage. When `outputMemoryUsageCsv` is enabled, it writes memory statistics to a CSV file every 50 updates. See [Metrics & Monitoring](metrics.md) for full details.
 
+## Control-Plane Audit Log
+
+**TL;DR:** an off-by-default, append-only, bounded, in-memory log of control-plane *mutations* (who/what/when/where/outcome), so MockServer can run as shared infrastructure with accountability. It is **not** data-plane traffic logging and stores **no request headers or bodies** — only redacted, structural metadata.
+
+```mermaid
+flowchart LR
+    A["Control-plane request\n(PUT /expectation, /clear, ...)"] --> B["controlPlaneRequestAuthenticated()\n(single post-auth choke point)"]
+    B -->|authorised| C["recordAudit()\nfail-soft, off by default"]
+    C --> D["AuditStore\nbounded ring (newest-first)"]
+    D --> E["GET /mockserver/audit\n?limit=<n> (default 200, cap 1000)"]
+```
+
+- **Why a separate store.** The audit log is a security/accountability record of *who changed mock state*, with a different lifetime, redaction policy, and retrieval surface from the data-plane event log. It deliberately reuses the proven `DriftStore` shape (a `java.util.concurrent`-locked `ArrayDeque` ring) rather than the Disruptor event log.
+- **Fire point.** `HttpState.controlPlaneRequestAuthenticated` is the single choke point every control-plane operation passes through after authentication. It now calls `handler.authenticate(request)` and passes the resulting `AuthenticationResult` into `recordAudit(request, result)` in the success branch, *before* the handler executes (when auth is disabled it synthesises an authenticated-anonymous result). It is wrapped in `try/catch` and swallows all errors (TRACE-logged) so it can never throw into the request path.
+- **Off by default.** When `controlPlaneAuditEnabled` is false, `recordAudit` returns immediately and the operation behaves byte-for-byte identically. Reads (GET requests and known read PUTs such as `/retrieve`, `/verify`, `/diff`) are skipped unless `controlPlaneAuditReads` is enabled — by default only mutations (and `reset`) are recorded.
+- **Entry schema** (`AuditEntry`, immutable): `epochTimeMs`, `method`, `path` (control-plane path with the **query string dropped**), `operation` (logical name from the path suffix, e.g. `expectation`/`clear`/`reset`/`chaosExperiment`/`loadScenario`), `sourceAddress` (`request.getRemoteAddress()`, `"unknown"` if null), `principal`, `principalSource` (`verified-oidc`/`verified-mtls`/`verified-jwt` when an enriched handler supplied a verified principal, else the best-effort `jwt`/`mtls`/`none`), `outcome` (`AUTHORIZED` for a permitted operation, or `FORBIDDEN` when control-plane authorization — `controlPlaneAuthorizationEnabled` — denied an authenticated principal), `summary` (reserved; always `null` in v1 — never a header, query value, or body).
+- **Verified principal preferred; best-effort fallback.** When the configured `AuthenticationHandler` returns an `AuthenticationResult` carrying a verified principal (e.g. `OidcAuthenticationHandler` → `principalSource=verified-oidc`, principal = the signature-verified `sub`), that principal/source is recorded. Otherwise — auth disabled, or a legacy boolean-only handler — audit falls back to the **UNVERIFIED** best-effort extraction: from `Authorization: Bearer <jwt>` the payload segment is base64url-decoded and `sub` is read with **no signature verification** (`principalSource=jwt`); else the mTLS client-certificate subject CN (`principalSource=mtls`); else `anonymous`/`none`. The raw token is never stored, and any parse failure yields `anonymous`/`none`.
+- **Redaction (by omission).** Entries carry no headers and no body, and the path has its query string stripped — so there is no credential-bearing free text to scrub. The `summary` field is unused (always `null`) in v1, so safety is by omission rather than active redaction. If a non-null `summary` derived from a header or query value is ever added, scrub it through `FixtureRedactor.defaultSensitiveHeaders()` + `REDACTED_PLACEHOLDER` at that point.
+- **Reset clears the audit log, including its own `reset` entry.** A `PUT /mockserver/reset` records its `reset` audit entry and then `reset()` clears the store, so the wipe leaves no durable trace — intentional for an off-by-default, best-effort, in-memory log (not a tamper-evident compliance log).
+- **Capacity.** The `AuditStore` singleton reads `controlPlaneAuditMaxEntries` (default 1000) **once at construction** — a fixed-capacity ring, like `DriftStore`. `HttpState.reset()` clears it alongside `DriftStore`.
+
+**Deferred (not in v1):** persistent/external sink; tamper-evidence; process-signal control of auditing. (Verified-principal / external-IdP integration shipped in Tier 1.5-A via `OidcAuthenticationHandler` — an OIDC-verified `sub` is recorded with `principalSource=verified-oidc`. Coarse control-plane authorization — Tier 1.5-A Wave 2 — now populates `outcome=FORBIDDEN` for denied operations; FORBIDDEN denials are always recorded when auditing is enabled, even for reads, whereas AUTHORIZED reads honour `controlPlaneAuditReads`.)
+
 ## Class Reference
 
 | Class | File | Role |
 |-------|------|------|
 | `MockServerEventLog` | `mockserver-core/.../log/MockServerEventLog.java` | Central event log with Disruptor ring buffer |
+| `AuditStore` | `mockserver-core/.../mock/audit/AuditStore.java` | Bounded, append-only ring of control-plane audit entries (singleton; off by default) |
+| `AuditEntry` | `mockserver-core/.../mock/audit/AuditEntry.java` | Immutable, redacted control-plane mutation record (no headers/bodies) |
 | `LogEntry` | `mockserver-core/.../log/model/LogEntry.java` | Event data object, implements `EventTranslator` |
 | `MockServerLogger` | `mockserver-core/.../logging/MockServerLogger.java` | Logging facade, routes to event log |
 | `Scheduler` | `mockserver-core/.../scheduler/Scheduler.java` | Async task execution |
@@ -372,6 +579,8 @@ Thread names follow the pattern `MockServer-<name><N>`. The pool uses `CallerRun
 | `Verification` | `mockserver-core/.../verify/Verification.java` | Request count verification |
 | `VerificationSequence` | `mockserver-core/.../verify/VerificationSequence.java` | Ordered sequence verification |
 | `VerificationTimes` | `mockserver-core/.../verify/VerificationTimes.java` | Expected count constraints |
+| `HttpResponseMatcher` | `mockserver-core/.../matchers/HttpResponseMatcher.java` | Response matcher for response verification (status, headers, body) |
+| `BodyMatcherBuilder` | `mockserver-core/.../matchers/BodyMatcherBuilder.java` | Factory for body matchers, shared by request and response matching |
 | `ExpectationFileSystemPersistence` | `mockserver-core/.../persistence/ExpectationFileSystemPersistence.java` | Write expectations to disk |
 | `ExpectationFileWatcher` | `mockserver-core/.../persistence/ExpectationFileWatcher.java` | Monitor initialization files |
 | `FileWatcher` | `mockserver-core/.../persistence/FileWatcher.java` | Low-level file polling |

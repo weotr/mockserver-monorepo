@@ -1,0 +1,71 @@
+---
+title: PyPI
+description: Install the mockserver-client Python package from PyPI to drive MockServer from Python tests — sync, async, and WebSocket callback support included.
+layout: page
+pageOrder: 6.1
+section: 'Where'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-11T08:00:00+01:00
+---
+
+<h2>PyPI &nbsp;&nbsp;<a target="_blank" href="https://pypi.org/project/mockserver-client/" rel="noopener noreferrer"><img src="https://img.shields.io/pypi/v/mockserver-client.svg" alt="PyPI version" style="max-width:100%;"></a></h2>
+
+<p>The <a target="_blank" href="https://pypi.org/project/mockserver-client/" rel="noopener noreferrer"><code>mockserver-client</code></a> package provides a Python client for MockServer's control-plane REST API, with support for synchronous and asyncio usage, WebSocket response callbacks, and an on-demand binary launcher that starts MockServer without Java or Docker.</p>
+
+<h3>Install</h3>
+
+<pre><code class="code">pip install mockserver-client</code></pre>
+
+<h3>Quick start</h3>
+
+<pre><code class="code python">from mockserver import MockServerClient, HttpRequest, HttpResponse
+
+client = MockServerClient("localhost", 1080)
+
+# Create an expectation
+client.when(
+    HttpRequest.request("/api/users").with_method("GET")
+).respond(
+    HttpResponse.response('{"users": []}', status_code=200)
+)
+
+# Verify the request was received
+client.verify(
+    HttpRequest.request("/api/users").with_method("GET")
+)
+
+# Reset
+client.reset()
+client.close()</code></pre>
+
+<h3>Async usage</h3>
+
+<pre><code class="code python">import asyncio
+from mockserver import AsyncMockServerClient, HttpRequest, HttpResponse
+
+async def main():
+    async with AsyncMockServerClient("localhost", 1080) as client:
+        await client.when(
+            HttpRequest.request("/api/data")
+        ).respond(
+            HttpResponse.response('{"key": "value"}')
+        )
+
+asyncio.run(main())</code></pre>
+
+<h3>Launch MockServer from Python</h3>
+
+<p>The package includes a binary launcher — no Java installation or Docker required:</p>
+
+<pre><code class="code python">from mockserver.launcher import start
+
+with start(port=1080) as server:
+    print(f"MockServer running on port {server.port}")
+    # ... use MockServer ...</code></pre>
+
+<p>See <a href="/mock_server/running_mock_server.html#client_library_launcher">Running MockServer &mdash; client library launcher</a> for full launcher options (version pinning, cache directory, air-gapped networks).</p>
+
+<p>For the full Python client API, see <a href="/mock_server/mockserver_clients.html">MockServer clients</a>.</p>

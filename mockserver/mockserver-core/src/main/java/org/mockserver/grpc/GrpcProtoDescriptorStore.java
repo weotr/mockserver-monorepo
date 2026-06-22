@@ -18,6 +18,7 @@ public class GrpcProtoDescriptorStore {
     private final MockServerLogger mockServerLogger;
     private final ConcurrentHashMap<String, Descriptors.ServiceDescriptor> services = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Descriptors.FileDescriptor> fileDescriptors = new ConcurrentHashMap<>();
+    private final GrpcExampleSynthesizer exampleSynthesizer = new GrpcExampleSynthesizer();
     private volatile GrpcJsonMessageConverter converter;
 
     public GrpcProtoDescriptorStore(MockServerLogger mockServerLogger) {
@@ -140,6 +141,27 @@ public class GrpcProtoDescriptorStore {
 
     public GrpcJsonMessageConverter getConverter() {
         return converter;
+    }
+
+    public GrpcExampleSynthesizer getExampleSynthesizer() {
+        return exampleSynthesizer;
+    }
+
+    /**
+     * Synthesize a schema-valid protobuf-JSON example for the output (response) message of
+     * the supplied service/method, using the loaded descriptors. Returns {@code null} when
+     * the method is unknown, so the caller can fall back to existing behaviour.
+     *
+     * <p>This backs the "no hand-authored body" path: a matched gRPC expectation whose
+     * response has no explicit body can return this synthesized message instead of an empty
+     * response.
+     */
+    public String synthesizeResponseJson(String serviceName, String methodName) {
+        Descriptors.MethodDescriptor method = getMethod(serviceName, methodName);
+        if (method == null) {
+            return null;
+        }
+        return exampleSynthesizer.synthesizeJson(method.getOutputType(), converter);
     }
 
     public boolean hasServices() {

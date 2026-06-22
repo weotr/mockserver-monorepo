@@ -6,7 +6,6 @@ import org.mockserver.closurecallback.websocketregistry.LocalCallbackRegistry;
 import org.mockserver.closurecallback.websocketregistry.WebSocketClientRegistry;
 import org.mockserver.closurecallback.websocketregistry.WebSocketRequestCallback;
 import org.mockserver.log.model.LogEntry;
-import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.HttpState;
 import org.mockserver.mock.action.ExpectationForwardAndResponseCallback;
 import org.mockserver.mock.action.ExpectationForwardCallback;
@@ -19,7 +18,6 @@ import org.mockserver.uuid.UUIDService;
 
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.commons.lang3.BooleanUtils.isFalse;
 import static org.apache.commons.lang3.BooleanUtils.isTrue;
 import static org.mockserver.closurecallback.websocketregistry.WebSocketClientRegistry.WEB_SOCKET_CORRELATION_ID_HEADER_NAME;
 import static org.mockserver.model.HttpResponse.badGatewayResponse;
@@ -57,6 +55,19 @@ public class HttpForwardObjectCallbackActionHandler extends HttpForwardAction {
                     .setArguments(request)
             );
         }
+        // ROOT FIX for the pool-on-by-default self-deadlock (forward variant): the local forward request
+        // callback (and the optional forward-and-response callback below) may make a BLOCKING loopback
+        // call back to this same server. Dispatch via scheduleLocalCallback so — in asynchronous (Netty)
+        // mode — the blocking body runs on the dedicated unbounded local-callback pool rather than inline
+        // on the server worker event loop (freeing the worker to read the loopback reply, and giving any
+        // recursively-nested callback its own thread). In synchronous (WAR/servlet) mode it still runs
+        // inline. sendRequest / executeAfterForwardActionResponse remain async and the response is written
+        // through the original responseWriter exactly as before, so forward routing is unchanged.
+        actionHandler.getScheduler().scheduleLocalCallback(() ->
+            handleLocallyOnCallbackThread(actionHandler, httpObjectCallback, request, responseWriter, synchronous, expectationPostProcessor, clientId), synchronous);
+    }
+
+    private void handleLocallyOnCallbackThread(HttpActionHandler actionHandler, HttpObjectCallback httpObjectCallback, HttpRequest request, ResponseWriter responseWriter, boolean synchronous, Runnable expectationPostProcessor, String clientId) {
         ExpectationForwardCallback expectationForwardCallback = LocalCallbackRegistry.retrieveForwardCallback(clientId);
         try {
             HttpRequest callbackRequest = expectationForwardCallback.handle(request);

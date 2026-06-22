@@ -1,0 +1,16 @@
+{
+  "httpRequest": {
+    "if": {
+      "method": "GET"
+    },
+    "then": {
+      "path": "/admin"
+    },
+    "else": {
+      "path": "/public"
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

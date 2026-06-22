@@ -14,7 +14,8 @@ module.exports = function (grunt) {
         exec: {
             stop_existing_mockservers: './stop_MockServer.sh',
             typecheck: 'npx tsc',
-            node_test: 'node --test --test-force-exit --test-concurrency=1 test/no_proxy/mock_server_node_client_test.js test/with_proxy/proxy_client_node_test.js'
+            node_test: 'node --test --test-force-exit --test-concurrency=1 test/no_proxy/mcp_mock_builder_test.js test/no_proxy/mock_server_node_client_test.js test/with_proxy/proxy_client_node_test.js',
+            node_test_local: 'node test/run_with_local_server.js'
         },
         jshint: {
             options: {
@@ -50,9 +51,12 @@ module.exports = function (grunt) {
     grunt.loadNpmTasks('mockserver-node');
     grunt.loadNpmTasks('grunt-contrib-jshint');
     grunt.registerTask('ts', ['exec:typecheck']);
-    grunt.registerTask('test_node', ['ts', 'start_mockserver', 'exec:node_test', 'stop_mockserver']);
+    // Default: test against the MockServer jar built from this checkout (current code).
+    grunt.registerTask('test_node', ['ts', 'exec:node_test_local']);
     grunt.registerTask('test_node_external', ['exec:node_test']);
-    grunt.registerTask('test', ['start_mockserver', 'exec:node_test', 'stop_mockserver']);
+    grunt.registerTask('test', ['exec:node_test_local']);
+    // Legacy: test against the published `mockserver-node` download (a fixed MockServer release).
+    grunt.registerTask('test_node_download', ['ts', 'start_mockserver', 'exec:node_test', 'stop_mockserver']);
 
     grunt.registerTask('default', ['exec:stop_existing_mockservers', 'jshint', 'test_node']);
     grunt.registerTask('headless', ['exec:stop_existing_mockservers', 'jshint', 'test_node']);

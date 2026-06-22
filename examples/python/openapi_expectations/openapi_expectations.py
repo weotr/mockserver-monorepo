@@ -15,8 +15,8 @@ MOCK_HOST = "localhost"
 MOCK_PORT = 1080
 
 PETSTORE_SPEC_URL = (
-    "https://raw.githubusercontent.com/mock-server/mockserver/master/"
-    "mockserver-integration-testing/src/main/resources/"
+    "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/"
+    "mockserver/mockserver-integration-testing/src/main/resources/"
     "org/mockserver/openapi/openapi_petstore_example.json"
 )
 

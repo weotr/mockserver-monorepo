@@ -16,6 +16,10 @@ from mockserver.models import (
     HttpForward,
     HttpRequest,
     HttpResponse,
+    LoadProfile,
+    LoadScenario,
+    LoadStage,
+    LoadStep,
     OpenAPIExpectation,
     Times,
     VerificationTimes,
@@ -26,14 +30,18 @@ class SyncMockHandler(BaseHTTPRequestHandler):
     response_status = 200
     response_body = "[]"
     last_request_body = None
+    last_request_bytes = None
+    last_content_type = None
     last_path = None
     last_method = None
     request_count = 0
 
     def do_PUT(self):
         content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8") if content_length > 0 else ""
-        SyncMockHandler.last_request_body = body
+        raw = self.rfile.read(content_length) if content_length > 0 else b""
+        SyncMockHandler.last_request_bytes = raw
+        SyncMockHandler.last_content_type = self.headers.get("Content-Type")
+        SyncMockHandler.last_request_body = raw.decode("utf-8", errors="replace")
         SyncMockHandler.last_path = self.path
         SyncMockHandler.last_method = "PUT"
         SyncMockHandler.request_count += 1
@@ -47,6 +55,17 @@ class SyncMockHandler(BaseHTTPRequestHandler):
         SyncMockHandler.last_request_body = None
         SyncMockHandler.last_path = self.path
         SyncMockHandler.last_method = "GET"
+        SyncMockHandler.request_count += 1
+
+        self.send_response(SyncMockHandler.response_status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(SyncMockHandler.response_body.encode("utf-8"))
+
+    def do_DELETE(self):
+        SyncMockHandler.last_request_body = None
+        SyncMockHandler.last_path = self.path
+        SyncMockHandler.last_method = "DELETE"
         SyncMockHandler.request_count += 1
 
         self.send_response(SyncMockHandler.response_status)
@@ -68,6 +87,8 @@ def sync_mock_server():
     SyncMockHandler.response_status = 200
     SyncMockHandler.response_body = "[]"
     SyncMockHandler.last_request_body = None
+    SyncMockHandler.last_request_bytes = None
+    SyncMockHandler.last_content_type = None
     SyncMockHandler.last_path = None
     SyncMockHandler.last_method = None
     SyncMockHandler.request_count = 0
@@ -150,6 +171,41 @@ class TestSyncVerify:
             )
             assert "/mockserver/verifySequence" in SyncMockHandler.last_path
 
+    def test_verify_with_response(self, sync_mock_server):
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.verify(
+                HttpRequest(path="/test"),
+                response=HttpResponse(status_code=200),
+            )
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["httpRequest"]["path"] == "/test"
+            assert sent["httpResponse"]["statusCode"] == 200
+
+    def test_verify_response_only(self, sync_mock_server):
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.verify(
+                response=HttpResponse(status_code=200),
+            )
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert "httpRequest" not in sent
+            assert sent["httpResponse"]["statusCode"] == 200
+
+    def test_verify_sequence_with_responses(self, sync_mock_server):
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.verify_sequence(
+                HttpRequest(path="/a"),
+                HttpRequest(path="/b"),
+                responses=[
+                    HttpResponse(status_code=200),
+                    HttpResponse(status_code=201),
+                ],
+            )
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert len(sent["httpRequests"]) == 2
+            assert len(sent["httpResponses"]) == 2
+            assert sent["httpResponses"][0]["statusCode"] == 200
+            assert sent["httpResponses"][1]["statusCode"] == 201
+
     def test_verify_zero_interactions(self, sync_mock_server):
         with MockServerClient("127.0.0.1", sync_mock_server) as client:
             client.verify_zero_interactions()
@@ -183,6 +239,23 @@ class TestSyncRetrieve:
         with MockServerClient("127.0.0.1", sync_mock_server) as client:
             result = client.retrieve_recorded_expectations()
             assert len(result) == 1
+
+    def test_retrieve_expectations_as_code(self, sync_mock_server):
+        SyncMockHandler.response_body = 'when(request().withPath("/code"));'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            code = client.retrieve_expectations_as_code("java")
+            assert isinstance(code, str)
+            assert "/code" in code
+            assert "type=ACTIVE_EXPECTATIONS" in SyncMockHandler.last_path
+            assert "format=JAVA" in SyncMockHandler.last_path
+
+    def test_retrieve_recorded_expectations_as_code(self, sync_mock_server):
+        SyncMockHandler.response_body = "# generated python"
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            code = client.retrieve_recorded_expectations_as_code("python")
+            assert code == "# generated python"
+            assert "type=RECORDED_EXPECTATIONS" in SyncMockHandler.last_path
+            assert "format=PYTHON" in SyncMockHandler.last_path
 
     def test_retrieve_log_messages(self, sync_mock_server):
         SyncMockHandler.response_body = json.dumps(["msg1", "msg2"])
@@ -441,3 +514,326 @@ class TestSyncServiceChaos:
             assert SyncMockHandler.last_path == "/mockserver/serviceChaos"
             assert SyncMockHandler.last_method == "GET"
             assert result["services"]["payments.svc"]["errorStatus"] == 503
+
+
+class TestSyncLoadScenario:
+    def _scenario(self) -> LoadScenario:
+        return LoadScenario(
+            name="checkout-flow",
+            template_type="VELOCITY",
+            max_requests=1000,
+            start_delay_millis=1500,
+            labels={"team": "payments"},
+            profile=LoadProfile(
+                stages=[
+                    LoadStage.vu_stage(60000, start_vus=1, end_vus=10, curve="LINEAR"),
+                    LoadStage.rate_stage(30000, rate=50.0, max_vus=20),
+                    LoadStage.pause_stage(5000),
+                ],
+            ),
+            steps=[
+                LoadStep(
+                    name="login",
+                    request=HttpRequest(method="POST", path="/login"),
+                    think_time=Delay("MILLISECONDS", 250),
+                ),
+                LoadStep(
+                    request=HttpRequest(method="GET", path="/cart"),
+                ),
+            ],
+        )
+
+    def test_load_scenario_serialization(self):
+        sent = self._scenario().to_dict()
+        assert sent["name"] == "checkout-flow"
+        assert sent["templateType"] == "VELOCITY"
+        assert sent["maxRequests"] == 1000
+        assert sent["startDelayMillis"] == 1500
+        assert sent["labels"] == {"team": "payments"}
+        stages = sent["profile"]["stages"]
+        assert len(stages) == 3
+        # VU ramp stage
+        assert stages[0]["type"] == "VU"
+        assert stages[0]["startVus"] == 1
+        assert stages[0]["endVus"] == 10
+        assert stages[0]["durationMillis"] == 60000
+        assert stages[0]["curve"] == "LINEAR"
+        assert "vus" not in stages[0]
+        assert "rate" not in stages[0]
+        # RATE hold stage
+        assert stages[1]["type"] == "RATE"
+        assert stages[1]["rate"] == 50.0
+        assert stages[1]["maxVus"] == 20
+        assert stages[1]["durationMillis"] == 30000
+        assert "vus" not in stages[1]
+        assert "startRate" not in stages[1]
+        # PAUSE stage
+        assert stages[2]["type"] == "PAUSE"
+        assert stages[2]["durationMillis"] == 5000
+        assert "vus" not in stages[2]
+        assert "rate" not in stages[2]
+        assert "curve" not in stages[2]
+        assert len(sent["steps"]) == 2
+        assert sent["steps"][0]["name"] == "login"
+        assert sent["steps"][0]["request"]["method"] == "POST"
+        assert sent["steps"][0]["thinkTime"]["value"] == 250
+        assert "thinkTime" not in sent["steps"][1]
+
+    def test_load_scenario_round_trip(self):
+        scenario = self._scenario()
+        restored = LoadScenario.from_dict(scenario.to_dict())
+        assert restored.to_dict() == scenario.to_dict()
+
+    def test_load_scenario_registers(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"name": "checkout-flow", "state": "LOADED"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.load_scenario(self._scenario())
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["name"] == "checkout-flow"
+            assert sent["startDelayMillis"] == 1500
+            assert sent["profile"]["stages"][0]["type"] == "VU"
+            assert sent["steps"][0]["request"]["path"] == "/login"
+            assert result == {"name": "checkout-flow", "state": "LOADED"}
+
+    def test_load_scenario_accepts_dict(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"name": "raw", "state": "LOADED"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.load_scenario({"name": "raw", "profile": {"stages": [{"type": "VU", "vus": 5, "durationMillis": 1000}]}, "steps": []})
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["name"] == "raw"
+            assert sent["profile"]["stages"][0]["vus"] == 5
+
+    def test_load_scenarios_list(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"scenarios": [{"name": "checkout-flow", "state": "RUNNING"}]}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.load_scenarios()
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario"
+            assert SyncMockHandler.last_method == "GET"
+            assert result["scenarios"][0]["name"] == "checkout-flow"
+
+    def test_get_load_scenario(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"name": "checkout-flow", "state": "LOADED"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.get_load_scenario("checkout-flow")
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/checkout-flow"
+            assert SyncMockHandler.last_method == "GET"
+            assert result["state"] == "LOADED"
+
+    def test_delete_load_scenario(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"name": "checkout-flow", "state": "STOPPED"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.delete_load_scenario("checkout-flow")
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/checkout-flow"
+            assert SyncMockHandler.last_method == "DELETE"
+            assert result["state"] == "STOPPED"
+
+    def test_clear_load_scenarios(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"cleared": True})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.clear_load_scenarios()
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario"
+            assert SyncMockHandler.last_method == "DELETE"
+            assert result["cleared"] is True
+
+    def test_start_load_scenarios_single_name(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"started": [{"name": "checkout-flow", "state": "RUNNING"}], "status": "ok"}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.start_load_scenarios("checkout-flow")
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/start"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {"names": ["checkout-flow"]}
+            assert result["started"][0]["state"] == "RUNNING"
+
+    def test_start_load_scenarios_list(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"started": [], "status": "ok"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.start_load_scenarios(["a", "b"])
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {"names": ["a", "b"]}
+
+    def test_stop_load_scenarios_named(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"stopped": ["a"], "status": "ok"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.stop_load_scenarios(["a"])
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/stop"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {"names": ["a"]}
+
+    def test_stop_load_scenarios_all(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"stopped": ["a", "b"], "status": "ok"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.stop_load_scenarios()
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/stop"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {}
+
+    def test_run_load_scenario_registers_then_starts(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps({"name": "checkout-flow", "state": "LOADED"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.run_load_scenario(self._scenario())
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/start"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {"names": ["checkout-flow"]}
+
+    def test_load_scenario_register_error(self, sync_mock_server):
+        SyncMockHandler.response_status = 400
+        SyncMockHandler.response_body = '{"error": "invalid scenario"}'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="Failed to register load scenario"):
+                client.load_scenario(self._scenario())
+
+    def test_start_load_scenarios_forbidden_when_disabled(self, sync_mock_server):
+        SyncMockHandler.response_status = 403
+        SyncMockHandler.response_body = '{"error": "load generation disabled"}'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="load generation is disabled"):
+                client.start_load_scenarios("checkout-flow")
+
+
+class TestSyncGrpcDescriptors:
+    def test_upload_grpc_descriptor(self, sync_mock_server):
+        SyncMockHandler.response_status = 201
+        SyncMockHandler.response_body = '{"status":"loaded"}'
+        descriptor = bytes([0x0a, 0x04, 0x74, 0x65, 0x73, 0x74, 0xff, 0x80])
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.upload_grpc_descriptor(descriptor)
+            assert SyncMockHandler.last_method == "PUT"
+            assert SyncMockHandler.last_path == "/mockserver/grpc/descriptors"
+            assert SyncMockHandler.last_request_bytes == descriptor
+            assert SyncMockHandler.last_content_type == "application/octet-stream"
+
+    def test_upload_grpc_descriptor_empty_raises(self, sync_mock_server):
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="must not be empty"):
+                client.upload_grpc_descriptor(b"")
+
+    def test_retrieve_grpc_services(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps([
+            {
+                "name": "example.Greeter",
+                "methods": [
+                    {
+                        "name": "SayHello",
+                        "inputType": "example.HelloRequest",
+                        "outputType": "example.HelloReply",
+                        "clientStreaming": False,
+                        "serverStreaming": False,
+                    }
+                ],
+            }
+        ])
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            services = client.retrieve_grpc_services()
+            assert SyncMockHandler.last_path == "/mockserver/grpc/services"
+            assert len(services) == 1
+            assert services[0]["name"] == "example.Greeter"
+
+    def test_clear_grpc_descriptors(self, sync_mock_server):
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.clear_grpc_descriptors()
+            assert SyncMockHandler.last_method == "PUT"
+            assert SyncMockHandler.last_path == "/mockserver/grpc/clear"
+
+
+class TestSyncScenario:
+    def test_scenario_state(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"scenarioName": "Deploy", "currentState": "Deploying"}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            state = client.scenario("Deploy").state()
+            assert SyncMockHandler.last_path == "/mockserver/scenario/Deploy"
+            assert SyncMockHandler.last_method == "GET"
+            assert state == "Deploying"
+
+    def test_scenario_set(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"scenarioName": "Deploy", "currentState": "Deploying"}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.scenario("Deploy").set("Deploying")
+            assert SyncMockHandler.last_path == "/mockserver/scenario/Deploy"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {"state": "Deploying"}
+            assert "transitionAfterMs" not in sent
+            assert "nextState" not in sent
+            assert result["currentState"] == "Deploying"
+
+    def test_scenario_set_timed(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {
+                "scenarioName": "Deploy",
+                "currentState": "Deploying",
+                "nextState": "Deployed",
+                "transitionAfterMs": 5000,
+            }
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.scenario("Deploy").set(
+                "Deploying", transition_after_ms=5000, next_state="Deployed"
+            )
+            assert SyncMockHandler.last_path == "/mockserver/scenario/Deploy"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {
+                "state": "Deploying",
+                "transitionAfterMs": 5000,
+                "nextState": "Deployed",
+            }
+
+    def test_scenario_trigger(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"scenarioName": "Deploy", "currentState": "Failed"}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.scenario("Deploy").trigger("Failed")
+            assert SyncMockHandler.last_path == "/mockserver/scenario/Deploy/trigger"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent == {"newState": "Failed"}
+            assert result["currentState"] == "Failed"
+
+    def test_scenarios_list(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {
+                "scenarios": [
+                    {"scenarioName": "Deploy", "currentState": "Deploying"},
+                    {"scenarioName": "Login", "currentState": "LoggedOut"},
+                ]
+            }
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            scenarios = client.scenarios()
+            assert SyncMockHandler.last_path == "/mockserver/scenario"
+            assert SyncMockHandler.last_method == "GET"
+            assert len(scenarios) == 2
+            assert scenarios[0]["scenarioName"] == "Deploy"
+            assert scenarios[0]["currentState"] == "Deploying"
+
+    def test_scenario_name_is_url_encoded(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"scenarioName": "deploy flow", "currentState": "x"}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            client.scenario("deploy flow").state()
+            assert SyncMockHandler.last_path == "/mockserver/scenario/deploy%20flow"
+
+    def test_scenario_handle_name(self, sync_mock_server):
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            assert client.scenario("Deploy").name == "Deploy"
+
+    def test_scenario_error(self, sync_mock_server):
+        SyncMockHandler.response_status = 400
+        SyncMockHandler.response_body = '{"error": "scenario name is required in the path"}'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="Scenario request failed"):
+                client.scenario("Deploy").set("Deploying")

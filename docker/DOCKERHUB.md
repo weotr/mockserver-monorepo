@@ -11,7 +11,9 @@
 
 ## Main Features
 
-MockServer is an HTTP(S) **mock server** and **proxy** for testing, with support for HTTP/2, HTTP/3, gRPC, WebSockets, raw TCP, message brokers like Kafka and MQTT, and AI/LLM APIs such as OpenAI, Anthropic, and Gemini. Mock the APIs your application depends on to develop and test against systems that are unavailable, incomplete, or hard to reproduce; proxy real traffic to record, inspect, and modify requests in flight; and simulate dependencies both working normally and failing — injecting latency, dropped connections, and errors — to test how your application copes either way.
+MockServer is an HTTP(S) **mock server** and **proxy** for testing. **Mock** the APIs your application depends on, so you can develop and test against systems that are unavailable, incomplete, or hard to reproduce. **Proxy** real traffic to record, inspect, and modify requests and responses in flight, pausing them at interactive **proxy breakpoints** to step through, edit, or abort each exchange like a debugger for network traffic. And with built-in **chaos engineering**, make dependencies misbehave on demand — injecting latency, dropped connections, and errors — to test how your application copes when the systems it relies on degrade or fail.
+
+**Speaks every protocol your stack uses.** HTTP/1.1 & HTTPS, HTTP/2, gRPC & gRPC-Web, WebSockets and raw TCP are auto-detected from the first bytes of each connection, so one MockServer port handles them all with no per-protocol configuration. Beyond that core: HTTP/3 (QUIC — experimental, on its own UDP port), JSON-RPC for MCP/A2A mocking, AsyncAPI-driven message-broker testing against external Kafka and MQTT brokers, and mocked AI/LLM chat-completion APIs (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI, Ollama).
 
 - **Mock any API** — HTTP/1.1, HTTPS, HTTP/2, HTTP/3, gRPC, gRPC-Web, JSON-RPC, WebSockets, raw TCP, and message brokers (Kafka, MQTT). Match requests on method, path, query, headers, cookies and body (JSON, XML, JSONPath, XPath, regex, OpenAPI) and return configured responses.
 - **Proxy & record** — port forwarding, web (HTTP) proxy, HTTPS tunneling (CONNECT) and SOCKS, with full visibility of even TLS-encrypted traffic.
@@ -41,9 +43,9 @@ The same software is published as several **image variants**, distinguished by *
 
 | Tag pattern (examples) | Variant | Use it when |
 |---|---|---|
-| `latest`, `7.0.0` | **Default** — distroless, runs as **non-root**. Smallest and most secure; no shell. | The normal choice for almost everyone. |
-| `latest-graaljs`, `7.0.0-graaljs` | **GraalJS** — adds the GraalVM JavaScript engine. | You use **JavaScript** response/forward **templates** (the default image only supports Velocity/Mustache + JS-free use). |
-| `clustered-latest`, `clustered-7.0.0` | **Clustered** — bundles the Infinispan state backend (JGroups). | You run **multiple MockServer instances** that must share expectations/state (`MOCKSERVER_STATE_BACKEND=infinispan`). |
+| `latest`, `7.1.0` | **Default** — distroless, runs as **non-root**. Smallest and most secure; no shell. | The normal choice for almost everyone. |
+| `latest-graaljs`, `7.1.0-graaljs` | **GraalJS** — adds the GraalVM JavaScript engine. | You use **JavaScript** response/forward **templates** (the default image only supports Velocity/Mustache + JS-free use). |
+| `clustered-latest`, `clustered-7.1.0` | **Clustered** — bundles the Infinispan state backend (JGroups). | You run **multiple MockServer instances** that must share expectations/state (`MOCKSERVER_STATE_BACKEND=infinispan`). |
 | `root`, `root-snapshot` | **Root** — same as default/snapshot but runs as **root**. | A platform requires the container to run as root (most don't). |
 | `snapshot`, `snapshot-graaljs`, `mockserver-snapshot` | **Snapshot** — built from the latest `master`. | You want the bleeding-edge unreleased build (not for production). |
 
@@ -53,18 +55,18 @@ A separate image, **`mockserver/mockserver-webhook`**, is the Kubernetes admissi
 
 Every released version is available under two equivalent tag forms — pick whichever you prefer:
 
-- bare version: `mockserver/mockserver:7.0.0`
-- `mockserver-` prefixed: `mockserver/mockserver:mockserver-7.0.0`
+- bare version: `mockserver/mockserver:7.1.0`
+- `mockserver-` prefixed: `mockserver/mockserver:mockserver-7.1.0`
 
-`latest` always points at the most recent release of the default variant. **Pin to an explicit version (e.g. `7.0.0`) in production**; `latest`/`snapshot` are moving tags.
+`latest` always points at the most recent release of the default variant. **Pin to an explicit version (e.g. `7.1.0`) in production**; `latest`/`snapshot` are moving tags.
 
 ### Registries
 
 Images are published to **Docker Hub** and mirrored to **AWS ECR Public**:
 
 ```bash
-docker pull mockserver/mockserver:7.0.0
-docker pull public.ecr.aws/t2x9c0i6/mockserver:7.0.0
+docker pull mockserver/mockserver:7.1.0
+docker pull public.ecr.aws/t2x9c0i6/mockserver:7.1.0
 ```
 
 ## How to use
@@ -108,7 +110,7 @@ docker run -d --rm --name mockserver -p 1080:1080 \
 ```yaml
 services:
   mockServer:
-    image: mockserver/mockserver:7.0.0
+    image: mockserver/mockserver:7.1.0
     ports:
       - 1080:1080
     environment:
@@ -135,7 +137,7 @@ Release images are signed with [cosign](https://github.com/sigstore/cosign) usin
 ```bash
 cosign verify \
   --key https://www.mock-server.com/mockserver-cosign.pub \
-  mockserver/mockserver:7.0.0
+  mockserver/mockserver:7.1.0
 ```
 
 The same key signs every image variant (`-graaljs`, `clustered-…`), the ECR Public mirror, and the Helm chart.

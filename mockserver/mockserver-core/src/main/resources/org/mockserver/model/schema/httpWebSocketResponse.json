@@ -28,6 +28,47 @@
         }
       }
     },
+    "matchers": {
+      "type": "array",
+      "description": "per-incoming-frame response rules; when set, an incoming frame matching a rule triggers that rule's responses",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "frameType": {
+            "enum": [
+              "TEXT",
+              "BINARY",
+              "PING",
+              "PONG",
+              "ANY"
+            ]
+          },
+          "textMatcher": {
+            "type": "string"
+          },
+          "responses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "binary": {
+                  "type": "string",
+                  "format": "byte"
+                },
+                "delay": {
+                  "$ref": "#/definitions/delay"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "closeConnection": {
       "type": "boolean"
     },

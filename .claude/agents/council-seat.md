@@ -2,6 +2,7 @@
 name: council-seat
 description: Read-only design council seat for parallel fan-out debates. Spawn multiple instances with distinct role briefs to debate a technical decision. Each seat returns APPROVE/CONCERNS/BLOCK with a position paper ≤300 words.
 model: claude-haiku-4-5-20251001
+effort: medium
 tools:
   - Read
   - Glob

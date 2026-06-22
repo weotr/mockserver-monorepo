@@ -4,7 +4,7 @@
 
 <h2>Memory Tuning Guide</h2>
 
-<p>MockServer stores expectations and log entries in memory using ring buffers. The two most important settings that affect memory usage are <a href="#button_configuration_max_expectations">maxExpectations</a> and <a href="#button_configuration_request_log_size">maxLogEntries</a>. Each HTTP request processed by MockServer generates 2-3 log entries (the request itself, the expectation match result, and the response).</p>
+<p>MockServer stores expectations and log entries in memory using ring buffers. The two most important settings that affect memory usage are <a href="/mock_server/configuration_properties.html#button_configuration_max_expectations">maxExpectations</a> and <a href="/mock_server/configuration_properties.html#button_configuration_request_log_size">maxLogEntries</a>. Each HTTP request processed by MockServer generates 2-3 log entries (the request itself, the expectation match result, and the response).</p>
 
 <p>Both settings have automatic defaults based on available JVM heap space. The table below provides recommended values if you want to override the defaults for different heap sizes:</p>
 
@@ -39,10 +39,10 @@
 
 <p><strong>Tips for reducing memory usage:</strong></p>
 <ul>
-    <li>Reduce <a href="#button_configuration_request_log_size">maxLogEntries</a> to limit the number of stored request/response log entries</li>
-    <li>Reduce <a href="#button_configuration_max_expectations">maxExpectations</a> if expectations contain large response bodies</li>
+    <li>Reduce <a href="/mock_server/configuration_properties.html#button_configuration_request_log_size">maxLogEntries</a> to limit the number of stored request/response log entries</li>
+    <li>Reduce <a href="/mock_server/configuration_properties.html#button_configuration_max_expectations">maxExpectations</a> if expectations contain large response bodies</li>
     <li>Increase JVM heap size (<span class="inline_code">-Xmx</span>) to give the garbage collector more headroom</li>
-    <li>Use <a href="#button_configuration_log_memory_statistics">outputMemoryUsageCsv</a> to monitor actual heap usage and tune values accordingly</li>
+    <li>Use <a href="/mock_server/configuration_properties.html#button_configuration_log_memory_statistics">outputMemoryUsageCsv</a> to monitor actual heap usage and tune values accordingly</li>
 </ul>
 
 <p>Docker example with memory-constrained settings:</p>
@@ -170,7 +170,7 @@
   -e MOCKSERVER_MAX_LOG_ENTRIES=100 \
   -e MOCKSERVER_LOG_LEVEL=WARN \
   mockserver/mockserver</code></pre>
-<p><span class="inline_code">MOCKSERVER_LOG_LEVEL=WARN</span> drops the per-matcher diagnostic logging on the matching hot path (see the note above), which is the largest matching-path allocation when many expectations are registered. If your matchers rely heavily on regular expressions <em>and</em> your patterns and inputs are trusted, also add <span class="inline_code">-e MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS=0</span> to evaluate regexes inline and skip the per-regex thread hand-off (this removes the catastrophic-backtracking guard &mdash; see <a href="#button_configuration_regex_matching_timeout_millis">Regex Matching Timeout</a>).</p>
+<p><span class="inline_code">MOCKSERVER_LOG_LEVEL=WARN</span> drops the per-matcher diagnostic logging on the matching hot path (see the note above), which is the largest matching-path allocation when many expectations are registered. If your matchers rely heavily on regular expressions <em>and</em> your patterns and inputs are trusted, also add <span class="inline_code">-e MOCKSERVER_REGEX_MATCHING_TIMEOUT_MILLIS=0</span> to evaluate regexes inline and skip the per-regex thread hand-off (this removes the catastrophic-backtracking guard &mdash; see <a href="/mock_server/configuration_properties.html#button_configuration_regex_matching_timeout_millis">Regex Matching Timeout</a>).</p>
 
 <h3>Configuring JVM Heap Size</h3>
 

@@ -23,6 +23,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     private Integer priority;
     private Integer percentage;
     private HttpChaosProfileDTO chaos;
+    private RateLimitDTO rateLimit;
     private RequestDefinitionDTO httpRequest;
     private HttpResponseDTO httpResponse;
     private HttpTemplateDTO httpResponseTemplate;
@@ -52,13 +53,19 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<HttpResponseDTO> httpResponses;
     private ResponseMode responseMode;
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<Integer> responseWeights;
+    private Integer switchAfter;
     private org.mockserver.serialization.model.TimesDTO times;
     private TimeToLiveDTO timeToLive;
+    private String namespace;
     private String scenarioName;
     private String scenarioState;
     private String newScenarioState;
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private List<CrossProtocolScenario> crossProtocolScenarios;
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private List<CaptureRuleDTO> capture;
 
     public ExpectationDTO(Expectation expectation) {
         if (expectation != null) {
@@ -69,6 +76,7 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             }
             this.percentage = expectation.getPercentage();
             this.chaos = expectation.getChaos() != null ? new HttpChaosProfileDTO(expectation.getChaos()) : null;
+            this.rateLimit = expectation.getRateLimit() != null ? new RateLimitDTO(expectation.getRateLimit()) : null;
             RequestDefinition requestMatcher = expectation.getHttpRequest();
             if (requestMatcher instanceof HttpRequest) {
                 this.httpRequest = new HttpRequestDTO((HttpRequest) requestMatcher);
@@ -78,6 +86,8 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
                 this.httpRequest = new BinaryRequestDefinitionDTO((BinaryRequestDefinition) requestMatcher);
             } else if (requestMatcher instanceof DnsRequestDefinition) {
                 this.httpRequest = new DnsRequestDefinitionDTO((DnsRequestDefinition) requestMatcher);
+            } else if (requestMatcher instanceof ConditionalRequestDefinition) {
+                this.httpRequest = new ConditionalRequestDefinitionDTO((ConditionalRequestDefinition) requestMatcher);
             }
             HttpResponse httpResponse = expectation.getHttpResponse();
             if (httpResponse != null) {
@@ -172,6 +182,11 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
                 this.httpResponses = httpResponsesList.stream().map(HttpResponseDTO::new).collect(Collectors.toList());
             }
             this.responseMode = expectation.getResponseMode();
+            List<Integer> responseWeightsList = expectation.getResponseWeights();
+            if (responseWeightsList != null && !responseWeightsList.isEmpty()) {
+                this.responseWeights = new java.util.ArrayList<>(responseWeightsList);
+            }
+            this.switchAfter = expectation.getSwitchAfter();
             Times times = expectation.getTimes();
             if (times != null) {
                 this.times = new org.mockserver.serialization.model.TimesDTO(times);
@@ -179,6 +194,9 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             TimeToLive timeToLive = expectation.getTimeToLive();
             if (timeToLive != null) {
                 this.timeToLive = new TimeToLiveDTO(timeToLive);
+            }
+            if (expectation.getNamespace() != null) {
+                this.namespace = expectation.getNamespace();
             }
             if (expectation.getScenarioName() != null) {
                 this.scenarioName = expectation.getScenarioName();
@@ -191,6 +209,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             }
             if (expectation.getCrossProtocolScenarios() != null && !expectation.getCrossProtocolScenarios().isEmpty()) {
                 this.crossProtocolScenarios = expectation.getCrossProtocolScenarios();
+            }
+            List<CaptureRule> captureList = expectation.getCapture();
+            if (captureList != null && !captureList.isEmpty()) {
+                this.capture = captureList.stream().map(CaptureRuleDTO::new).collect(Collectors.toList());
             }
         }
     }
@@ -309,6 +331,8 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             .withId(this.id)
             .withPercentage(this.percentage)
             .withChaos(this.chaos != null ? this.chaos.buildObject() : null)
+            .withRateLimit(this.rateLimit != null ? this.rateLimit.buildObject() : null)
+            .withNamespace(this.namespace)
             .withScenarioName(this.scenarioName)
             .withScenarioState(this.scenarioState)
             .withNewScenarioState(this.newScenarioState)
@@ -336,7 +360,10 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
             .withSteps(this.steps != null ? this.steps.stream().map(ExpectationStepDTO::buildObject).collect(Collectors.toList()) : null)
             .thenRespond(this.httpResponses != null ? this.httpResponses.stream().map(HttpResponseDTO::buildObject).collect(Collectors.toList()) : null)
             .withResponseMode(this.responseMode)
-            .withCrossProtocolScenarios(this.crossProtocolScenarios);
+            .withResponseWeights(this.responseWeights)
+            .withSwitchAfter(this.switchAfter)
+            .withCrossProtocolScenarios(this.crossProtocolScenarios)
+            .withCapture(this.capture != null ? this.capture.stream().map(CaptureRuleDTO::buildObject).collect(Collectors.toList()) : null);
         if (this.crossProtocolScenarios != null) {
             for (CrossProtocolScenario scenario : this.crossProtocolScenarios) {
                 CrossProtocolEventBus.getInstance().register(scenario);
@@ -378,6 +405,15 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
 
     public ExpectationDTO setChaos(HttpChaosProfileDTO chaos) {
         this.chaos = chaos;
+        return this;
+    }
+
+    public RateLimitDTO getRateLimit() {
+        return rateLimit;
+    }
+
+    public ExpectationDTO setRateLimit(RateLimitDTO rateLimit) {
+        this.rateLimit = rateLimit;
         return this;
     }
 
@@ -628,6 +664,34 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
         return this;
     }
 
+    public List<Integer> getResponseWeights() {
+        return responseWeights;
+    }
+
+    @JsonSetter("responseWeights")
+    public ExpectationDTO setResponseWeights(List<Integer> responseWeights) {
+        this.responseWeights = responseWeights;
+        return this;
+    }
+
+    public Integer getSwitchAfter() {
+        return switchAfter;
+    }
+
+    public ExpectationDTO setSwitchAfter(Integer switchAfter) {
+        this.switchAfter = switchAfter;
+        return this;
+    }
+
+    public String getNamespace() {
+        return namespace;
+    }
+
+    public ExpectationDTO setNamespace(String namespace) {
+        this.namespace = namespace;
+        return this;
+    }
+
     public String getScenarioName() {
         return scenarioName;
     }
@@ -662,6 +726,16 @@ public class ExpectationDTO extends ObjectWithJsonToString implements DTO<Expect
     @JsonSetter("crossProtocolScenarios")
     public ExpectationDTO setCrossProtocolScenarios(List<CrossProtocolScenario> crossProtocolScenarios) {
         this.crossProtocolScenarios = crossProtocolScenarios;
+        return this;
+    }
+
+    public List<CaptureRuleDTO> getCapture() {
+        return capture;
+    }
+
+    @JsonSetter("capture")
+    public ExpectationDTO setCapture(List<CaptureRuleDTO> capture) {
+        this.capture = capture;
         return this;
     }
 

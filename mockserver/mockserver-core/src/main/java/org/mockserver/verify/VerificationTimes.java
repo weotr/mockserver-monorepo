@@ -24,18 +24,36 @@ public class VerificationTimes extends ObjectWithReflectiveEqualsHashCodeToStrin
     }
 
     public static VerificationTimes exactly(int count) {
+        if (count < 0) {
+            throw new IllegalArgumentException("count must not be negative but was " + count);
+        }
         return new VerificationTimes(count, count);
     }
 
     public static VerificationTimes atLeast(int count) {
+        if (count < 0) {
+            throw new IllegalArgumentException("count must not be negative but was " + count);
+        }
         return new VerificationTimes(count, -1);
     }
 
     public static VerificationTimes atMost(int count) {
+        if (count < 0) {
+            throw new IllegalArgumentException("count must not be negative but was " + count);
+        }
         return new VerificationTimes(-1, count);
     }
 
     public static VerificationTimes between(int atLeast, int atMost) {
+        // -1 is the internal "unbounded" sentinel (e.g. an atLeast-only or atMost-only
+        // verification deserialised from JSON), so it is permitted; any other negative
+        // value is invalid user input.
+        if (atLeast < -1) {
+            throw new IllegalArgumentException("atLeast must not be negative but was " + atLeast);
+        }
+        if (atMost < -1) {
+            throw new IllegalArgumentException("atMost must not be negative but was " + atMost);
+        }
         return new VerificationTimes(atLeast, atMost);
     }
 

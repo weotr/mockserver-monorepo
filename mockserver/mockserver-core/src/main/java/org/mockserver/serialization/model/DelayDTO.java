@@ -1,6 +1,8 @@
 package org.mockserver.serialization.model;
 
 import org.mockserver.model.Delay;
+import org.mockserver.model.DelayDistribution;
+import org.mockserver.model.HttpTemplate;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 
 import java.util.concurrent.TimeUnit;
@@ -13,6 +15,8 @@ public class DelayDTO extends ObjectWithReflectiveEqualsHashCodeToString impleme
     private TimeUnit timeUnit;
     private long value;
     private DelayDistributionDTO distribution;
+    private String template;
+    private HttpTemplate.TemplateType templateType;
 
     public DelayDTO(Delay delay) {
         if (delay != null) {
@@ -21,6 +25,8 @@ public class DelayDTO extends ObjectWithReflectiveEqualsHashCodeToString impleme
             if (delay.getDistribution() != null) {
                 distribution = new DelayDistributionDTO(delay.getDistribution());
             }
+            template = delay.getTemplate();
+            templateType = delay.getTemplateType();
         }
     }
 
@@ -28,8 +34,12 @@ public class DelayDTO extends ObjectWithReflectiveEqualsHashCodeToString impleme
     }
 
     public Delay buildObject() {
-        if (distribution != null) {
-            return new Delay(timeUnit, value, distribution.buildObject());
+        DelayDistribution builtDistribution = distribution != null ? distribution.buildObject() : null;
+        if (template != null && templateType != null) {
+            return new Delay(timeUnit, value, builtDistribution, template, templateType);
+        }
+        if (builtDistribution != null) {
+            return new Delay(timeUnit, value, builtDistribution);
         }
         return new Delay(timeUnit, value);
     }
@@ -58,6 +68,24 @@ public class DelayDTO extends ObjectWithReflectiveEqualsHashCodeToString impleme
 
     public DelayDTO setDistribution(DelayDistributionDTO distribution) {
         this.distribution = distribution;
+        return this;
+    }
+
+    public String getTemplate() {
+        return template;
+    }
+
+    public DelayDTO setTemplate(String template) {
+        this.template = template;
+        return this;
+    }
+
+    public HttpTemplate.TemplateType getTemplateType() {
+        return templateType;
+    }
+
+    public DelayDTO setTemplateType(HttpTemplate.TemplateType templateType) {
+        this.templateType = templateType;
         return this;
     }
 }

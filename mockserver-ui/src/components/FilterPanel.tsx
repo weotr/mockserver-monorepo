@@ -9,15 +9,26 @@ import IconButton from '@mui/material/IconButton';
 import MenuItem from '@mui/material/MenuItem';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import Button from '@mui/material/Button';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
 import RemoveCircleOutlineIcon from '@mui/icons-material/RemoveCircleOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import FilterListIcon from '@mui/icons-material/FilterList';
+import SaveIcon from '@mui/icons-material/Save';
 import type { KeyToMultiValue, KeyToValue, RequestFilter } from '../types';
 import { useDashboardStore } from '../store';
-import { ACTION_TYPES, LLM_PROVIDERS, PROVIDER_DISPLAY } from '../lib/clientFilters';
+import { ACTION_TYPES, buildBodyMatcher, LLM_PROVIDERS, PROVIDER_DISPLAY } from '../lib/clientFilters';
+import {
+  deletePreset,
+  loadPresets,
+  savePresets,
+  upsertPreset,
+  validateRegex,
+  type FilterPreset,
+} from '../lib/filterPresets';
 
 const HTTP_METHODS = ['', 'CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT', 'TRACE'];
 
@@ -59,7 +70,7 @@ function ChipCluster({ label, options, selected, onChange, displayMap, disabled 
             color={selected.includes(option) ? 'primary' : 'default'}
             onClick={() => toggle(option)}
             disabled={disabled}
-            sx={{ height: 24, fontSize: '0.7rem' }}
+            sx={{ height: 24 }}
           />
         ))}
       </Box>
@@ -74,7 +85,7 @@ interface MultiValueFieldProps {
   disabled: boolean;
 }
 
-function MultiValueField({ label, items, onChange, disabled }: MultiValueFieldProps) {
+export function MultiValueField({ label, items, onChange, disabled }: MultiValueFieldProps) {
   const addRow = () => onChange([...items, { name: '', values: [''] }]);
   const removeRow = (i: number) => onChange(items.filter((_, idx) => idx !== i));
   const setName = (i: number, name: string) =>
@@ -107,9 +118,9 @@ function MultiValueField({ label, items, onChange, disabled }: MultiValueFieldPr
             value={item.name}
             onChange={(e) => setName(i, e.target.value)}
             disabled={disabled}
-            sx={{ width: 140 }}
+            sx={{ width: { xs: '100%', sm: 140 } }}
           />
-          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1 }}>
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
             {item.values.map((val, vi) => (
               <Box key={vi} sx={{ display: 'flex', alignItems: 'center' }}>
                 <TextField
@@ -118,29 +129,37 @@ function MultiValueField({ label, items, onChange, disabled }: MultiValueFieldPr
                   value={val}
                   onChange={(e) => setValue(i, vi, e.target.value)}
                   disabled={disabled}
-                  sx={{ width: 120 }}
+                  sx={{ width: { xs: '100%', sm: 120 } }}
                 />
                 {vi > 0 && (
-                  <IconButton size="small" disabled={disabled} onClick={() => removeValue(i, vi)}>
-                    <RemoveCircleOutlineIcon fontSize="small" />
-                  </IconButton>
+                  <Tooltip title="Remove value">
+                    <IconButton size="small" disabled={disabled} onClick={() => removeValue(i, vi)} aria-label="Remove value">
+                      <RemoveCircleOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
                 )}
               </Box>
             ))}
-            <IconButton size="small" disabled={disabled} onClick={() => addValue(i)}>
-              <AddCircleOutlineIcon fontSize="small" />
-            </IconButton>
+            <Tooltip title="Add value">
+              <IconButton size="small" disabled={disabled} onClick={() => addValue(i)} aria-label="Add value">
+                <AddCircleOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           </Box>
           {i > 0 && (
-            <IconButton size="small" disabled={disabled} onClick={() => removeRow(i)}>
-              <RemoveCircleOutlineIcon fontSize="small" />
-            </IconButton>
+            <Tooltip title="Remove filter row">
+              <IconButton size="small" disabled={disabled} onClick={() => removeRow(i)} aria-label="Remove filter row">
+                <RemoveCircleOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
       ))}
-      <IconButton size="small" disabled={disabled} onClick={addRow}>
-        <AddCircleOutlineIcon fontSize="small" />
-      </IconButton>
+      <Tooltip title="Add filter row">
+        <IconButton size="small" disabled={disabled} onClick={addRow} aria-label="Add filter row">
+          <AddCircleOutlineIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
     </Box>
   );
 }
@@ -152,7 +171,7 @@ interface SingleValueFieldProps {
   disabled: boolean;
 }
 
-function SingleValueField({ label, items, onChange, disabled }: SingleValueFieldProps) {
+export function SingleValueField({ label, items, onChange, disabled }: SingleValueFieldProps) {
   const addRow = () => onChange([...items, { name: '', value: '' }]);
   const removeRow = (i: number) => onChange(items.filter((_, idx) => idx !== i));
   const setField = (i: number, field: 'name' | 'value', val: string) =>
@@ -171,7 +190,7 @@ function SingleValueField({ label, items, onChange, disabled }: SingleValueField
             value={item.name}
             onChange={(e) => setField(i, 'name', e.target.value)}
             disabled={disabled}
-            sx={{ width: 140 }}
+            sx={{ width: { xs: '100%', sm: 140 } }}
           />
           <TextField
             size="small"
@@ -179,18 +198,22 @@ function SingleValueField({ label, items, onChange, disabled }: SingleValueField
             value={item.value}
             onChange={(e) => setField(i, 'value', e.target.value)}
             disabled={disabled}
-            sx={{ width: 180 }}
+            sx={{ width: { xs: '100%', sm: 180 } }}
           />
           {i > 0 && (
-            <IconButton size="small" disabled={disabled} onClick={() => removeRow(i)}>
-              <RemoveCircleOutlineIcon fontSize="small" />
-            </IconButton>
+            <Tooltip title="Remove filter row">
+              <IconButton size="small" disabled={disabled} onClick={() => removeRow(i)} aria-label="Remove filter row">
+                <RemoveCircleOutlineIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
           )}
         </Box>
       ))}
-      <IconButton size="small" disabled={disabled} onClick={addRow}>
-        <AddCircleOutlineIcon fontSize="small" />
-      </IconButton>
+      <Tooltip title="Add filter row">
+        <IconButton size="small" disabled={disabled} onClick={addRow} aria-label="Add filter row">
+          <AddCircleOutlineIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
     </Box>
   );
 }
@@ -209,6 +232,8 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
   const setActionTypeFilter = useDashboardStore((s) => s.setActionTypeFilter);
   const llmProviderFilter = useDashboardStore((s) => s.llmProviderFilter);
   const setLlmProviderFilter = useDashboardStore((s) => s.setLlmProviderFilter);
+  const logShowForwarded = useDashboardStore((s) => s.logShowForwarded);
+  const setLogShowForwarded = useDashboardStore((s) => s.setLogShowForwarded);
 
   const hasLlmExpectations = useMemo(
     () => activeExpectations.some((e) => 'httpLlmResponse' in e.value),
@@ -217,11 +242,24 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
 
   const [method, setMethod] = useState('');
   const [path, setPath] = useState('');
+  const [body, setBody] = useState('');
   const [secure, setSecure] = useState(false);
   const [keepAlive, setKeepAlive] = useState(false);
+  const [regex, setRegex] = useState(false);
   const [headers, setHeaders] = useState<KeyToMultiValue[]>([{ name: '', values: [''] }]);
   const [queryParams, setQueryParams] = useState<KeyToMultiValue[]>([{ name: '', values: [''] }]);
   const [cookies, setCookies] = useState<KeyToValue[]>([{ name: '', value: '' }]);
+
+  // Saved filter presets (persisted to localStorage, like the theme).
+  const [presets, setPresets] = useState<FilterPreset[]>(() => loadPresets());
+  const [presetName, setPresetName] = useState('');
+
+  // Validate the path as a regex only when regex mode is on; surfaces a subtle
+  // error state instead of crashing or silently shipping a broken pattern.
+  const pathRegexError = useMemo(
+    () => (regex ? validateRegex(path).error : undefined),
+    [regex, path],
+  );
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -234,7 +272,13 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
       }
       const filter: RequestFilter = {};
       if (method) filter.method = method;
-      if (path) filter.path = path;
+      // In regex mode an invalid pattern is held back rather than shipped to the
+      // server (it would match nothing or error); the field shows the error.
+      if (path && !(regex && validateRegex(path).error)) filter.path = path;
+      // "Body contains" must be a substring (contains) match, not full-body
+      // equality — see buildBodyMatcher for why the STRING/subString DTO is sent
+      // rather than a bare string.
+      if (body) filter.body = buildBodyMatcher(body);
       if (keepAlive) filter.keepAlive = true;
       if (secure) filter.secure = true;
 
@@ -253,7 +297,7 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
 
       onFilterChange(filter);
     }, 300);
-  }, [filterEnabled, method, path, secure, keepAlive, headers, queryParams, cookies, onFilterChange]);
+  }, [filterEnabled, method, path, body, secure, keepAlive, regex, headers, queryParams, cookies, onFilterChange]);
 
   useEffect(() => {
     emitFilter();
@@ -263,6 +307,59 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
   }, [emitFilter]);
 
   const disabled = !filterEnabled;
+
+  const persist = useCallback((next: FilterPreset[]) => {
+    setPresets(next);
+    savePresets(next);
+  }, []);
+
+  const handleSavePreset = useCallback(() => {
+    const name = presetName.trim();
+    if (!name) return;
+    const preset: FilterPreset = {
+      name,
+      method,
+      path,
+      body,
+      secure,
+      keepAlive,
+      regex,
+      headers,
+      queryStringParameters: queryParams,
+      cookies,
+      actionTypeFilter,
+      llmProviderFilter,
+    };
+    persist(upsertPreset(presets, preset));
+    setPresetName('');
+  }, [
+    presetName, method, path, body, secure, keepAlive, regex, headers, queryParams, cookies,
+    actionTypeFilter, llmProviderFilter, presets, persist,
+  ]);
+
+  const applyPreset = useCallback((preset: FilterPreset) => {
+    setMethod(preset.method);
+    setPath(preset.path);
+    setBody(preset.body ?? '');
+    setSecure(preset.secure);
+    setKeepAlive(preset.keepAlive);
+    setRegex(preset.regex);
+    setHeaders(preset.headers && preset.headers.length > 0 ? preset.headers : [{ name: '', values: [''] }]);
+    setQueryParams(
+      preset.queryStringParameters && preset.queryStringParameters.length > 0
+        ? preset.queryStringParameters
+        : [{ name: '', values: [''] }],
+    );
+    setCookies(preset.cookies && preset.cookies.length > 0 ? preset.cookies : [{ name: '', value: '' }]);
+    setActionTypeFilter(preset.actionTypeFilter);
+    setLlmProviderFilter(preset.llmProviderFilter);
+    // Applying a preset is only meaningful with filtering on.
+    setFilterEnabled(true);
+  }, [setActionTypeFilter, setLlmProviderFilter, setFilterEnabled]);
+
+  const handleDeletePreset = useCallback((name: string) => {
+    persist(deletePreset(presets, name));
+  }, [presets, persist]);
 
   return (
     <Card variant="outlined" sx={{ mx: 1, mt: 1, flexShrink: 0 }}>
@@ -298,6 +395,11 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
                 }
                 label="Enabled"
               />
+              {disabled && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -0.5 }}>
+                  Turn on “Enabled” to filter.
+                </Typography>
+              )}
             </Box>
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', flex: 1 }}>
               <TextField
@@ -307,7 +409,7 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
                 value={method}
                 onChange={(e) => setMethod(e.target.value)}
                 disabled={disabled}
-                sx={{ width: 130 }}
+                sx={{ width: { xs: '100%', sm: 130 } }}
               >
                 {HTTP_METHODS.map((m) => (
                   <MenuItem key={m} value={m}>
@@ -317,11 +419,33 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
               </TextField>
               <TextField
                 size="small"
-                label="Path"
+                label={regex ? 'Path (regex)' : 'Path'}
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
                 disabled={disabled}
-                sx={{ width: 200 }}
+                error={Boolean(pathRegexError)}
+                helperText={pathRegexError}
+                sx={{ width: { xs: '100%', sm: 200 } }}
+              />
+              <TextField
+                size="small"
+                label="Body contains"
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                disabled={disabled}
+                placeholder="text in the request body"
+                sx={{ width: { xs: '100%', sm: 200 } }}
+              />
+              <FormControlLabel
+                control={
+                  <Switch
+                    size="small"
+                    checked={regex}
+                    onChange={(e) => setRegex(e.target.checked)}
+                    disabled={disabled}
+                  />
+                }
+                label="Regex"
               />
               <FormControlLabel
                 control={
@@ -349,7 +473,7 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
           </Box>
           <Box sx={{ mt: 2 }}>
             <ChipCluster
-              label="Action Type"
+              label="Action Type (expectations only)"
               options={ACTION_TYPES}
               selected={actionTypeFilter}
               onChange={setActionTypeFilter}
@@ -357,7 +481,7 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
             />
             {hasLlmExpectations && (
               <ChipCluster
-                label="LLM Provider"
+                label="LLM Provider (expectations only)"
                 options={LLM_PROVIDERS}
                 selected={llmProviderFilter}
                 onChange={setLlmProviderFilter}
@@ -366,10 +490,77 @@ export default function FilterPanel({ onFilterChange }: FilterPanelProps) {
               />
             )}
           </Box>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="caption" color="primary" sx={{ mb: 0.5, display: 'block' }}>
+              Log Display
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={logShowForwarded}
+                  onChange={(e) => setLogShowForwarded(e.target.checked)}
+                />
+              }
+              label="Show forwarded"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: -0.5 }}>
+              Hide proxied / forwarded request entries from the Log panel when off.
+            </Typography>
+          </Box>
           <Box sx={{ mt: 2 }}>
             <MultiValueField label="Headers" items={headers} onChange={setHeaders} disabled={disabled} />
             <SingleValueField label="Cookies" items={cookies} onChange={setCookies} disabled={disabled} />
             <MultiValueField label="Query Parameters" items={queryParams} onChange={setQueryParams} disabled={disabled} />
+          </Box>
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="caption" color="primary" sx={{ mb: 0.5, display: 'block' }}>
+              Saved Presets
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+              <TextField
+                size="small"
+                label="Preset name"
+                value={presetName}
+                onChange={(e) => setPresetName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSavePreset();
+                  }
+                }}
+                sx={{ width: { xs: '100%', sm: 200 } }}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<SaveIcon fontSize="small" />}
+                disabled={!presetName.trim()}
+                onClick={handleSavePreset}
+              >
+                Save
+              </Button>
+            </Box>
+            {presets.length === 0 ? (
+              <Typography variant="caption" color="text.secondary">
+                No saved presets. Configure a filter and save it to re-apply later.
+              </Typography>
+            ) : (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                {presets.map((preset) => (
+                  <Chip
+                    key={preset.name}
+                    label={preset.name}
+                    size="small"
+                    variant="outlined"
+                    color="primary"
+                    onClick={() => applyPreset(preset)}
+                    onDelete={() => handleDeletePreset(preset.name)}
+                    sx={{ height: 24 }}
+                  />
+                ))}
+              </Box>
+            )}
           </Box>
         </CardContent>
       </Collapse>

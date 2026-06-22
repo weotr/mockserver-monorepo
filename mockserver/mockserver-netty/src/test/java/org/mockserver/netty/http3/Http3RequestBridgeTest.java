@@ -39,6 +39,19 @@ public class Http3RequestBridgeTest {
         assertThat(request.getPath().getValue(), is("/hello"));
         assertThat(request.isSecure(), is(true));
         assertThat(request.getFirstHeader("host"), is("localhost:8443"));
+        // HTTP/3 requests are tagged with the negotiated protocol so they can be
+        // matched on / verified by protocol (the h3 ALPN is server-trusted)
+        assertThat(request.getProtocol(), is(org.mockserver.model.Protocol.HTTP_3));
+    }
+
+    @Test
+    public void shouldTagProtocolAsHttp3() {
+        HttpRequest request = Http3RequestBridge.toHttpRequest(
+            "POST", "/api", "https", "example.com",
+            new ArrayList<>(), new byte[0]
+        );
+
+        assertThat(request.getProtocol(), is(org.mockserver.model.Protocol.HTTP_3));
     }
 
     @Test

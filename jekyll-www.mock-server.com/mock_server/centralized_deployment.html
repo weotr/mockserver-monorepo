@@ -1,6 +1,6 @@
 ---
-title: Centralized Deployment
-shortTitle: Centralized Deployment
+title: Centralised Deployment
+shortTitle: Centralised Deployment
 description: Deploy MockServer as a shared instance across multiple teams or CI pipelines, with options for single-node, persistence-only durability, and clustered HA using the Infinispan state backend.
 layout: page
 pageOrder: 4
@@ -9,8 +9,8 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-06-05T00:00:00+00:00
-keywords: shared mockserver, centralized mock server, clustered mockserver, infinispan clustering, shared test environment, mockserver ha, mockserver kubernetes cluster, stateBackend, clusterEnabled, cloud blob storage, s3 gcs azure blob store
+  lastmod: 2026-06-11T00:00:00+00:00
+keywords: shared mockserver, centralised mock server, centralized mock server, clustered mockserver, infinispan clustering, shared test environment, mockserver ha, mockserver kubernetes cluster, stateBackend, clusterEnabled, cloud blob storage, s3 gcs azure blob store
 ---
 
 <p>
@@ -412,6 +412,45 @@ app:
     </tbody>
 </table>
 
+<h3>Monitoring cluster membership</h3>
+
+<p>
+    Every MockServer node exposes a read-only <code class="inline code">GET /mockserver/cluster</code> control-plane
+    endpoint that reports the node's view of the cluster &mdash; how many members it can see, which member is the
+    coordinator, and which member is itself. Use it from a health check, dashboard, or operations script to confirm
+    that all nodes have formed the cluster and agree on membership.
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -s http://localhost:1080/mockserver/cluster</code></pre>
+
+<p>On a clustered node, the response lists every member and flags the coordinator and the local node:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "clustered" : true,
+  "nodeId" : "node-a-7f3c",
+  "coordinator" : "node-a-7f3c",
+  "clusterName" : "shared-cluster",
+  "memberCount" : 2,
+  "members" : [
+    { "id" : "node-a-7f3c", "coordinator" : true,  "local" : true  },
+    { "id" : "node-b-91ad", "coordinator" : false, "local" : false }
+  ]
+}</code></pre>
+
+<p>
+    On a single-node deployment (the default in-memory backend, or Infinispan in LOCAL mode), the same endpoint returns
+    a sensible degenerate response: <code class="inline code">"clustered": false</code> with exactly one member &mdash;
+    this node, which is its own coordinator. This means health checks and tooling can call the endpoint unconditionally,
+    regardless of whether clustering is enabled.
+</p>
+
+<p>
+    If MockServer metrics are enabled (<code class="inline code">metricsEnabled=true</code>), the live member count is
+    also exported as the Prometheus gauge <code class="inline code">mock_server_cluster_members</code> (read at scrape time),
+    so you can chart and alert on cluster size from your existing Prometheus stack. The gauge reads <code class="inline code">1</code>
+    for a single-node deployment. See <a href="/mock_server/observability.html">Observability</a> for the full metrics setup.
+</p>
+
 <a id="option3" class="anchor" href="#option3">&nbsp;</a>
 <h2>Option 3: Persistence-Only Durability</h2>
 
@@ -461,7 +500,7 @@ app:
     on the local filesystem (<code class="inline code">blobStoreType=filesystem</code>). When several nodes &mdash;
     or several short-lived CI runners &mdash; need to share that durable data <strong>without</strong> a shared
     POSIX volume (NFS / EFS / Azure Files), MockServer can store it in a cloud object store instead.
-    This is useful for centralized fixture libraries, record-and-replay cassettes captured by one job and
+    This is useful for centralised fixture libraries, record-and-replay cassettes captured by one job and
     replayed by another, and snapshots that must outlive any individual pod.
 </p>
 

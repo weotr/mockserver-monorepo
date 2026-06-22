@@ -12,6 +12,7 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.StreamingBody;
 import org.mockserver.responsewriter.ResponseWriter;
+import org.mockserver.responsewriter.StreamErrorWriter;
 import org.mockserver.telemetry.TraceContextAttributes;
 import org.mockserver.telemetry.W3CTraceContext;
 import org.slf4j.event.Level;
@@ -31,13 +32,46 @@ import org.slf4j.event.Level;
  * Backpressure is implemented via {@link StreamingBody#requestMore()}: each
  * chunk write completion triggers the next upstream read.
  */
-public class Http3ResponseWriter extends ResponseWriter {
+public class Http3ResponseWriter extends ResponseWriter implements StreamErrorWriter {
 
     private final ChannelHandlerContext ctx;
 
     public Http3ResponseWriter(Configuration configuration, MockServerLogger mockServerLogger, ChannelHandlerContext ctx) {
         super(configuration, mockServerLogger);
         this.ctx = ctx;
+    }
+
+    /**
+     * Reset the QUIC stream with the supplied HTTP/3 error code (RESET_STREAM, RFC 9114
+     * section 4.1). Only this request stream is reset; other streams on the QUIC connection are
+     * unaffected. No ByteBuf is allocated, so there is nothing to release.
+     */
+    @Override
+    public void writeStreamError(long errorCode) {
+        if (ctx.channel() instanceof QuicStreamChannel && ctx.channel().isActive()) {
+            // Netty's QuicStreamChannel.shutdownOutput takes an int, but a QUIC application error code
+            // is a 62-bit varint. Every RFC 9114 §8.1 HTTP/3 code is tiny (<= 0x110), so this only
+            // matters for out-of-range vendor codes — clamp (and warn) rather than silently truncating.
+            int resetCode;
+            if (errorCode < 0 || errorCode > Integer.MAX_VALUE) {
+                if (MockServerLogger.isEnabled(Level.WARN) && mockServerLogger != null) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.WARN)
+                            .setMessageFormat("HTTP/3 stream error code {} is out of the supported int range, clamping to {}")
+                            .setArguments(errorCode, Integer.MAX_VALUE)
+                    );
+                }
+                resetCode = Integer.MAX_VALUE;
+            } else {
+                resetCode = (int) errorCode;
+            }
+            // shutdownOutput(int) sends a RESET_STREAM frame carrying the application error code,
+            // tearing down this stream's output without affecting the rest of the QUIC connection.
+            ((QuicStreamChannel) ctx.channel()).shutdownOutput(resetCode);
+        } else if (ctx.channel().isActive()) {
+            ctx.close();
+        }
     }
 
     @Override
@@ -118,11 +152,20 @@ public class Http3ResponseWriter extends ResponseWriter {
             },
             // onComplete -- flush an empty DATA frame to ensure all prior chunk
             // writes have drained through the QUIC pipeline before shutting down
-            // the stream output (avoids truncation race with pending async writes)
+            // the stream output (avoids truncation race with pending async writes).
+            // When the response carries trailers, emit a trailing HEADERS frame after
+            // the final DATA frame and before shutting down the stream output.
             () -> {
                 if (ctx.channel().isActive()) {
-                    ctx.writeAndFlush(new DefaultHttp3DataFrame(Unpooled.EMPTY_BUFFER))
-                        .addListener(future -> shutdownQuicStreamOutput());
+                    DefaultHttp3HeadersFrame trailersFrame = Http3RequestBridge.toHttp3TrailersFrame(response);
+                    if (trailersFrame != null) {
+                        ctx.write(new DefaultHttp3DataFrame(Unpooled.EMPTY_BUFFER));
+                        ctx.writeAndFlush(trailersFrame)
+                            .addListener(future -> shutdownQuicStreamOutput());
+                    } else {
+                        ctx.writeAndFlush(new DefaultHttp3DataFrame(Unpooled.EMPTY_BUFFER))
+                            .addListener(future -> shutdownQuicStreamOutput());
+                    }
                 }
             },
             // onError
@@ -150,10 +193,22 @@ public class Http3ResponseWriter extends ResponseWriter {
     private void writeStaticResponse(HttpResponse response) {
         DefaultHttp3HeadersFrame headersFrame = Http3RequestBridge.toHttp3HeadersFrame(response);
         DefaultHttp3DataFrame dataFrame = Http3RequestBridge.toHttp3DataFrame(response);
+        DefaultHttp3HeadersFrame trailersFrame = Http3RequestBridge.toHttp3TrailersFrame(response);
 
         ctx.write(headersFrame);
         if (dataFrame != null) {
-            ctx.writeAndFlush(dataFrame)
+            if (trailersFrame != null) {
+                // headers + data + trailing HEADERS frame, then shutdown the stream output
+                ctx.write(dataFrame);
+                ctx.writeAndFlush(trailersFrame)
+                    .addListener(QuicStreamChannel.SHUTDOWN_OUTPUT);
+            } else {
+                ctx.writeAndFlush(dataFrame)
+                    .addListener(QuicStreamChannel.SHUTDOWN_OUTPUT);
+            }
+        } else if (trailersFrame != null) {
+            // body-less response with trailers: headers + trailing HEADERS frame
+            ctx.writeAndFlush(trailersFrame)
                 .addListener(QuicStreamChannel.SHUTDOWN_OUTPUT);
         } else {
             ctx.flush();

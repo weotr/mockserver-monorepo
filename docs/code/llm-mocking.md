@@ -27,20 +27,25 @@ flowchart LR
 
 - `encode(Completion, model)` -- non-streaming response
 - `encodeStreaming(Completion, model, StreamingPhysics)` -- SSE event list
-- `encodeEmbedding(EmbeddingResponse, input)` -- embeddings
+- `encodeEmbedding(EmbeddingResponse, input)` / `encodeEmbedding(EmbeddingResponse, input, model)` -- embeddings (the model-aware overload lets Bedrock pick Titan vs Cohere; most codecs ignore the model and inherit the two-arg default)
+- `encodeRerank(RerankResponse, documents)` -- rerank results (Cohere/Voyage)
 - `decode(HttpRequest)` -- parse inbound request to `ParsedConversation` (for conversation matchers)
+
+All embedding codecs share `EmbeddingVectors` (deterministic-from-input or random, then L2-normalised); only the JSON envelope differs per provider. Embedding shapes: OpenAI/Azure `{"object":"list","data":[{"embedding":[...]}]}` (default 1536 dims); Gemini `{"embedding":{"values":[...]}}` (768); Ollama `{"embeddings":[[...]]}` — the `/api/embed` shape (768); Bedrock Titan `{"embedding":[...],"inputTextTokenCount":N}` or Bedrock Cohere `{"embeddings":[[...]]}` when the model id starts with `cohere` (1024). `ANTHROPIC` and `OPENAI_RESPONSES` have no embeddings endpoint and throw (surfaced as a 400 by the handler). Rerank shares `RerankScoring` (per-document relevance scores — reproducible when `deterministicFromInput` is set, else random — descending, capped to `topN`) and emits the provider-correct envelope via a `RerankScoring.Envelope` selector: Cohere `{"results":[{"index":N,"relevance_score":F}, ...]}`, Voyage `{"object":"list","data":[...],"usage":{"total_tokens":N}}`.
 
 Currently registered codecs:
 
 | Provider | Codec class | Status |
 |----------|-------------|--------|
-| ANTHROPIC | `AnthropicCodec` | Complete |
-| OPENAI | `OpenAiChatCompletionsCodec` | Complete |
-| OPENAI_RESPONSES | `OpenAiResponsesCodec` | Complete |
-| GEMINI | `GeminiCodec` | Complete |
-| BEDROCK | `BedrockCodec` | Complete (delegates to `AnthropicCodec`; streaming uses `application/vnd.amazon.eventstream` binary framing via `BedrockEventStreamEncoder`; SigV4 signing is a follow-up) |
+| ANTHROPIC | `AnthropicCodec` | Complete (no embeddings endpoint) |
+| OPENAI | `OpenAiChatCompletionsCodec` | Complete (chat + embeddings) |
+| OPENAI_RESPONSES | `OpenAiResponsesCodec` | Complete (no embeddings endpoint) |
+| GEMINI | `GeminiCodec` | Complete (chat + embeddings) |
+| BEDROCK | `BedrockCodec` | Complete (delegates chat to `AnthropicCodec`; streaming uses `application/vnd.amazon.eventstream` binary framing via `BedrockEventStreamEncoder`; SigV4 signing is a follow-up; embeddings = Titan default / Cohere by model) |
 | AZURE_OPENAI | `AzureOpenAiCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
-| OLLAMA | `OllamaCodec` | Complete (see security audit for NDJSON wire-format limitation) |
+| OLLAMA | `OllamaCodec` | Complete (chat + embeddings; see security audit for NDJSON wire-format limitation) |
+| COHERE | `CohereCodec` | Rerank only (`/v1/rerank`) |
+| VOYAGE | `VoyageCodec` | Rerank only (`/v1/rerank`) |
 
 ## Streaming Physics
 
@@ -66,6 +71,28 @@ The expanded events are handed to `HttpSseResponseActionHandler` which already h
 - `withNormalization(options)` -- opt-in prompt normalisation applied before the `contains`/`matches` text predicates (see below)
 
 Predicates are stored as `ConversationPredicates` on `HttpLlmResponse` for JSON round-tripping. The matcher is lazily reconstructed from predicates after deserialisation.
+
+### Multimodal (image) recognition
+
+The decoders recognise **image content parts** on the request side so a mocked request can be matched on image presence. Each `ParsedMessage` exposes `hasImage()`, `imageCount()`, and `getImages()` (a list of `ImagePart`, each carrying the declared media type where the provider shape includes it):
+
+| Provider | Image shape recognised |
+|----------|------------------------|
+| OPENAI / AZURE_OPENAI | `image_url` content part (media type parsed from a `data:` URL; `null` for a remote `https` URL) |
+| ANTHROPIC / BEDROCK | `image` block with a `source.media_type` |
+| GEMINI | `inline_data` / `inlineData` part with `mime_type` / `mimeType` |
+
+This is **request-side recognition only** — MockServer notes that a message contains an image (and how many, and the media type) so conversation matchers can assert it; it does not store the image bytes or generate image responses.
+
+### Multimodal (audio) recognition
+
+The OpenAI decoder also recognises **audio content parts** on the request side, mirroring the image handling. Each `ParsedMessage` exposes `hasAudio()`, `audioCount()`, and `getAudio()` (a list of `AudioPart`, each carrying the declared `format` where the provider shape includes it):
+
+| Provider | Audio shape recognised |
+|----------|------------------------|
+| OPENAI / AZURE_OPENAI | `input_audio` content part (`format` read from `input_audio.format`, e.g. `wav`/`mp3`; `null` when absent) |
+
+Like image recognition, this is **request-side only** — MockServer notes that a message contains audio (and how many, and the declared format); it does not store the audio bytes.
 
 ### Normalised prompt matching
 
@@ -172,10 +199,11 @@ Two MCP tools expose the LLM mocking feature to agents:
 |------|-------------|
 | `mock_llm_completion` | Creates a single LLM expectation from provider, path, text, tool calls, usage, and an optional `outputSchema` (response-path structured-output validation) |
 | `create_llm_conversation` | Creates a multi-turn conversation with scenario state chain, optional isolation, and an optional per-turn `match.normalization` object |
-| `verify_tool_call` | Asserts an agent called a named tool `atLeast`/`atMost` times (optional args regex), by decoding recorded LLM requests |
-| `explain_agent_run` | Summarises a recorded agent run: turn/tool-call sequence, tool results, latest role |
+| `verify_tool_call` | Asserts an agent called a named tool `atLeast`/`atMost` times (optional args regex), by decoding recorded LLM requests. Supports `provider=AUTO` to auto-detect from request paths |
+| `explain_agent_run` | Summarises a recorded agent run: turn/tool-call sequence, tool results, latest role. Supports `provider=AUTO` to auto-detect from request paths |
 | `verify_structured_output` | Validates the JSON output text of recorded LLM responses against a JSON Schema (decodes each response via the runtime-LLM client SPI, then `JsonSchemaValidator`); reports per-response conformance |
 | `verify_cost_budget` | Sums input/output tokens from recorded responses' usage, prices them via `org.mockserver.llm.cost.LlmPricing`, and asserts the total USD cost is within `maxCostUsd` — a deterministic CI cost gate. Unpriceable models are reported and excluded |
+| `mock_llm_failover` | Creates a failover/retry scenario: the first N requests fail with specified HTTP statuses, then subsequent requests succeed with a provider-correct LLM response. Uses `LlmFailoverBuilder` |
 
 The first two validate provider availability against `ProviderCodecRegistry` at registration time. The analysis tools delegate to `org.mockserver.llm.analysis.AgentRunAnalyzer`.
 
@@ -184,7 +212,14 @@ The first two validate provider availability against `ProviderCodecRegistry` at 
 Structured-output validation against a JSON Schema works on **both sides** of a mock, both built on `JsonSchemaValidator`:
 
 - **Read side — `verify_structured_output`** (assertion over recorded traffic): decodes each recorded response for a provider via the runtime-LLM client SPI and checks the assistant's output text against the schema. Read-only and deterministic.
-- **Response side — `Completion.outputSchema`** (fixture sanity check): a completion may declare the JSON Schema its `text` should conform to (`Completion.withOutputSchema(...)`, the `outputSchema` expectation-JSON field, or the `mock_llm_completion` MCP param — string or inline object). `HttpLlmResponseActionHandler.validateStructuredOutput(...)` validates the configured text as the response is encoded. It is **fail-soft**: a mismatch never alters the response body — it adds the `x-mockserver-structured-output-invalid` diagnostic header (a single-line, CR/LF-collapsed message; non-streaming only) and logs a warning. A blank schema, absent text, or a malformed schema are all "nothing to check" and can never break the response. This surfaces malformed fixtures while still letting you return a deliberately non-conforming response unchanged.
+- **Response side — `Completion.outputSchema`** (fixture sanity check): a completion may declare the JSON Schema its `text` should conform to (`Completion.withOutputSchema(...)`, the `outputSchema` expectation-JSON field, or the `mock_llm_completion` MCP param — string or inline object). `HttpLlmResponseActionHandler.validateStructuredOutput(...)` validates the configured text as the response is encoded. It is **fail-soft** by default: a mismatch never alters the response body — it adds the `x-mockserver-structured-output-invalid` diagnostic header (a single-line, CR/LF-collapsed message; non-streaming only) and logs a warning. A blank schema, absent text, or a malformed schema are all "nothing to check" and can never break the response. This surfaces malformed fixtures while still letting you return a deliberately non-conforming response unchanged.
+  - **Strict enforcement (opt-in) — `Completion.enforceOutputSchema`**: set the `enforceOutputSchema` flag (`Completion.enforceOutputSchema()` / `withEnforceOutputSchema(true)`, the `enforceOutputSchema` expectation-JSON field, or the `mock_llm_completion` MCP boolean param) alongside the schema to switch from fail-soft to strict. `HttpLlmResponseActionHandler.enforcementErrorResponseOrNull(...)` then **fails loudly** when the configured body does not conform: it returns a provider-correct error (HTTP `502` via `LlmErrorBodies`, with the `x-mockserver-structured-output-invalid` header) instead of the non-conforming body. This models a provider's strict `response_format: json_schema` mode, which guarantees schema-valid output. `HttpActionHandler` checks it before dispatch (after chaos, which takes priority — a transport-level failure independent of the body), so it applies on **both** the streaming and non-streaming paths and a strict streaming completion with a non-conforming body never begins streaming. The shared `structuredOutputError(...)` helper backs both the fail-soft and strict paths, so a blank/absent-text/malformed schema is a no-op in either mode and can never produce an enforcement error. The flag is back-compatible: unset/`false` keeps the fail-soft behaviour and the flag has no effect without an `outputSchema`.
+
+## Approximate token counting and usage inference
+
+`TokenCounter` (`org.mockserver.llm`) is a pure, deterministic helper that estimates token counts for text. It is **an estimate, not a real tokenizer** — it does not implement BPE/SentencePiece or any provider's vocabulary, so its counts differ from a provider's billed counts (roughly within ±20% for ordinary English prose, further off for code or non-Latin text). The heuristic averages two cheap signals — characters ÷ 4 and words × 4/3 — plus a small punctuation-density allowance (BPE tends to split punctuation into its own tokens), clamped to ≥1 for any non-empty text and 0 for `null`/empty. It exposes `estimateTokens(text)`, `estimatePromptTokens(ParsedConversation)` (per-message text + a small per-message chat-format overhead, including tool-call args and tool results), and `estimateCompletionTokens(text, toolCalls)`.
+
+When the opt-in `mockserver.llmInferUsageEnabled` flag is set, `HttpLlmResponseActionHandler.withInferredUsageIfEnabled(...)` returns a **per-request shallow copy** of the completion carrying approximate `prompt_tokens` / `completion_tokens` for a mocked completion that omits `usage`, on both the non-streaming and streaming paths, **before** the codec encodes. The shared expectation `Completion` is never mutated, so the request-dependent prompt estimate is recomputed every request (no stale caching, no concurrent-write race). The prompt estimate comes from decoding the inbound request with the provider codec (`ProviderCodec.decode`); the completion estimate from the response text and tool-call arguments. It is **off by default** so existing responses are unchanged (an absent `usage` continues to encode as zeros) and a completion that already declares a non-zero `usage` is never overwritten. Decoding failures are fail-soft (prompt estimate degrades to 0, never an error). This is independent of `HttpLlmResponseActionHandler.estimateTokenCount(...)`, the existing rough character estimate that backs the token-based chaos quota, which is unchanged.
 
 ## Adversarial-response harness
 
@@ -201,6 +236,41 @@ Structured-output validation against a JSON Schema works on **both sides** of a 
 
 Truncation, malformed-SSE, and the stateful quota are fully deterministic; the probabilistic error path is deterministic at probability 0.0/1.0. Each injection increments the `LLM_CHAOS_INJECTED_COUNT` metric. The profile round-trips as the top-level `chaos` field on `HttpLlmResponse` (alongside `completion`, `embedding`, and `conversationPredicates`) and is exposed per turn in the dashboard wizard and via the `chaos` MCP parameter.
 
+### Provider-specific error bodies
+
+Both chaos error paths (the probabilistic `errorStatus` and a stateful quota breach) emit the **provider-correct JSON error body** for the detected provider, so client SDK retry/backoff logic — which parses the body's `error.type` / `error.code` — can be exercised faithfully against a mock. `LlmErrorBodies` (`org.mockserver.llm`) is a pure, deterministic helper that maps a `Provider` + a coarse error `Kind` (derived from the HTTP status) to the body shape. When the provider is `null`/unknown, the handler falls back to the previous generic body (`{"error":{"type":"chaos_injected"|"quota_exceeded"|"token_quota_exceeded",...}}`), so behaviour is unchanged for an unspecified provider.
+
+The error `Kind` is derived from the status: `429 → RATE_LIMIT`, `529 → OVERLOADED`, any other status `→ SERVER_ERROR`.
+
+| Provider | Body shape (by error kind) |
+|----------|----------------------------|
+| ANTHROPIC / BEDROCK | `{"type":"error","error":{"type":"overloaded_error"\|"rate_limit_error"\|"api_error","message":...}}` — Bedrock delivers the Anthropic body unchanged |
+| OPENAI / OPENAI_RESPONSES / AZURE_OPENAI | `{"error":{"message":...,"type":"rate_limit_exceeded"\|"server_error","param":null,"code":...}}` — `code` is the numeric status for `server_error`, the string `"rate_limit_exceeded"` for a 429 |
+| GEMINI | `{"error":{"code":<status>,"message":...,"status":"UNAVAILABLE"\|"RESOURCE_EXHAUSTED"\|"INTERNAL"}}` |
+| OLLAMA | `{"error":"<message>"}` (a plain message string) |
+
+The `Retry-After` and provider-specific rate-limit *headers* (see below) are still applied on top of the body by the same code path, so a 429/529 carries both the correct body and the correct headers.
+
+### Token-based quota (TPM/TPD)
+
+Real LLM providers (OpenAI, Anthropic) enforce token-per-minute (TPM) and token-per-day (TPD) limits in addition to request-count limits. MockServer models this with two additional `LlmChaosProfile` fields: `tokenQuotaLimit` (Long, >= 1) and `tokenQuotaWindowMillis` (Long, >= 1). When both are set alongside `quotaName`, each response charges its cumulative token count (from `Usage.inputTokens + outputTokens`, or `ceil(text.length()/4)` as a fallback when no Usage is present) against a separate fixed-window counter in `LlmQuotaRegistry` under the key `quotaName + ":tokens"`. Once the in-window token sum exceeds `tokenQuotaLimit`, the response path returns a 429 (or custom `quotaErrorStatus`) with error type `token_quota_exceeded` and the `Retry-After` header when set. The request-count quota and token quota are independent counters that can coexist on the same profile; the request-count quota is checked first. Embeddings contribute zero tokens. The `LlmQuotaRegistry.tryAcquire(name, limit, windowMillis, amount)` overload supports arbitrary increment amounts for this purpose.
+
+### Provider rate-limit headers
+
+When an LLM response path returns a rate-limit / quota error (probabilistic `errorStatus` or stateful quota 429), MockServer emits the **provider-correct rate-limit HTTP headers** that real LLM providers send, so client SDK retry/backoff logic (which reads those headers) can be exercised faithfully against a mock. The same headers are stamped on **successful** responses when a quota is configured, so a client can observe the limit counting down.
+
+`LlmRateLimitHeaders` (`org.mockserver.llm`) is a pure, deterministic helper that maps a `Provider` + quota parameters to the **provider-specific** header names and values. The standard `Retry-After` header is generic HTTP (not provider-specific), so it is owned by `HttpLlmResponseActionHandler.applyRateLimitHeaders(...)` — emitted once for every provider on a 429 — rather than by the helper, so it can never appear twice on the wire.
+
+| Provider | Provider-specific headers on error (429) | Headers on success (with quota) | `Retry-After` on 429 |
+|----------|----------------------|-------------------------------|---------------------|
+| OPENAI / OPENAI_RESPONSES / AZURE_OPENAI | `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests` (e.g. `"60s"`) | `x-ratelimit-limit-requests`, `x-ratelimit-reset-requests` | yes (seconds) |
+| ANTHROPIC | `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-remaining`, `anthropic-ratelimit-requests-reset` (RFC 3339 timestamp) | `anthropic-ratelimit-requests-limit`, `anthropic-ratelimit-requests-reset` | yes (seconds) |
+| GEMINI | *(none)* | *(none)* | yes (seconds) |
+| BEDROCK | *(none)* | *(none)* | yes (seconds) |
+| OLLAMA | *(none)* | *(none)* | yes, when a quota window or literal `retryAfter` is set |
+
+Header values are derived from the `LlmChaosProfile` fields: `quotaLimit` becomes the limit header; the reset duration is `quotaWindowMillis / 1000` (falling back to `tokenQuotaWindowMillis / 1000` for a token-only quota, then to a numeric `retryAfter`), so a **token-quota-only** 429 still carries reset/`Retry-After` headers; `remaining` is `0` on a 429 (omitted on success since the registry window count is not cheaply re-readable). On a 429 `Retry-After` is the literal configured `retryAfter` (which may be an HTTP-date) when set, otherwise the computed reset seconds. Applied at three sites: the probabilistic chaos error, the quota-exceeded error, and the successful non-streaming response when a quota is configured.
+
 ## Agent-run analysis
 
 `AgentRunAnalyzer` (`org.mockserver.llm.analysis`) is a deterministic, read-only inspector. Given the LLM requests MockServer recorded (retrieved via the normal request log), it decodes each with the provider's `ProviderCodec` and treats the **richest** conversation (most messages — the latest dialogue snapshot) as the canonical run. From that it derives:
@@ -211,6 +281,14 @@ Truncation, malformed-SSE, and the stateful quota are fully deterministic; the p
 - `buildCallGraph(requests, provider)` → a `CallGraph` of nodes (one per message, one per assistant tool call) and directed edges: `NEXT` (message sequence), `INVOKES` (assistant turn → the tool calls it made), `RESULT` (tool call → the tool message that returned its result, correlated by tool-call id). Powers the dashboard call-graph view.
 
 No LLM is called and no network is used — it reads the structure the codecs already produce, so assertions are reproducible. The MCP tools are thin wrappers that retrieve recorded requests (`/mockserver/retrieve?type=REQUESTS`) and format the analyzer's output; `explain_agent_run` includes the `callGraph` (nodes + edges). The dashboard **Sessions** view (`SessionInspector` → `AgentRunGraph.tsx`, with the pure transform `mockserver-ui/src/lib/callGraph.ts`) loads the graph per session via `explain_agent_run` and renders it as a step list (role + invoked tool calls + result indicator) plus a copyable Mermaid `flowchart`.
+
+### Proxied/forwarded traffic support
+
+Agent-run analysis works identically for **proxied/forwarded** traffic. Every incoming request — whether it matches a mock expectation or is forwarded to an upstream provider — is recorded as a `RECEIVED_REQUEST` log entry with the full request body. The `type=REQUESTS` retrieval returns these entries, and `AgentRunAnalyzer` decodes them with the appropriate `ProviderCodec`.
+
+**Provider auto-detection.** The `verify_tool_call` and `explain_agent_run` MCP tools accept `"AUTO"` as the `provider` parameter. `ProviderDetector` (`org.mockserver.llm.ProviderDetector`) infers the provider from recorded request paths (e.g. `/v1/messages` maps to `ANTHROPIC`, `/v1/chat/completions` to `OPENAI`), mirroring the UI-side detection in `llmTraffic.ts`. This is especially useful for proxy users who route real LLM calls through MockServer and may not know or want to specify the provider explicitly.
+
+**Dashboard Sessions view.** The Sessions view groups proxied LLM traffic by upstream host (from the `Host` header) when no conversation-isolation expectations are configured, so proxy traffic to different providers appears in separate session lanes. The call graph (via `AgentRunGraph`) is shown for all sessions including these host-grouped proxy sessions.
 
 ## Dashboard Rendering
 
@@ -227,15 +305,19 @@ classDiagram
         +model: String
         +completion: Completion
         +embedding: EmbeddingResponse
+        +rerank: RerankResponse
         +conversationPredicates: ConversationPredicates
     }
     class Completion {
         +text: String
         +toolCalls: List~ToolUse~
+        +toolChoice: String
         +stopReason: String
         +usage: Usage
         +streaming: Boolean
         +streamingPhysics: StreamingPhysics
+        +outputSchema: String
+        +enforceOutputSchema: Boolean
     }
     class ToolUse {
         +id: String
@@ -245,6 +327,9 @@ classDiagram
     class Usage {
         +inputTokens: Integer
         +outputTokens: Integer
+        +cachedInputTokens: Integer
+        +cacheCreationTokens: Integer
+        +reasoningTokens: Integer
     }
     class StreamingPhysics {
         +timeToFirstToken: Delay
@@ -257,6 +342,11 @@ classDiagram
         +deterministicFromInput: Boolean
         +seed: Integer
     }
+    class RerankResponse {
+        +topN: Integer
+        +deterministicFromInput: Boolean
+        +seed: Long
+    }
     class Provider {
         <<enum>>
         ANTHROPIC
@@ -266,6 +356,8 @@ classDiagram
         BEDROCK
         AZURE_OPENAI
         OLLAMA
+        COHERE
+        VOYAGE
     }
     class ConversationPredicates {
         +turnIndex: Integer
@@ -284,6 +376,12 @@ classDiagram
         +textContent: String
         +toolName: String
         +toolCallId: String
+        +images: List~ImagePart~
+        +audio: List~AudioPart~
+        +hasImage() boolean
+        +imageCount() int
+        +hasAudio() boolean
+        +audioCount() int
     }
     class IsolationSource {
         +kind: Kind
@@ -296,6 +394,7 @@ classDiagram
     HttpLlmResponse --> Provider
     HttpLlmResponse --> Completion
     HttpLlmResponse --> EmbeddingResponse
+    HttpLlmResponse --> RerankResponse
     HttpLlmResponse --> ConversationPredicates
     Completion --> ToolUse
     Completion --> Usage
@@ -332,7 +431,9 @@ This SPI is never on the deterministic assertion/matching path. The features tha
 Optional, off-by-default OTLP export, in two independent parts (both fail-soft — a setup error logs one line and never affects the server or a response; `io.opentelemetry` is relocated in the shaded jar):
 
 - **Metrics** (`org.mockserver.metrics.OtelMetricsExporter`, `mockserver.otelMetricsEnabled`) — bridges the existing `Metrics.Name` gauges (the same set exposed for Prometheus, including the LLM/SSE/chaos counters) to OTLP as observable gauges that read the current values, so Prometheus and OTLP stay consistent. An alternative to the Prometheus endpoint.
-- **GenAI spans** (`org.mockserver.telemetry.GenAiSpanExporter` + `GenAiSpans`, `mockserver.otelTracesEnabled`) — `HttpLlmResponseActionHandler` calls `GenAiSpans.recordCompletion(provider, model, completion)` on each served completion (streaming and non-streaming), emitting one span with GenAI semantic-convention attributes (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.response.finish_reasons`, tool-call count). These are spans MockServer codes deliberately — **no auto-instrumentation**. `GenAiSpans` is a process-wide no-op until `GenAiSpanExporter` installs a tracer.
+- **GenAI spans** (`org.mockserver.telemetry.GenAiSpanExporter` + `GenAiSpans`, `mockserver.otelTracesEnabled`) — emits one span per LLM completion with GenAI semantic-convention attributes (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.usage.*`, `gen_ai.response.finish_reasons`, tool-call count). When a provider reports them, cached-input and reasoning token counts are also emitted under the `mockserver.gen_ai.usage.*` namespace (`cached_input_tokens`, `cache_creation_tokens`, `reasoning_tokens`) — there is no GenAI semconv attribute for these yet, and they are omitted entirely when absent. These are spans MockServer codes deliberately — **no auto-instrumentation**. `GenAiSpans` is a process-wide no-op until `GenAiSpanExporter` installs a tracer. Spans fire on two paths:
+  - **Mock action path** — `HttpLlmResponseActionHandler` calls `GenAiSpans.recordCompletion()` for mocked responses (streaming and non-streaming).
+  - **Forward/proxy path** — `HttpActionHandler.emitForwardGenAiSpan()` detects LLM traffic via `LlmProviderSniffer` (maps the forwarded request's target host to a `Provider`), parses the upstream response using the provider's `LlmClient.parseCompletionResponse()`, and records a completion span. Covers matched-expectation forwards and unmatched proxy-pass. Streaming forward paths emit the GenAI span in the completion listener after the full SSE body is captured. Model is extracted from the response body (most providers include it), falling back to the request body.
 
 Both use the OTLP HTTP/protobuf exporter with the JDK HttpClient sender (no gRPC/OkHttp) and share `mockserver.otelEndpoint` (a base collector URL; `/v1/metrics` and `/v1/traces` appended per signal, resolved by `telemetry.OtelEndpoints`).
 
@@ -435,10 +536,38 @@ These are operational settings (config + MCP, for CI/automation), not dashboard 
 | `mockserver.llmBackendsConfig` | _(unset)_ | — | Path to JSON file of named backends |
 | `mockserver.llmRequestTimeoutMillis` | `30000` | — | Per-request timeout for outbound runtime-LLM calls |
 | `mockserver.llmSemanticMatchingEnabled` | `false` | — | Opt-in: activate the exploratory `semanticMatch` predicate (needs a backend; never for assertions) |
+| `mockserver.llmInferUsageEnabled` | `false` | — | Opt-in: fill **approximate** `prompt_tokens`/`completion_tokens` (via `TokenCounter`) when a mocked completion omits `usage`. Off by default so responses are unchanged; never overwrites a declared `usage` |
 | `mockserver.otelMetricsEnabled` | `false` | — | Export MockServer's metrics to an OTLP collector (alternative to Prometheus) |
 | `mockserver.otelTracesEnabled` | `false` | — | Emit one explicit GenAI semantic-convention span per served LLM completion |
 | `mockserver.otelEndpoint` | _(unset)_ | — | OTLP base endpoint shared by metrics and span export |
 | `mockserver.otelMetricsExportIntervalSeconds` | `60` | ≥1 | How often metrics are pushed to the OTLP collector |
+| `mockserver.llmMetricsEnabled` | `false` | — | Enable LLM token/cost Prometheus counters (requires `metricsEnabled`); activates forward-path response parsing even without OTLP tracing |
+| `mockserver.llmCostBudgetUsd` | `-1.0` (disabled) | — | Cumulative LLM cost budget in USD; enforced on ALL forward paths (matched FORWARD, breakpoint-continuation, unmatched proxy). When exceeded, LLM forwards return 429. Negative = disabled. Resets on server reset. Trip surfaces via `mock_server_llm_cost_budget_tripped` counter, WARN log, and the dashboard Circuit Breakers section |
+
+## LLM failover scenarios
+
+`LlmFailoverBuilder` (`org.mockserver.client`) produces an ordered array of expectations that simulate a provider returning failures for the first N attempts, then succeeding on subsequent attempts. This is the deterministic way to test retry/failover logic (LiteLLM, Envoy AI Gateway, SDK retries) against MockServer.
+
+The mechanism relies on expectation registration order and `Times` exhaustion: failure expectations with `Times.exactly(n)` are registered before the success expectation with `Times.unlimited()`. MockServer matches expectations in priority-then-insertion order (`SortableExpectationId`), so the first N requests match and consume the failure expectations, then fall through to the unlimited success expectation.
+
+```java
+// Java builder
+llmFailover()
+    .withPath("/v1/chat/completions")
+    .withProvider(Provider.OPENAI)
+    .withModel("gpt-4o")
+    .failWith(503)
+    .failWith(503)
+    .failWith(429)
+    .thenRespondWith(completion().withText("The answer is 42."))
+    .applyTo(mockServerClient);
+```
+
+Consecutive failures with the same status code and body are coalesced into a single expectation with `Times.exactly(count)` for efficiency. Custom error bodies can be provided per failure via `failWith(status, body)`.
+
+| MCP Tool | Description |
+|----------|-------------|
+| `mock_llm_failover` | Creates a failover scenario: `failStatuses` array of HTTP status codes (one per failure attempt), then a success response with provider-correct encoding. Validates provider against `ProviderCodecRegistry`. |
 
 ## Related Documents
 
@@ -455,7 +584,7 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 
 | File | Role |
 |------|------|
-| `llm/ProviderCodecRegistry.java` | Codec registry singleton; all 7 providers registered at boot |
+| `llm/ProviderCodecRegistry.java` | Codec registry singleton; all 9 providers registered at boot (7 chat + 2 rerank-only) |
 | `llm/codec/AnthropicCodec.java` | Anthropic Messages API encoder/decoder |
 | `llm/codec/OpenAiChatCompletionsCodec.java` | OpenAI Chat Completions encoder/decoder |
 | `llm/codec/OpenAiResponsesCodec.java` | OpenAI Responses API encoder/decoder |
@@ -464,12 +593,18 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `llm/codec/BedrockEventStreamEncoder.java` | AWS event-stream binary framing encoder/decoder (`application/vnd.amazon.eventstream`) |
 | `llm/codec/AzureOpenAiCodec.java` | Azure OpenAI wrapper (delegates to OpenAI codec) |
 | `llm/codec/OllamaCodec.java` | Ollama encoder/decoder |
+| `llm/codec/CohereCodec.java` | Cohere rerank-only codec (`/v1/rerank`) |
+| `llm/codec/VoyageCodec.java` | Voyage AI rerank-only codec (`/v1/rerank`) |
+| `llm/codec/EmbeddingVectors.java` | Shared deterministic/L2-normalised embedding-vector generation used by every embedding codec |
+| `llm/codec/RerankScoring.java` | Shared deterministic rerank scoring + `{"results":[...]}` envelope used by the rerank codecs |
+| `model/RerankResponse.java` | Rerank action config (`topN`, `deterministicFromInput`, `seed`) carried on `HttpLlmResponse` |
 | `llm/StreamingPhysicsExpander.java` | Converts `Completion` + `StreamingPhysics` to `List<SseEvent>` |
 | `llm/IsolationSource.java` | Session isolation key extraction descriptor |
 | `llm/LlmScenarioNames.java` | Scenario name generation with isolation encoding |
 | `llm/ParsedConversation.java` | Decoded conversation model |
 | `llm/ParsedMessage.java` | Single decoded message (role, text, tool name, tool call ID) |
 | `client/LlmConversationBuilder.java` | Fluent builder producing per-turn `Expectation` arrays |
+| `client/LlmFailoverBuilder.java` | Fluent builder producing failover/retry `Expectation` arrays (failures then success) |
 | `client/TurnBuilder.java` | Per-turn predicate and response configuration |
 | `matchers/LlmConversationMatcher.java` | Evaluates `ConversationPredicates` against decoded requests |
 | `llm/PromptNormalizer.java` | Deterministic prompt normalisation (whitespace/case/JSON-key-sort/volatile-field drop) |
@@ -479,14 +614,18 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `llm/client/LlmClient.java` + `AbstractLlmClient.java` | Runtime-LLM client SPI (build request / parse response), pure |
 | `llm/client/LlmClientRegistry.java` | Singleton registry of runtime-LLM clients keyed by `Provider` |
 | `llm/client/{Ollama,OpenAi,OpenAiResponses,AzureOpenAi,Anthropic,Gemini,Bedrock}LlmClient.java` | Per-provider runtime clients |
+| `llm/client/LlmProviderSniffer.java` | Maps forwarded request host/path to LLM Provider for forward-path GenAI observability (path-gated fallback) |
 | `llm/client/LlmBackend.java` | Immutable backend config record (apiKey redacted) |
 | `llm/client/LlmBackendResolver.java` | Three-layer backend resolution (env / properties / named JSON) |
 | `llm/client/LlmCompletionService.java` | Orchestrator: off-unless-configured, fail-closed, cached |
 | `llm/client/LlmTransport.java` + `NettyHttpClientLlmTransport.java` | Transport seam over `NettyHttpClient` |
+| `llm/ProviderDetector.java` | Heuristic provider detection from request path; mirrors UI-side detection; powers `AUTO` provider for MCP tools |
 | `llm/analysis/AgentRunAnalyzer.java` | Deterministic read-only agent-run inspection (tool-call counts, run summary, call graph) |
 | `llm/semantic/SemanticPromptMatcher.java` + `SemanticMatching.java` | Opt-in LLM-judge fuzzy match + its off-by-default static gate |
 | `llm/adversarial/AdversarialResponseLibrary.java` | Curated adversarial-response payloads for agent-resilience testing |
 | `model/LlmChaosProfile.java` | Fault/chaos profile carried on `HttpLlmResponse` |
+| `llm/LlmErrorBodies.java` | Pure helper mapping a `Provider` + error kind to the provider-correct chaos/quota error JSON body |
+| `llm/TokenCounter.java` | Pure, deterministic **approximate** token-count estimator (char/word heuristic; not a real tokenizer); backs opt-in usage inference |
 | `mock/action/http/HttpLlmResponseActionHandler.java` | Encodes LLM responses and applies chaos (error / truncation / malformed SSE) |
 | `fixture/FixtureRedactor.java` | Masks sensitive headers and (optional) JSON body fields when recording fixtures |
 | `llm/drift/StructuralShapeDiff.java` | Pure JSON shape diff (added/removed/type-changed paths) |
@@ -495,3 +634,93 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `llm/StubGenerationResult.java` | Result DTO for stub generation (suggestions, confidence, explanation) |
 | `metrics/OtelMetricsExporter.java` | Optional OTLP metrics export bridging the Prometheus gauges (off by default) |
 | `telemetry/GenAiSpanExporter.java` + `GenAiSpans.java` + `OtelEndpoints.java` | Optional explicit GenAI span export per served completion (off by default) |
+| `llm/analysis/LlmOptimisationReport.java` | Structured JSON bundle — nested `Session`, `Totals`, `Call`, `ToolCall`, `Signal`, `Redaction` POJOs; schema version 1 |
+| `llm/analysis/LlmOptimisationReportBuilder.java` | Builds the report from `FORWARDED_REQUEST` log entries via `ProviderCodecRegistry` + `LlmProviderSniffer` + `LlmPricing` + `FixtureRedactor` |
+| `llm/analysis/OptimisationSignals.java` | Six deterministic signal detectors (see below); pure — no network, no LLM |
+| `llm/analysis/LlmOptimisationBriefRenderer.java` | Renders an `LlmOptimisationReport` to a pre-framed Markdown brief |
+| `llm/analysis/LlmOptimisationReportService.java` | Façade: `build(pairs, filter)` + `renderBrief(result)` — used by both the REST handler and the MCP tool |
+
+## LLM Optimisation Export
+
+MockServer can turn any captured LLM session into a structured **optimisation report** — either a copy-paste Markdown brief (pre-framed so a user can paste it into any LLM for cost-reduction advice) or a JSON bundle for programmatic use. The feature is export-only: MockServer never calls an LLM; every number is deterministic.
+
+### Data flow
+
+```mermaid
+flowchart LR
+    LOG["FORWARDED_REQUEST\nlog entries"] --> SVC["LlmOptimisationReportService\n.build(pairs, filter)"]
+    SVC --> SNIFF["LlmProviderSniffer\n(detect provider)"]
+    SVC --> CODEC["ProviderCodecRegistry\n.decode() → ParsedConversation"]
+    SVC --> PRICE["LlmPricing\n(estimate USD cost)"]
+    SVC --> REDACT["FixtureRedactor\n(strip secrets)"]
+    SVC --> BUILD["LlmOptimisationReportBuilder\n(assemble report)"]
+    BUILD --> SIG["OptimisationSignals\n(detect 6 signal types)"]
+    BUILD --> RPT["LlmOptimisationReport\n(JSON bundle)"]
+    RPT -->|"format=markdown"| RENDER["LlmOptimisationBriefRenderer\n(Markdown brief)"]
+```
+
+Only LLM traffic (where the sniffer recognises a provider) is included; non-LLM forwarded traffic is ignored.
+
+### Per-call upstream latency
+
+The per-call `latencyMs` is the measured upstream round-trip time. It is carried from the forward path to the report via an internal `x-mockserver-response-time-ms` header attached **only to the logged `FORWARDED_REQUEST` response clone** (never the response written to the real client) — the same convention as `x-mockserver-streamed` / `x-mockserver-chunk-delays-ms`. `HttpActionHandler` defines the constant (`HttpActionHandler.RESPONSE_TIME_HEADER`) and sets the header on every forward path's logged clone:
+
+- **Non-streaming** — the value prefers the precise `Timing.getTotalTimeInMillis()` measured by `NettyHttpClient` (matching `recordForwardMetrics`), falling back to the wall-clock delta. This matters for the matched-`FORWARD` path, where `scheduler.submit(responseFuture, …)` only runs after the future has completed, so a naive nanos delta would read ~0.
+- **Streaming** — the full-stream duration is computed from the captured forward-start nanos at stream completion (the upstream `Timing` only covers the response head).
+
+`LlmOptimisationReportService` reads the header off the recorded response and passes it as `CapturedExchange.latencyMs`; the builder applies it when non-null and `>= 0` and aggregates `totals.totalLatencyMs`. A malformed/absent header degrades gracefully to a `0` latency for that call. The matched-`FORWARD` two-arg `writeForwardActionResponse(HttpResponse, …)` overload (pre-resolved responses, e.g. object-callback) has no upstream timing and leaves latency unset.
+
+### Endpoint and MCP tool
+
+**REST** — `GET /mockserver/llm/optimisationReport` (mockserver-netty control-plane, handled by `HttpRequestHandler.handleOptimisationReport`):
+
+| Query parameter | Values | Default |
+|-----------------|--------|---------|
+| `format` | `json` \| `markdown` | `json` |
+| `session` | grouping key | all captured LLM traffic |
+| `host` | upstream hostname | all hosts |
+| `provider` | `OPENAI` \| `ANTHROPIC` \| `GEMINI` \| `BEDROCK` \| `AZURE_OPENAI` \| `OLLAMA` | all providers |
+
+CORS is enabled on this endpoint so the dashboard UI can call it even when the dashboard and control plane are on different origins.
+
+**MCP tool** — `export_optimisation_report` (registered in `McpToolRegistry.registerExportOptimisationReport`), same parameters as the REST endpoint. Returns the brief text or JSON bundle as a tool result.
+
+**Dashboard** — the LLM Optimise screen (`OptimiseView.tsx`, the **LLM Optimise** nav tab, positioned immediately after **Chaos**) fetches `format=json` for display and `format=markdown` for the "Copy optimisation brief" and "Download bundle" buttons.
+
+### Optimisation signals
+
+`OptimisationSignals.detect(calls)` runs six pure detectors and sorts the results HIGH → MEDIUM → LOW:
+
+| Signal id | Severity | Trigger | Lever |
+|-----------|----------|---------|-------|
+| `REPEATED_SYSTEM_PROMPT` | HIGH / MEDIUM | Same system-prompt fingerprint on ≥2 calls | Prompt caching / retrieval tool |
+| `LARGE_STATIC_CONTEXT_RESENT` | HIGH | Context block ≥2,000 tokens resent on ≥2 calls | Prompt caching / retrieval tool |
+| `DETERMINISTIC_TOOL_CALL` | MEDIUM | Same tool name + args fingerprint on ≥2 calls | Direct HTTP/MCP endpoint |
+| `OVERSIZED_TOOL_RESULT` | MEDIUM | Tool result ≥1,000 tokens | Trim/summarise output |
+| `OUTPUT_TOKEN_BLOAT` | LOW | Output ≥1,500 tokens or ≥3× session median | `max_tokens` / `response_format` |
+| `DUPLICATE_CONSECUTIVE_CALL` | MEDIUM | Near-identical consecutive request shape | De-duplicate / cache / retry guard |
+
+Each signal carries `estimatedWastedInputTokens` (nullable) and `estimatedSavingUsd` (nullable, scaled from per-call cost via `LlmPricing`).
+
+### Session grouping
+
+Sessions group by isolation key (when LLM conversation expectations with `IsolationSource` are active — isolation key encoded in the scenario name as `__llm_conv_<uuid>__iso=<type>:<key>`) or by upstream `Host` header otherwise. The `groupingBasis` field in the report (`ISOLATION_KEY` \| `PROXY_HOST`) records which was used.
+
+**v1 deferral.** Proxied (forwarded) LLM traffic — the optimisation use case — carries no matched-expectation scenario, so the builder groups it by upstream host (`PROXY_HOST`); server-side isolation-key grouping is deferred. The `session` filter in `LlmOptimisationReportService` therefore accepts the composite `host:<host>` key or the bare host, and the dashboard `OptimiseView` picker offers host-grouped sessions only (plus "All captured LLM traffic") so a selection always resolves rather than silently returning an empty report.
+
+### Redaction
+
+`FixtureRedactor` strips `Authorization`, `x-api-key`, `api-key`, `Cookie`, `Set-Cookie`, and `Proxy-Authorization` headers. JSON body fields named in `mockserver.fixtureBodyRedactFields` are also redacted. The `redaction` object in the report lists what was stripped.
+
+### Configuration
+
+- `mockserver.llmOptimisationMaxCalls` (int, default 200) — caps report size; only the most recent N calls are included when the session is larger. Signal thresholds are v1 constants in `OptimisationSignals` (no config properties beyond this bound).
+- `mockserver.fixtureBodyRedactFields` — shared with `record_llm_fixtures`; controls body-field redaction.
+
+### Markdown brief structure (frozen order)
+
+1. Framing preamble (verbatim instructions for the downstream LLM)
+2. Run summary (providers, models, token totals, estimated cost, latency, tool-call count)
+3. Per-call table (`# | model | in tok | out tok | cost | latency | tools | finish`)
+4. Detected opportunities (HIGH first, each as a `###` section with title, detail, affected call indices, estimated saving, recommendation)
+5. Conversations and tool definitions appendix (redacted messages + tool schemas per call)

@@ -9,7 +9,7 @@ steps:
     fields:
       - text: "Release Version"
         key: "release-version"
-        hint: "e.g., 7.0.0"
+        hint: "e.g., 7.1.0"
         required: true
         format: "[0-9]+\\.[0-9]+\\.[0-9]+"
       - text: "Next SNAPSHOT Version"
@@ -68,27 +68,14 @@ steps:
 
   - wait
 
-  # F-BK-02: a second TOTP check before downstream artifact publishing
-  # bounds the blast radius if the build context is compromised between
-  # Maven Central publish and downstream artifact deploys (npm, PyPI,
-  # RubyGems, Helm, Docker, SwaggerHub, GitHub).
-  - block: ":rocket: Approve downstream publish"
-    prompt: "Maven Central published. Re-authenticate with a fresh TOTP to authorize downstream artifact publishing."
-    allowed_teams: ["release-managers"]
-    fields:
-      - text: "TOTP Code"
-        key: "totp-code-downstream"
-        hint: "6-digit code from your authenticator app"
-        required: true
-        format: "[0-9]{6}"
-
-  - label: ":shield: Verify TOTP (downstream)"
-    command: |
-      TOTP_CODE="$(buildkite-agent meta-data get totp-code-downstream)" \
-        .buildkite/scripts/release-verify-totp.sh
-    agents: { queue: "release" }
-
-  - wait
+  # Downstream publishing proceeds automatically — there is no manual approval
+  # gate here. The Maven Central step above already polls repo1 until the main
+  # MockServer artifacts for this release are live (see the "Wait for Maven
+  # Central sync" loop in scripts/release/components/maven-central.sh, up to
+  # ~2h). All modules publish in one Central deployment and sync together, so
+  # once that poll succeeds the release is confirmed live on Maven Central and
+  # downstream artifacts (npm, PyPI, RubyGems, Helm, Docker, SwaggerHub,
+  # GitHub) can be published without a second human gate.
 
   - label: ":globe_with_meridians: Versioned Site"
     command: ".buildkite/scripts/release-runner.sh versioned-site"
@@ -156,6 +143,16 @@ steps:
         # SwaggerHub is an optional mirror of the OpenAPI spec to a third-party
         # catalogue. A failure here (e.g. SwaggerHub account / API access) must
         # not block the release, so the step is allowed to soft-fail.
+        soft_fail: true
+        timeout_in_minutes: 10
+        agents: { queue: "release" }
+
+      - label: ":rocket: Postman Collection"
+        command: ".buildkite/scripts/release-runner.sh postman-collection"
+        # Regenerates the Postman + Bruno collections from the OpenAPI spec and
+        # republishes the Postman collection to the public workspace. Like
+        # SwaggerHub, this is an optional distribution mirror — a failure (e.g.
+        # Postman API access) must not block the release, so it soft-fails.
         soft_fail: true
         timeout_in_minutes: 10
         agents: { queue: "release" }

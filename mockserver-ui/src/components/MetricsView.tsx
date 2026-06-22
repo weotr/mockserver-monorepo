@@ -6,8 +6,10 @@ import Alert from '@mui/material/Alert';
 import AlertTitle from '@mui/material/AlertTitle';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
-import CircularProgress from '@mui/material/CircularProgress';
+import Card from '@mui/material/Card';
+import Skeleton from '@mui/material/Skeleton';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import { transitions, monospaceFontFamily } from '../theme';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { useMetricsPolling } from '../hooks/useMetricsPolling';
 import { findSample, metricValue, metricValueByLabel, metricSum, hasMetric, labelValues } from '../lib/prometheusParser';
@@ -20,6 +22,9 @@ const CHAOS_METRIC = 'mock_server_http_chaos_injected_total';
 const ACTIVE_CHAOS_METRIC = 'mock_server_active_service_chaos';
 const EXPECTATIONS_BY_TYPE_METRIC = 'mock_server_expectations_by_type';
 const MCP_TOOL_CALLS_METRIC = 'mock_server_mcp_tool_calls_total';
+const AUTO_HALT_METRIC = 'mock_server_chaos_auto_halt';
+const LLM_COST_BUDGET_TRIPPED_METRIC = 'mock_server_llm_cost_budget_tripped';
+const LLM_COST_USD_METRIC = 'mock_server_llm_cost_usd';
 const ASYNC_PUBLISHED_METRIC = 'mock_server_async_messages_published_total';
 const ASYNC_CONSUMED_METRIC = 'mock_server_async_messages_consumed_total';
 
@@ -86,6 +91,17 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
   const version = latest ? findSample(latest.samples, 'mock_server_build_info')?.labels.version : undefined;
   const rps = latestRate(history, 'requests_received_count');
 
+  // One wall-clock timestamp per history snapshot, in lockstep with every
+  // derived series, so the charts can render a real time x-axis.
+  const timestamps = history.map((h) => h.at);
+
+  // KPI "hero" stats — the four headline request counters surfaced as prominent
+  // stat cards above the chart stack. Latency p50/p95/p99 join when the server
+  // exposes the duration histogram (added below once latencyEnabled is known).
+  const heroCounters = latest
+    ? SUMMARY.map(({ name, label }) => ({ label, value: metricValue(latest.samples, name) }))
+    : [];
+
   const actionRows = latest
     ? latest.samples
         .filter((s) => s.name.endsWith('_actions_count'))
@@ -95,6 +111,14 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
   const maxAction = actionRows.reduce((m, r) => Math.max(m, r.value), 0);
   const jvmEnabled = latest ? hasMetric(latest.samples, 'jvm_memory_used_bytes') : false;
   const latencyEnabled = latest ? hasMetric(latest.samples, `${LATENCY_METRIC}_count`) : false;
+  // Latency quantiles for the hero stat row (ms). Only meaningful when the
+  // duration histogram is exposed; otherwise omitted from the hero cards.
+  const latencyHeroStats = latencyEnabled && latest
+    ? ([['p50', 0.5], ['p95', 0.95], ['p99', 0.99]] as const).map(([label, q]) => {
+        const seconds = histogramQuantile(latest.samples, LATENCY_METRIC, q);
+        return { label, text: seconds == null ? '—' : `${(seconds * 1000).toFixed(1)} ms` };
+      })
+    : [];
   const chaosFaultTypes = latest ? orderedFaultTypes(labelValues(latest.samples, CHAOS_METRIC, 'fault_type')) : [];
   const chaosFaultTotals = latest
     ? chaosFaultTypes.map((ft) => ({ faultType: ft, value: metricValueByLabel(latest.samples, CHAOS_METRIC, 'fault_type', ft) }))
@@ -107,8 +131,20 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
     (sum, ft) => sum + (latest ? metricValueByLabel(latest.samples, ACTIVE_CHAOS_METRIC, 'fault_type', ft) : 0),
     0,
   );
-  const chaosEnabled = latest ? (hasMetric(latest.samples, CHAOS_METRIC) || activeServiceChaosEnabled) : false;
-  const chaosHasData = chaosFaultTotals.some((f) => f.value > 0) || activeChaosTotal > 0;
+  // Auto-halt circuit-breaker counter
+  const autoHaltTotal = latest ? metricValue(latest.samples, AUTO_HALT_METRIC) : 0;
+  const autoHaltEnabled = latest ? hasMetric(latest.samples, AUTO_HALT_METRIC) : false;
+
+  // LLM cost-budget circuit-breaker counter and cumulative cost
+  const llmCostBudgetTrippedTotal = latest ? metricValue(latest.samples, LLM_COST_BUDGET_TRIPPED_METRIC) : 0;
+  const llmCostBudgetEnabled = latest ? hasMetric(latest.samples, LLM_COST_BUDGET_TRIPPED_METRIC) : false;
+  const llmCostUsdTotal = latest ? metricSum(latest.samples, LLM_COST_USD_METRIC) : 0;
+
+  const chaosEnabled = latest ? (hasMetric(latest.samples, CHAOS_METRIC) || activeServiceChaosEnabled || autoHaltEnabled || llmCostBudgetEnabled) : false;
+  // The auto-halt and LLM cost-budget counters are meaningful even at zero (they
+  // mean the circuit-breaker is configured and has not fired), so their presence
+  // alone qualifies as "has data".
+  const chaosHasData = chaosFaultTotals.some((f) => f.value > 0) || activeChaosTotal > 0 || autoHaltEnabled || llmCostBudgetEnabled;
 
   // Expectations by type — gauge labeled by action_type
   const expectationActionTypes = latest
@@ -173,7 +209,7 @@ export default function MetricsView({ connectionParams }: MetricsViewProps) {
         <Alert severity="info" sx={{ mb: 1.5 }}>
           <AlertTitle>Metrics are disabled</AlertTitle>
           Start MockServer with metrics enabled to view live metrics here:
-          <Box component="pre" sx={{ mt: 1, mb: 0, p: 1, bgcolor: 'action.hover', borderRadius: 1, fontSize: '0.75rem', overflow: 'auto' }}>
+          <Box component="pre" sx={{ mt: 1, mb: 0, p: 1, bgcolor: 'action.hover', borderRadius: 1, typography: 'subtitle2', fontWeight: 400, fontFamily: monospaceFontFamily, overflow: 'auto' }}>
 {`-Dmockserver.metricsEnabled=true
 # or environment variable:
 MOCKSERVER_METRICS_ENABLED=true`}
@@ -191,13 +227,83 @@ MOCKSERVER_METRICS_ENABLED=true`}
       )}
 
       {status === 'loading' && history.length === 0 && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-          <CircularProgress size={28} />
+        <Box data-testid="metrics-loading-skeleton">
+          {/* Hero stat-card row placeholder */}
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 1, mb: 1.5 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <Card key={i} elevation={1} sx={{ p: 1.25 }}>
+                <Skeleton variant="text" width="55%" height={14} />
+                <Skeleton variant="text" width="70%" height={32} />
+              </Card>
+            ))}
+          </Box>
+          {/* Chart-block placeholders */}
+          {[0, 1, 2].map((i) => (
+            <Paper key={i} variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+              <Skeleton variant="text" width="40%" height={16} />
+              <Skeleton variant="rounded" height={i === 0 ? 180 : 160} sx={{ mt: 1 }} />
+            </Paper>
+          ))}
         </Box>
       )}
 
       {latest && (
         <>
+          {/* KPI hero stat cards — headline request counters (and latency
+              quantiles when available) presented as prominent cards above the
+              chart stack, rather than a monotonous list of identical papers. */}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: 1,
+              mb: 1.5,
+            }}
+          >
+            {heroCounters.map(({ label, value }) => (
+              <Card
+                key={label}
+                elevation={1}
+                sx={{
+                  p: 1.25,
+                  transition: transitions.forProps(['box-shadow', 'transform']),
+                  '&:hover': {
+                    boxShadow: (t) => t.shadows[4],
+                    transform: 'translateY(-1px)',
+                  },
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  {label}
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2, mt: 0.25 }}>
+                  {value.toLocaleString()}
+                </Typography>
+              </Card>
+            ))}
+            {latencyHeroStats.map(({ label, text }) => (
+              <Card
+                key={`latency-${label}`}
+                elevation={1}
+                sx={{
+                  p: 1.25,
+                  transition: transitions.forProps(['box-shadow', 'transform']),
+                  '&:hover': {
+                    boxShadow: (t) => t.shadows[4],
+                    transform: 'translateY(-1px)',
+                  },
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  latency {label}
+                </Typography>
+                <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2, mt: 0.25 }}>
+                  {text}
+                </Typography>
+              </Card>
+            ))}
+          </Box>
+
           {/* Throughput */}
           <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
             <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
@@ -205,6 +311,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
               <Typography variant="h6" sx={{ fontWeight: 700 }}>{rps.toFixed(1)} req/s</Typography>
             </Box>
             <MetricsLineChart
+              timestamps={timestamps}
               height={180}
               series={[{ data: ratePerSecond(history, 'requests_received_count'), label: 'req/s' }]}
               valueFormatter={(v) => `${v.toFixed(1)}/s`}
@@ -215,21 +322,9 @@ MOCKSERVER_METRICS_ENABLED=true`}
           {latencyEnabled && latest && (
             <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
               <Typography variant="caption" color="text.secondary">Request latency — cumulative since server start</Typography>
-              <Box sx={{ display: 'flex', gap: 3, mt: 0.5, flexWrap: 'wrap' }}>
-                {([['p50', 0.5], ['p95', 0.95], ['p99', 0.99]] as const).map(([label, q]) => {
-                  const seconds = histogramQuantile(latest.samples, LATENCY_METRIC, q);
-                  return (
-                    <Box key={label}>
-                      <Typography variant="h5" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-                        {seconds == null ? '—' : `${(seconds * 1000).toFixed(1)} ms`}
-                      </Typography>
-                      <Typography variant="caption" color="text.secondary">{label}</Typography>
-                    </Box>
-                  );
-                })}
-              </Box>
               <Box sx={{ mt: 1 }}>
                 <MetricsLineChart
+                  timestamps={timestamps}
                   height={140}
                   valueFormatter={(v) => `${v.toFixed(1)} ms`}
                   series={[{
@@ -264,6 +359,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
                 <Box sx={{ mt: 1 }}>
                   <Typography variant="caption" color="text.secondary">Faults injected by type (cumulative)</Typography>
                   <MetricsLineChart
+                    timestamps={timestamps}
                     height={180}
                     valueFormatter={(v) => Math.round(v).toLocaleString()}
                     series={chaosFaultTypes.map((ft) => ({
@@ -277,6 +373,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
                 <Box sx={{ mt: 1 }}>
                   <Typography variant="caption" color="text.secondary">Active service-scoped chaos by type</Typography>
                   <MetricsLineChart
+                    timestamps={timestamps}
                     height={180}
                     valueFormatter={(v) => Math.round(v).toLocaleString()}
                     series={activeChaosFaultTypes.map((ft) => ({
@@ -286,6 +383,60 @@ MOCKSERVER_METRICS_ENABLED=true`}
                   />
                 </Box>
               )}
+              {(autoHaltEnabled || llmCostBudgetEnabled) && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>Circuit Breakers</Typography>
+                  {autoHaltEnabled && (
+                    <Box sx={{ mt: 0.5 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Chaos auto-halt</Typography>
+                        <Chip
+                          size="small"
+                          label={autoHaltTotal > 0 ? `${autoHaltTotal} halt${autoHaltTotal === 1 ? '' : 's'}` : 'no halts'}
+                          color={autoHaltTotal > 0 ? 'error' : 'success'}
+                          variant="outlined"
+                        />
+                      </Box>
+                      <MetricsLineChart
+                        timestamps={timestamps}
+                        height={100}
+                        valueFormatter={(v) => Math.round(v).toLocaleString()}
+                        series={[{
+                          data: gaugeSeries(history, AUTO_HALT_METRIC),
+                          label: 'auto-halt count',
+                        }]}
+                      />
+                    </Box>
+                  )}
+                  {llmCostBudgetEnabled && (
+                    <Box sx={{ mt: 0.5 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                        <Typography variant="caption" color="text.secondary">LLM cost-budget</Typography>
+                        <Chip
+                          size="small"
+                          label={llmCostBudgetTrippedTotal > 0 ? `${llmCostBudgetTrippedTotal} trip${llmCostBudgetTrippedTotal === 1 ? '' : 's'}` : 'within budget'}
+                          color={llmCostBudgetTrippedTotal > 0 ? 'error' : 'success'}
+                          variant="outlined"
+                        />
+                        {llmCostUsdTotal > 0 && (
+                          <Typography variant="caption" color="text.secondary">
+                            ${llmCostUsdTotal.toFixed(4)} spent
+                          </Typography>
+                        )}
+                      </Box>
+                      <MetricsLineChart
+                        timestamps={timestamps}
+                        height={100}
+                        valueFormatter={(v) => Math.round(v).toLocaleString()}
+                        series={[{
+                          data: gaugeSeries(history, LLM_COST_BUDGET_TRIPPED_METRIC),
+                          label: 'budget trips',
+                        }]}
+                      />
+                    </Box>
+                  )}
+                </Box>
+              )}
             </Paper>
           )}
 
@@ -293,6 +444,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
           <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
             <Typography variant="caption" color="text.secondary">HTTP request activity (cumulative)</Typography>
             <MetricsLineChart
+              timestamps={timestamps}
               height={200}
               valueFormatter={(v) => Math.round(v).toLocaleString()}
               series={SUMMARY.map(({ name, label }) => ({ data: gaugeSeries(history, name), label }))}
@@ -320,6 +472,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
               </Box>
               <Box sx={{ mt: 1 }}>
                 <MetricsLineChart
+                  timestamps={timestamps}
                   height={200}
                   valueFormatter={(v) => Math.round(v).toLocaleString()}
                   series={[
@@ -340,6 +493,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
               </Typography>
             ) : (
               <MetricsLineChart
+                timestamps={timestamps}
                 height={200}
                 valueFormatter={(v) => Math.round(v).toLocaleString()}
                 series={actionRows
@@ -361,6 +515,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
               </Typography>
             ) : (
               <MetricsLineChart
+                timestamps={timestamps}
                 height={200}
                 valueFormatter={(v) => Math.round(v).toLocaleString()}
                 series={expectationsByType.map((r) => ({
@@ -380,6 +535,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
               </Typography>
             ) : (
               <MetricsLineChart
+                timestamps={timestamps}
                 height={200}
                 valueFormatter={(v) => Math.round(v).toLocaleString()}
                 series={mcpToolRows.map((r) => ({
@@ -396,6 +552,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
               <Paper variant="outlined" sx={{ p: 1.25 }}>
                 <Typography variant="caption" color="text.secondary">JVM heap memory</Typography>
                 <MetricsLineChart
+                  timestamps={timestamps}
                   height={200}
                   valueFormatter={formatBytes}
                   series={[
@@ -426,6 +583,7 @@ MOCKSERVER_METRICS_ENABLED=true`}
                 </Box>
                 <Box sx={{ mt: 1 }}>
                   <MetricsLineChart
+                    timestamps={timestamps}
                     height={110}
                     series={[{ data: gaugeSeries(history, 'jvm_threads_current'), label: 'threads' }]}
                   />

@@ -10,6 +10,8 @@ public class Delay extends ObjectWithReflectiveEqualsHashCodeToString {
     private final TimeUnit timeUnit;
     private final long value;
     private final DelayDistribution distribution;
+    private final String template;
+    private final HttpTemplate.TemplateType templateType;
 
     public static Delay milliseconds(long value) {
         return new Delay(TimeUnit.MILLISECONDS, value);
@@ -39,16 +41,33 @@ public class Delay extends ObjectWithReflectiveEqualsHashCodeToString {
         return new Delay(timeUnit, 0, DelayDistribution.gaussian(mean, stdDev));
     }
 
+    /**
+     * Creates an opt-in delay whose duration in milliseconds is computed by rendering the supplied
+     * template against the incoming request (the same request context exposed to response templates,
+     * e.g. {@code request.body}, {@code request.headers}). The rendered output is parsed as a
+     * millisecond value, so e.g. larger request payloads can respond more slowly. When the template
+     * renders to a non-numeric or blank value the delay falls back to the static {@code value}/{@code timeUnit}
+     * pair (which defaults to zero). Only {@link HttpTemplate.TemplateType#VELOCITY} and
+     * {@link HttpTemplate.TemplateType#MUSTACHE} are supported.
+     */
+    public static Delay template(HttpTemplate.TemplateType templateType, String template) {
+        return new Delay(TimeUnit.MILLISECONDS, 0, null, template, templateType);
+    }
+
     public Delay(TimeUnit timeUnit, long value) {
-        this.timeUnit = timeUnit;
-        this.value = value;
-        this.distribution = null;
+        this(timeUnit, value, null, null, null);
     }
 
     public Delay(TimeUnit timeUnit, long value, DelayDistribution distribution) {
+        this(timeUnit, value, distribution, null, null);
+    }
+
+    public Delay(TimeUnit timeUnit, long value, DelayDistribution distribution, String template, HttpTemplate.TemplateType templateType) {
         this.timeUnit = timeUnit;
         this.value = value;
         this.distribution = distribution;
+        this.template = template;
+        this.templateType = templateType;
     }
 
     public TimeUnit getTimeUnit() {
@@ -61,6 +80,22 @@ public class Delay extends ObjectWithReflectiveEqualsHashCodeToString {
 
     public DelayDistribution getDistribution() {
         return distribution;
+    }
+
+    public String getTemplate() {
+        return template;
+    }
+
+    public HttpTemplate.TemplateType getTemplateType() {
+        return templateType;
+    }
+
+    /**
+     * @return {@code true} when this delay computes its duration from a request template
+     * (see {@link #template(HttpTemplate.TemplateType, String)}).
+     */
+    public boolean hasTemplate() {
+        return template != null && templateType != null;
     }
 
     public long sampleValueMillis() {

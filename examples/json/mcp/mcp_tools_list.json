@@ -1,0 +1,14 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/mcp",
+    "body": {
+      "type": "JSON_RPC",
+      "method": "tools/list"
+    }
+  },
+  "httpResponseTemplate": {
+    "templateType": "VELOCITY",
+    "template": "{\"statusCode\": 200, \"headers\": [{\"name\": \"Content-Type\", \"values\": [\"application/json\"]}], \"body\": {\"jsonrpc\": \"2.0\", \"result\": {\"tools\": [{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city\", \"inputSchema\": {\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}}]}, \"id\": $!{request.jsonRpcRawId}}}"
+  }
+}

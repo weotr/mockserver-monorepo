@@ -14,6 +14,61 @@ sitemap:
 
 <p>MockServer's <strong>AsyncAPI broker mocking</strong> lets you drive Kafka and MQTT brokers with realistic example messages, all derived directly from an <a target="_blank" href="https://www.asyncapi.com/" rel="noopener noreferrer">AsyncAPI</a> 2.x or 3.x specification. MockServer can also <strong>subscribe</strong> to broker channels to record incoming messages for verification &mdash; mirroring how HTTP requests are recorded.</p>
 
+<a id="asyncapi_quickstart" class="anchor" href="#asyncapi_quickstart">&nbsp;</a>
+
+<h2>See it in action</h2>
+
+<p>The fastest way to try AsyncAPI mocking: supply a spec and a Kafka bootstrap address and MockServer publishes example messages immediately.</p>
+
+<ol>
+    <li><strong>Start Kafka</strong> (for example with Docker Compose — a minimal single-node Kafka is sufficient).</li>
+    <li><strong>Load your AsyncAPI spec</strong> and tell MockServer to publish example messages on load and record everything that arrives on each channel:</li>
+</ol>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/asyncapi \
+  -H "Content-Type: application/json" \
+  -d '{
+    "spec": {
+      "asyncapi": "2.6.0",
+      "info": { "title": "Orders API", "version": "1.0.0" },
+      "channels": {
+        "orders": {
+          "publish": {
+            "message": {
+              "payload": {
+                "type": "object",
+                "properties": {
+                  "orderId": { "type": "integer" },
+                  "status": { "type": "string", "enum": ["pending", "shipped"] }
+                },
+                "required": ["orderId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "brokerConfig": {
+      "kafkaBootstrapServers": "localhost:9092",
+      "publishOnLoad": true,
+      "consume": true
+    }
+  }'</code></pre>
+
+<ol start="3">
+    <li><strong>Verify a message was published</strong> to the <span class="inline_code">orders</span> channel:</li>
+</ol>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/asyncapi/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channel": "orders",
+    "count": { "atLeast": 1 }
+  }'
+# 202 Accepted = verification passed</code></pre>
+
+<p>See the AsyncAPI examples in the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/bruno/asyncapi" rel="noopener noreferrer">examples/bruno/asyncapi</a> folder. The full REST API reference, schema validation details, and MQTT configuration follow below.</p>
+
 <a id="asyncapi_how_it_works" class="anchor" href="#asyncapi_how_it_works">&nbsp;</a>
 
 <h2>How it works</h2>
@@ -73,7 +128,7 @@ sitemap:
         <tr><td><span class="inline_code">kafkaBootstrapServers</span></td><td>string</td><td>null</td><td>Kafka bootstrap servers (e.g. <span class="inline_code">localhost:9092</span>)</td></tr>
         <tr><td><span class="inline_code">kafkaGroupId</span></td><td>string</td><td><span class="inline_code">mockserver-async-consumer</span></td><td>Consumer group ID for Kafka subscribers</td></tr>
         <tr><td><span class="inline_code">mqttBrokerUrl</span></td><td>string</td><td>null</td><td>MQTT broker URL (e.g. <span class="inline_code">tcp://localhost:1883</span>)</td></tr>
-        <tr><td><span class="inline_code">mqttClientId</span></td><td>string</td><td>auto-generated</td><td>MQTT client ID prefix</td></tr>
+        <tr><td><span class="inline_code">mqttClientId</span></td><td>string</td><td><span class="inline_code">mockserver-mqtt-pub</span> / <span class="inline_code">mockserver-mqtt-sub</span></td><td>MQTT client ID prefix. When set, <span class="inline_code">-pub</span> and <span class="inline_code">-sub</span> suffixes are appended for the publisher and subscriber connections respectively. When unset, the defaults <span class="inline_code">mockserver-mqtt-pub</span> (publisher) and <span class="inline_code">mockserver-mqtt-sub</span> (subscriber) are used.</td></tr>
         <tr><td><span class="inline_code">mqttQos</span></td><td>int</td><td>1</td><td>MQTT QoS level (0, 1, or 2)</td></tr>
         <tr><td><span class="inline_code">publishOnLoad</span></td><td>boolean</td><td>true</td><td>Publish example messages immediately when spec is loaded</td></tr>
         <tr><td><span class="inline_code">publishIntervalMillis</span></td><td>long</td><td>0 (disabled)</td><td>Publish examples periodically at this interval</td></tr>
@@ -347,7 +402,7 @@ client.verifyAsyncMessage("{\"channel\":\"orders\", \"payloadJsonPath\":\"user.n
 <h2>Not yet supported</h2>
 
 <ul>
-    <li><strong>Advanced AsyncAPI bindings</strong> &mdash; channel-specific binding configurations (e.g. Kafka partition assignment, MQTT retain flag) are not parsed or applied</li>
+    <li><strong>Advanced AsyncAPI bindings</strong> &mdash; some channel-specific binding configurations are not yet supported (e.g. Kafka partition assignment, Kafka topic-config bindings). Note: MQTT QoS, MQTT retain, and Kafka message key bindings <em>are</em> parsed and applied &mdash; see the <a href="/mock_server/asyncapi_messaging.html#asyncapi_also_supported">Also supported</a> section below</li>
     <li><strong>Security schemes</strong> &mdash; security scheme definitions declared in the AsyncAPI spec document are not auto-applied to broker connections. Broker security itself <em>is</em> supported: configure it explicitly via the <span class="inline_code">kafkaSecurity</span> and <span class="inline_code">mqttSecurity</span> broker-configuration options above (SASL, TLS truststore/keystore, username/password)</li>
 </ul>
 

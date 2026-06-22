@@ -18,7 +18,7 @@ buildkite-agents/"]
 Suspender"]
         EC2["EC2 c5/m5 instances
 0–10 build agents
-20% on-demand / 80% spot"]
+60% on-demand / 40% spot"]
         EC2_T["EC2 t3 instances
 0–4 trigger agents
 100% spot, 4 agents/instance"]
@@ -124,12 +124,12 @@ default · trigger · release · perf"]
             subgraph "Public Subnet eu-west-2a — 10.0.1.0/24"
                 EC2_1["EC2 c5/m5
 Buildkite Agent
-20% on-demand / 80% spot"]
+60% on-demand / 40% spot"]
             end
             subgraph "Public Subnet eu-west-2b — 10.0.2.0/24"
                 EC2_2["EC2 c5/m5
 Buildkite Agent
-20% on-demand / 80% spot"]
+60% on-demand / 40% spot"]
             end
             VPCE["VPC Endpoints
 SSM · SSM Messages · EC2 Messages"]
@@ -173,7 +173,7 @@ rate 1 min"]
 
 | Resource | Details |
 |----------|---------|
-| ASG `default` | Min 0, Max 10, 20% on-demand / 80% Spot, diversified instance types (c5, c5a, m5), on-demand base capacity 1, 1 agent/instance, AZRebalance suspended |
+| ASG `default` | Min 0, Max 10, 60% on-demand / 40% Spot, diversified instance types (c5, c5a, m5), on-demand base capacity 1, 1 agent/instance, AZRebalance suspended |
 | ASG `trigger` | Min 0, Max 4, 100% Spot, t3.small/t3a.small/t3.micro, 4 agents/instance — cheap instances for trigger polling jobs |
 | ASG `release` | Min 0, Max 2, 100% on-demand, same instance types as default, 1 agent/instance |
 | ASG `perf` | Min 0, Max 1, 100% on-demand, c5.4xlarge, on-demand base 0 — scale-to-zero, never more than one concurrent perf run |
@@ -288,7 +288,7 @@ Policies are scoped per queue — each agent role receives only the secrets and 
 - **Minimum:** 0 instances (scales to zero when idle)
 - **Maximum:** 10 instances, 1 agent per instance
 - **Instance types:** Diversified (c5.2xlarge, c5a.2xlarge, m5.2xlarge)
-- **Capacity mix:** 20% on-demand, 80% Spot, with on-demand base capacity of 1
+- **Capacity mix:** 60% on-demand, 40% Spot, with on-demand base capacity of 1 (raised from 20% on-demand after Spot reclamations were killing long Maven builds; see CI/CD doc)
 - **Build cost:** ~$0.03–0.10/hr per agent (mixed on-demand/spot pricing)
 
 #### Trigger Queue (polling)
@@ -371,7 +371,7 @@ terraform/
 | Terraform module | `buildkite/elastic-ci-stack-for-aws/buildkite` ~0.7.x |
 | Region | `eu-west-2` |
 | Instance types | Diversified (c5, c5a, m5 families) |
-| Capacity | 20% on-demand / 80% Spot, base capacity 1 on-demand |
+| Capacity | 60% on-demand / 40% Spot, base capacity 1 on-demand |
 | Scaling | 0–10 instances |
 | State backend | S3 in `eu-west-2` (native lockfile) |
 | Monitoring | CloudWatch alarms, SNS email alerts, dashboard |
@@ -393,7 +393,7 @@ The bootstrap (`terraform/buildkite-agents/bootstrap/`) uses `import` blocks, ma
 | `instance_types` | `string` | `c5.2xlarge` | EC2 instance types for default/release queues |
 | `min_size` | `number` | `0` | Minimum default queue instances (0 = scale to zero) |
 | `max_size` | `number` | `10` | Maximum default queue instances |
-| `on_demand_percentage` | `number` | `0` | % on-demand vs spot for default queue (terraform.tfvars overrides to 20) |
+| `on_demand_percentage` | `number` | `0` | % on-demand vs spot for default queue (terraform.tfvars overrides to 60) |
 | `trigger_instance_types` | `string` | `t3.small` | EC2 instance types for trigger queue (cheap polling) |
 | `trigger_min_size` | `number` | `0` | Minimum trigger queue instances |
 | `trigger_max_size` | `number` | `4` | Maximum trigger queue instances |
@@ -471,6 +471,8 @@ The website account runs its own AWS Organization with a separate IAM Identity C
 
 19 distributions — one per S3 bucket, each mapped to a domain alias. The main site serves `mock-server.com`, with versioned subdomains (`4-0` through `5-14`) for archived documentation. **Managed by `terraform/website/sites.tf`** (`aws_cloudfront_distribution.site` per version + `aws_cloudfront_distribution.main` for the apex).
 
+A separate distribution serves `downloads.mock-server.com` from the private `aws-binaries-mockserver` bucket (OAC, reusing the shared WAF web ACL, response-headers policy, and access-logs bucket). **Managed by `terraform/website/binaries.tf`.** It hosts the JVM-less client binary bundles that the Go/.NET/Rust/Ruby/Python/Node launchers download for **`-SNAPSHOT`** versions; released versions are downloaded from GitHub Release assets instead (see [ci-cd.md](ci-cd.md)).
+
 All distributions authenticate to S3 via Origin Access Control (OAC) only; the legacy Origin Access Identity (OAI) grants were removed from the bucket policies after the OAC cutover was verified. S3 buckets are not publicly accessible — only CloudFront can read objects.
 
 Main distribution config: `PriceClass_All`, HTTP/2+3, TLSv1.2_2021 minimum, redirect HTTP→HTTPS, custom 403→404 mapping to `/error403.html`. The private (OAC) bucket returns 403 for any missing object; CloudFront serves the friendly error page but preserves a real **404** status. `error403.html` still `meta refresh`es human visitors to the homepage, so deep-link/moved-URL refreshes land somewhere useful, while search-engine crawlers receive the 404 and drop deleted URLs (old apidocs, retired path-based copies) instead of treating thousands of soft-404s as duplicate indexable pages. The main distribution `depends_on` the per-version distributions so promoting a new `latest_version` doesn't trip the CloudFront "CNAME already associated" error.
@@ -482,8 +484,11 @@ A shared CloudFront response headers policy (`mockserver-security-headers`) is a
 The build-account Buildkite agents push releases into the website account by assuming `mockserver-release-website` via `sts:AssumeRole`. **Managed by `terraform/website/cross-account-role.tf`.** Permissions are scoped:
 
 - S3 object and bucket verbs (`GetObject`, `PutObject`, `DeleteObject`, `ListBucket`, etc.) on `arn:aws:s3:::aws-website-mockserver-*` only — ACL and website-configuration verbs are removed (buckets use OAC + `BucketOwnerEnforced`)
+- S3 bucket verbs on `arn:aws:s3:::aws-binaries-mockserver` (the `downloads.mock-server.com` bundle host, `binaries.tf`) — adds `s3:PutBucketVersioning` + `s3:PutEncryptionConfiguration` (the bucket enables versioning + SSE) and `s3:ListBucket` (backs the provider's `HeadBucket` probe; without it the refresh 403s and the provider misreads it as a deleted bucket, planning a destructive recreate)
 - `cloudfront:*` (account-wide — CloudFront lacks resource-level permissions for distribution-list/create)
 - `route53:ChangeResourceRecordSets` on the `mock-server.com` hosted zone only
+
+> **Why the release role needs the binaries bucket.** `versioned-site.sh` runs `terraform apply` over the **whole** `terraform/website/` state, so Terraform refreshes (and may create) every resource in it — including `binaries.tf`. Any resource added to that module must have a matching grant in `cross-account-role.tf` or the release's Versioned Site step fails with `AccessDenied`. The `aws-binaries-mockserver` bucket is only *written* by the SNAPSHOT bundle CI step (build-account agent, cross-account write); **released versions ship as GitHub Release assets**, not to S3. The release role manages it purely because its IaC lives in this release-applied state. This gap is exactly what failed release build #49 (binaries bucket added to the state without updating the release role).
 
 The trust policy optionally requires `sts:ExternalId` when `var.role_external_id` is non-empty (inactive until wired — default `""`). When set, the matching value must be supplied at apply time via `TF_VAR_role_external_id` from Secrets Manager; see `terraform/website/README.md` for the wiring procedure.
 

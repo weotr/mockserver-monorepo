@@ -47,6 +47,7 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("jsonPath".toLowerCase(), Body.Type.JSON_PATH);
         fieldNameToType.put("parameters".toLowerCase(), Body.Type.PARAMETERS);
         fieldNameToType.put("regex".toLowerCase(), Body.Type.REGEX);
+        fieldNameToType.put("fuzzy".toLowerCase(), Body.Type.FUZZY);
         fieldNameToType.put("string".toLowerCase(), Body.Type.STRING);
         fieldNameToType.put("xml".toLowerCase(), Body.Type.XML);
         fieldNameToType.put("xmlSchema".toLowerCase(), Body.Type.XML_SCHEMA);
@@ -54,6 +55,8 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
         fieldNameToType.put("jsonRpc".toLowerCase(), Body.Type.JSON_RPC);
         fieldNameToType.put("graphql".toLowerCase(), Body.Type.GRAPHQL);
         fieldNameToType.put("moduleName".toLowerCase(), Body.Type.WASM);
+        fieldNameToType.put("filenames".toLowerCase(), Body.Type.MULTIPART);
+        fieldNameToType.put("partContentTypes".toLowerCase(), Body.Type.MULTIPART);
     }
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(StrictBodyDTODeserializer.class);
@@ -74,9 +77,14 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
         MediaType contentType = null;
         Charset charset = null;
         boolean subString = false;
+        double fuzzyThreshold = FuzzyBody.DEFAULT_THRESHOLD;
+        boolean fuzzyIgnoreCase = FuzzyBody.DEFAULT_IGNORE_CASE;
         MatchType matchType = JsonBody.DEFAULT_MATCH_TYPE;
         boolean matchNumbersAsStrings = false;
         Parameters parameters = null;
+        Parameters multipartFields = null;
+        Parameters multipartFilenames = null;
+        Parameters multipartPartContentTypes = null;
         Map<String, String> namespacePrefixes = null;
         String jsonRpcMethod = null;
         String jsonRpcParamsSchema = null;
@@ -163,7 +171,7 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 .collect(java.util.stream.Collectors.toList());
                         }
                     }
-                    if (containsIgnoreCase(key, "string", "regex", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "moduleName") && type != Body.Type.PARAMETERS) {
+                    if (containsIgnoreCase(key, "string", "regex", "fuzzy", "json", "jsonSchema", "jsonPath", "xml", "xmlSchema", "xpath", "base64Bytes", "moduleName") && type != Body.Type.PARAMETERS) {
                         String fieldName = String.valueOf(entry.getKey()).toLowerCase();
                         if (fieldNameToType.containsKey(fieldName)) {
                             type = fieldNameToType.get(fieldName);
@@ -230,6 +238,23 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                                 );
                             }
                         }
+                    }
+                    if (key.equalsIgnoreCase("threshold")) {
+                        try {
+                            fuzzyThreshold = Double.parseDouble(String.valueOf(entry.getValue()));
+                        } catch (NumberFormatException nfe) {
+                            if (MockServerLogger.isEnabled(DEBUG)) {
+                                MOCK_SERVER_LOGGER.logEvent(
+                                    new LogEntry()
+                                        .setLogLevel(DEBUG)
+                                        .setMessageFormat("ignoring invalid fuzzy threshold with value \"" + entry.getValue() + "\"")
+                                        .setThrowable(nfe)
+                                );
+                            }
+                        }
+                    }
+                    if (key.equalsIgnoreCase("ignoreCase")) {
+                        fuzzyIgnoreCase = Boolean.parseBoolean(String.valueOf(entry.getValue()));
                     }
                     if (key.equalsIgnoreCase("contentType")) {
                         try {
@@ -331,6 +356,36 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         }
                         parameters = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
                     }
+                    if (key.equalsIgnoreCase("fields") && !(entry.getValue() instanceof java.util.List)) {
+                        if (objectMapper == null) {
+                            objectMapper = ObjectMapperFactory.createObjectMapper();
+                        }
+                        if (objectWriter == null) {
+                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+                        }
+                        type = Body.Type.MULTIPART;
+                        multipartFields = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
+                    }
+                    if (key.equalsIgnoreCase("filenames")) {
+                        if (objectMapper == null) {
+                            objectMapper = ObjectMapperFactory.createObjectMapper();
+                        }
+                        if (objectWriter == null) {
+                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+                        }
+                        type = Body.Type.MULTIPART;
+                        multipartFilenames = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
+                    }
+                    if (key.equalsIgnoreCase("partContentTypes")) {
+                        if (objectMapper == null) {
+                            objectMapper = ObjectMapperFactory.createObjectMapper();
+                        }
+                        if (objectWriter == null) {
+                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+                        }
+                        type = Body.Type.MULTIPART;
+                        multipartPartContentTypes = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
+                    }
                     if (key.equalsIgnoreCase("namespacePrefixes")) {
                         if (objectMapper == null) {
                             objectMapper = ObjectMapperFactory.createObjectMapper();
@@ -373,8 +428,14 @@ public class StrictBodyDTODeserializer extends StdDeserializer<BodyDTO> {
                     case PARAMETERS:
                         result = new ParameterBodyDTO(new ParameterBody(parameters), not);
                         break;
+                    case MULTIPART:
+                        result = new MultipartBodyDTO(new MultipartBody(multipartFields, multipartFilenames, multipartPartContentTypes), not);
+                        break;
                     case REGEX:
                         result = new RegexBodyDTO(new RegexBody(valueJsonValue), not);
+                        break;
+                    case FUZZY:
+                        result = new FuzzyBodyDTO(new FuzzyBody(valueJsonValue, fuzzyThreshold, fuzzyIgnoreCase), not);
                         break;
                     case STRING:
                         if (contentType != null && isNotBlank(contentType.toString())) {

@@ -121,13 +121,6 @@ locals {
       emoji       = ":docker:"
       trigger     = "none"
     }
-    "docker-push-release" = {
-      name        = "MockServer Release Image"
-      description = "Build and push multi-arch release image to Docker Hub"
-      file        = ".buildkite/docker-push-release.yml"
-      emoji       = ":docker:"
-      trigger     = "none"
-    }
     "cleanup" = {
       name        = "MockServer Cleanup"
       description = "Cancel and delete Buildkite builds for closed/merged PRs"
@@ -227,8 +220,18 @@ resource "buildkite_pipeline" "pipeline" {
   # token and only run jobs from pipelines in this cluster.
   cluster_id = data.buildkite_cluster.default.id
 
-  cancel_intermediate_builds = true
-  skip_intermediate_builds   = true
+  # Cancel superseded in-progress builds on feature/PR branches (saves agent VMs
+  # during rapid iteration), but NEVER on master: a master build that is canceled
+  # mid-run reports as a misleading failure on the triggering pipeline, and the
+  # commit goes untested. Long pipelines (container-tests ~20m, performance-test)
+  # were the worst hit because, without this filter, every fresh master commit
+  # canceled the previous still-running build before it could report. master builds
+  # now always run to completion and report true pass/fail. Skipping still applies
+  # to queued (not-yet-started) builds on all branches — those report as "skipped"
+  # (neutral), not red, so they are left unfiltered.
+  cancel_intermediate_builds               = true
+  cancel_intermediate_builds_branch_filter = "!master"
+  skip_intermediate_builds                 = true
 
   steps = "steps:\n  - label: \":pipeline:\"\n    command: \"buildkite-agent pipeline upload ${each.value.file}\"\n"
 

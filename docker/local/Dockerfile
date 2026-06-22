@@ -11,6 +11,15 @@ FROM gcr.io/distroless/java17:nonroot@sha256:81d09cac6ec47f6a13c61a941557f950792
 # maintainer details
 MAINTAINER James Bloom "jamesdbloom@gmail.com"
 
+# MCP registry ownership annotation — proves this image backs the com.mock-server/mockserver
+# entry on the official MCP registry (https://registry.modelcontextprotocol.io). REQUIRED for the
+# server.json OCI package publish (scripts/release/components/mcp.sh): the registry rejects the
+# publish with a 400 "missing required annotation" if the published image lacks this label. This is
+# the Dockerfile the release actually builds + pushes as mockserver/mockserver:<ver> (docker/local
+# is the buildx context in docker.sh), so the label MUST live here — not only in docker/Dockerfile.
+# The namespace is DNS-verified against mock-server.com. See docs/operations/mcp-registry-publishing.md.
+LABEL io.modelcontextprotocol.server.name="com.mock-server/mockserver"
+
 # expose ports.
 EXPOSE 1080
 

@@ -2,9 +2,11 @@ package org.mockserver.serialization.java;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
+import org.apache.commons.text.StringEscapeUtils;
 import org.mockserver.model.Cookies;
 import org.mockserver.model.Headers;
 import org.mockserver.model.HttpResponseModifier;
+import org.mockserver.model.HttpResponseModifierCondition;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 import org.mockserver.serialization.Base64Converter;
 
@@ -51,9 +53,50 @@ public class HttpResponseModifierToJavaSerializer implements ToJavaSerializer<Ht
                 outputList(numberOfSpacesToIndent, output, response.getCookies().getRemove());
                 appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(")");
             }
+            if (response.getCondition() != null) {
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withCondition(");
+                outputCondition(numberOfSpacesToIndent + 2, output, response.getCondition());
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(")");
+            }
+            if (response.getModifiers() != null && !response.getModifiers().isEmpty()) {
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withModifiers(Arrays.asList(");
+                boolean first = true;
+                for (HttpResponseModifier modifier : response.getModifiers()) {
+                    if (!first) {
+                        output.append(",");
+                    }
+                    output.append(serialize(numberOfSpacesToIndent + 2, modifier));
+                    first = false;
+                }
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append("))");
+            }
+            if (response.getJsonPatch() != null) {
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output)
+                    .append(".withJsonPatch(\"").append(StringEscapeUtils.escapeJava(response.getJsonPatch().toString())).append("\")");
+            }
+            if (response.getJsonMergePatch() != null) {
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output)
+                    .append(".withJsonMergePatch(\"").append(StringEscapeUtils.escapeJava(response.getJsonMergePatch().toString())).append("\")");
+            }
         }
 
         return output.toString();
+    }
+
+    private void outputCondition(int numberOfSpacesToIndent, StringBuffer output, HttpResponseModifierCondition condition) {
+        appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append("responseModifierCondition()");
+        if (condition.getStatusCode() != null) {
+            appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withStatusCode(").append(condition.getStatusCode()).append(")");
+        }
+        if (condition.getStatusCodeRange() != null) {
+            appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withStatusCodeRange(\"").append(condition.getStatusCodeRange()).append("\")");
+        }
+        if (condition.getResponseHasHeader() != null) {
+            appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withResponseHasHeader(\"").append(condition.getResponseHasHeader()).append("\")");
+        }
+        if (condition.getRequestHasHeader() != null) {
+            appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withRequestHasHeader(\"").append(condition.getRequestHasHeader()).append("\")");
+        }
     }
 
     private void outputHeaders(int numberOfSpacesToIndent, StringBuffer output, Headers headers) {

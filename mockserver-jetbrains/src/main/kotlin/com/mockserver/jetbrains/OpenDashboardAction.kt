@@ -5,16 +5,12 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 
 /**
- * Action that opens the MockServer dashboard in the user's default browser.
- * Defaults to http://localhost:1080/mockserver/dashboard.
+ * Action that opens the MockServer dashboard in the user's default browser at
+ * the configured port (see [MockServerSettings]).
  */
 class OpenDashboardAction : AnAction() {
 
-    companion object {
-        const val DEFAULT_DASHBOARD_URL = "http://localhost:1080/mockserver/dashboard"
-    }
-
     override fun actionPerformed(e: AnActionEvent) {
-        BrowserUtil.browse(DEFAULT_DASHBOARD_URL)
+        BrowserUtil.browse(MockServerSettings.getInstance().dashboardUrl())
     }
 }

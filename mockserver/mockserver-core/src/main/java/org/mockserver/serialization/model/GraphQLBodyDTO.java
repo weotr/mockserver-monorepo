@@ -13,6 +13,7 @@ public class GraphQLBodyDTO extends BodyDTO {
     private final String variablesSchema;
     private final SelectionSetMatchType selectionSetMatchType;
     private final List<String> fields;
+    private final String schema;
 
     public GraphQLBodyDTO(GraphQLBody graphQLBody) {
         this(graphQLBody, null);
@@ -25,6 +26,7 @@ public class GraphQLBodyDTO extends BodyDTO {
         this.variablesSchema = graphQLBody.getVariablesSchema();
         this.selectionSetMatchType = graphQLBody.getSelectionSetMatchType();
         this.fields = graphQLBody.getFields();
+        this.schema = graphQLBody.getSchema();
         withOptional(graphQLBody.getOptional());
     }
 
@@ -48,6 +50,10 @@ public class GraphQLBodyDTO extends BodyDTO {
         return fields;
     }
 
+    public String getSchema() {
+        return schema;
+    }
+
     public GraphQLBody buildObject() {
         GraphQLBody body = new GraphQLBody(getQuery(), getOperationName(), getVariablesSchema());
         if (selectionSetMatchType != null) {
@@ -55,6 +61,9 @@ public class GraphQLBodyDTO extends BodyDTO {
         }
         if (fields != null) {
             body.withFields(fields);
+        }
+        if (schema != null) {
+            body.withSchema(schema);
         }
         body.withOptional(getOptional());
         return body;

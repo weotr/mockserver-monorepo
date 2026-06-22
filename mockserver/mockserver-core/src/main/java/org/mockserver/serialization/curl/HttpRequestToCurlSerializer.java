@@ -53,7 +53,7 @@ public class HttpRequestToCurlSerializer {
                 }
                 for (Header header : request.getHeaderList()) {
                     for (NottableString headerValue : header.getValues()) {
-                        curlString.append(" -H '").append(header.getName().getValue()).append(": ").append(headerValue.getValue()).append("'");
+                        curlString.append(" -H ").append(singleQuote(header.getName().getValue() + ": " + headerValue.getValue()));
                         if (header.getName().getValue().toLowerCase().contains("Accept-Encoding".toLowerCase())) {
                             if (headerValue.getValue().toLowerCase().contains("gzip")
                                 || headerValue.getValue().toLowerCase().contains("deflate")
@@ -66,7 +66,7 @@ public class HttpRequestToCurlSerializer {
                 }
                 curlString.append(getCookieHeader(request));
                 if (isNotBlank(request.getBodyAsString())) {
-                    curlString.append(" --data '").append(request.getBodyAsString().replace("'", "\\'")).append("'");
+                    curlString.append(" --data ").append(singleQuote(request.getBodyAsString()));
                 }
             } else {
                 curlString.append("no host header or remote address specified");
@@ -105,9 +105,23 @@ public class HttpRequestToCurlSerializer {
             cookies.add(new DefaultCookie(cookie.getName().getValue(), cookie.getValue().getValue()));
         }
         if (cookies.size() > 0) {
-            return " -H '" + COOKIE + ": " + ClientCookieEncoder.LAX.encode(cookies) + "'";
+            return " -H " + singleQuote(COOKIE + ": " + ClientCookieEncoder.LAX.encode(cookies));
         } else {
             return "";
         }
+    }
+
+    /**
+     * Wrap a value so it is safe to embed inside a shell command as a single-quoted string.
+     * Uses the standard POSIX idiom: terminate the quoted string, emit an escaped literal
+     * single quote ({@code '\''}) for each embedded {@code '}, then resume the quoted string.
+     * Everything else (including {@code "}, {@code \}, {@code `} and {@code $}) is literal
+     * inside single quotes, so no further escaping is required.
+     */
+    private static String singleQuote(String value) {
+        if (value == null) {
+            value = "";
+        }
+        return "'" + value.replace("'", "'\\''") + "'";
     }
 }

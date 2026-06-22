@@ -294,6 +294,11 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
         if (!isHttp2Enabled(ctx.channel())) {
             http2Enabled(ctx.channel());
 
+            // cleartext h2c has no ALPN, so record HTTP/2 as the negotiated protocol on the channel
+            // from the trusted server-side preface detection; this lets the request mapper recognise
+            // genuine h2c (and capture the HTTP/2 stream id) without trusting a client-supplied header.
+            SniHandler.setNegotiatedApplicationProtocol(ctx.channel(), HTTP_2);
+
             ChannelPipeline pipeline = ctx.pipeline();
 
             if (TcpChaosRegistry.getInstance().activeCount() > 0) {

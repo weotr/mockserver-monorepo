@@ -1,7 +1,7 @@
 ---
 title: Mock Drift Detection
 shortTitle: Drift Detection
-description: Detect when real upstream services have drifted from your mock stubs — status code mismatches, added or removed JSON fields, type and header changes.
+description: Detect when real upstream services have drifted from your mock stubs — status code mismatches, added or removed JSON fields, type and header changes. Compare two sets of expectations offline with the baseline compare endpoint.
 layout: page
 pageOrder: 5
 section: 'Verify & Test'
@@ -9,8 +9,8 @@ subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2026-05-31T08:00:00+00:00
-keywords: mock drift detection, stub validation, proxy mode, schema drift, contract testing, response comparison, api evolution
+  lastmod: 2026-06-17T00:00:00+00:00
+keywords: mock drift detection, stub validation, proxy mode, schema drift, contract testing, response comparison, api evolution, baseline compare
 ---
 
 <h2>What is mock drift?</h2>
@@ -140,6 +140,83 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 <p>When the p95 response time for any expectation exceeds 500ms, a <code>PERFORMANCE</code> drift record is emitted. MockServer uses a sliding window of the last 100 response time observations per expectation to calculate percentiles.</p>
 
 <p>Set to <code>0</code> (the default) to disable performance drift detection.</p>
+
+<h2 id="baseline-compare">Baseline Traffic Comparison</h2>
+
+<p>The <code>GET /mockserver/drift</code> endpoint detects drift from live forwarded traffic at runtime. For offline CI use — comparing a committed snapshot of expectations against the current set without running a proxy — use the baseline compare endpoint.</p>
+
+<p>Send a <code>PUT</code> request to <code>/mockserver/baseline/compare</code> with a JSON body containing a <code>baseline</code> array of expectations. MockServer compares the baseline against a <code>current</code> array (if supplied) or against its own live active expectations (if <code>current</code> is omitted). It returns HTTP 200 with a structured drift report.</p>
+
+<h3>Request body</h3>
+
+<pre><code>{
+  "baseline": [ &lt;expectations&gt; ],
+  "current":  [ &lt;expectations&gt; ]
+}</code></pre>
+
+<p>The <code>current</code> field is optional. When omitted, MockServer uses its live active expectations — useful for checking whether newly recorded traffic matches a committed baseline.</p>
+
+<h3>Response body</h3>
+
+<pre><code>{
+  "hasDrift": false,
+  "added":   [],
+  "removed": [],
+  "changed": []
+}</code></pre>
+
+<table class="table table-striped">
+  <thead>
+    <tr><th>Field</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>hasDrift</code></td><td><code>true</code> if any interaction was added, removed, or changed; <code>false</code> when the sets are structurally identical</td></tr>
+    <tr><td><code>added</code></td><td>Interactions present in <code>current</code> but not in <code>baseline</code> (new traffic shapes)</td></tr>
+    <tr><td><code>removed</code></td><td>Interactions present in <code>baseline</code> but not in <code>current</code> (dropped endpoints)</td></tr>
+    <tr><td><code>changed</code></td><td>Interactions present in both whose request fields or response structure differ</td></tr>
+  </tbody>
+</table>
+
+<p>Each entry in <code>added</code> and <code>removed</code> contains only the <code>key</code> (matching key, see below). Each entry in <code>changed</code> also carries <code>requestDiffs</code> and <code>responseDiffs</code> arrays of field-level differences, each with a <code>field</code>, <code>diffType</code> (<code>ADDED</code>, <code>REMOVED</code>, or <code>CHANGED</code>), and <code>expectedValue</code>/<code>actualValue</code>.</p>
+
+<h3>Matching key</h3>
+
+<p>Interactions are correlated across the two sets by a stable key of <code>METHOD normalized-path</code>: method is upper-cased, and a single trailing slash is stripped from the path (but <code>/</code> is preserved). For example, <code>GET /api/users/</code> and <code>GET /api/users</code> share the same key <code>GET /api/users</code>.</p>
+
+<h3>What counts as drift</h3>
+
+<p>The comparison is <strong>value-insensitive for JSON response bodies</strong>: only structural differences are reported. A different value at the same field with the same JSON type is NOT drift. The following ARE drift:</p>
+
+<ul>
+  <li>A new or removed JSON field in the response body</li>
+  <li>A JSON type change at any field (e.g. <code>string</code> became <code>number</code>, <code>object</code> became <code>array</code>)</li>
+  <li>A response status code change</li>
+  <li>A header added, removed, or whose value changed</li>
+  <li>A request field change (method, path, headers, query parameters, body)</li>
+</ul>
+
+<p>Non-JSON response bodies fall back to exact-string comparison.</p>
+
+<h3>CI usage pattern</h3>
+
+<p>A typical CI workflow: commit a baseline expectations file alongside your tests. In CI, start MockServer, run your test suite (which populates expectations via recording or explicit setup), then call <code>PUT /mockserver/baseline/compare</code> with the committed baseline as <code>baseline</code> and no <code>current</code> (so MockServer uses its live expectations). If <code>hasDrift</code> is <code>true</code>, fail the build.</p>
+
+<pre><code>curl -s -X PUT "http://localhost:1080/mockserver/baseline/compare" \
+  -H "Content-Type: application/json" \
+  -d "{\"baseline\": $(cat baseline-expectations.json)}" \
+  | python3 -c "import sys,json; r=json.load(sys.stdin); sys.exit(1 if r['hasDrift'] else 0)"</code></pre>
+
+<h3>Response codes</h3>
+
+<table class="table table-striped">
+  <thead>
+    <tr><th>Status</th><th>Meaning</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>200</code></td><td>Comparison completed. Check <code>hasDrift</code> in the body to determine whether traffic shapes match.</td></tr>
+    <tr><td><code>400</code></td><td>Empty body, invalid JSON, or missing <code>baseline</code> field.</td></tr>
+  </tbody>
+</table>
 
 <h2 id="llm-drift">Not the same as LLM cassette drift</h2>
 

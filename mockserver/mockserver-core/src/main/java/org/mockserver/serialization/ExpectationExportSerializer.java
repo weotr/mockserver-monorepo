@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
+import org.mockserver.model.Body;
 import org.mockserver.model.Header;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.LogEventRequestAndResponse;
+import org.mockserver.model.NottableSchemaString;
 import org.mockserver.model.NottableString;
 import org.mockserver.model.Parameter;
 import org.mockserver.model.RequestDefinition;
@@ -18,11 +20,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 /**
  * Exports a list of {@link Expectation}s into third-party tooling formats —
@@ -40,6 +50,18 @@ import java.util.zip.ZipOutputStream;
 public class ExpectationExportSerializer {
 
     private static final String OPENAPI_VERSION = "3.0.3";
+
+    /**
+     * The fixed set of HTTP methods OpenAPI 3.0 permits as path-item operation
+     * keys (lower-case). A recorded {@code CONNECT} (proxy mode) or any
+     * arbitrary/whitespace method is not one of these and must NOT be emitted as
+     * an operation key — doing so produces a schema-invalid document.
+     */
+    private static final Set<String> OPENAPI_METHODS = new HashSet<>(Arrays.asList(
+        "get", "put", "post", "delete", "options", "head", "patch", "trace"));
+
+    /** Matches OpenAPI path-template placeholders, e.g. the {@code {orderId}} in {@code /orders/{orderId}}. */
+    private static final Pattern PATH_TEMPLATE = Pattern.compile("\\{([^/{}]+)}");
     private static final String POSTMAN_SCHEMA =
         "https://schema.getpostman.com/json/collection/v2.1.0/collection.json";
     private static final String COLLECTION_NAME = "MockServer Exported Expectations";
@@ -69,42 +91,96 @@ public class ExpectationExportSerializer {
             info.put("description", COLLECTION_DESCRIPTION);
 
             ObjectNode paths = root.putObject("paths");
+            // Defect 3: operationId must be unique across the whole document.
+            Set<String> emittedOperationIds = new HashSet<>();
             for (Expectation expectation : expectations) {
-                addOpenApiOperation(paths, expectation);
+                addOpenApiOperation(paths, expectation, emittedOperationIds);
             }
             return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (JsonProcessingException e) {
             mockServerLogger.logEvent(new org.mockserver.log.model.LogEntry()
                 .setType(org.mockserver.log.model.LogEntry.LogMessageType.EXCEPTION)
                 .setMessageFormat("exception while serialising expectations as OpenAPI: " + e.getMessage()));
-            return "{}";
+            // Return a minimal but schema-VALID OpenAPI document rather than "{}".
+            return "{\"openapi\":\"" + OPENAPI_VERSION + "\","
+                + "\"info\":{\"title\":\"" + COLLECTION_NAME + "\",\"version\":\"1.0\"},"
+                + "\"paths\":{}}";
         }
     }
 
-    private void addOpenApiOperation(ObjectNode paths, Expectation expectation) {
+    private void addOpenApiOperation(ObjectNode paths, Expectation expectation, Set<String> emittedOperationIds) {
         if (!(expectation.getHttpRequest() instanceof HttpRequest)) {
             return;
         }
         HttpRequest req = (HttpRequest) expectation.getHttpRequest();
-        String path = stringValue(req.getPath(), "/");
-        String method = stringValue(req.getMethod(), "get").toLowerCase();
+
+        // Defect 2: never export the POSITIVE form of a negated path/method
+        // matcher — that would invert the meaning. Schema matchers
+        // (NottableSchemaString) likewise carry no literal path/method string.
+        if (isNegatedOrSchema(req.getPath()) || isNegatedOrSchema(req.getMethod())) {
+            mockServerLogger.logEvent(new org.mockserver.log.model.LogEntry()
+                .setType(org.mockserver.log.model.LogEntry.LogMessageType.INFO)
+                .setMessageFormat("skipping OpenAPI export of expectation " + expectation.getId()
+                    + " because a negated or schema path/method matcher cannot be represented as an OpenAPI operation"));
+            return;
+        }
+
+        // Defect 4: OpenAPI path keys must always start with "/", and an empty
+        // path must normalise to "/".
+        String rawPath = stringValue(req.getPath(), "/");
+        if (rawPath.isEmpty()) {
+            rawPath = "/";
+        }
+        String path = rawPath.startsWith("/") ? rawPath : "/" + rawPath;
+
+        String method = stringValue(req.getMethod(), "get").trim().toLowerCase();
         if (method.isEmpty()) {
             method = "get";
+        }
+        // Defect 2: OpenAPI 3.0 only permits a fixed set of methods as path-item
+        // operation keys. A recorded CONNECT (proxy mode) or an arbitrary/whitespace
+        // method would produce a schema-invalid document, so skip the operation.
+        if (!OPENAPI_METHODS.contains(method)) {
+            mockServerLogger.logEvent(new org.mockserver.log.model.LogEntry()
+                .setType(org.mockserver.log.model.LogEntry.LogMessageType.INFO)
+                .setMessageFormat("skipping OpenAPI export of expectation " + expectation.getId()
+                    + " because HTTP method \"" + stringValue(req.getMethod(), "")
+                    + "\" is not a valid OpenAPI 3.0 operation"));
+            return;
         }
 
         ObjectNode pathItem = paths.has(path)
             ? (ObjectNode) paths.get(path)
             : paths.putObject(path);
+
+        // Defect 3: same path + method must not overwrite — merge responses
+        // into the existing operation instead of replacing it.
+        if (pathItem.has(method)) {
+            ObjectNode existing = (ObjectNode) pathItem.get(method);
+            ObjectNode existingResponses = existing.has("responses")
+                ? (ObjectNode) existing.get("responses")
+                : existing.putObject("responses");
+            addOpenApiResponses(existingResponses, expectation.getHttpResponse());
+            return;
+        }
+
         ObjectNode operation = pathItem.putObject(method);
         operation.put("summary", method.toUpperCase() + " " + path);
-        operation.put("operationId", expectation.getId());
+        // Defect 3: operationId must be unique across the whole document. A
+        // distinct operation that reuses an explicit expectation id is
+        // disambiguated with a deterministic numeric suffix.
+        operation.put("operationId", uniqueOperationId(expectation.getId(), emittedOperationIds));
 
-        // Parameters: query + path + headers
+        // Parameters: query + path + headers. Negated/schema matchers are
+        // omitted rather than exported in their positive form (Defect 2).
         ArrayNode parameters = operation.putArray("parameters");
-        addOpenApiParameters(parameters, req.getQueryStringParameters(), "query");
-        addOpenApiParameters(parameters, req.getPathParameters(), "path");
+        addOpenApiParameters(parameters, req.getQueryStringParameters(), "query", path);
+        Set<String> emittedPathParams = addOpenApiParameters(parameters, req.getPathParameters(), "path", path);
         if (req.getHeaders() != null) {
             for (Header header : req.getHeaders().getEntries()) {
+                if (isNegatedOrSchema(header.getName())) {
+                    continue;
+                }
                 ObjectNode p = parameters.addObject();
                 p.put("name", header.getName().getValue());
                 p.put("in", "header");
@@ -113,49 +189,212 @@ public class ExpectationExportSerializer {
                 schema.put("type", "string");
             }
         }
+        // Defect 1: every {name} placeholder in the path key MUST have a matching
+        // in:path parameter, else the document is schema-invalid. Synthesise one
+        // for any placeholder not already covered by an emitted path parameter.
+        addSyntheticPathParameters(parameters, path, emittedPathParams);
         if (parameters.isEmpty()) {
             operation.remove("parameters");
         }
 
-        // Response: take the first httpResponse on the expectation as the
-        // canonical example. Other action types (forward / template / etc.)
-        // export an empty 200 response since they're dynamic.
+        // Response: take the httpResponse on the expectation as the canonical
+        // example. Other action types (forward / template / etc.) export an
+        // empty 200 response since they're dynamic.
         ObjectNode responses = operation.putObject("responses");
-        HttpResponse response = expectation.getHttpResponse();
+        addOpenApiResponses(responses, expectation.getHttpResponse());
+    }
+
+    private void addOpenApiResponses(ObjectNode responses, HttpResponse response) {
         if (response != null) {
             int code = response.getStatusCode() != null ? response.getStatusCode() : 200;
-            ObjectNode respNode = responses.putObject(String.valueOf(code));
-            respNode.put("description",
-                response.getReasonPhrase() != null ? response.getReasonPhrase() : "OK");
-            String bodyString = response.getBodyAsString();
-            if (bodyString != null && !bodyString.isEmpty()) {
-                ObjectNode content = respNode.putObject("content");
-                ObjectNode mediaTypeNode = content.putObject(detectContentType(bodyString));
-                mediaTypeNode.put("example", bodyString);
+            String codeKey = String.valueOf(code);
+            ObjectNode respNode = responses.has(codeKey)
+                ? (ObjectNode) responses.get(codeKey)
+                : responses.putObject(codeKey);
+            if (!respNode.has("description")) {
+                respNode.put("description",
+                    response.getReasonPhrase() != null ? response.getReasonPhrase() : "OK");
             }
-        } else {
+            addOpenApiBody(respNode, response.getBody(), response.getBodyAsString(),
+                response.getFirstHeader("content-type"));
+        } else if (responses.isEmpty()) {
             ObjectNode okNode = responses.putObject("200");
             okNode.put("description", "Dynamic response (forward / callback / template / error / LLM)");
         }
     }
 
-    private void addOpenApiParameters(ArrayNode parameters,
-                                      org.mockserver.model.Parameters params,
-                                      String location) {
-        if (params == null) {
+    /**
+     * Defect 5: emit a media-type entry with the correct body fidelity.
+     * Prefers an explicit Content-Type header for the media-type key; branches
+     * on the {@link Body} subtype; never emits a matcher pattern as a literal
+     * example and represents binary bodies as a binary schema rather than a
+     * base64 text example.
+     */
+    private void addOpenApiBody(ObjectNode respNode, Body<?> body,
+                                String bodyString, String contentTypeHeader) {
+        if (body == null) {
+            if (bodyString == null || bodyString.isEmpty()) {
+                return;
+            }
+            // No structured body but a string is available (e.g. captured pairs).
+            ObjectNode content = respNode.putObject("content");
+            String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : detectContentType(bodyString);
+            content.putObject(mediaType).put("example", bodyString);
             return;
         }
+
+        Body.Type type = body.getType();
+        switch (type) {
+            case BINARY: {
+                String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : "application/octet-stream";
+                ObjectNode mediaTypeNode = respNode.putObject("content").putObject(mediaType);
+                ObjectNode schema = mediaTypeNode.putObject("schema");
+                schema.put("type", "string");
+                schema.put("format", "binary");
+                return;
+            }
+            case JSON: {
+                String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : "application/json";
+                emitExample(respNode, mediaType, bodyString);
+                return;
+            }
+            case XML: {
+                String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : "application/xml";
+                emitExample(respNode, mediaType, bodyString);
+                return;
+            }
+            case PARAMETERS: {
+                String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : "application/x-www-form-urlencoded";
+                emitExample(respNode, mediaType, bodyString);
+                return;
+            }
+            case STRING: {
+                String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : "text/plain";
+                emitExample(respNode, mediaType, bodyString);
+                return;
+            }
+            case REGEX:
+            case FUZZY:
+            case JSON_SCHEMA:
+            case JSON_PATH:
+            case XPATH:
+            case XML_SCHEMA: {
+                // Matcher-only bodies: never emit the raw pattern as a literal
+                // example. Describe it instead so the meaning isn't inverted.
+                String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : "text/plain";
+                ObjectNode mediaTypeNode = respNode.putObject("content").putObject(mediaType);
+                mediaTypeNode.putObject("schema")
+                    .put("type", "string")
+                    .put("description", "matcher body (" + type + ") — pattern not exported as a literal value");
+                return;
+            }
+            default: {
+                if (bodyString != null && !bodyString.isEmpty()) {
+                    String mediaType = isNotBlank(contentTypeHeader) ? contentTypeHeader : detectContentType(bodyString);
+                    emitExample(respNode, mediaType, bodyString);
+                }
+            }
+        }
+    }
+
+    private void emitExample(ObjectNode respNode, String mediaType, String bodyString) {
+        ObjectNode mediaTypeNode = respNode.putObject("content").putObject(mediaType);
+        mediaTypeNode.put("example", bodyString != null ? bodyString : "");
+    }
+
+    /**
+     * Emits parameters for one location and returns the set of {@code in:path}
+     * parameter names actually emitted (empty for non-path locations). The
+     * caller uses that set to synthesise any uncovered path placeholders
+     * (Defect 1).
+     */
+    private Set<String> addOpenApiParameters(ArrayNode parameters,
+                                             org.mockserver.model.Parameters params,
+                                             String location,
+                                             String path) {
+        Set<String> emittedPathParams = new LinkedHashSet<>();
+        if (params == null) {
+            return emittedPathParams;
+        }
         for (Parameter parameter : params.getEntries()) {
+            // Omit negated/schema parameter matchers rather than emitting their
+            // positive form (Defect 2).
+            if (isNegatedOrSchema(parameter.getName())) {
+                continue;
+            }
+            String name = parameter.getName().getValue();
+            // Defect 1: an in:path parameter is only valid when the path key
+            // actually contains the matching {name} template segment. Omit it
+            // otherwise rather than emitting a schema-INVALID parameter.
+            if ("path".equals(location) && (name == null || !path.contains("{" + name + "}"))) {
+                continue;
+            }
             ObjectNode p = parameters.addObject();
-            p.put("name", parameter.getName().getValue());
+            p.put("name", name);
             p.put("in", location);
             p.put("required", "path".equals(location));
             ObjectNode schema = p.putObject("schema");
             schema.put("type", "string");
             if (parameter.getValues() != null && !parameter.getValues().isEmpty()) {
-                schema.put("example", parameter.getValues().get(0).getValue());
+                NottableString first = parameter.getValues().get(0);
+                if (!isNegatedOrSchema(first)) {
+                    schema.put("example", first.getValue());
+                }
+            }
+            if ("path".equals(location)) {
+                emittedPathParams.add(name);
             }
         }
+        return emittedPathParams;
+    }
+
+    /**
+     * Defect 1: every {@code {name}} placeholder in the path key must be declared
+     * as an {@code in:path} parameter, otherwise swagger-parser rejects the
+     * document ("Declared path parameter ... needs to be defined as a path
+     * parameter"). Synthesise a {@code required:true, type:string} parameter for
+     * any placeholder not already covered by an emitted path parameter.
+     */
+    private void addSyntheticPathParameters(ArrayNode parameters, String path, Set<String> emittedPathParams) {
+        Set<String> seen = new LinkedHashSet<>(emittedPathParams);
+        Matcher matcher = PATH_TEMPLATE.matcher(path);
+        while (matcher.find()) {
+            String name = matcher.group(1);
+            if (seen.add(name)) {
+                ObjectNode p = parameters.addObject();
+                p.put("name", name);
+                p.put("in", "path");
+                p.put("required", true);
+                p.putObject("schema").put("type", "string");
+            }
+        }
+    }
+
+    /**
+     * Defect 3: returns an operationId that has not yet been emitted in this
+     * document. If {@code base} is already taken (a DISTINCT operation reusing an
+     * explicit expectation id), a deterministic numeric suffix is appended.
+     */
+    private String uniqueOperationId(String base, Set<String> emittedOperationIds) {
+        String candidate = base;
+        int suffix = 2;
+        while (!emittedOperationIds.add(candidate)) {
+            candidate = base + "-" + suffix++;
+        }
+        return candidate;
+    }
+
+    /**
+     * True when the matcher is negated ({@code NottableString.isNot()}) or is a
+     * schema matcher ({@link NottableSchemaString}) whose value is a JSON schema
+     * rather than a literal string. Either case means the raw value must NOT be
+     * emitted as a positive literal in the exported OpenAPI document.
+     */
+    private boolean isNegatedOrSchema(NottableString s) {
+        if (s == null) {
+            return false;
+        }
+        return Boolean.TRUE.equals(s.isNot()) || s instanceof NottableSchemaString;
     }
 
     // -----------------------------------------------------------------------

@@ -1,15 +1,19 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import TextField from '@mui/material/TextField';
 import Button from '@mui/material/Button';
-import Alert from '@mui/material/Alert';
+import HumanErrorAlert from './HumanErrorAlert';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { diffRequests, type DiffResult } from '../lib/diff';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import { monospaceFontFamily } from '../theme';
 import DiffPanel from './DiffPanel';
 
 const PLACEHOLDER = '{\n  "method": "GET",\n  "path": "/api/users",\n  "headers": { "accept": ["application/json"] }\n}';
@@ -36,11 +40,13 @@ export default function DiffRequestsDialog({
   initialExpected?: string;
   initialActual?: string;
 }) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [expected, setExpected] = useState(() => initialExpected ?? '');
   const [actual, setActual] = useState(() => initialActual ?? '');
   const [result, setResult] = useState<DiffResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
 
   const submit = useCallback(async () => {
     let expectedObj: Record<string, unknown>;
@@ -48,13 +54,13 @@ export default function DiffRequestsDialog({
     try {
       expectedObj = JSON.parse(expected) as Record<string, unknown>;
     } catch {
-      setError('“Expected” request is not valid JSON.');
+      setError({ message: '“Expected” request is not valid JSON.' });
       return;
     }
     try {
       actualObj = JSON.parse(actual) as Record<string, unknown>;
     } catch {
-      setError('“Actual” request is not valid JSON.');
+      setError({ message: '“Actual” request is not valid JSON.' });
       return;
     }
     setLoading(true);
@@ -63,16 +69,36 @@ export default function DiffRequestsDialog({
     try {
       setResult(await diffRequests(connectionParams, expectedObj, actualObj));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setLoading(false);
     }
   }, [connectionParams, expected, actual]);
 
+  // When opened pre-populated from the Traffic inspector ("Compare" mode) with
+  // both requests already filled, run the diff immediately so the user sees the
+  // result without a second click. The parent remounts this component (via a
+  // changing `key`) for each new pair, so a once-on-mount effect is correct.
+  // submit() sets loading state synchronously on purpose so the spinner shows at once.
+  useEffect(() => {
+    if (initialExpected?.trim() && initialActual?.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void submit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth aria-labelledby="diff-requests-title">
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth fullScreen={fullScreen} aria-labelledby="diff-requests-title">
       <DialogTitle id="diff-requests-title">Diff two requests</DialogTitle>
       <DialogContent>
+        {/* Diff result is shown at the top so it is the most visible thing in the
+            dialog (the editable request JSON is below for tweaking and re-running). */}
+        {(loading || result) && (
+          <Box sx={{ mb: 1.5 }}>
+            <DiffPanel result={result} loading={loading} error={null} />
+          </Box>
+        )}
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
           Paste two requests as JSON to compare them field-by-field. Copy a request from the Traffic
           inspector, or hand-author one.
@@ -83,20 +109,19 @@ export default function DiffRequestsDialog({
             multiline minRows={8} maxRows={20}
             value={expected} onChange={(e) => setExpected(e.target.value)}
             placeholder={PLACEHOLDER}
-            sx={{ flex: 1, minWidth: 280 }}
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            sx={{ flex: 1, minWidth: { xs: '100%', sm: 280 } }}
+            slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } } }}
           />
           <TextField
             label="Actual request (JSON)"
             multiline minRows={8} maxRows={20}
             value={actual} onChange={(e) => setActual(e.target.value)}
             placeholder={PLACEHOLDER}
-            sx={{ flex: 1, minWidth: 280 }}
-            slotProps={{ input: { sx: { fontFamily: 'monospace', fontSize: '0.78rem' } } }}
+            sx={{ flex: 1, minWidth: { xs: '100%', sm: 280 } }}
+            slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } } }}
           />
         </Box>
-        {error && <Alert severity="error" sx={{ mt: 1.5 }}>{error}</Alert>}
-        {(loading || result) && <DiffPanel result={result} loading={loading} error={null} />}
+        {error && <HumanErrorAlert error={error} sx={{ mt: 1.5 }} />}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Close</Button>

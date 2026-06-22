@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "MockServer Control Plane",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

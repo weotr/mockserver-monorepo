@@ -4,7 +4,7 @@
 
 <p>MockServer supports a <a href="/mock_server/performance.html">very high request throughput</a> from a single node. When you need high availability, horizontal scale beyond one node, or zero-downtime rolling updates, MockServer can run as a cluster so that all nodes share state.</p>
 
-<p>There are two ways to cluster MockServer. For the full deployment guide &mdash; architecture diagrams, the <code class="inline_code">-clustered</code> image, Docker Compose and Helm examples, and a decision table &mdash; see <a href="/mock_server/centralized_deployment.html">Centralized Deployment</a>.</p>
+<p>There are two ways to cluster MockServer. For the full deployment guide &mdash; architecture diagrams, the <code class="inline_code">-clustered</code> image, Docker Compose and Helm examples, and a decision table &mdash; see <a href="/mock_server/centralized_deployment.html">Centralised Deployment</a>.</p>
 
 <a id="clustering_infinispan" class="anchor" href="#clustering_infinispan">&nbsp;</a>
 
@@ -40,7 +40,7 @@
     </tbody>
 </table>
 
-<p><strong>Note:</strong> as with the file-based approach below, the request log and verification ring buffer are <strong>node-local</strong> &mdash; a <span class="inline_code">verify()</span> call only checks the node that received it. The <a href="/mock_server/centralized_deployment.html#option2">Centralized Deployment</a> page covers this constraint and the full Docker Compose and Kubernetes/Helm setup.</p>
+<p><strong>Note:</strong> as with the file-based approach below, the request log and verification ring buffer are <strong>node-local</strong> &mdash; a <span class="inline_code">verify()</span> call only checks the node that received it. The <a href="/mock_server/centralized_deployment.html#option2">Centralised Deployment</a> page covers this constraint and the full Docker Compose and Kubernetes/Helm setup.</p>
 
 <a id="clustering_shared_filesystem" class="anchor" href="#clustering_shared_filesystem">&nbsp;</a>
 

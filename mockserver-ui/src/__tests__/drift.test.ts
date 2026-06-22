@@ -52,14 +52,29 @@ describe('fetchDriftRecords', () => {
     expect(url).toContain('limit=50');
   });
 
-  it('returns empty response on non-OK status', async () => {
+  it('throws on a non-OK status instead of silently reporting no drift', async () => {
+    // A 500 must NOT be swallowed as { count: 0 } — that made a server error
+    // look identical to "no drift detected". The lib now throws so the caller
+    // can surface a real error (and route 404s to the "not available" branch).
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
+      statusText: 'Internal Server Error',
+      json: async () => ({}),
     }));
 
-    const result = await fetchDriftRecords(params);
-    expect(result).toEqual({ count: 0, drifts: [] });
+    await expect(fetchDriftRecords(params)).rejects.toThrow(/500/);
+  });
+
+  it('surfaces the server error envelope message when present', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: async () => ({ error: 'bad limit' }),
+    }));
+
+    await expect(fetchDriftRecords(params)).rejects.toThrow('bad limit');
   });
 
   it('passes the AbortSignal to fetch', async () => {
@@ -88,5 +103,16 @@ describe('clearDrift', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('http://127.0.0.1:1080/mockserver/drift/clear');
     expect(init.method).toBe('PUT');
+  });
+
+  it('throws when the clear fails instead of reporting success', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      json: async () => ({}),
+    }));
+
+    await expect(clearDrift(params)).rejects.toThrow(/500/);
   });
 });

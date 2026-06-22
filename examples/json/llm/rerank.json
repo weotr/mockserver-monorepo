@@ -1,0 +1,15 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/rerank"
+  },
+  "httpLlmResponse": {
+    "provider": "COHERE",
+    "model": "rerank-english-v3.0",
+    "rerank": {
+      "topN": 3,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}

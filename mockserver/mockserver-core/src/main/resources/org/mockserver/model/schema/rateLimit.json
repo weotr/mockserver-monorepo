@@ -1,0 +1,47 @@
+{
+  "title": "declarative protocol-agnostic rate limit / quota",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Shared counter key; expectations with the same name share one rate-limit counter. When omitted the expectation id is used as the key"
+    },
+    "algorithm": {
+      "type": "string",
+      "enum": ["fixed_window", "token_bucket"],
+      "description": "Rate-limiting algorithm; defaults to fixed_window"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "fixed_window: maximum requests allowed per window before requests are rejected"
+    },
+    "windowMillis": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "fixed_window: fixed-window length in milliseconds"
+    },
+    "burst": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "token_bucket: bucket capacity in tokens"
+    },
+    "refillPerSecond": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "token_bucket: token refill rate per second"
+    },
+    "errorStatus": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599,
+      "description": "Status returned when the request is over-limit (default 429)"
+    },
+    "retryAfter": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "Literal Retry-After header value; when omitted it is computed from the window/bucket reset time"
+    }
+  }
+}

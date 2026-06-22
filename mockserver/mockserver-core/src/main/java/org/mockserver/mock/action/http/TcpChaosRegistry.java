@@ -171,7 +171,13 @@ public class TcpChaosRegistry {
             .withTimeout(patch.getTimeout() != null ? patch.getTimeout() : base.getTimeout())
             .withResetPeer(patch.getResetPeer() != null ? patch.getResetPeer() : base.getResetPeer())
             .withSlicerChunkSize(patch.getSlicerChunkSize() != null ? patch.getSlicerChunkSize() : base.getSlicerChunkSize())
-            .withLimitDataBytes(patch.getLimitDataBytes() != null ? patch.getLimitDataBytes() : base.getLimitDataBytes());
+            .withLimitDataBytes(patch.getLimitDataBytes() != null ? patch.getLimitDataBytes() : base.getLimitDataBytes())
+            .withResetMidResponse(patch.getResetMidResponse() != null ? patch.getResetMidResponse() : base.getResetMidResponse())
+            .withResetAfterResponseChunks(patch.getResetAfterResponseChunks() != null ? patch.getResetAfterResponseChunks() : base.getResetAfterResponseChunks())
+            .withSlowCloseDelay(patch.getSlowCloseDelay() != null ? patch.getSlowCloseDelay() : base.getSlowCloseDelay())
+            .withHttp2GoAway(patch.getHttp2GoAway() != null ? patch.getHttp2GoAway() : base.getHttp2GoAway())
+            .withHttp2GoAwayErrorCode(patch.getHttp2GoAwayErrorCode() != null ? patch.getHttp2GoAwayErrorCode() : base.getHttp2GoAwayErrorCode())
+            .withHttp2GoAwayLastStreamId(patch.getHttp2GoAwayLastStreamId() != null ? patch.getHttp2GoAwayLastStreamId() : base.getHttp2GoAwayLastStreamId());
     }
 
     /** Removes the TCP chaos profile for the given host (no-op if absent). */
@@ -214,7 +220,8 @@ public class TcpChaosRegistry {
      * The TCP chaos fault types reported by {@link #activeCountByFaultType()}.
      */
     public static final List<String> FAULT_TYPES =
-        List.of("latency", "down", "bandwidth", "slow_close", "timeout", "reset_peer", "slicer", "limit_data");
+        List.of("latency", "down", "bandwidth", "slow_close", "timeout", "reset_peer", "slicer", "limit_data",
+            "reset_mid_response", "slow_close_delay", "http2_goaway");
 
     /**
      * For each fault type, the number of currently-active (non-expired)
@@ -254,6 +261,15 @@ public class TcpChaosRegistry {
             }
             if (profile.getLimitDataBytes() != null && profile.getLimitDataBytes() > 0) {
                 counts.merge("limit_data", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getResetMidResponse())) {
+                counts.merge("reset_mid_response", 1, Integer::sum);
+            }
+            if (profile.getSlowCloseDelay() != null) {
+                counts.merge("slow_close_delay", 1, Integer::sum);
+            }
+            if (Boolean.TRUE.equals(profile.getHttp2GoAway())) {
+                counts.merge("http2_goaway", 1, Integer::sum);
             }
         }
         return counts;

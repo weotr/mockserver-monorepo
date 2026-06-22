@@ -107,6 +107,20 @@ public class HttpResponseToJavaSerializerTest {
     }
 
     @Test
+    public void shouldSerializeGenerateFromSchemaAsJava() {
+        assertThat(
+            new HttpResponseToJavaSerializer().serialize(1,
+                new HttpResponse()
+                    .withStatusCode(200)
+                    .withGenerateFromSchema("{\"type\":\"object\"}")
+            )
+        , is(NEW_LINE +
+                "        response()" + NEW_LINE +
+                "                .withStatusCode(200)" + NEW_LINE +
+                "                .withGenerateFromSchema(\"{\\\"type\\\":\\\"object\\\"}\")"));
+    }
+
+    @Test
     public void shouldSerializeMinimalObjectAsJava() {
         assertThat(
             new HttpResponseToJavaSerializer().serialize(1,

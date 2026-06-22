@@ -3,6 +3,7 @@ package org.mockserver.closurecallback.websocketregistry;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.util.AttributeKey;
 import org.mockserver.closurecallback.websocketclient.WebSocketException;
 import org.mockserver.collections.CircularHashMap;
 import org.mockserver.configuration.Configuration;
@@ -13,6 +14,8 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpRequestAndHttpResponse;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.serialization.WebSocketMessageSerializer;
+import org.mockserver.serialization.model.PausedStreamFrameDTO;
+import org.mockserver.serialization.model.StreamFrameDecisionDTO;
 import org.mockserver.serialization.model.WebSocketClientIdDTO;
 import org.mockserver.serialization.model.WebSocketErrorDTO;
 
@@ -31,12 +34,41 @@ import static org.slf4j.event.Level.WARN;
 public class WebSocketClientRegistry {
 
     public static final String WEB_SOCKET_CORRELATION_ID_HEADER_NAME = "WebSocketCorrelationId";
+    /**
+     * Header name carrying the matched breakpoint id so the client can route each
+     * pushed paused item to the handler of the SPECIFIC breakpoint that matched.
+     * Set by the server dispatchers on REQUEST/RESPONSE phase messages.
+     */
+    public static final String BREAKPOINT_ID_HEADER_NAME = "X-MockServer-BreakpointId";
+    /**
+     * Header name carrying the epoch-millis timestamp of when MockServer first
+     * received the request. All phases (REQUEST, RESPONSE) of the same exchange
+     * share the same value, enabling the dashboard to sort exchanges by original
+     * request time rather than by WS arrival time.
+     */
+    public static final String REQUEST_TIMESTAMP_HEADER_NAME = "X-MockServer-RequestTimestamp";
+    /**
+     * Channel attribute key for the per-server {@link WebSocketClientRegistry}. Set once
+     * on the parent/server channel at pipeline construction; read at hold points in Netty
+     * handlers that need the registry but do not have {@code HttpState} in direct scope.
+     */
+    public static final AttributeKey<WebSocketClientRegistry> WS_REGISTRY_KEY =
+        AttributeKey.valueOf("mockserver.webSocketClientRegistry");
     private final MockServerLogger mockServerLogger;
     private final WebSocketMessageSerializer webSocketMessageSerializer;
     private final Map<String, Channel> clientRegistry;
     private final Map<String, WebSocketResponseCallback> responseCallbackRegistry;
     private final Map<String, WebSocketRequestCallback> forwardCallbackRegistry;
+    private final Map<String, StreamFrameDecisionCallback> streamFrameCallbackRegistry;
     private final Metrics metrics;
+
+    /**
+     * Callback interface for stream-frame breakpoint decision replies received
+     * over the callback WebSocket.
+     */
+    public interface StreamFrameDecisionCallback {
+        void handle(StreamFrameDecisionDTO decision);
+    }
 
     public WebSocketClientRegistry(Configuration configuration, MockServerLogger mockServerLogger) {
         this.mockServerLogger = mockServerLogger;
@@ -46,8 +78,9 @@ public class WebSocketClientRegistry {
                 channel.close();
             }
         }));
-        this.responseCallbackRegistry = new CircularHashMap<>(configuration.maxWebSocketExpectations());
-        this.forwardCallbackRegistry = new CircularHashMap<>(configuration.maxWebSocketExpectations());
+        this.responseCallbackRegistry = Collections.synchronizedMap(new CircularHashMap<>(configuration.maxWebSocketExpectations()));
+        this.forwardCallbackRegistry = Collections.synchronizedMap(new CircularHashMap<>(configuration.maxWebSocketExpectations()));
+        this.streamFrameCallbackRegistry = Collections.synchronizedMap(new CircularHashMap<>(configuration.maxWebSocketExpectations()));
         this.metrics = new Metrics(configuration);
     }
 
@@ -75,6 +108,13 @@ public class WebSocketClientRegistry {
                 WebSocketRequestCallback webSocketRequestCallback = forwardCallbackRegistry.get(firstHeader);
                 if (webSocketRequestCallback != null) {
                     webSocketRequestCallback.handle(httpRequest);
+                }
+            } else if (deserializedMessage instanceof StreamFrameDecisionDTO) {
+                StreamFrameDecisionDTO decisionDTO = (StreamFrameDecisionDTO) deserializedMessage;
+                String correlationId = decisionDTO.getCorrelationId();
+                StreamFrameDecisionCallback callback = streamFrameCallbackRegistry.get(correlationId);
+                if (callback != null) {
+                    callback.handle(decisionDTO);
                 }
             } else if (deserializedMessage instanceof WebSocketErrorDTO) {
                 WebSocketErrorDTO webSocketErrorDTO = (WebSocketErrorDTO) deserializedMessage;
@@ -130,6 +170,10 @@ public class WebSocketClientRegistry {
         if (removeChannel != null && removeChannel.isOpen()) {
             removeChannel.close();
         }
+        // Clean up breakpoint matchers and in-flight WS dispatches owned by this client
+        org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().removeByClientId(clientId);
+        org.mockserver.mock.breakpoint.BreakpointCallbackDispatcher.getInstance().autoCompleteForClient(clientId);
+        org.mockserver.mock.breakpoint.StreamFrameCallbackDispatcher.getInstance().autoCompleteForClient(clientId);
         metrics.set(WEBSOCKET_CALLBACK_CLIENTS_COUNT, clientRegistry.size());
         if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
             mockServerLogger.logEvent(
@@ -188,6 +232,65 @@ public class WebSocketClientRegistry {
         }
     }
 
+    public void registerStreamFrameCallbackHandler(String correlationId, StreamFrameDecisionCallback callback) {
+        streamFrameCallbackRegistry.put(correlationId, callback);
+        if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(TRACE)
+                    .setMessageFormat("registering stream frame callback " + correlationId)
+            );
+        }
+    }
+
+    public void unregisterStreamFrameCallbackHandler(String correlationId) {
+        streamFrameCallbackRegistry.remove(correlationId);
+        if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(TRACE)
+                    .setMessageFormat("unregistering stream frame callback " + correlationId + "")
+            );
+        }
+    }
+
+    /**
+     * Send a paused stream frame DTO to the specified client over the callback WebSocket.
+     *
+     * @param clientId          the target client
+     * @param pausedFrameDTO    the paused frame to send
+     * @return true if the client was found and the message was sent
+     */
+    public boolean sendStreamFrameMessage(String clientId, PausedStreamFrameDTO pausedFrameDTO) {
+        try {
+            if (clientRegistry.containsKey(clientId)) {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(TRACE)
+                            .setMessageFormat("sending stream frame message {} to client " + clientId)
+                            .setArguments(pausedFrameDTO.getCorrelationId())
+                    );
+                }
+                clientRegistry.get(clientId).writeAndFlush(
+                    new TextWebSocketFrame(webSocketMessageSerializer.serialize(pausedFrameDTO)));
+                return true;
+            } else {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(WARN)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(WARN)
+                            .setMessageFormat("client " + clientId + " not found for stream frame message{}")
+                            .setArguments(pausedFrameDTO.getCorrelationId())
+                    );
+                }
+                return false;
+            }
+        } catch (Exception e) {
+            throw new WebSocketException("Exception while sending stream frame message to client " + clientId, e);
+        }
+    }
+
     public boolean sendClientMessage(String clientId, HttpRequest httpRequest, HttpResponse httpResponse) {
         try {
             if (clientRegistry.containsKey(clientId)) {
@@ -238,11 +341,19 @@ public class WebSocketClientRegistry {
     public synchronized void reset() {
         forwardCallbackRegistry.clear();
         responseCallbackRegistry.clear();
-        clientRegistry.forEach((clientId, channel) -> {
-            LocalCallbackRegistry.unregisterCallback(clientId);
-            channel.close();
-        });
-        clientRegistry.clear();
+        streamFrameCallbackRegistry.clear();
+        // Iteration over a Collections.synchronizedMap is only safe while holding
+        // the map's own monitor (the synchronized(this) on reset() guards a
+        // different lock than registerClient/unregisterClient, which mutate the
+        // map under the map's monitor). Synchronize on the map to make the
+        // forEach + clear atomic with respect to those mutators.
+        synchronized (clientRegistry) {
+            clientRegistry.forEach((clientId, channel) -> {
+                LocalCallbackRegistry.unregisterCallback(clientId);
+                channel.close();
+            });
+            clientRegistry.clear();
+        }
         clearWebSocketMetrics();
     }
 }

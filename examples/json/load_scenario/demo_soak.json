@@ -1,0 +1,38 @@
+{
+  "name": "demo-soak",
+  "templateType": "VELOCITY",
+  "profile": {
+    "stages": [
+      {
+        "type": "RATE",
+        "startRate": 1,
+        "endRate": 10,
+        "durationMillis": 60000,
+        "curve": "LINEAR",
+        "maxVus": 20
+      },
+      {
+        "type": "VU",
+        "vus": 5,
+        "durationMillis": 60000
+      },
+      {
+        "type": "PAUSE",
+        "durationMillis": 5000
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "ping",
+      "request": {
+        "method": "GET",
+        "path": "/ping"
+      },
+      "thinkTime": {
+        "timeUnit": "MILLISECONDS",
+        "value": 50
+      }
+    }
+  ]
+}

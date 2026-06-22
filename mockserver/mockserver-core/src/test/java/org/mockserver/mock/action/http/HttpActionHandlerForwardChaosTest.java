@@ -14,6 +14,7 @@ import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.metrics.Metrics;
+import org.mockserver.metrics.MetricsLock;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.HttpState;
 import org.mockserver.mock.crud.CrudDispatcher;
@@ -89,6 +90,9 @@ public class HttpActionHandlerForwardChaosTest {
 
     @ClassRule
     public static final FixedTime fixedTime = new FixedTime();
+
+    @ClassRule
+    public static final MetricsLock metricsLock = new MetricsLock();
 
     @AfterClass
     public static void stopScheduler() {
@@ -780,6 +784,68 @@ public class HttpActionHandlerForwardChaosTest {
         dispatchForwardAndCapture(request, expectation, forward, upstreamResponse);
         assertThat("no additional error metric for match #3 (outside window)",
             scrapeCounterValue("mock_server_http_chaos_injected", "fault_type", "error"), is(1.0));
+    }
+
+    // --- Per-upstream forward observability metric tests ---
+
+    @Test
+    public void forwardRecordsPerUpstreamMetricWithHostLabel() {
+        // given - a plain FORWARD to host "localhost" returning a 200
+        HttpRequest request = request("some_path");
+        HttpResponse upstreamResponse = response("upstream body").withStatusCode(200).withDelay(milliseconds(0));
+        HttpForward forward = forward().withHost("localhost").withPort(1090);
+        HttpForwardActionResult forwardResult = completedForwardResult(upstreamResponse);
+
+        Expectation expectation = new Expectation(request).thenForward(forward);
+
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(forwardResult);
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then - the per-upstream count is labeled by the forward action's host (not the socket port)
+        assertThat("forward count labeled by upstream host + 2xx status class",
+            Metrics.getForwardRequestCount("localhost", "2xx"), is(1L));
+        // and the latency histogram recorded one observation for that host
+        assertThat("latency histogram observed once for the host",
+            scrapeForwardDurationCount("localhost"), is(1.0));
+    }
+
+    @Test
+    public void forwardMetricStatusClassReflectsUpstreamStatus() {
+        // given - a FORWARD whose upstream returns 502
+        HttpRequest request = request("some_path");
+        HttpResponse upstreamResponse = response("bad gateway").withStatusCode(502).withDelay(milliseconds(0));
+        HttpForward forward = forward().withHost("localhost").withPort(1090);
+        HttpForwardActionResult forwardResult = completedForwardResult(upstreamResponse);
+
+        Expectation expectation = new Expectation(request).thenForward(forward);
+
+        when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(expectation);
+        when(mockHttpForwardActionHandler.handle(any(HttpForward.class), any(HttpRequest.class))).thenReturn(forwardResult);
+
+        // when
+        actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
+
+        // then - recorded under the 5xx status class, not 2xx
+        assertThat(Metrics.getForwardRequestCount("localhost", "5xx"), is(1L));
+        assertThat(Metrics.getForwardRequestCount("localhost", "2xx"), is(0L));
+    }
+
+    private static double scrapeForwardDurationCount(String host) {
+        MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
+        for (MetricSnapshot snapshot : snapshots) {
+            if (snapshot.getMetadata().getName().equals("mock_server_forward_request_duration_seconds")
+                && snapshot instanceof io.prometheus.metrics.model.snapshots.HistogramSnapshot histogramSnapshot) {
+                for (io.prometheus.metrics.model.snapshots.HistogramSnapshot.HistogramDataPointSnapshot dataPoint : histogramSnapshot.getDataPoints()) {
+                    if (host.equals(dataPoint.getLabels().get("upstream_host"))) {
+                        return dataPoint.getCount();
+                    }
+                }
+            }
+        }
+        return 0.0;
     }
 
     private static double scrapeCounterValue(String name, String labelName, String labelValue) {

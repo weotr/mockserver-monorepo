@@ -18,6 +18,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 
 import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -35,7 +36,8 @@ public class DashboardLogEntryDTOSerializerTest {
     );
 
     private final long epochTime = 1593582678216L;
-    private final String timeStamp = StringUtils.substringAfter(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date(epochTime)), "-");
+    private final String fullTimeStamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date(epochTime));
+    private final String timeStamp = StringUtils.substringAfter(fullTimeStamp, "-");
 
     private Description getDescription(LogEntry logEntry) {
         return new LogMessageDescription(StringUtils.substringAfter(logEntry.getTimestamp(), "-"), logEntry.getType().name(), new DescriptionProcessor());
@@ -61,6 +63,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -112,6 +115,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -165,6 +169,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -221,6 +226,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -277,6 +283,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -333,6 +340,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -382,6 +390,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -433,6 +442,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -487,6 +497,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -536,6 +547,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -588,6 +600,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -634,6 +647,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, containsString("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -653,6 +667,35 @@ public class DashboardLogEntryDTOSerializerTest {
             "      \"multiline\" : true," + NEW_LINE +
             "      \"argument\" : true," + NEW_LINE +
             "      \"value\" : [ \"java.lang.RuntimeException: TEST EXCEPTION\", \"\\tat org.mockserver.dashboard.serializers.DashboardLogEntryDTOSerializerTest.shouldSerialiseEventWithThrowable"));
+    }
+
+    @Test
+    public void shouldSerialiseTimestampWhenSet() throws JsonProcessingException {
+        // given
+        LogEntry logEntry = new LogEntry()
+            .setLogLevel(Level.WARN)
+            .setEpochTime(epochTime)
+            .setType(LogEntry.LogMessageType.TEMPLATE_GENERATED)
+            .setMessageFormat("some message");
+
+        // when
+        String json = objectWriter.writeValueAsString(new DashboardLogEntryDTO(logEntry).setDescription(getDescription(logEntry)));
+
+        // then
+        assertThat(json, containsString("\"timestamp\" : \"" + fullTimeStamp + "\""));
+    }
+
+    @Test
+    public void shouldOmitTimestampWhenNull() throws JsonProcessingException {
+        // given
+        DashboardLogEntryDTO dto = new DashboardLogEntryDTO("someId", "someCorrelationId", null, LogEntry.LogMessageType.TEMPLATE_GENERATED)
+            .setMessageFormat("some message");
+
+        // when
+        String json = objectWriter.writeValueAsString(dto);
+
+        // then
+        assertThat(json, not(containsString("\"timestamp\"")));
     }
 
     @Test
@@ -698,6 +741,7 @@ public class DashboardLogEntryDTOSerializerTest {
         assertThat(json, is("{\n" +
             "  \"key\" : \"" + logEntry.id() + "_log\",\n" +
             "  \"value\" : {\n" +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\",\n" +
             "    \"description\" : \"" + timeStamp + " FORWARDED_REQUEST \",\n" +
             "    \"style\" : {\n" +
             "      \"paddingBottom\" : \"4px\",\n" +

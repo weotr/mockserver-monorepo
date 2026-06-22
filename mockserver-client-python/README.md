@@ -243,6 +243,118 @@ response = (
 )
 ```
 
+## Interactive Breakpoints
+
+The client supports matcher-driven interactive breakpoints over the callback WebSocket. Register a breakpoint matcher to pause forwarded/proxied exchanges at specific phases and inspect/modify/continue them via callback handlers.
+
+### Register a breakpoint (sync client)
+
+```python
+from mockserver import MockServerClient, HttpRequest, HttpResponse
+
+client = MockServerClient("localhost", 1080)
+
+# REQUEST phase only
+bp_id = client.add_request_breakpoint(
+    HttpRequest(path="/api/.*"),
+    lambda request: request,  # continue unchanged (or return HttpResponse to abort)
+)
+
+# REQUEST + RESPONSE
+bp_id = client.add_request_and_response_breakpoint(
+    HttpRequest(path="/api/.*"),
+    lambda request: request,                      # REQUEST handler
+    lambda request, response: response,           # RESPONSE handler
+)
+
+# All phases with stream frame handler
+bp_id = client.add_breakpoint(
+    HttpRequest(path="/stream/.*"),
+    ["REQUEST", "RESPONSE", "RESPONSE_STREAM", "INBOUND_STREAM"],
+    request_handler=lambda request: request,
+    response_handler=lambda request, response: response,
+    stream_frame_handler=lambda frame: {"action": "CONTINUE"},
+    # Other actions: MODIFY (with body), DROP, INJECT (with body), CLOSE
+)
+```
+
+### Manage breakpoints
+
+```python
+# List all matchers
+matchers = client.list_breakpoint_matchers()  # {"matchers": [...]}
+
+# Remove a specific matcher
+client.remove_breakpoint_matcher(bp_id)
+
+# Clear all matchers
+client.clear_breakpoint_matchers()
+```
+
+The async client (`AsyncMockServerClient`) exposes the same methods as coroutines.
+
+## Start / Launch MockServer
+
+The Python client can download and launch a local MockServer instance directly -- no Java installation and no Docker required. The launcher downloads a self-contained platform bundle (`mockserver-<version>-<os>-<arch>`) from the GitHub Release, verifies its SHA-256, caches it per-user, and starts it.
+
+### Quick start
+
+```python
+from mockserver.launcher import start, MockServerProcess
+
+# Download (first run) and start MockServer on port 1080
+with start(port=1080) as server:
+    print(f"MockServer running on port {server.port}, PID {server.pid}")
+    # ... use MockServer ...
+# Server is stopped automatically when the context manager exits
+```
+
+### Just ensure the binary is present
+
+```python
+from mockserver.launcher import ensure_binary
+
+launcher_path = ensure_binary()  # returns Path to the launcher executable
+```
+
+### Specify a version
+
+```python
+from mockserver.launcher import start
+
+server = start(port=1080, version="7.1.0")
+# ...
+server.stop()
+```
+
+### API reference
+
+| Function / Class | Description |
+|---|---|
+| `ensure_binary(version=None, *, log=True)` | Download, verify, cache, and return the launcher `Path`. Defaults to the client's own version. |
+| `start(port, version=None, *, extra_args=None, log=True)` | Ensure the binary and start MockServer. Returns a `MockServerProcess`. |
+| `MockServerProcess` | Handle to the running process. Properties: `port`, `pid`, `launcher`, `returncode`. Methods: `stop(timeout=10.0)`. Supports `with` statement. |
+
+### Supported platforms
+
+| OS | Architecture |
+|---|---|
+| Linux | x86_64, aarch64 |
+| macOS (darwin) | x86_64, aarch64 |
+| Windows | x86_64, aarch64 |
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `MOCKSERVER_BINARY_BASE_URL` | Mirror host for the release assets (corporate / air-gapped networks) |
+| `MOCKSERVER_BINARY_CACHE` | Override the cache directory (default: `~/.cache/mockserver/binaries` on Unix) |
+| `MOCKSERVER_SKIP_BINARY_DOWNLOAD` | Fail instead of downloading (use with a pre-seeded cache in CI) |
+
+### Version
+
+By default the launcher downloads the MockServer version matching this client package (currently the version set in `pyproject.toml`). Pass an explicit `version` argument to override.
+
 ## Requirements
 
 - Python 3.9+

@@ -1,0 +1,29 @@
+---
+openapi: 3.0.0
+info:
+  version: 1.0.0
+  title: Unresolvable Ref Example
+paths:
+  /thing:
+    get:
+      operationId: getThing
+      responses:
+        '200':
+          description: a thing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  nested:
+                    type: object
+              example:
+                id: 7
+                # an internal $ref that resolveRef cannot resolve (no such component);
+                # must NOT leak a literal {"$ref": ...} node into the body (Fix 3)
+                nested:
+                  $ref: '#/components/examples/doesNotExist'
+components:
+  examples: {}

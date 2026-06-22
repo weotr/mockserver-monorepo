@@ -136,9 +136,44 @@ public class OpenAPIResponseValidatorTest {
         // when
         List<String> errors = OpenAPIResponseValidator.validate(specWithNoDefault, "testOp", response, mockServerLogger);
 
-        // then
+        // then - the message names the requested status code AND the statuses that ARE defined
         assertThat(errors, hasSize(1));
         assertThat(errors.get(0), containsString("response status code 404 not defined"));
+        assertThat(errors.get(0), containsString("defined response status codes are"));
+        assertThat(errors.get(0), containsString("200"));
+    }
+
+    @Test
+    public void shouldProduceMeaningfulErrorWhenExceptionMessageIsNull() {
+        // given - an exception with no message (getMessage() == null), e.g. a bare NPE
+        Throwable nullMessageThrowable = new NullPointerException();
+
+        // when - the same helper the validator uses turns it into a caller-facing error string
+        String error = OpenAPIValidationErrors.unexpectedError("OpenAPI response validation for operation showPetById", nullMessageThrowable, mockServerLogger);
+
+        // then - the operation context AND the exception type are present, and there is no literal "null"
+        assertThat(error, containsString("OpenAPI response validation for operation showPetById"));
+        assertThat(error, containsString("NullPointerException"));
+        assertThat(error, not(containsString("null")));
+    }
+
+    @Test
+    public void shouldBoundAndSingleLineAnOversizedExceptionMessage() {
+        // given - an exception whose message is huge and multi-line (untrusted / pathological)
+        StringBuilder huge = new StringBuilder("line one\nline two\t");
+        for (int i = 0; i < 5_000; i++) {
+            huge.append("x");
+        }
+        Throwable throwable = new RuntimeException(huge.toString());
+
+        // when
+        String error = OpenAPIValidationErrors.unexpectedError("OpenAPI response validation for operation listPets", throwable, mockServerLogger);
+
+        // then - the message is single-line and bounded, but still meaningful
+        assertThat(error, containsString("OpenAPI response validation for operation listPets"));
+        assertThat(error, containsString("RuntimeException"));
+        assertThat("must be single line", error, not(containsString("\n")));
+        assertThat("must be bounded", error.length(), lessThan(500));
     }
 
     @Test
@@ -322,6 +357,107 @@ public class OpenAPIResponseValidatorTest {
 
         // then
         assertThat(errors, is(empty()));
+    }
+
+    private final String rangeSpec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_status_code_range.yaml");
+
+    @Test
+    public void shouldMatchStatusCodeAgainstRangeBucketKey() {
+        // given - operation defines only the "2XX" range bucket, no exact "200"
+        HttpResponse response = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("\"ok\"");
+
+        // when
+        List<String> errors = OpenAPIResponseValidator.validate(rangeSpec, "rangeOnly", response, mockServerLogger);
+
+        // then - 200 matches "2XX", no false "status code not defined" error
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldMatch404AgainstFourXXRangeBucketKey() {
+        // given - operation defines only the "4XX" range bucket
+        HttpResponse response = response()
+            .withStatusCode(404)
+            .withHeader("content-type", "application/json")
+            .withBody("{\"message\": \"not found\"}");
+
+        // when
+        List<String> errors = OpenAPIResponseValidator.validate(rangeSpec, "notFoundRange", response, mockServerLogger);
+
+        // then - 404 matches "4XX"
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldPreferExactStatusCodeOverRangeBucketKey() {
+        // given - operation defines BOTH "200" (requires "exact") and "2XX" (requires "range"),
+        // each with additionalProperties:false; a body valid only for the exact "200" schema
+        HttpResponse response = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("{\"exact\": \"value\"}");
+
+        // when
+        List<String> errors = OpenAPIResponseValidator.validate(rangeSpec, "exactAndRange", response, mockServerLogger);
+
+        // then - the exact "200" schema is used (no error); the "2XX" schema would have rejected this body
+        assertThat(errors, is(empty()));
+    }
+
+    private final String lowercaseRangeSpec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_status_code_range_lowercase.yaml");
+
+    @Test
+    public void shouldMatchStatusCodeAgainstLowercaseRangeBucketKey() {
+        // given - operation defines only the lowercase "2xx" range bucket; the validator must
+        // match it case-insensitively so the generator and validator agree
+        HttpResponse response = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("\"ok\"");
+
+        // when
+        List<String> errors = OpenAPIResponseValidator.validate(lowercaseRangeSpec, "lowercaseRangeOnly", response, mockServerLogger);
+
+        // then - 200 matches "2xx", no false "status code not defined" error
+        assertThat(errors, is(empty()));
+    }
+
+    private final String webhooksOnlySpec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_31_webhooks_only.yaml");
+
+    @Test
+    public void shouldValidateWebhooksOnlySpecWithoutNpe() {
+        // given - a valid OAS 3.1 spec with webhooks and NO paths; getPaths() returns null and must
+        // not NPE or produce a misleading "null" validation error
+        HttpResponse response = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("{\"id\": 7, \"name\": \"Rex\"}");
+
+        // when - the webhook operation is reachable for validation
+        List<String> errors = OpenAPIResponseValidator.validate(webhooksOnlySpec, "onNewPet", response, mockServerLogger);
+
+        // then - no NPE, no misleading error; the webhook response validates cleanly
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldUseExactStatusCodeSchemaNotRangeBucketForValidation() {
+        // given - a body that is valid only for the "2XX" range schema (requires "range")
+        // but invalid for the exact "200" schema (requires "exact", additionalProperties:false)
+        HttpResponse response = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("{\"range\": \"value\"}");
+
+        // when
+        List<String> errors = OpenAPIResponseValidator.validate(rangeSpec, "exactAndRange", response, mockServerLogger);
+
+        // then - the exact "200" schema is selected (range precedence loses), so the body fails validation
+        assertThat(errors, hasSize(1));
+        assertThat(errors.get(0), containsString("response body validation error"));
     }
 
 }

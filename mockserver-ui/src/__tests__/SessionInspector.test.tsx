@@ -56,6 +56,37 @@ function makeAnthropicRequest(
   };
 }
 
+function makeOpenAiRequest(key: string, host = 'api.openai.com'): JsonListItem {
+  return {
+    key,
+    value: {
+      httpRequest: {
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers: [{ name: 'host', values: [host] }],
+        body: {
+          type: 'JSON',
+          json: JSON.stringify({
+            model: 'gpt-4o',
+            messages: [{ role: 'user', content: 'Where is my order?' }],
+          }),
+        },
+      },
+      httpResponse: {
+        statusCode: 200,
+        body: {
+          type: 'JSON',
+          json: JSON.stringify({
+            model: 'gpt-4o',
+            choices: [{ message: { role: 'assistant', content: 'Checking now.' } }],
+            usage: { prompt_tokens: 12, completion_tokens: 4 },
+          }),
+        },
+      },
+    },
+  };
+}
+
 function makeIsolatedExpectation(scenarioName: string): JsonListItem {
   return {
     key: `exp-${scenarioName}`,
@@ -103,8 +134,8 @@ describe('SessionInspector', () => {
 
     renderInspector();
 
-    // Should show "Active sessions: 2"
-    expect(screen.getByText('Active sessions: 2')).toBeInTheDocument();
+    // Should show "Active traces: 2"
+    expect(screen.getByText('Active traces: 2')).toBeInTheDocument();
 
     // Session lanes should be visible
     expect(screen.getByText(/chat \/ agent-A/)).toBeInTheDocument();
@@ -154,7 +185,7 @@ describe('SessionInspector', () => {
     expect(screen.getByText(/chat \/ agent-B/)).toBeInTheDocument();
 
     // Type in the search box
-    const searchInput = screen.getByPlaceholderText('Filter sessions...');
+    const searchInput = screen.getByPlaceholderText('Filter traces...');
     await user.type(searchInput, 'agent-A');
 
     // Only agent-A session should remain
@@ -162,26 +193,29 @@ describe('SessionInspector', () => {
     expect(screen.queryByText(/chat \/ agent-B/)).not.toBeInTheDocument();
   });
 
-  it('exposes a Compare tab that switches to the session comparison view', async () => {
+  it('exposes a Compare tab that switches to the trace comparison view', async () => {
     const user = userEvent.setup();
     renderInspector();
 
+    // The Trace page now has exactly two tabs: Traces and Compare.
+    // (Scenarios moved to the Mocks page.)
     const tabs = screen.getAllByRole('tab');
-    expect(tabs[0]).toHaveTextContent('Sessions');
-    expect(tabs[1]).toHaveTextContent('Scenarios');
-    expect(tabs[2]).toHaveTextContent('Compare');
+    expect(tabs).toHaveLength(2);
+    expect(tabs[0]).toHaveTextContent('Traces');
+    expect(tabs[1]).toHaveTextContent('Compare');
+    expect(screen.queryByRole('tab', { name: 'Scenarios' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('tab', { name: 'Compare' }));
 
-    // The Compare (session comparison) view exposes Run A / Run B selectors.
-    expect(screen.getByLabelText('Run A')).toBeInTheDocument();
-    expect(screen.getByLabelText('Run B')).toBeInTheDocument();
+    // The Compare (trace comparison) view exposes Trace A / Trace B selectors.
+    expect(screen.getByLabelText('Trace A')).toBeInTheDocument();
+    expect(screen.getByLabelText('Trace B')).toBeInTheDocument();
   });
 
-  it('renders unscoped session for requests without isolation', () => {
+  it('renders unscoped session with upstream host for proxy traffic without isolation', () => {
     useDashboardStore.setState({
       proxiedRequests: [
-        makeAnthropicRequest('req-1'), // no agent id header
+        makeAnthropicRequest('req-1'), // no agent id header, but has host: api.anthropic.com
       ],
       activeExpectations: [
         makeIsolatedExpectation('__llm_conv_chat__iso=header:x-agent-id'),
@@ -190,6 +224,131 @@ describe('SessionInspector', () => {
 
     renderInspector();
 
+    // The host header provides the upstream host for unscoped proxy traffic
+    expect(screen.getByText('Unscoped requests (api.anthropic.com)')).toBeInTheDocument();
+  });
+
+  it('renders plain "Unscoped requests" when no host header is present', () => {
+    // Build a request with no host header so isolationKey falls back to <unscoped>
+    const noHostRequest: JsonListItem = {
+      key: 'req-no-host',
+      value: {
+        httpRequest: {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: [], // no host header
+          body: {
+            type: 'JSON',
+            json: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              messages: [{ role: 'user', content: 'Hello' }],
+            }),
+          },
+        },
+        httpResponse: {
+          statusCode: 200,
+          body: {
+            type: 'JSON',
+            json: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              content: [{ type: 'text', text: 'Hi!' }],
+              usage: { input_tokens: 10, output_tokens: 5 },
+              stop_reason: 'end_turn',
+            }),
+          },
+        },
+      },
+    };
+
+    useDashboardStore.setState({
+      proxiedRequests: [noHostRequest],
+      activeExpectations: [],
+    });
+
+    renderInspector();
+
+    // With no host header, isolationKey is the <unscoped> sentinel,
+    // so the label should be plain "Unscoped requests" without a parenthetical.
     expect(screen.getByText('Unscoped requests')).toBeInTheDocument();
+  });
+
+  it('flags a mixed unscoped lane and hides the agent-run graph', async () => {
+    const user = userEvent.setup();
+    // Two unrelated providers sharing a host → one <unscoped> lane with a mix.
+    const anthropic: JsonListItem = {
+      key: 'a1',
+      value: {
+        httpRequest: {
+          method: 'POST',
+          path: '/v1/messages',
+          headers: [{ name: 'host', values: ['localhost:1080'] }],
+          body: {
+            type: 'JSON',
+            json: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              messages: [{ role: 'user', content: 'Hi' }],
+            }),
+          },
+        },
+        httpResponse: {
+          statusCode: 200,
+          body: {
+            type: 'JSON',
+            json: JSON.stringify({
+              model: 'claude-sonnet-4-20250514',
+              content: [{ type: 'text', text: 'Hello' }],
+              usage: { input_tokens: 10, output_tokens: 5 },
+              stop_reason: 'end_turn',
+            }),
+          },
+        },
+      },
+    };
+    useDashboardStore.setState({
+      proxiedRequests: [anthropic, makeOpenAiRequest('o1', 'localhost:1080')],
+      activeExpectations: [],
+    });
+
+    renderInspector();
+
+    // No correlated agent-run graph for the heterogeneous catch-all.
+    expect(screen.queryByText('Show graph')).not.toBeInTheDocument();
+    // The Conversation flags that it shows only the most recent of several.
+    const convBtn = screen.getByText(/Conversation \(latest of 2\)/);
+    await user.click(convBtn);
+    expect(
+      screen.getByText(/This lane groups 2 unrelated LLM requests across 2 providers/),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the agent-run graph for a scoped single-provider session', () => {
+    useDashboardStore.setState({
+      proxiedRequests: [makeAnthropicRequest('r1', 'agent-A')],
+      activeExpectations: [makeIsolatedExpectation('__llm_conv_chat__iso=header:x-agent-id')],
+    });
+
+    renderInspector();
+
+    expect(screen.getByText('Show graph')).toBeInTheDocument();
+    // A single-provider scoped lane uses the plain "Conversation" label (no "latest of N").
+    expect(screen.getByText('Conversation')).toBeInTheDocument();
+    expect(screen.queryByText(/latest of/)).not.toBeInTheDocument();
+  });
+
+  it('flags a single-provider unscoped lane that holds multiple unrelated requests', async () => {
+    const user = userEvent.setup();
+    // Two unrelated Anthropic requests, same host, no isolation → one <unscoped> lane.
+    const r1 = makeAnthropicRequest('u1');
+    const r2 = makeAnthropicRequest('u2');
+    useDashboardStore.setState({ proxiedRequests: [r1, r2], activeExpectations: [] });
+
+    renderInspector();
+
+    // Even with one provider, the unscoped lane shows only the latest and says so.
+    const convBtn = screen.getByText(/Conversation \(latest of 2\)/);
+    await user.click(convBtn);
+    expect(
+      screen.getByText(/This lane groups 2 unrelated LLM requests \(Anthropic\)/),
+    ).toBeInTheDocument();
   });
 });

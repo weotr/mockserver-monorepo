@@ -15,9 +15,11 @@ import javax.annotation.Nullable;
 import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.model.HttpResponse.badGatewayResponse;
+import static org.mockserver.model.HttpResponse.response;
 
 /**
  * @author jamesdbloom
@@ -41,14 +43,67 @@ public abstract class HttpForwardAction {
     }
 
     protected HttpForwardActionResult sendRequest(HttpRequest request, @Nullable InetSocketAddress remoteAddress, Function<HttpResponse, HttpResponse> overrideHttpResponse, boolean disableStreaming) {
+        // Resolved once outside the try so the catch block can feed a synchronous failure back into
+        // the circuit breaker (otherwise a half-open trial that throws synchronously would never
+        // release its trial slot and the breaker would be stranded open). Null when the breaker is
+        // disabled, so the default forward path is byte-for-byte unchanged.
+        String circuitKey = null;
+        boolean circuitBreakerEnabled = configuration != null
+            && Boolean.TRUE.equals(configuration.forwardProxyCircuitBreakerEnabled());
         try {
             // TODO(jamesdbloom) support proxying via HTTP2, for now always force into HTTP1
             HttpRequest toSend = hopByHopHeaderFilter.onRequest(request).withProtocol(null);
-            CompletableFuture<HttpResponse> responseFuture = disableStreaming
-                ? httpClient.sendRequest(toSend, remoteAddress, configuration.socketConnectionTimeoutInMillis(), true)
-                : httpClient.sendRequest(toSend, remoteAddress);
+
+            // Per-upstream circuit breaker (default off): when the breaker for this upstream is
+            // open, fail fast with a 503 instead of attempting the forward. Resolve the key from the
+            // explicit remote address when present, otherwise from the request's Host header.
+            if (circuitBreakerEnabled) {
+                circuitKey = ForwardCircuitBreaker.keyFor(remoteAddress != null ? remoteAddress : safeSocketAddressFromHostHeader(toSend));
+            }
+            if (circuitBreakerEnabled && !ForwardCircuitBreaker.getInstance().allowRequest(configuration, circuitKey)) {
+                CompletableFuture<HttpResponse> openFuture = new CompletableFuture<>();
+                openFuture.complete(
+                    response()
+                        .withStatusCode(503)
+                        .withReasonPhrase("Service Unavailable")
+                        .withBody("upstream circuit breaker open for " + circuitKey)
+                );
+                return new HttpForwardActionResult(request, openFuture, overrideHttpResponse, remoteAddress);
+            }
+
+            // Retry policy (default off, maxRetries=0): re-issues the upstream call for idempotent
+            // methods on a transient failure (connection error or 502/503/504) with linear back-off.
+            final int maxRetries = configuration != null ? configuration.forwardProxyRetryCount() : 0;
+            final long backoffMillis = configuration != null ? configuration.forwardProxyRetryBackoffMillis() : 0L;
+            final HttpRequest finalToSend = toSend;
+            final Supplier<CompletableFuture<HttpResponse>> attempt = () -> disableStreaming
+                ? httpClient.sendRequest(finalToSend, remoteAddress, configuration.socketConnectionTimeoutInMillis(), true)
+                : httpClient.sendRequest(finalToSend, remoteAddress);
+
+            CompletableFuture<HttpResponse> responseFuture =
+                ForwardRetryPolicy.execute(toSend.getMethod(""), maxRetries, backoffMillis, attempt);
+
+            // Feed the final outcome back into the circuit breaker. Only chained when the breaker is
+            // enabled and a key resolved, so when disabled the upstream future flows through unchanged.
+            if (circuitBreakerEnabled && circuitKey != null) {
+                final String key = circuitKey;
+                responseFuture = responseFuture.whenComplete((res, throwable) -> {
+                    if (ForwardRetryPolicy.isTransientFailure(res, throwable)) {
+                        ForwardCircuitBreaker.getInstance().recordFailure(configuration, key);
+                    } else {
+                        ForwardCircuitBreaker.getInstance().recordSuccess(configuration, key);
+                    }
+                });
+            }
+
             return new HttpForwardActionResult(request, responseFuture, overrideHttpResponse, remoteAddress);
         } catch (Exception e) {
+            // A synchronous failure (e.g. the upstream connection throws before a future is returned)
+            // must still count against the breaker so a stuck half-open trial slot is released and the
+            // breaker can re-probe recovery rather than stranding open.
+            if (circuitBreakerEnabled && circuitKey != null) {
+                ForwardCircuitBreaker.getInstance().recordFailure(configuration, circuitKey);
+            }
             mockServerLogger.logEvent(
                 new LogEntry()
                     .setLogLevel(Level.ERROR)
@@ -58,6 +113,15 @@ public abstract class HttpForwardAction {
             );
         }
         return badGatewayFuture(request);
+    }
+
+    private static InetSocketAddress safeSocketAddressFromHostHeader(HttpRequest request) {
+        try {
+            return request.socketAddressFromHostHeader();
+        } catch (Exception ignore) {
+            // No usable Host header — circuit breaker simply does not key on this request.
+            return null;
+        }
     }
 
     protected void adjustHostHeader(HttpRequest request) {

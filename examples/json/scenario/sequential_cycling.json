@@ -1,0 +1,9 @@
+{
+  "httpRequest": { "path": "/api/status" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"degraded\"}" },
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" }
+  ],
+  "responseMode": "SEQUENTIAL"
+}

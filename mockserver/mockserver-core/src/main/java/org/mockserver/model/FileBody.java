@@ -10,14 +10,20 @@ import static org.mockserver.model.MediaType.DEFAULT_TEXT_HTTP_CHARACTER_SET;
 public class FileBody extends BodyWithContentType<String> {
     private int hashCode;
     private final String filePath;
+    private final HttpTemplate.TemplateType templateType;
 
     public FileBody(String filePath) {
         this(filePath, null);
     }
 
     public FileBody(String filePath, MediaType contentType) {
+        this(filePath, contentType, null);
+    }
+
+    public FileBody(String filePath, MediaType contentType, HttpTemplate.TemplateType templateType) {
         super(Type.FILE, contentType);
         this.filePath = filePath;
+        this.templateType = templateType;
     }
 
     public static FileBody file(String filePath) {
@@ -28,8 +34,24 @@ public class FileBody extends BodyWithContentType<String> {
         return new FileBody(filePath, contentType);
     }
 
+    public static FileBody file(String filePath, MediaType contentType, HttpTemplate.TemplateType templateType) {
+        return new FileBody(filePath, contentType, templateType);
+    }
+
+    public static FileBody file(String filePath, HttpTemplate.TemplateType templateType) {
+        return new FileBody(filePath, null, templateType);
+    }
+
     public String getFilePath() {
         return filePath;
+    }
+
+    /**
+     * When set, the file contents are processed by the named template engine against the request
+     * before being returned as the response body. When {@code null} the file is returned verbatim.
+     */
+    public HttpTemplate.TemplateType getTemplateType() {
+        return templateType;
     }
 
     public String getValue() {
@@ -71,13 +93,14 @@ public class FileBody extends BodyWithContentType<String> {
             return false;
         }
         FileBody fileBody = (FileBody) o;
-        return Objects.equals(filePath, fileBody.filePath);
+        return Objects.equals(filePath, fileBody.filePath) &&
+            templateType == fileBody.templateType;
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), filePath);
+            hashCode = Objects.hash(super.hashCode(), filePath, templateType);
         }
         return hashCode;
     }

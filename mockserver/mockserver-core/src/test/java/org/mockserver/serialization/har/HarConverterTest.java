@@ -214,6 +214,21 @@ public class HarConverterTest {
     }
 
     @Test
+    public void shouldUrlEncodeQueryParameterReservedAndNonAsciiCharacters() {
+        // given - characters that MUST be percent-encoded (the previous silent-catch bug
+        // returned them unencoded, producing an invalid/injectable URL)
+        HttpRequest httpRequest = request("/search")
+            .withHeader("host", "example.com")
+            .withQueryStringParameter("q", "a#b'c");
+
+        // when
+        String url = harConverter.reconstructUrl(httpRequest);
+
+        // then
+        assertThat(url, is("http://example.com/search?q=a%23b%27c"));
+    }
+
+    @Test
     public void shouldHandleHttp2Protocol() throws Exception {
         // given
         LogEventRequestAndResponse entry = new LogEventRequestAndResponse()
@@ -239,6 +254,32 @@ public class HarConverterTest {
         JsonNode harEntry = root.get("log").get("entries").get(0);
         assertThat(harEntry.get("request").get("httpVersion").asText(), is("HTTP/2"));
         assertThat(harEntry.get("connection").asText(), is("3"));
+    }
+
+    @Test
+    public void shouldHandleHttp3Protocol() throws Exception {
+        // given
+        LogEventRequestAndResponse entry = new LogEventRequestAndResponse()
+            .withTimestamp("2026-01-15T10:30:00.000Z")
+            .withHttpRequest(
+                request("/api/test")
+                    .withMethod("GET")
+                    .withHeader("host", "example.com")
+                    .withProtocol(Protocol.HTTP_3)
+            )
+            .withHttpResponse(
+                response()
+                    .withStatusCode(200)
+                    .withReasonPhrase("OK")
+            );
+
+        // when
+        String har = harConverter.serialize(Collections.singletonList(entry));
+
+        // then
+        JsonNode root = objectMapper.readTree(har);
+        JsonNode harEntry = root.get("log").get("entries").get(0);
+        assertThat(harEntry.get("request").get("httpVersion").asText(), is("HTTP/3"));
     }
 
     @Test

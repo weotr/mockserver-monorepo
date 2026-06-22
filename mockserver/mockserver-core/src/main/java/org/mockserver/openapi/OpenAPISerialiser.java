@@ -81,11 +81,23 @@ public class OpenAPISerialiser {
     }
 
     public Optional<Pair<String, Operation>> retrieveOperation(String specUrlOrPayload, String operationId) {
-        return buildOpenAPI(specUrlOrPayload, mockServerLogger)
-            .getPaths()
-            .values()
-            .stream()
-            .flatMap(pathItem -> mapOperations(pathItem).stream())
+        OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, mockServerLogger);
+        // Search paths first, then webhooks (OAS 3.1). A valid 3.1 spec may omit paths entirely.
+        java.util.stream.Stream<Pair<String, Operation>> pathOps = openAPI.getPaths() == null
+            ? java.util.stream.Stream.empty()
+            : openAPI
+                .getPaths()
+                .values()
+                .stream()
+                .flatMap(pathItem -> mapOperations(pathItem).stream());
+        java.util.stream.Stream<Pair<String, Operation>> webhookOps = java.util.stream.Stream.empty();
+        if (openAPI.getWebhooks() != null) {
+            webhookOps = openAPI.getWebhooks()
+                .values()
+                .stream()
+                .flatMap(pathItem -> mapOperations(pathItem).stream());
+        }
+        return java.util.stream.Stream.concat(pathOps, webhookOps)
             .filter(operation -> isBlank(operationId) || operation.getRight().getOperationId().equals(operationId))
             .findFirst();
     }
@@ -98,24 +110,43 @@ public class OpenAPISerialiser {
         Map<String, List<Pair<String, Operation>>> operations = new LinkedHashMap<>();
         if (openAPI != null) {
             String normalizedPrefix = normalizeContextPathPrefix(contextPathPrefix);
-            openAPI
-                .getPaths()
-                .forEach((pathString, pathObject) -> {
-                    if (pathString != null && pathObject != null) {
+            // a valid OAS 3.1 spec may omit paths entirely (webhooks-only)
+            if (openAPI.getPaths() != null) {
+                openAPI
+                    .getPaths()
+                    .forEach((pathString, pathObject) -> {
+                        if (pathString != null && pathObject != null) {
+                            List<Pair<String, Operation>> filteredOperations = mapOperations(pathObject)
+                                .stream()
+                                .filter(operation -> isBlank(operationId) || operationId.equals(operation.getRight().getOperationId()))
+                                .sorted(Comparator.comparing(Pair::getLeft))
+                                .collect(Collectors.toList());
+                            if (!filteredOperations.isEmpty()) {
+                                // add server path prefix to each operation path
+                                filteredOperations.forEach((methodOperationPair) -> {
+                                    String pathWithServerPrefixAdded = normalizedPrefix + firstValidServerPath(methodOperationPair.getValue().getServers(), pathObject.getServers(), openAPI.getServers()) + pathString;
+                                    operations.computeIfAbsent(pathWithServerPrefixAdded, k -> new ArrayList<>()).add(methodOperationPair);
+                                });
+                            }
+                        }
+                    });
+            }
+            // OpenAPI 3.1 webhooks — use the webhook name as the path key
+            if (openAPI.getWebhooks() != null) {
+                openAPI.getWebhooks().forEach((webhookName, pathObject) -> {
+                    if (webhookName != null && pathObject != null) {
                         List<Pair<String, Operation>> filteredOperations = mapOperations(pathObject)
                             .stream()
                             .filter(operation -> isBlank(operationId) || operationId.equals(operation.getRight().getOperationId()))
                             .sorted(Comparator.comparing(Pair::getLeft))
                             .collect(Collectors.toList());
                         if (!filteredOperations.isEmpty()) {
-                            // add server path prefix to each operation path
-                            filteredOperations.forEach((methodOperationPair) -> {
-                                String pathWithServerPrefixAdded = normalizedPrefix + firstValidServerPath(methodOperationPair.getValue().getServers(), pathObject.getServers(), openAPI.getServers()) + pathString;
-                                operations.computeIfAbsent(pathWithServerPrefixAdded, k -> new ArrayList<>()).add(methodOperationPair);
-                            });
+                            String webhookPath = normalizedPrefix + "/webhook:" + webhookName;
+                            operations.computeIfAbsent(webhookPath, k -> new ArrayList<>()).addAll(filteredOperations);
                         }
                     }
                 });
+            }
         }
         return operations;
     }

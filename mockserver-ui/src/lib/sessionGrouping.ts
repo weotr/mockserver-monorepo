@@ -184,6 +184,20 @@ function isLlmKind(kind: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Host extraction for proxy-aware fallback grouping
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract a grouping key from a proxied LLM request when no isolation
+ * expectation matched. For proxy traffic the Host header identifies the
+ * upstream provider (e.g. "api.anthropic.com", "api.openai.com").
+ * Returns null when no usable host is found.
+ */
+function extractProviderHost(httpRequest: Record<string, unknown>): string | null {
+  return getHeaderValue(httpRequest['headers'], 'host');
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -281,12 +295,17 @@ export function groupBySession(
     }
 
     if (!matched) {
-      const unscopedKey = `${UNSCOPED}::${UNSCOPED}`;
+      // Proxy-aware fallback: group by the upstream host (from the Host
+      // header) so that proxy traffic to different LLM providers gets
+      // separate session lanes instead of one giant unscoped bucket.
+      const providerHost = extractProviderHost(httpRequest);
+      const groupKey = providerHost ?? UNSCOPED;
+      const unscopedKey = `${UNSCOPED}::${groupKey}`;
       let session = sessionMap.get(unscopedKey);
       if (!session) {
         session = {
           scenarioName: UNSCOPED,
-          isolationKey: UNSCOPED,
+          isolationKey: groupKey,
           requests: [],
         };
         sessionMap.set(unscopedKey, session);

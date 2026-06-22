@@ -648,4 +648,68 @@ public class ExpectationInitializerLoaderTest {
         assertThat(expectations.length, equalTo(0));
     }
 
+    // --- failOnInitializationError -------------------------------------------------------------
+
+    @Test
+    public void shouldFailFastWhenInitializationClassIsBrokenAndFailOnInitializationErrorEnabled() {
+        // given - a class name that does not exist, so loading it throws
+        Configuration configuration = configuration()
+            .initializationClass("org.mockserver.server.initialize.NoSuchInitializerClass")
+            .failOnInitializationError(true);
+
+        // when / then
+        ExpectationInitializerException exception = org.junit.Assert.assertThrows(
+            ExpectationInitializerException.class,
+            () -> new ExpectationInitializerLoader(configuration, new MockServerLogger(configuration, ExpectationInitializerLoaderTest.class), mock(RequestMatchers.class))
+        );
+        assertThat(exception.getMessage().contains("class"), is(true));
+    }
+
+    @Test
+    public void shouldContinueWhenInitializationClassIsBrokenAndFailOnInitializationErrorDisabled() {
+        // given - default (false): a broken class logs a WARN and yields zero expectations
+        Configuration configuration = configuration()
+            .initializationClass("org.mockserver.server.initialize.NoSuchInitializerClass");
+
+        // when
+        final Expectation[] expectations = new ExpectationInitializerLoader(configuration, new MockServerLogger(configuration, ExpectationInitializerLoaderTest.class), mock(RequestMatchers.class)).loadExpectations();
+
+        // then
+        assertThat(expectations.length, equalTo(0));
+    }
+
+    @Test
+    public void shouldFailFastWhenJsonInitializerIsMalformedAndFailOnInitializationErrorEnabled() throws Exception {
+        // given - a JSON file that is not a valid expectation array
+        File malformedJson = File.createTempFile("mockserverMalformedInitialization", ".json");
+        malformedJson.deleteOnExit();
+        Files.write(malformedJson.toPath(), "{ this is not valid expectation json".getBytes(StandardCharsets.UTF_8));
+        Configuration configuration = configuration()
+            .initializationJsonPath(malformedJson.getAbsolutePath())
+            .failOnInitializationError(true);
+
+        // when / then
+        org.junit.Assert.assertThrows(
+            ExpectationInitializerException.class,
+            () -> new ExpectationInitializerLoader(configuration, new MockServerLogger(configuration, ExpectationInitializerLoaderTest.class), mock(RequestMatchers.class))
+        );
+    }
+
+    @Test
+    public void shouldFailFastWhenOpenAPIInitializerIsInvalidAndFailOnInitializationErrorEnabled() throws Exception {
+        // given - an OpenAPI file that fails to parse
+        File invalidSpecFile = File.createTempFile("mockserverInvalidOpenAPIFailFast", ".yaml");
+        invalidSpecFile.deleteOnExit();
+        Files.write(invalidSpecFile.toPath(), "this is not valid openapi".getBytes(StandardCharsets.UTF_8));
+        Configuration configuration = configuration()
+            .initializationOpenAPIPath(invalidSpecFile.getAbsolutePath())
+            .failOnInitializationError(true);
+
+        // when / then
+        org.junit.Assert.assertThrows(
+            ExpectationInitializerException.class,
+            () -> new ExpectationInitializerLoader(configuration, new MockServerLogger(configuration, ExpectationInitializerLoaderTest.class), mock(RequestMatchers.class))
+        );
+    }
+
 }

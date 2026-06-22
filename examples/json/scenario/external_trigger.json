@@ -1,0 +1,4 @@
+{
+  "_comment": "PUT this body to /mockserver/scenario/HealthFlow/trigger to advance the scenario to Down. Register the two state-gated expectations from the README first.",
+  "newState": "Down"
+}

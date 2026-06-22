@@ -1,6 +1,5 @@
 package org.mockserver.templates.engine.javascript;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Splitter;
 import org.mockserver.configuration.Configuration;
@@ -11,9 +10,6 @@ import org.mockserver.model.HttpResponse;
 import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.model.DTO;
 import org.mockserver.templates.engine.TemplateEngine;
-import org.mockserver.templates.engine.TemplateFunctions;
-import org.mockserver.templates.engine.model.HttpRequestTemplateObject;
-import org.mockserver.templates.engine.model.HttpResponseTemplateObject;
 import org.mockserver.templates.engine.serializer.HttpTemplateOutputDeserializer;
 import org.slf4j.event.Level;
 
@@ -82,15 +78,33 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
 
     @Override
     public synchronized <T> T executeTemplate(String template, HttpRequest request, Class<? extends DTO<T>> dtoClass) {
-        return executeTemplateInternal(template, request, null, dtoClass, false);
+        return executeTemplateInternal(template, request, null, null, dtoClass, false);
     }
 
     @Override
     public synchronized <T> T executeTemplate(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass) {
-        return executeTemplateInternal(template, request, response, dtoClass, true);
+        return executeTemplateInternal(template, request, response, null, dtoClass, true);
     }
 
-    private <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass, boolean includeResponse) {
+    /**
+     * Load-generation only: execute a JavaScript template with a per-iteration variable
+     * ({@code iteration}) bound in the script scope. Used by the load executor so a JavaScript
+     * load-scenario step can vary its output per iteration. Identical to
+     * {@link #executeTemplate(String, HttpRequest, Class)} when {@code iteration} is null.
+     */
+    public synchronized <T> T executeTemplate(String template, HttpRequest request, org.mockserver.load.IterationContext iteration, Class<? extends DTO<T>> dtoClass) {
+        return executeTemplateInternal(template, request, null, iteration, dtoClass, false);
+    }
+
+    @Override
+    public String renderTemplate(String template, HttpRequest request) {
+        // JavaScript templates are designed to construct and return a full response object, not a text
+        // fragment, so they are not supported for FileBody templating. Use httpResponseTemplate (or
+        // httpResponseTemplate with templateFile) with a JavaScript template instead.
+        throw new UnsupportedOperationException("JavaScript templates are not supported for file body templating; use a Velocity or Mustache templateType, or an httpResponseTemplate for JavaScript");
+    }
+
+    private <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, org.mockserver.load.IterationContext iteration, Class<? extends DTO<T>> dtoClass, boolean includeResponse) {
         String script = includeResponse ? wrapTemplateWithResponse(template) : wrapTemplate(template);
         try {
             validateTemplate(template);
@@ -104,6 +118,7 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
                     includeResponse,
                     request,
                     response,
+                    iteration,
                     classFilter,
                     objectMapper,
                     mockServerLogger,

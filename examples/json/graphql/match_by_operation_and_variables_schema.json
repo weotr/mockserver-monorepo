@@ -1,0 +1,19 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/graphql",
+    "body": {
+      "type": "GRAPHQL",
+      "query": "mutation CreateOrder($input: OrderInput!) { createOrder(input: $input) { id status } }",
+      "operationName": "CreateOrder",
+      "variablesSchema": "{\"type\":\"object\",\"properties\":{\"input\":{\"type\":\"object\",\"required\":[\"productId\",\"quantity\"]}},\"required\":[\"input\"]}"
+    }
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": ["application/json"]
+    },
+    "body": "{\"data\":{\"createOrder\":{\"id\":\"order-42\",\"status\":\"PENDING\"}}}"
+  }
+}

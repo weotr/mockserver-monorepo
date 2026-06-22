@@ -5,8 +5,8 @@ set -euo pipefail
 # untrusted PR code on every master build) cannot push release-tagged images:
 #   - mockserver-build/dockerhub   — SNAPSHOT push (default queue)
 #   - mockserver-release/dockerhub — RELEASE push (release queue)
-# Release callers (docker-push-release.sh, scripts/release/components/docker.sh)
-# export DOCKERHUB_SECRET_ID explicitly; as a fallback, agents on the release
+# Release callers (scripts/release/components/docker.sh) export
+# DOCKERHUB_SECRET_ID explicitly; as a fallback, agents on the release
 # queue select the release secret automatically.
 SECRET_ID="${DOCKERHUB_SECRET_ID:-mockserver-build/dockerhub}"
 if [ -z "${DOCKERHUB_SECRET_ID:-}" ] && [ "${BUILDKITE_AGENT_META_DATA_QUEUE:-}" = "release" ]; then

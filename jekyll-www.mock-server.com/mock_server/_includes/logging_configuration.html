@@ -30,6 +30,7 @@
 <div class="panel title">
     <p>The the minimum level of logs to record in the event log and to output to system out (if <a href="#button_configuration_disable_system_out">system out log output</a> is not disabled).  The lower the log level the more log entries will be captured, particularly at TRACE level logging.</p>
     <p>Type: <span class="keyword">string</span> Default: <span class="this_value">INFO</span></p>
+    <p>Allowed values: <span class="inline_code">TRACE</span>, <span class="inline_code">DEBUG</span>, <span class="inline_code">INFO</span>, <span class="inline_code">WARN</span>, <span class="inline_code">ERROR</span>, <span class="inline_code">OFF</span> (also accepts java.util.logging equivalents: FINEST, FINE, WARNING, SEVERE)</p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.logLevel(String level)</code></pre>
     <p>System Property:</p>
@@ -38,7 +39,6 @@
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_LOG_LEVEL=...</code></pre>
     <p>Property File:</p>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.logLevel=...</code></pre>
-    <p>The log level, which can be TRACE, DEBUG, INFO, WARN, ERROR, OFF, FINEST, FINE, INFO, WARNING, SEVERE</p>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.logLevel="DEBUG"</code></pre>
 </div>
@@ -183,8 +183,8 @@
 
 <button id="button_configuration_launch_ui__debug" class="accordion title"><strong>ClientAndServer launches UI when log level DEBUG</strong></button>
 <div class="panel title">
-    <p>If true (the default) the ClientAndServer constructor or static factor methods will open the UI in the default browser when the log level is set to DEBUG.</p>
-    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">false</span></p>
+    <p>If true (default <span class="this_value">false</span>) the ClientAndServer constructor or static factory methods will open the UI in the default browser when the log level is set to DEBUG.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.launchUIForLogLevelDebug(boolean enable)</code></pre>
     <p>System Property:</p>

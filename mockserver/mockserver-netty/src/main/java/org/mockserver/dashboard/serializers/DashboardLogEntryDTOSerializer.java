@@ -9,7 +9,6 @@ import org.mockserver.model.NottableString;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -30,6 +29,9 @@ public class DashboardLogEntryDTOSerializer extends StdSerializer<DashboardLogEn
         jsonGenerator.writeStartObject();
         jsonGenerator.writeObjectField("key", logEntry.getId() + "_log");
         jsonGenerator.writeObjectFieldStart("value");
+        if (logEntry.getTimestamp() != null) {
+            jsonGenerator.writeObjectField("timestamp", logEntry.getTimestamp());
+        }
         if (logEntry.getDescription() != null) {
             jsonGenerator.writeObjectField("description", logEntry.getDescription());
         }

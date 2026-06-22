@@ -64,7 +64,12 @@ check_http() {
   local label="$1" url="$2"
   local expected="${3:-200|301|302}"
   local code
-  code=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' -L -I "$url" 2>/dev/null || echo "000")
+  # Send a real User-Agent: crates.io returns 403 to UA-less requests, which made
+  # the crates.io checks report a misleading HTTP 403. A UA is harmless for every
+  # other host, so set it unconditionally.
+  code=$(curl -sS --connect-timeout 10 --max-time 30 \
+    -A 'mockserver-release (+https://github.com/mock-server/mockserver-monorepo)' \
+    -o /dev/null -w '%{http_code}' -L -I "$url" 2>/dev/null || echo "000")
   if [[ "$code" =~ ^(${expected})$ ]]; then
     log_info "  PASS  $label  (HTTP $code)"
   else
@@ -79,7 +84,12 @@ check_http_soft() {
   local label="$1" url="$2"
   local expected="${3:-200|301|302}"
   local code
-  code=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' -L -I "$url" 2>/dev/null || echo "000")
+  # Send a real User-Agent: crates.io returns 403 to UA-less requests, which made
+  # the crates.io checks report a misleading HTTP 403. A UA is harmless for every
+  # other host, so set it unconditionally.
+  code=$(curl -sS --connect-timeout 10 --max-time 30 \
+    -A 'mockserver-release (+https://github.com/mock-server/mockserver-monorepo)' \
+    -o /dev/null -w '%{http_code}' -L -I "$url" 2>/dev/null || echo "000")
   if [[ "$code" =~ ^(${expected})$ ]]; then
     log_info "  PASS  $label  (HTTP $code)"
   else
@@ -163,10 +173,15 @@ check_http "mockserver/mockserver:$V tag" \
   "https://hub.docker.com/v2/repositories/mockserver/mockserver/tags/$V/"
 
 log_info ""
-log_info "== Binary bundles (GitHub Release, soft — convenience channel, not a gate) =="
-check_http_soft "mockserver $V linux-x86_64 bundle" \
+log_info "== Binary bundles (GitHub Release, HARD — every client launcher 404s at runtime without these) =="
+# HARD gate: the per-OS bundles are what the Node/Python/Ruby/Go/.NET/Rust client
+# launchers download at runtime. 7.0.0 shipped with zero assets (the binary step
+# soft-failed and this check was soft), so every launcher 404'd. Treat a missing
+# bundle as a release failure so it is caught before users hit it. Two
+# representative platforms are enough to detect a wholesale "no assets uploaded".
+check_http "mockserver $V linux-x86_64 bundle" \
   "https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-$V/mockserver-$V-linux-x86_64.tar.gz"
-check_http_soft "mockserver $V windows-x86_64 bundle" \
+check_http "mockserver $V windows-x86_64 bundle" \
   "https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-$V/mockserver-$V-windows-x86_64.zip"
 
 log_info ""
@@ -242,6 +257,13 @@ else
   HARD_FAILS+=("SwaggerHub default version")
 fi
 
+log_info ""
+log_info "== Postman collection (soft — convenience mirror, indexing may lag) =="
+# Public "Run in Postman" endpoint for the MockServer Control Plane collection — a
+# reachability proxy for the published public workspace; not a release gate.
+check_http_soft "MockServer Control Plane collection (Run in Postman)" \
+  "https://god.gw.postman.com/run-collection/3256712-63a2d67a-46d6-41fd-a544-0535e7393e7d"
+
 if [[ "$CREATE_VERSIONED_SITE" == "yes" ]]; then
   log_info ""
   log_info "== Versioned site =="
@@ -286,8 +308,8 @@ check_http_soft "Go client module on pkg.go.dev" \
 
 log_info ""
 log_info "== .NET Client (soft — NuGet indexing may lag) =="
-check_http_soft "MockServer.Client $V on NuGet" \
-  "https://api.nuget.org/v3-flatcontainer/mockserver.client/${V}/mockserver.client.${V}.nupkg"
+check_http_soft "MockServerClient $V on NuGet" \
+  "https://api.nuget.org/v3-flatcontainer/mockserverclient/${V}/mockserverclient.${V}.nupkg"
 
 log_info ""
 log_info "== Rust Client (soft — crates.io indexing may lag) =="
@@ -296,9 +318,14 @@ check_http_soft "mockserver-client $V on crates.io" \
 
 log_info ""
 log_info "== PHP Client (soft — Packagist webhook may lag) =="
+# `jq -e` exits non-zero when the version key is absent (the normal case while
+# the Packagist webhook lags). Under `set -euo pipefail` that non-zero in a
+# command substitution aborts the WHOLE verify run mid-PHP-check (it did, in
+# release build #50 — the step exited 1 right after this header). `|| true`
+# keeps it soft like every other check here, which use `|| echo`/`jq -r //empty`.
 php_check=$(curl -sS --connect-timeout 10 --max-time 30 \
   "https://packagist.org/packages/mock-server/mockserver-client.json" 2>/dev/null \
-  | jq -e ".package.versions[\"${V}\"]" 2>/dev/null)
+  | jq -e ".package.versions[\"${V}\"]" 2>/dev/null || true)
 if [[ -n "$php_check" && "$php_check" != "null" ]]; then
   log_info "  PASS  PHP client $V on Packagist"
 else
@@ -317,9 +344,11 @@ check_http_soft "testcontainers-mockserver $V on PyPI" \
   "https://pypi.org/pypi/testcontainers-mockserver/$V/json" "200"
 
 log_info ""
-log_info "== Testcontainers.MockServer (NuGet, soft) =="
-check_http_soft "Testcontainers.MockServer $V on NuGet" \
-  "https://api.nuget.org/v3-flatcontainer/testcontainers.mockserver/${V}/testcontainers.mockserver.${V}.nupkg"
+log_info "== MockServer.Testcontainers (NuGet, soft) =="
+# Package id is MockServer.Testcontainers (not Testcontainers.MockServer — that
+# prefix is NuGet-reserved); the flat-container path is the lowercased id.
+check_http_soft "MockServer.Testcontainers $V on NuGet" \
+  "https://api.nuget.org/v3-flatcontainer/mockserver.testcontainers/${V}/mockserver.testcontainers.${V}.nupkg"
 
 log_info ""
 log_info "== testcontainers-go (soft — pkg.go.dev indexing may lag) =="
@@ -334,7 +363,7 @@ check_http_soft "testcontainers-mockserver $V on crates.io" \
 log_info ""
 log_info "== VS Code extension (soft — Marketplace indexing may lag) =="
 check_http_soft "mockserver VS Code extension" \
-  "https://marketplace.visualstudio.com/items?itemName=mock-server.mockserver"
+  "https://marketplace.visualstudio.com/items?itemName=mockserver.mockserver"
 
 log_info ""
 log_info "== JetBrains plugin (soft — Marketplace indexing may lag) =="

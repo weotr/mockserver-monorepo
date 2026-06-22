@@ -134,4 +134,96 @@ public class HttpResponseDTOTest {
         assertThat(httpResponseDTO.getReasonPhrase(), is(nullValue()));
         assertThat(httpResponseDTO.getConnectionOptions(), is(nullValue()));
     }
+
+    @Test
+    public void shouldRoundTripTrailers() {
+        // given
+        Headers trailers = new Headers().withEntries(header("x-checksum", "abc123"));
+        HttpResponse httpResponse = new HttpResponse()
+            .withStatusCode(200)
+            .withTrailer("x-checksum", "abc123");
+
+        // when
+        HttpResponseDTO httpResponseDTO = new HttpResponseDTO(httpResponse);
+
+        // then DTO captures the trailers
+        assertThat(httpResponseDTO.getTrailers(), is(trailers));
+
+        // and building back yields an equal response with the trailers preserved
+        HttpResponse rebuilt = httpResponseDTO.buildObject();
+        assertThat(rebuilt.getTrailerList(), containsInAnyOrder(new Header("x-checksum", "abc123")));
+        assertThat(rebuilt, is(httpResponse));
+    }
+
+    @Test
+    public void shouldOmitTrailersWhenAbsent() {
+        // when
+        HttpResponseDTO httpResponseDTO = new HttpResponseDTO(new HttpResponse().withStatusCode(200));
+
+        // then
+        assertThat(httpResponseDTO.getTrailers(), is(nullValue()));
+        assertThat(httpResponseDTO.buildObject().getTrailers(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldRoundTripRecoverAfter() {
+        // given
+        RecoverAfter recoverAfter = new RecoverAfter()
+            .withFailTimes(3)
+            .withFailResponse(new HttpResponse().withStatusCode(503).withHeader("Retry-After", "1"))
+            .withIdempotencyHeader("Idempotency-Key");
+        HttpResponse httpResponse = new HttpResponse()
+            .withStatusCode(200)
+            .withBody("ok")
+            .withRecoverAfter(recoverAfter);
+
+        // when
+        HttpResponseDTO httpResponseDTO = new HttpResponseDTO(httpResponse);
+
+        // then the DTO captures it
+        assertThat(httpResponseDTO.getRecoverAfter(), is(new RecoverAfterDTO(recoverAfter)));
+
+        // and building back yields an equal response with the recoverAfter preserved
+        HttpResponse rebuilt = httpResponseDTO.buildObject();
+        assertThat(rebuilt.getRecoverAfter(), is(recoverAfter));
+        assertThat(rebuilt, is(httpResponse));
+    }
+
+    @Test
+    public void shouldOmitRecoverAfterWhenAbsent() {
+        // when - a response without recoverAfter
+        HttpResponseDTO httpResponseDTO = new HttpResponseDTO(new HttpResponse().withStatusCode(200));
+
+        // then the DTO field stays null and rebuilding keeps it null (so the JSON key is omitted)
+        assertThat(httpResponseDTO.getRecoverAfter(), is(nullValue()));
+        assertThat(httpResponseDTO.buildObject().getRecoverAfter(), is(nullValue()));
+    }
+
+    @Test
+    public void plainResponseJsonHasNoRecoverAfterKey() {
+        // a response WITHOUT recoverAfter must serialize byte-for-byte as before (no recoverAfter key)
+        org.mockserver.serialization.HttpResponseSerializer serializer =
+            new org.mockserver.serialization.HttpResponseSerializer(new org.mockserver.logging.MockServerLogger());
+        String json = serializer.serialize(new HttpResponse().withStatusCode(200).withBody("ok"));
+        assertThat("plain response JSON must not contain a recoverAfter key", json.contains("recoverAfter"), is(false));
+    }
+
+    @Test
+    public void recoverAfterJsonRoundTrips() {
+        org.mockserver.serialization.HttpResponseSerializer serializer =
+            new org.mockserver.serialization.HttpResponseSerializer(new org.mockserver.logging.MockServerLogger());
+        HttpResponse original = new HttpResponse()
+            .withStatusCode(200)
+            .withBody("ok")
+            .withRecoverAfter(new RecoverAfter()
+                .withFailTimes(3)
+                .withIdempotencyHeader("Idempotency-Key"));
+
+        String json = serializer.serialize(original);
+        assertThat(json.contains("recoverAfter"), is(true));
+        assertThat(json.contains("failTimes"), is(true));
+
+        HttpResponse rebuilt = serializer.deserialize(json);
+        assertThat(rebuilt.getRecoverAfter(), is(original.getRecoverAfter()));
+    }
 }

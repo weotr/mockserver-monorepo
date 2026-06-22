@@ -1,0 +1,35 @@
+meta {
+  name: verify a request has been received a specific number of times
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/verify
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "httpRequest": {
+      "method": "GET",
+      "path": "/api/users"
+    },
+    "times": {
+      "atLeast": 1
+    }
+  }
+}
+
+docs {
+  Verify a request has been received a specific number of times.
+  
+  request matcher and the number of times to match
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -90,6 +90,9 @@ public class AsyncApiParser {
             Integer mqttQos = parseMqttQos(operationNode);
             Boolean mqttRetain = parseMqttRetain(operationNode);
 
+            // Parse AMQP channel binding (bindings.amqp lives on the channel in both v2 and v3)
+            AmqpBinding amqpBinding = parseAmqpBinding(channelDef);
+
             // Check for oneOf (multi-message in AsyncAPI 2.x)
             JsonNode oneOf = messageNode.get("oneOf");
             if (oneOf != null && oneOf.isArray() && oneOf.size() > 1) {
@@ -148,11 +151,11 @@ public class AsyncApiParser {
                     result.add(new AsyncApiChannel(channelName,
                         firstExamples != null ? firstExamples : List.of(),
                         firstPayloadSchema,
-                        mqttQos, mqttRetain, firstKafkaKey, explicitMessages, firstCorrelationIdLoc));
+                        mqttQos, mqttRetain, firstKafkaKey, explicitMessages, firstCorrelationIdLoc, amqpBinding));
                 } else {
                     // All oneOf entries were malformed — fall through to empty channel
                     result.add(new AsyncApiChannel(channelName, List.of(), null,
-                        mqttQos, mqttRetain, null));
+                        mqttQos, mqttRetain, null, null, null, amqpBinding));
                 }
             } else {
                 // Single message (no oneOf, or oneOf with 0-1 entries)
@@ -196,7 +199,7 @@ public class AsyncApiParser {
                 String correlationIdLoc = parseCorrelationIdLocation(root, singleMsg);
 
                 result.add(new AsyncApiChannel(channelName, examples, payloadSchema,
-                    mqttQos, mqttRetain, kafkaKey, null, correlationIdLoc));
+                    mqttQos, mqttRetain, kafkaKey, null, correlationIdLoc, amqpBinding));
             }
         }
 
@@ -253,6 +256,9 @@ public class AsyncApiParser {
             // Full v3 operation-binding navigation is deferred.
             Integer mqttQos = parseMqttQos(channelDef);
             Boolean mqttRetain = parseMqttRetain(channelDef);
+
+            // Parse AMQP channel binding (bindings.amqp lives on the channel in v3)
+            AmqpBinding amqpBinding = parseAmqpBinding(channelDef);
 
             // Iterate ALL message definitions in this channel
             List<AsyncApiMessage> allMessages = new ArrayList<>();
@@ -312,13 +318,80 @@ public class AsyncApiParser {
             List<AsyncApiMessage> explicitMessages = allMessages.size() > 1 ? allMessages : null;
 
             result.add(new AsyncApiChannel(channelName, firstExamples, firstPayloadSchema,
-                mqttQos, mqttRetain, firstKafkaKey, explicitMessages, firstCorrelationIdLoc));
+                mqttQos, mqttRetain, firstKafkaKey, explicitMessages, firstCorrelationIdLoc, amqpBinding));
         }
 
         return result;
     }
 
     // ---- Binding extraction helpers ----
+
+    /**
+     * Extract the AMQP channel binding from {@code channelDef.bindings.amqp}.
+     * <p>
+     * Reads the {@code is} discriminator ({@code routingKey} / {@code queue}),
+     * the {@code exchange} object ({@code name}/{@code type}/{@code durable}),
+     * the {@code queue} object ({@code name}/{@code durable}), and an optional
+     * top-level {@code routingKey} extension. Returns null when no
+     * {@code bindings.amqp} object is present (never throws).
+     */
+    private AmqpBinding parseAmqpBinding(JsonNode channelDef) {
+        try {
+            if (channelDef == null) {
+                return null;
+            }
+            JsonNode bindings = channelDef.get("bindings");
+            if (bindings == null) {
+                return null;
+            }
+            JsonNode amqp = bindings.get("amqp");
+            if (amqp == null || !amqp.isObject()) {
+                return null;
+            }
+
+            // Discriminator: 'is' = routingKey (default) | queue
+            AmqpBinding.ChannelType channelType = AmqpBinding.ChannelType.ROUTING_KEY;
+            JsonNode isNode = amqp.get("is");
+            if (isNode != null && isNode.isTextual() && "queue".equalsIgnoreCase(isNode.asText())) {
+                channelType = AmqpBinding.ChannelType.QUEUE;
+            }
+
+            // Exchange object
+            String exchangeName = null;
+            String exchangeType = null;
+            boolean exchangeDurable = true;
+            JsonNode exchange = amqp.get("exchange");
+            if (exchange != null && exchange.isObject()) {
+                exchangeName = textOrNull(exchange, "name");
+                exchangeType = textOrNull(exchange, "type");
+                JsonNode durable = exchange.get("durable");
+                if (durable != null && durable.isBoolean()) {
+                    exchangeDurable = durable.asBoolean();
+                }
+            }
+
+            // Queue object
+            String queueName = null;
+            boolean queueDurable = true;
+            JsonNode queue = amqp.get("queue");
+            if (queue != null && queue.isObject()) {
+                queueName = textOrNull(queue, "name");
+                JsonNode durable = queue.get("durable");
+                if (durable != null && durable.isBoolean()) {
+                    queueDurable = durable.asBoolean();
+                }
+            }
+
+            // Optional explicit routing key (extension; AsyncAPI itself uses the channel name)
+            String routingKey = textOrNull(amqp, "routingKey");
+
+            return new AmqpBinding(channelType, exchangeName, exchangeType, exchangeDurable,
+                queueName, queueDurable, routingKey);
+        } catch (Exception e) {
+            LOG.warn("Failed to parse AMQP channel binding: {}", e.getMessage());
+            return null;
+        }
+    }
 
     /**
      * Extract MQTT QoS from {@code node.bindings.mqtt.qos} (int 0/1/2).

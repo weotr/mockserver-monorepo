@@ -28,6 +28,7 @@ class HttpRequest implements \JsonSerializable
     private string|array|null $body = null;
     private ?bool $keepAlive = null;
     private ?bool $secure = null;
+    private ?array $socketAddress = null;
 
     /**
      * Static factory for fluent construction.
@@ -113,9 +114,38 @@ class HttpRequest implements \JsonSerializable
         return $this;
     }
 
+    /**
+     * Set the request body as a file reference.
+     *
+     * @param string $filePath Path to the file to serve
+     * @param string|null $contentType Optional content type
+     * @param string|null $templateType Optional template type ("VELOCITY" or "MUSTACHE") for templating the file
+     */
+    public function fileBody(string $filePath, ?string $contentType = null, ?string $templateType = null): self
+    {
+        $body = [
+            'type' => 'FILE',
+            'filePath' => $filePath,
+        ];
+        if ($contentType !== null) {
+            $body['contentType'] = $contentType;
+        }
+        if ($templateType !== null) {
+            $body['templateType'] = $templateType;
+        }
+        $this->body = $body;
+        return $this;
+    }
+
     public function keepAlive(bool $keepAlive): self
     {
         $this->keepAlive = $keepAlive;
+        return $this;
+    }
+
+    public function socketAddress(string $host, int $port, string $scheme = 'HTTP'): self
+    {
+        $this->socketAddress = ['host' => $host, 'port' => $port, 'scheme' => $scheme];
         return $this;
     }
 
@@ -202,6 +232,9 @@ class HttpRequest implements \JsonSerializable
         }
         if ($this->secure !== null) {
             $data['secure'] = $this->secure;
+        }
+        if ($this->socketAddress !== null) {
+            $data['socketAddress'] = $this->socketAddress;
         }
 
         return $data;

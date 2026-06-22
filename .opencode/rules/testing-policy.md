@@ -26,7 +26,7 @@ Follow the full pre-commit workflow in `commit-workflow.md`. That workflow cover
 
 When the user asks to commit Java changes:
 1. **Run unit tests** — `./mvnw test -pl <modules>` for all affected modules. Fix failures before committing.
-2. **Adversarial review** — launch `review-cheap` subagent (see `commit-workflow.md` Step 3).
+2. **Adversarial review** — launch `review-cheap` subagent (see `commit-workflow.md` Step 4; control / AI-component changes use `review-final` + gated approval).
 3. **Only then commit.**
 
 **Skip condition:** If user explicitly says to skip (e.g., "skip tests", "just commit"), skip corresponding steps.

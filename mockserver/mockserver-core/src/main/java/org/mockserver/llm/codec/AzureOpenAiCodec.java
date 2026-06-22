@@ -2,7 +2,6 @@ package org.mockserver.llm.codec;
 
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ProviderCodec;
-import org.mockserver.llm.StreamingPhysicsExpander;
 import org.mockserver.model.*;
 
 import java.util.List;

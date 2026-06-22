@@ -2,15 +2,16 @@
 
 ## Publish Gate
 
-**Do not post until `Testcontainers.MockServer` is live on NuGet.**
+**Do not post until `MockServer.Testcontainers` is live on NuGet.**
 
 Verify:
 ```bash
-dotnet add package Testcontainers.MockServer --version 7.0.1
-# or: curl -sf "https://api.nuget.org/v3/registration5-gz-semver2/testcontainers.mockserver/index.json" | python3 -c "import sys,json,gzip; data=json.loads(gzip.decompress(sys.stdin.buffer.read())); print(data['items'][0]['items'][-1]['catalogEntry']['version'])"
+dotnet add package MockServer.Testcontainers --version 7.1.0
+# or: curl -sf "https://api.nuget.org/v3/registration5-gz-semver2/mockserver.testcontainers/index.json" | python3 -c "import sys,json,gzip; data=json.loads(gzip.decompress(sys.stdin.buffer.read())); print(data['items'][0]['items'][-1]['catalogEntry']['version'])"
 ```
 
-The NuGet package version is `7.0.1` (set in `Directory.Build.props`).
+The NuGet package version tracks the MockServer release (e.g. `7.1.0`); the
+in-repo default lives in `Directory.Build.props` and is bumped by the release script.
 
 ---
 
@@ -34,7 +35,7 @@ File most likely to PR against: the module list in `README.md` or the dedicated
 ## PR Title
 
 ```
-docs: add official MockServer module — Testcontainers.MockServer (NuGet)
+docs: add official MockServer module — MockServer.Testcontainers (NuGet)
 ```
 
 ---
@@ -45,7 +46,7 @@ docs: add official MockServer module — Testcontainers.MockServer (NuGet)
 ## Summary
 
 MockServer now ships an officially maintained Testcontainers module for .NET:
-[`Testcontainers.MockServer`](https://www.nuget.org/packages/Testcontainers.MockServer/).
+[`MockServer.Testcontainers`](https://www.nuget.org/packages/MockServer.Testcontainers/) (C# namespace stays `Testcontainers.MockServer`).
 
 The module is maintained by the MockServer project and tracks each MockServer release.
 It targets .NET 8+ and wraps `Testcontainers` 4.12.0.
@@ -53,7 +54,7 @@ It targets .NET 8+ and wraps `Testcontainers` 4.12.0.
 ## Install
 
 ```bash
-dotnet add package Testcontainers.MockServer
+dotnet add package MockServer.Testcontainers
 ```
 
 ## Quick start
@@ -89,7 +90,7 @@ var response = await httpClient.GetStringAsync($"{url}/hello");
 
 ## Links
 
-- NuGet: https://www.nuget.org/packages/Testcontainers.MockServer/
+- NuGet: https://www.nuget.org/packages/MockServer.Testcontainers/
 - Source: https://github.com/mock-server/mockserver/tree/master/mockserver-testcontainers/dotnet
 - MockServer docs: https://www.mock-server.com
 ```
@@ -98,7 +99,7 @@ var response = await httpClient.GetStringAsync($"{url}/hello");
 
 ## Notes for the Submitter
 
-- NuGet package ID: `Testcontainers.MockServer`; version in this release: `7.0.1`.
+- NuGet package ID: `MockServer.Testcontainers` (namespace/assembly stay `Testcontainers.MockServer`); version in this release: `7.1.0`.
 - Targets `net8.0`; depends on `Testcontainers` 4.12.0.
 - The builder class is `MockServerBuilder`; the started container exposes `GetUrl()`,
   `GetSecureUrl()`, and `GetConnectionString()`.

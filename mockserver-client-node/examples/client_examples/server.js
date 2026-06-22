@@ -152,7 +152,7 @@ function verifyRequestsReceiveAtLeastTwiceByOpenAPI() {
     mockServerClient("localhost", 1080)
         .verify(
             {
-                'specUrlOrPayload': 'https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json'
+                'specUrlOrPayload': 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json'
             }, 2)
         .then(
             function () {
@@ -328,7 +328,7 @@ function clearWithOpenAPIRequestMatcher() {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080)
         .clear({
-            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
             "operationId": "showPetById"
         })
         .then(
@@ -375,7 +375,7 @@ function clearRequestAndLogsWithOpenAPIRequestMatcher() {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080)
         .clear({
-            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
             "operationId": "showPetById"
         }, 'LOG')
         .then(

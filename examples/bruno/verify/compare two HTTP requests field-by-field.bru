@@ -1,0 +1,46 @@
+meta {
+  name: compare two HTTP requests field-by-field
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/mockserver/diff
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "expected": {
+      "method": "GET",
+      "path": "/api/pets",
+      "headers": {
+        "Accept": [
+          "application/json"
+        ]
+      }
+    },
+    "actual": {
+      "method": "GET",
+      "path": "/api/pets",
+      "headers": {
+        "Accept": [
+          "text/xml"
+        ]
+      }
+    }
+  }
+}
+
+docs {
+  Diffs an 'expected' against an 'actual' HttpRequest and returns the per-field differences, a total diff count and whether the two requests are identical.
+  
+  the two HTTP requests to compare
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

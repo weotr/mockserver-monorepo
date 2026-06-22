@@ -369,6 +369,163 @@ public class McpStreamableHttpHandlerTest {
     }
 
     @Test
+    public void shouldAdvertisePromptsAndSamplingCapabilities() throws Exception {
+        String requestBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+        FullHttpResponse response = sendPost(requestBody);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        JsonNode capabilities = json.path("result").path("capabilities");
+        assertThat(capabilities.path("prompts").path("listChanged").asBoolean(), is(false));
+        assertThat(capabilities.has("sampling"), is(true));
+
+        response.release();
+    }
+
+    @Test
+    public void shouldHandlePromptsList() throws Exception {
+        String sessionId = initializeAndGetSessionId();
+
+        String requestBody = "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"prompts/list\",\"params\":{}}";
+        FullHttpResponse response = sendPost(requestBody, sessionId);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        JsonNode prompts = json.path("result").path("prompts");
+        assertThat(prompts.isArray(), is(true));
+        assertThat(prompts.size() > 0, is(true));
+
+        boolean foundDebugPrompt = false;
+        for (JsonNode prompt : prompts) {
+            if ("debug_unmatched_request".equals(prompt.path("name").asText())) {
+                foundDebugPrompt = true;
+                assertThat(prompt.path("description").asText().isEmpty(), is(false));
+                assertThat(prompt.path("arguments").isArray(), is(true));
+                assertThat(prompt.path("arguments").size(), is(2));
+                assertThat(prompt.path("arguments").get(0).path("name").asText(), is("method"));
+                assertThat(prompt.path("arguments").get(0).path("required").asBoolean(), is(true));
+            }
+        }
+        assertThat(foundDebugPrompt, is(true));
+
+        response.release();
+    }
+
+    @Test
+    public void shouldHandlePromptsGetWithArgumentSubstitution() throws Exception {
+        String sessionId = initializeAndGetSessionId();
+
+        ObjectNode arguments = objectMapper.createObjectNode();
+        arguments.put("method", "POST");
+        arguments.put("path", "/orders");
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("name", "debug_unmatched_request");
+        params.set("arguments", arguments);
+
+        ObjectNode rpcRequest = objectMapper.createObjectNode();
+        rpcRequest.put("jsonrpc", "2.0");
+        rpcRequest.put("id", 21);
+        rpcRequest.put("method", "prompts/get");
+        rpcRequest.set("params", params);
+
+        FullHttpResponse response = sendPost(objectMapper.writeValueAsString(rpcRequest), sessionId);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        JsonNode result = json.path("result");
+        assertThat(result.path("description").asText().isEmpty(), is(false));
+        JsonNode messages = result.path("messages");
+        assertThat(messages.isArray(), is(true));
+        assertThat(messages.size(), is(1));
+        assertThat(messages.get(0).path("role").asText(), is("user"));
+        String text = messages.get(0).path("content").path("text").asText();
+        assertThat(text, containsString("POST"));
+        assertThat(text, containsString("/orders"));
+        assertThat(text.contains("{{method}}"), is(false));
+
+        response.release();
+    }
+
+    @Test
+    public void shouldReturnErrorForUnknownPrompt() throws Exception {
+        String sessionId = initializeAndGetSessionId();
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("name", "nonexistent_prompt");
+
+        ObjectNode rpcRequest = objectMapper.createObjectNode();
+        rpcRequest.put("jsonrpc", "2.0");
+        rpcRequest.put("id", 22);
+        rpcRequest.put("method", "prompts/get");
+        rpcRequest.set("params", params);
+
+        FullHttpResponse response = sendPost(objectMapper.writeValueAsString(rpcRequest), sessionId);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        assertThat(json.path("error").path("code").asInt(), is(JsonRpcMessage.INVALID_PARAMS));
+        assertThat(json.path("error").path("message").asText(), containsString("Unknown prompt"));
+
+        response.release();
+    }
+
+    @Test
+    public void shouldHandleSamplingCreateMessage() throws Exception {
+        String sessionId = initializeAndGetSessionId();
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("role", "user");
+        ObjectNode content = message.putObject("content");
+        content.put("type", "text");
+        content.put("text", "Summarise the build failure.");
+
+        ObjectNode hint = objectMapper.createObjectNode();
+        hint.put("name", "claude-sonnet-4");
+        ObjectNode modelPreferences = objectMapper.createObjectNode();
+        modelPreferences.putArray("hints").add(hint);
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.putArray("messages").add(message);
+        params.set("modelPreferences", modelPreferences);
+        params.put("mockResponse", "The build failed because of a missing dependency.");
+
+        ObjectNode rpcRequest = objectMapper.createObjectNode();
+        rpcRequest.put("jsonrpc", "2.0");
+        rpcRequest.put("id", 23);
+        rpcRequest.put("method", "sampling/createMessage");
+        rpcRequest.set("params", params);
+
+        FullHttpResponse response = sendPost(objectMapper.writeValueAsString(rpcRequest), sessionId);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        JsonNode result = json.path("result");
+        assertThat(result.path("role").asText(), is("assistant"));
+        assertThat(result.path("content").path("type").asText(), is("text"));
+        assertThat(result.path("content").path("text").asText(), is("The build failed because of a missing dependency."));
+        assertThat(result.path("model").asText(), is("claude-sonnet-4"));
+        assertThat(result.path("stopReason").asText(), is("endTurn"));
+
+        response.release();
+    }
+
+    @Test
+    public void shouldReturnErrorForSamplingWithoutMessages() throws Exception {
+        String sessionId = initializeAndGetSessionId();
+
+        String requestBody = "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"sampling/createMessage\",\"params\":{}}";
+        FullHttpResponse response = sendPost(requestBody, sessionId);
+
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        assertThat(json.path("error").path("code").asInt(), is(JsonRpcMessage.INVALID_PARAMS));
+        assertThat(json.path("error").path("message").asText(), containsString("messages"));
+
+        response.release();
+    }
+
+    @Test
     public void shouldHandleUnknownMethod() throws Exception {
         String sessionId = initializeAndGetSessionId();
 

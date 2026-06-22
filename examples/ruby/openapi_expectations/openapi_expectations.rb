@@ -10,8 +10,8 @@ require 'mockserver-client'
 
 include MockServer
 
-PETSTORE_SPEC_URL = 'https://raw.githubusercontent.com/mock-server/mockserver/' \
-                    'master/mockserver-integration-testing/src/main/resources/' \
+PETSTORE_SPEC_URL = 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/' \
+                    'master/mockserver/mockserver-integration-testing/src/main/resources/' \
                     'org/mockserver/openapi/openapi_petstore_example.json'
 
 client = Client.new('localhost', 1080)

@@ -1,0 +1,13 @@
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "headers": {
+      "Accept": [
+        "accept:application/json"
+      ]
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

@@ -289,9 +289,40 @@ public class OllamaCodecTest {
         assertThat(parsed.getMessages(), is(empty()));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldThrowForEmbeddings() {
-        codec.encodeEmbedding(EmbeddingResponse.embedding(), "test input");
+    @Test
+    public void shouldEncodeEmbeddingInOllamaEmbedShape() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding()
+            .withDimensions(6)
+            .withDeterministicFromInput(true)
+            .withSeed(3L);
+
+        // when — Ollama /api/embed shape: {"embeddings":[[...]]}
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input");
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getFirstHeader("content-type"), is("application/json"));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        JsonNode embeddings = root.get("embeddings");
+        assertThat(embeddings.isArray(), is(true));
+        assertThat(embeddings.size(), is(1));
+        assertThat(embeddings.get(0).size(), is(6));
+        assertThat(root.get("model").asText(), is("nomic-embed-text"));
+        assertThat(root.get("prompt_eval_count").asInt(), is(greaterThanOrEqualTo(0)));
+    }
+
+    @Test
+    public void shouldDefaultOllamaEmbeddingDimensionsTo768() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding().withDeterministicFromInput(true);
+
+        // when
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input");
+
+        // then
+        JsonNode embeddings = OBJECT_MAPPER.readTree(response.getBodyAsString()).get("embeddings");
+        assertThat(embeddings.get(0).size(), is(768));
     }
 
     @Test

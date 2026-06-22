@@ -4,29 +4,182 @@
     <vendor email="jamesdbloom@gmail.com" url="https://www.mock-server.com">MockServer</vendor>
 
     <description><![CDATA[
-    MockServer integration for IntelliJ-based IDEs.
+    <p><b>Author, record, and debug HTTP/HTTPS mocks for <a href="https://www.mock-server.com">MockServer</a> without leaving your IDE.</b></p>
+
+    <p><b>MockServer</b> lets you mock any system you integrate with over HTTP/1.1, HTTP/2, HTTP/3 (QUIC), HTTPS, or gRPC — services, REST or RPC APIs, and more — so you can build and test against simulated dependencies instead of real ones. This plugin brings the full MockServer toolset into IntelliJ IDEA and every other JetBrains IDE.</p>
+
+    <p><b>Highlights</b></p>
     <ul>
-      <li>Open the MockServer Dashboard in your browser</li>
-      <li>Start a MockServer Docker container from the IDE</li>
-      <li>Tool window for quick access to MockServer controls</li>
+      <li><b>Schema-driven expectation authoring</b> — name a file <em>*.mockserver.json</em> and the editor validates it as you type, with autocompletion and hover documentation, using the same JSON Schema MockServer validates against. No language server, no extra setup.</li>
+      <li><b>Record real traffic into code</b> — capture the requests MockServer proxied from a real upstream and save them as ready-to-use expectations, as JSON or as a Java DSL snippet.</li>
+      <li><b>Generate mocks from an OpenAPI/Swagger spec</b> — turn the spec open in your editor into a full set of expectations in one action.</li>
+      <li><b>Live MockServer dashboard, embedded in the IDE</b> — watch requests, inspect match results, and review active expectations in a dedicated tool window, without switching to a browser.</li>
     </ul>
-    <p>This is an initial scaffold — more features coming soon.</p>
+
+    <p><em>See the screenshots for record-to-code, schema authoring, and the in-IDE dashboard.</em></p>
+
+    <p><b>Everything it does</b></p>
+
+    <p><b>Server</b></p>
+    <ul>
+      <li><b>Start MockServer (Docker)</b> — launch the configured <em>mockserver/mockserver</em> container on the configured port with one click (the image tracks the plugin version by default).</li>
+      <li><b>Open MockServer Dashboard in IDE</b> — embed the live dashboard in a right-hand tool window using the bundled JCEF (Chromium) engine, with Reload and Open-in-Browser buttons; falls back to your browser when JCEF is unavailable.</li>
+      <li><b>Open MockServer Dashboard</b> — open the live dashboard in your default browser.</li>
+      <li><b>Reset MockServer</b> — clear all expectations and recorded logs on the running server (confirms first).</li>
+    </ul>
+
+    <p><b>Editor actions</b> (operate on the active file)</p>
+    <ul>
+      <li><b>Load Expectations Into Running Server</b> — send the active file (a single expectation or an array) to the running server.</li>
+      <li><b>Save Recorded Expectations</b> — retrieve expectations MockServer recorded from proxied/forwarded traffic and open them in a new tab, choosing JSON or Java DSL output.</li>
+      <li><b>Generate Expectations From OpenAPI Spec</b> — send the active OpenAPI/Swagger spec (JSON or YAML) to MockServer and open the generated expectations.</li>
+      <li><b>Send Test Request</b> — fire the ad-hoc HTTP request described in the active editor and open the response in a new tab.</li>
+      <li><b>Show Drift Report</b> — fetch MockServer's mock-drift records (how real upstream responses differ from your stubs) and open a formatted report.</li>
+      <li><b>Find Requests by Trace</b> — enter a W3C trace id or full <em>traceparent</em> value and open every received request carrying that trace as JSON.</li>
+      <li><b>View Trace in Backend</b> — enter a W3C trace id or <em>traceparent</em> value and open the correlated trace in your trace backend (Jaeger/Tempo/Grafana) via a configurable URL template.</li>
+    </ul>
+
+    <p><b>Advanced</b></p>
+    <ul>
+      <li><b>Upload WASM Module</b> — pick a compiled <em>.wasm</em> custom-rule module and upload it, then reference it by name as a WASM body matcher.</li>
+      <li><b>List WASM Modules</b> — show the WASM custom-rule modules registered on the running server.</li>
+      <li><b>MockServer tool window</b> — a dockable panel that surfaces every action as a one-click button, grouped into Server, Editor, and WASM rows.</li>
+      <li><b>Settings</b> — configure the Docker image, container name, and port under <b>Settings | Tools | MockServer</b>.</li>
+    </ul>
+
+    <p><b>Requirements</b> — a running MockServer instance at the configured port (Docker is optional, and only needed for the Start action). WASM actions require <em>wasmEnabled=true</em> on the server.</p>
+
+    <p><b>Links</b> — <a href="https://www.mock-server.com">mock-server.com</a> for full documentation and client libraries, and the <a href="https://github.com/mock-server/mockserver">GitHub repository</a> for source and issues.</p>
     ]]></description>
 
+    <change-notes><![CDATA[
+    <p><b>Unreleased</b> — LLM authoring, contract testing, and stream-frame debugging (VS Code parity):</p>
+    <ul>
+      <li><b>LLM tool window</b> — build an <em>httpLlmResponse</em> expectation from a form (provider/model/path/completion/usage/stream) and open it in an editor or load it into the running server; completion for <em>httpLlmResponse</em> fields, provider and model names inside <em>*.mockserver.json</em>; and an agent-run call graph rendered as Mermaid in the embedded Chromium (JCEF)</li>
+      <li><b>Run Contract Test</b> — run an OpenAPI contract test of a live service against the active spec (Tools menu and editor/project-view context menus) and open a per-operation pass/fail report</li>
+      <li><b>Stream-frame debugging</b> — the in-IDE HTTP Debugger now shows paused stream frames in a Live Streams list and resolves each with Continue / Modify (Base64) / Drop</li>
+    </ul>
+    <p><b>7.1.0</b> — first release; full IDE integration:</p>
+    <ul>
+      <li>Expectation-file validation with JSON Schema completion and hover docs in <em>*.mockserver.json</em> files</li>
+      <li>Start MockServer via Docker, with a Docker-availability pre-check</li>
+      <li>Open the MockServer dashboard embedded in the IDE (JCEF) or in your browser</li>
+      <li>Load Expectations, Save Recorded Expectations (JSON or Java DSL), Generate From OpenAPI Spec, and Send Test Request from the active editor</li>
+      <li>Show Drift Report and Find Requests by Trace (W3C traceparent)</li>
+      <li>Upload and List WASM custom-rule modules</li>
+      <li>Reset the running server</li>
+      <li>Dockable MockServer tool window with one-click buttons grouped by Server / Editor / WASM</li>
+      <li>Settings for Docker image, container name, and port</li>
+      <li>UX polish: a marketplace icon, per-action icons and grouping in the Tools menu, a status line and section headers in the tool window, and a friendly "no server running" panel in the embedded dashboard</li>
+    </ul>
+    ]]></change-notes>
+
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.json</depends>
 
     <actions>
         <group id="MockServer.ActionGroup" text="MockServer" description="MockServer actions" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <separator text="Server"/>
             <action id="MockServer.OpenDashboard"
                     class="com.mockserver.jetbrains.OpenDashboardAction"
                     text="Open MockServer Dashboard"
-                    description="Opens the MockServer dashboard in your default browser"/>
+                    description="Opens the MockServer dashboard in your default browser"
+                    icon="AllIcons.General.Web"/>
+            <action id="MockServer.OpenDashboardInIde"
+                    class="com.mockserver.jetbrains.OpenDashboardInIdeAction"
+                    text="Open MockServer Dashboard in IDE"
+                    description="Shows the live MockServer dashboard inside the IDE using the bundled Chromium engine"
+                    icon="AllIcons.Toolwindows.WebToolWindow"/>
             <action id="MockServer.StartDocker"
                     class="com.mockserver.jetbrains.StartDockerAction"
                     text="Start MockServer (Docker)"
-                    description="Starts a MockServer container via Docker"/>
+                    description="Starts a MockServer container via Docker"
+                    icon="AllIcons.Actions.Execute"/>
+            <action id="MockServer.Reset"
+                    class="com.mockserver.jetbrains.ResetAction"
+                    text="Reset MockServer"
+                    description="Clears all expectations and logs on the running MockServer (PUT /mockserver/reset)"
+                    icon="AllIcons.Actions.GC"/>
+            <separator text="Editor actions"/>
+            <action id="MockServer.LoadExpectations"
+                    class="com.mockserver.jetbrains.LoadExpectationsAction"
+                    text="Load Expectations Into Running Server"
+                    description="Sends the active editor file to PUT /mockserver/expectation on the running MockServer"
+                    icon="AllIcons.Actions.Upload"/>
+            <action id="MockServer.VerifyExpectations"
+                    class="com.mockserver.jetbrains.VerifyExpectationsAction"
+                    text="Verify Declared Requests Were Received"
+                    description="Verifies every request declared in the active expectation file was received at least once (PUT /mockserver/verify)"
+                    icon="AllIcons.Actions.Selectall"/>
+            <action id="MockServer.DeleteExpectations"
+                    class="com.mockserver.jetbrains.DeleteExpectationsAction"
+                    text="Delete Expectations From Running Server"
+                    description="Clears the expectations declared in the active file from the running MockServer (PUT /mockserver/clear?type=expectations)"
+                    icon="AllIcons.Actions.GC"/>
+            <action id="MockServer.SaveRecordedExpectations"
+                    class="com.mockserver.jetbrains.SaveRecordedExpectationsAction"
+                    text="Save Recorded Expectations"
+                    description="Retrieves expectations recorded from proxied traffic and opens them in a new tab (JSON or Java DSL)"
+                    icon="AllIcons.Actions.Download"/>
+            <action id="MockServer.GenerateFromOpenApi"
+                    class="com.mockserver.jetbrains.GenerateFromOpenApiAction"
+                    text="Generate Expectations From OpenAPI Spec"
+                    description="Sends the active editor's OpenAPI/Swagger spec to MockServer and opens the generated expectations"
+                    icon="AllIcons.Actions.Compile"/>
+            <action id="MockServer.SendRequest"
+                    class="com.mockserver.jetbrains.SendRequestAction"
+                    text="Send Test Request"
+                    description="Sends the active editor's ad-hoc HTTP request to the running MockServer and opens the response"
+                    icon="AllIcons.Actions.Lightning"/>
+            <action id="MockServer.ShowDriftReport"
+                    class="com.mockserver.jetbrains.ShowDriftReportAction"
+                    text="Show Drift Report"
+                    description="Fetches MockServer's mock-drift records and opens a readable text report in a new tab"
+                    icon="AllIcons.Actions.Diff"/>
+            <action id="MockServer.FindByTrace"
+                    class="com.mockserver.jetbrains.FindRequestsByTraceAction"
+                    text="Find Requests by Trace"
+                    description="Finds every received request belonging to a W3C trace id (or traceparent) and opens them in a new JSON tab"
+                    icon="AllIcons.Actions.Find"/>
+            <action id="MockServer.ViewTrace"
+                    class="com.mockserver.jetbrains.ViewTraceAction"
+                    text="View Trace in Backend"
+                    description="Opens a W3C trace id (or traceparent) in your trace backend (Jaeger/Tempo/Grafana) using the configured trace-backend URL template"
+                    icon="AllIcons.General.Web"/>
+            <separator text="WASM"/>
+            <action id="MockServer.UploadWasm"
+                    class="com.mockserver.jetbrains.UploadWasmModuleAction"
+                    text="Upload WASM Module"
+                    description="Uploads a compiled .wasm custom-rule module to the running MockServer (PUT /mockserver/wasm/modules)"
+                    icon="AllIcons.Actions.Upload"/>
+            <action id="MockServer.ListWasm"
+                    class="com.mockserver.jetbrains.ListWasmModulesAction"
+                    text="List WASM Modules"
+                    description="Lists the WASM custom-rule modules registered on the running MockServer (GET /mockserver/wasm/modules)"
+                    icon="AllIcons.Actions.ListFiles"/>
+            <action id="MockServer.ContractTest"
+                    class="com.mockserver.jetbrains.ContractTestAction"
+                    text="Run Contract Test"
+                    description="Runs an OpenAPI contract/resiliency test of a live service against the active spec and opens a per-operation pass/fail report (PUT /mockserver/contractTest)"
+                    icon="AllIcons.Actions.RunAll"/>
+            <separator text="Advanced"/>
+            <action id="MockServer.ChaosExperiment"
+                    class="com.mockserver.jetbrains.ChaosExperimentAction"
+                    text="Chaos Experiment"
+                    description="Show status, start (from the active file), or stop a MockServer chaos experiment (GET/PUT/DELETE /mockserver/chaosExperiment)"
+                    icon="AllIcons.Actions.Lightning"/>
         </group>
+        <!-- Make the contract-test runner reachable from the editor and project-view
+             context menus on a spec file (the action self-guards on OpenAPI shape). -->
+        <action id="MockServer.ContractTest.EditorPopup"
+                class="com.mockserver.jetbrains.ContractTestAction"
+                text="Run MockServer Contract Test"
+                description="Runs an OpenAPI contract test of a live service against the active spec (PUT /mockserver/contractTest)"
+                icon="AllIcons.Actions.RunAll">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+        </action>
     </actions>
 
     <extensions defaultExtensionNs="com.intellij">
@@ -34,9 +187,56 @@
                     factoryClass="com.mockserver.jetbrains.MockServerToolWindowFactory"
                     anchor="bottom"
                     secondary="true"
-                    icon="AllIcons.Nodes.Plugin"/>
+                    icon="/icons/mockserver.svg"/>
+        <toolWindow id="MockServerDashboard"
+                    factoryClass="com.mockserver.jetbrains.MockServerDashboardToolWindowFactory"
+                    anchor="right"
+                    canCloseContents="false"
+                    icon="/icons/mockserver.svg"/>
+        <toolWindow id="MockServerDebugger"
+                    factoryClass="com.mockserver.jetbrains.BreakpointDebuggerToolWindowFactory"
+                    anchor="bottom"
+                    secondary="true"
+                    canCloseContents="false"
+                    icon="/icons/mockserver.svg"/>
+        <toolWindow id="MockServerLlm"
+                    factoryClass="com.mockserver.jetbrains.LlmToolWindowFactory"
+                    anchor="bottom"
+                    secondary="true"
+                    canCloseContents="false"
+                    icon="/icons/mockserver.svg"/>
         <notificationGroup id="MockServer Notifications"
                            displayType="BALLOON"
                            isLogByDefault="true"/>
+        <applicationService serviceImplementation="com.mockserver.jetbrains.MockServerSettings"/>
+        <applicationConfigurable parentId="tools"
+                                 instance="com.mockserver.jetbrains.MockServerConfigurable"
+                                 id="com.mockserver.jetbrains.MockServerConfigurable"
+                                 displayName="MockServer"/>
+        <!-- Phase 4: drift quick-fix on *.mockserver.json expectation files. -->
+        <intentionAction>
+            <language></language>
+            <className>com.mockserver.jetbrains.DriftQuickFixIntention</className>
+            <category>MockServer</category>
+        </intentionAction>
+        <!-- Phase 4: gutter run-affordance on MockServerClient/@MockServerSettings/Testcontainers
+             usage. language="" registers it for every language (best-effort textual detection). -->
+        <codeInsight.lineMarkerProvider
+                language=""
+                implementationClass="com.mockserver.jetbrains.MockServerGutterLineMarkerProvider"/>
+        <!-- LLM authoring completion inside httpLlmResponse blocks of *.mockserver.json.
+             Registered for every language (the contributor self-guards on file name and
+             cursor context) so it works regardless of how the JSON file type resolves. -->
+        <completion.contributor
+                language="any"
+                implementationClass="com.mockserver.jetbrains.LlmCompletionContributor"/>
+    </extensions>
+
+    <!-- The JSON Schema provider extension point is `JavaScript.JsonSchema.ProviderFactory`
+         (defined by the bundled JSON plugin, despite the `JavaScript` namespace). Registering
+         it under any other namespace/name (e.g. `com.intellij.json` / `jsonSchema.ProviderFactory`)
+         silently does nothing — the factory is never instantiated, so no validation/completion. -->
+    <extensions defaultExtensionNs="JavaScript">
+        <JsonSchema.ProviderFactory implementation="com.mockserver.jetbrains.MockServerSchemaProviderFactory"/>
     </extensions>
 </idea-plugin>

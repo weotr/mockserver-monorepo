@@ -3,60 +3,76 @@
 ## Overview
 
 The `mock-server/mockserver-client` package is published to [Packagist](https://packagist.org)
-via a GitHub webhook. Once the package is registered, Packagist auto-updates whenever a new
-git tag is pushed. No CI secret or publish command is needed.
+through a **dedicated read-only mirror repository**, because Packagist requires
+`composer.json` at the **repository root** of the default branch and does **not**
+support subdirectory packages. Submitting the monorepo URL fails with
+*"No composer.json was found in the master branch"* — the package's `composer.json`
+lives at `mockserver-client-php/composer.json`, not at the monorepo root.
+
+The mirror repo is:
+
+```
+github.com/mock-server/mockserver-client-php   (master = subtree split of mockserver-client-php/)
+```
+
+The **monorepo stays the single source of truth** — the PHP client is developed,
+built, tested, and versioned here. The mirror is regenerated from the monorepo at
+release time and is never edited directly.
 
 ## One-time Setup (already done for this package)
 
-1. Log in to https://packagist.org (GitHub OAuth).
-2. Click "Submit" and enter the repository URL:
-   `https://github.com/mock-server/mockserver-monorepo`
-3. Packagist detects `mockserver-client-php/composer.json` (subdirectory package).
-   If Packagist does not auto-detect subdirectory packages, use the monorepo plugin
-   approach or register a mirror/subtree-split repo.
-4. On the Packagist package page, go to Settings and copy the Packagist API token.
-5. In the GitHub repo Settings > Webhooks, add the Packagist webhook:
+1. Create the public mirror repo `mock-server/mockserver-client-php`.
+2. Push a subtree split of `mockserver-client-php/` to its `master`, so
+   `composer.json` sits at the repo root:
+   ```bash
+   git subtree split --prefix=mockserver-client-php -b php-split
+   git push git@github.com:mock-server/mockserver-client-php.git php-split:refs/heads/master
+   ```
+3. On https://packagist.org (GitHub OAuth), click **Submit** and enter the
+   **mirror** URL: `https://github.com/mock-server/mockserver-client-php`.
+   Packagist finds `composer.json` at the root and registers
+   `mock-server/mockserver-client`.
+4. Enable auto-updates on the **mirror** repo — either authorize Packagist's
+   GitHub integration when prompted at submit, or add the Packagist webhook
+   manually in the mirror repo's **Settings → Webhooks**:
    - URL: `https://packagist.org/api/github?username=<packagist-username>`
    - Content type: `application/json`
-   - Secret: the Packagist API token
+   - Secret: the Packagist API token (from the package's Settings page)
    - Events: push events only
-
-**Note on monorepo subdirectory packages:** Packagist natively supports monorepos
-if the `composer.json` is at the repository root OR if a tool like
-[`symplify/monorepo-builder`](https://github.com/symplify/monorepo-builder) splits
-each package to its own read-only git repository. The recommended approach is a
-subtree-split to `github.com/mock-server/mockserver-client-php` triggered by the
-release pipeline, so that Packagist can index the package at the repo root.
 
 ## Publishing a New Version
 
-Publishing happens automatically when a git tag is pushed:
+Publishing is automated by the release pipeline
+(`scripts/release/components/client-php.sh`). On each release it:
 
-```bash
-# From the release pipeline or manually:
-git tag 7.0.1   # matches the MockServer release version
-git push origin 7.0.1
-```
+1. Regenerates the mirror with `git subtree split --prefix=mockserver-client-php`.
+2. Pushes the split to the mirror's `master`.
+3. Pushes the version tag (e.g. `7.0.1`) to the **mirror** repo.
 
-Packagist picks up the tag via the webhook and updates the package index within minutes.
-Users install with:
+The Packagist webhook on the mirror picks up the tag and updates the package
+index within minutes. Users install with:
 
 ```bash
 composer require mock-server/mockserver-client:^7.0
 ```
 
+> The release uses the standard github-token (`mockserver-release/github-token`,
+> which has org `repo` write) to push to the mirror — no separate publish secret
+> is required.
+
 ## Verification
 
-After pushing a tag, verify the package is live:
+After a release, verify the package is live:
 
 ```bash
-curl -s "https://packagist.org/packages/mock-server/mockserver-client.json" | jq '.package.versions'
+curl -s "https://packagist.org/packages/mock-server/mockserver-client.json" | jq '.package.versions | keys'
 ```
 
 Or visit: https://packagist.org/packages/mock-server/mockserver-client
 
 ## Secret Requirements
 
-**None.** The Packagist webhook uses a token stored in GitHub repo settings (not in
-AWS Secrets Manager or CI). The webhook was configured once and requires no rotation
-for publishing. No pipeline secret is needed.
+**No dedicated publish secret.** Pushing to the mirror reuses
+`mockserver-release/github-token`. The Packagist webhook token lives in the
+**mirror** repo's GitHub settings (not in AWS Secrets Manager or CI) and needs no
+rotation for publishing.

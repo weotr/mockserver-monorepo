@@ -229,9 +229,22 @@ public class BedrockCodecRoundTripTest {
         assertThat(events.get(events.size() - 1).getEvent(), is("message_stop"));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldThrowUnsupportedForEmbeddings() {
-        codec.encodeEmbedding(EmbeddingResponse.embedding(), "test");
+    @Test
+    public void shouldEncodeTitanEmbeddingDeterministically() throws Exception {
+        EmbeddingResponse embedding = EmbeddingResponse.embedding()
+            .withDimensions(16)
+            .withDeterministicFromInput(true)
+            .withSeed(5L);
+
+        HttpResponse r1 = codec.encodeEmbedding(embedding, "same", "amazon.titan-embed-text-v2:0");
+        HttpResponse r2 = codec.encodeEmbedding(embedding, "same", "amazon.titan-embed-text-v2:0");
+
+        JsonNode v1 = OBJECT_MAPPER.readTree(r1.getBodyAsString()).get("embedding");
+        JsonNode v2 = OBJECT_MAPPER.readTree(r2.getBodyAsString()).get("embedding");
+        assertThat(v1.size(), is(16));
+        for (int i = 0; i < 16; i++) {
+            assertThat(v1.get(i).asDouble(), is(v2.get(i).asDouble()));
+        }
     }
 
     @Test

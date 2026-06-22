@@ -22,7 +22,10 @@ export function useConnectionParams(): ConnectionParams {
       params.get('port') ||
       window.location.port ||
       (window.location.protocol === 'https:' ? '443' : '80');
-    const secure = window.location.protocol === 'https:';
+    const secureParam = params.get('secure');
+    const secure = secureParam !== null
+      ? secureParam === 'true'
+      : window.location.protocol === 'https:';
     // Derive the base path from the dashboard URL: the segment before the trailing
     // /mockserver/dashboard. Only strip when that suffix is actually present so an unexpected
     // path is not misread as a base path; otherwise assume root (''). A ?basePath= query param

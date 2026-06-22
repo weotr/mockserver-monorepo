@@ -36,6 +36,21 @@ log_info "Spec: $SPEC"
 # is about the on-disk spec being the correct release content.)
 SPEC_VERSION=$(grep -E '^[[:space:]]+version:' "$SPEC" | head -1 | sed -E 's/^[[:space:]]+version:[[:space:]]*//; s/[[:space:]]*$//')
 log_info "Spec version: $SPEC_VERSION"
+# In dry-run, prepare.sh (which bumps the spec's info.version) is skipped and its
+# commit never reaches this step's fresh checkout, so the on-disk spec still has
+# the previous version. Bump it in-place to RELEASE_VERSION so the dry-run
+# validates the real release's spec; restore on exit (dry-run never commits).
+if is_dry_run && [[ "$SPEC_VERSION" != "$RELEASE_VERSION" ]]; then
+  mkdir -p "$REPO_ROOT/.tmp"
+  cp "$SPEC" "$REPO_ROOT/.tmp/swaggerhub-spec.bak"
+  # shellcheck disable=SC2064  # expand the path now, not at trap-fire time
+  trap "cp '$REPO_ROOT/.tmp/swaggerhub-spec.bak' '$SPEC' 2>/dev/null || true" EXIT
+  _newspec="$REPO_ROOT/.tmp/swaggerhub-spec.new"
+  awk -v v="$RELEASE_VERSION" 'seen!=1 && /^[[:space:]]+version:/ {sub(/version:[[:space:]]*.*/, "version: " v); seen=1} {print}' "$SPEC" > "$_newspec" && mv "$_newspec" "$SPEC"
+  SPEC_VERSION=$(grep -E '^[[:space:]]+version:' "$SPEC" | head -1 | sed -E 's/^[[:space:]]+version:[[:space:]]*//; s/[[:space:]]*$//')
+  [[ "$SPEC_VERSION" == "$RELEASE_VERSION" ]] || { log_error "dry-run: failed to bump spec info.version"; exit 1; }
+  log_info "dry-run: bumped spec info.version to $RELEASE_VERSION in-place (not committed)"
+fi
 if [[ "$SPEC_VERSION" != "$RELEASE_VERSION" ]]; then
   log_error "OpenAPI spec info.version ($SPEC_VERSION) does not match RELEASE_VERSION ($RELEASE_VERSION) — refusing to upload a spec whose body claims the wrong version"
   exit 1

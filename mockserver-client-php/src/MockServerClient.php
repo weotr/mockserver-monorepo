@@ -9,6 +9,7 @@ use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\RequestOptions;
 use MockServer\Exception\ConnectionException;
+use MockServer\Exception\FeatureNotEnabledException;
 use MockServer\Exception\InvalidRequestException;
 use MockServer\Exception\MockServerException;
 use MockServer\Exception\VerificationException;
@@ -37,11 +38,40 @@ class MockServerClient
     private string $baseUri;
 
     /**
+     * A static control-plane bearer token, or a callable returning one
+     * (a supplier, so the token can refresh between requests). Null when no
+     * control-plane authentication is configured.
+     *
+     * @var string|callable():?string|null
+     */
+    private $controlPlaneBearerToken;
+
+    /** Path to a PEM CA bundle used to verify the MockServer HTTPS certificate. */
+    private ?string $caCertPath = null;
+
+    /** Path to a PEM client certificate presented for mutual TLS. */
+    private ?string $clientCertPath = null;
+
+    /** Path to the PEM private key for the client certificate (when separate). */
+    private ?string $clientKeyPath = null;
+
+    /**
      * @param string $host MockServer hostname
      * @param int $port MockServer port (default 1080)
      * @param string $contextPath Optional context path prefix
      * @param bool $secure Use HTTPS
      * @param array<string, mixed> $guzzleOptions Additional Guzzle client options
+     * @param string|callable():?string|null $controlPlaneBearerToken Optional control-plane
+     *        bearer token. May be a string, or a callable returning the current token
+     *        (a supplier, evaluated per request so it can refresh). When set, an
+     *        {@code Authorization: Bearer <token>} header is attached to every
+     *        control-plane request this client issues.
+     * @param string|null $caCertPath Optional path to a PEM CA bundle used to verify the
+     *        MockServer HTTPS certificate (Guzzle {@see RequestOptions::VERIFY}).
+     * @param string|null $clientCertPath Optional path to a PEM client certificate presented
+     *        for mutual TLS (Guzzle {@see RequestOptions::CERT}).
+     * @param string|null $clientKeyPath Optional path to the PEM private key for the client
+     *        certificate when it is stored separately (Guzzle {@see RequestOptions::SSL_KEY}).
      */
     public function __construct(
         string $host = 'localhost',
@@ -49,6 +79,10 @@ class MockServerClient
         string $contextPath = '',
         bool $secure = false,
         array $guzzleOptions = [],
+        string|callable|null $controlPlaneBearerToken = null,
+        ?string $caCertPath = null,
+        ?string $clientCertPath = null,
+        ?string $clientKeyPath = null,
     ) {
         $scheme = $secure ? 'https' : 'http';
         $ctxPath = '';
@@ -56,6 +90,11 @@ class MockServerClient
             $ctxPath = str_starts_with($contextPath, '/') ? $contextPath : '/' . $contextPath;
         }
         $this->baseUri = "{$scheme}://{$host}:{$port}{$ctxPath}";
+
+        $this->controlPlaneBearerToken = $controlPlaneBearerToken;
+        $this->caCertPath = $caCertPath;
+        $this->clientCertPath = $clientCertPath;
+        $this->clientKeyPath = $clientKeyPath;
 
         $defaultOptions = [
             'base_uri' => $this->baseUri,
@@ -68,6 +107,124 @@ class MockServerClient
         ];
 
         $this->httpClient = new GuzzleClient(array_merge($defaultOptions, $guzzleOptions));
+    }
+
+    // -----------------------------------------------------------------
+    // Control-plane authentication + TLS/mTLS (fluent setters)
+    // -----------------------------------------------------------------
+
+    /**
+     * Configure a control-plane bearer token.
+     *
+     * The token is sent as {@code Authorization: Bearer <token>} on every
+     * control-plane request this client issues. Supply either a fixed string or
+     * a callable (supplier) that returns the current token; the callable is
+     * evaluated per request so a rotating/refreshing token works transparently.
+     *
+     * Passing {@code null} clears any previously configured token.
+     *
+     * @param string|callable():?string|null $token A token string, a supplier
+     *        callable returning the token, or null to clear.
+     * @return $this
+     */
+    public function withControlPlaneBearerToken(string|callable|null $token): self
+    {
+        $this->controlPlaneBearerToken = $token;
+        return $this;
+    }
+
+    /**
+     * Trust a specific CA certificate when connecting to MockServer over HTTPS.
+     *
+     * @param string|null $caCertPath Path to a PEM CA bundle (Guzzle
+     *        {@see RequestOptions::VERIFY}), or null to clear.
+     * @return $this
+     */
+    public function withCaCertificate(?string $caCertPath): self
+    {
+        $this->caCertPath = $caCertPath;
+        return $this;
+    }
+
+    /**
+     * Present a client certificate (and optional separate private key) for
+     * mutual TLS to a MockServer that requires client authentication.
+     *
+     * @param string|null $clientCertPath Path to a PEM client certificate (Guzzle
+     *        {@see RequestOptions::CERT}), or null to clear.
+     * @param string|null $clientKeyPath Optional path to the PEM private key when
+     *        stored separately from the certificate (Guzzle {@see RequestOptions::SSL_KEY}).
+     * @return $this
+     */
+    public function withClientCertificate(?string $clientCertPath, ?string $clientKeyPath = null): self
+    {
+        $this->clientCertPath = $clientCertPath;
+        $this->clientKeyPath = $clientKeyPath;
+        return $this;
+    }
+
+    /**
+     * Build the per-request Guzzle options carrying control-plane auth + TLS/mTLS.
+     *
+     * The returned array contains an {@code Authorization} header (when a bearer
+     * token is configured) and {@see RequestOptions::VERIFY} /
+     * {@see RequestOptions::CERT} / {@see RequestOptions::SSL_KEY} (when CA /
+     * client-cert paths are configured).
+     *
+     * @return array<string, mixed>
+     */
+    private function controlPlaneOptions(): array
+    {
+        $options = [];
+
+        $token = $this->controlPlaneBearerToken;
+        if (is_callable($token)) {
+            $token = $token();
+        }
+        if (is_string($token) && $token !== '') {
+            $options[RequestOptions::HEADERS] = [
+                'Authorization' => 'Bearer ' . $token,
+            ];
+        }
+
+        if ($this->caCertPath !== null) {
+            $options[RequestOptions::VERIFY] = $this->caCertPath;
+        }
+        if ($this->clientCertPath !== null) {
+            $options[RequestOptions::CERT] = $this->clientCertPath;
+        }
+        if ($this->clientKeyPath !== null) {
+            $options[RequestOptions::SSL_KEY] = $this->clientKeyPath;
+        }
+
+        return $options;
+    }
+
+    /**
+     * Merge control-plane auth/TLS options into a set of per-request options.
+     *
+     * Header maps are merged key-wise (so a per-call Content-Type override and the
+     * Authorization header coexist); per-call values take precedence on conflict.
+     *
+     * @param array<string, mixed> $perRequest
+     * @return array<string, mixed>
+     */
+    private function withControlPlaneOptions(array $perRequest): array
+    {
+        $base = $this->controlPlaneOptions();
+
+        $baseHeaders = $base[RequestOptions::HEADERS] ?? [];
+        $perRequestHeaders = $perRequest[RequestOptions::HEADERS] ?? [];
+
+        $merged = array_merge($base, $perRequest);
+
+        if ($baseHeaders !== [] || $perRequestHeaders !== []) {
+            // Per-request headers win on conflict, but the Authorization header
+            // from the control plane is preserved when not overridden.
+            $merged[RequestOptions::HEADERS] = array_merge($baseHeaders, $perRequestHeaders);
+        }
+
+        return $merged;
     }
 
     // -----------------------------------------------------------------
@@ -146,14 +303,94 @@ class MockServerClient
     /**
      * Verify that a request was received the expected number of times.
      *
+     * Optionally also verify the response that was returned. When both
+     * $request and $httpResponse are provided, the server checks that the
+     * request was received AND the matching response was returned.
+     *
      * @param HttpRequest $request The request to verify
+     * @param VerificationTimes|null $times Expected call count (null = at least once)
+     * @param HttpResponse|null $httpResponse Optional response matcher
+     * @throws VerificationException If verification fails
+     * @throws MockServerException On communication errors
+     */
+    public function verify(
+        HttpRequest $request,
+        ?VerificationTimes $times = null,
+        ?HttpResponse $httpResponse = null,
+    ): void {
+        $payload = ['httpRequest' => $request->toArray()];
+        if ($httpResponse !== null) {
+            $payload['httpResponse'] = $httpResponse->toArray();
+        }
+        if ($times !== null) {
+            $payload['times'] = $times->toArray();
+        }
+
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/verify', $body);
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 406) {
+            throw new VerificationException($responseBody ?: 'Verification failed');
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Verification request failed (HTTP {$status}): {$responseBody}");
+        }
+    }
+
+    /**
+     * Verify that zero interactions (requests) were received by the server.
+     *
+     * Sends {@code {"httpRequest": {}, "times": {"atMost": 0}}} so the server
+     * checks that no request matching the empty (match-everything) matcher was
+     * received — i.e. the server received no requests at all.
+     *
+     * @throws VerificationException If any request was received
+     * @throws MockServerException On communication errors
+     */
+    public function verifyZeroInteractions(): void
+    {
+        $this->verify(HttpRequest::request(), VerificationTimes::atMost(0));
+    }
+
+    /**
+     * Verify that a request+response pair was received the expected number of times.
+     *
+     * Convenience method combining request and response matchers.
+     *
+     * @param HttpRequest $request The request matcher
+     * @param HttpResponse $httpResponse The response matcher
      * @param VerificationTimes|null $times Expected call count (null = at least once)
      * @throws VerificationException If verification fails
      * @throws MockServerException On communication errors
      */
-    public function verify(HttpRequest $request, ?VerificationTimes $times = null): void
-    {
-        $payload = ['httpRequest' => $request->toArray()];
+    public function verifyRequestAndResponse(
+        HttpRequest $request,
+        HttpResponse $httpResponse,
+        ?VerificationTimes $times = null,
+    ): void {
+        $this->verify($request, $times, $httpResponse);
+    }
+
+    /**
+     * Verify that a response was returned the expected number of times,
+     * regardless of which request triggered it (response-only verification).
+     *
+     * The httpRequest field is omitted from the JSON payload so the server
+     * matches any request that produced a response matching $httpResponse.
+     *
+     * @param HttpResponse $httpResponse The response matcher
+     * @param VerificationTimes|null $times Expected call count (null = at least once)
+     * @throws VerificationException If verification fails
+     * @throws MockServerException On communication errors
+     */
+    public function verifyResponse(
+        HttpResponse $httpResponse,
+        ?VerificationTimes $times = null,
+    ): void {
+        $payload = ['httpResponse' => $httpResponse->toArray()];
         if ($times !== null) {
             $payload['times'] = $times->toArray();
         }
@@ -184,6 +421,71 @@ class MockServerClient
         $payload = [
             'httpRequests' => array_map(fn(HttpRequest $r) => $r->toArray(), $requests),
         ];
+
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/verifySequence', $body);
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 406) {
+            throw new VerificationException($responseBody ?: 'Sequence verification failed');
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Verify sequence request failed (HTTP {$status}): {$responseBody}");
+        }
+    }
+
+    /**
+     * Verify that requests were received in sequence with specific responses.
+     *
+     * Responses are index-aligned with requests: $responses[0] is the expected
+     * response for $requests[0], etc. Both arrays must have the same length.
+     *
+     * When a request entry is null, the httpRequests array entry is omitted
+     * for that index (response-only verification for that position).
+     *
+     * @param array<HttpRequest|null> $requests Request matchers (null entries omitted from payload)
+     * @param array<HttpResponse> $responses Response matchers (index-aligned with requests)
+     * @throws \InvalidArgumentException If array lengths differ
+     * @throws VerificationException If sequence verification fails
+     * @throws MockServerException On communication errors
+     */
+    public function verifySequenceWithResponses(array $requests, array $responses): void
+    {
+        if (count($requests) !== count($responses)) {
+            throw new \InvalidArgumentException(
+                sprintf(
+                    'Requests and responses arrays must have the same length, got %d requests and %d responses',
+                    count($requests),
+                    count($responses),
+                )
+            );
+        }
+
+        $payload = [];
+
+        // Build httpRequests array — null entries become absent (not serialized as null)
+        $hasRequests = false;
+        $httpRequests = [];
+        foreach ($requests as $request) {
+            if ($request !== null) {
+                $hasRequests = true;
+                $httpRequests[] = $request->toArray();
+            } else {
+                // Placeholder to maintain index alignment; server expects
+                // httpRequests and httpResponses to be index-aligned
+                $httpRequests[] = new \stdClass();
+            }
+        }
+        if ($hasRequests) {
+            $payload['httpRequests'] = $httpRequests;
+        }
+
+        $payload['httpResponses'] = array_map(
+            fn(HttpResponse $r) => $r->toArray(),
+            $responses,
+        );
 
         $body = json_encode($payload, JSON_THROW_ON_ERROR);
         $response = $this->put('/mockserver/verifySequence', $body);
@@ -293,6 +595,34 @@ class MockServerClient
     }
 
     /**
+     * Retrieve the active expectations as MockServer SDK setup code (the builder
+     * code that recreates the expectations) in the requested language.
+     *
+     * @param string $format One of java, javascript, python, go, csharp, ruby,
+     *                        rust or php (case-insensitive)
+     * @param HttpRequest|null $request Filter (null = all)
+     * @return string The generated code
+     */
+    public function retrieveExpectationsAsCode(string $format = 'java', ?HttpRequest $request = null): string
+    {
+        return $this->retrieveRaw($request, 'ACTIVE_EXPECTATIONS', strtoupper($format));
+    }
+
+    /**
+     * Retrieve the recorded (proxied) request/response pairs as MockServer SDK
+     * setup code in the requested language.
+     *
+     * @param string $format One of java, javascript, python, go, csharp, ruby,
+     *                        rust or php (case-insensitive)
+     * @param HttpRequest|null $request Filter (null = all)
+     * @return string The generated code
+     */
+    public function retrieveRecordedExpectationsAsCode(string $format = 'java', ?HttpRequest $request = null): string
+    {
+        return $this->retrieveRaw($request, 'RECORDED_EXPECTATIONS', strtoupper($format));
+    }
+
+    /**
      * Retrieve log messages matching the given filter.
      *
      * @param HttpRequest|null $request Filter (null = all)
@@ -357,6 +687,214 @@ class MockServerClient
         return ['ports' => []];
     }
 
+    // -----------------------------------------------------------------
+    // Stateful scenarios
+    // -----------------------------------------------------------------
+
+    /**
+     * Obtain a typed handle for a named scenario state machine.
+     *
+     * @param string $name The scenario name.
+     * @return ScenarioHandle A handle exposing state()/set()/trigger().
+     */
+    public function scenario(string $name): ScenarioHandle
+    {
+        return new ScenarioHandle($this, $name);
+    }
+
+    /**
+     * List all known scenarios and their current states.
+     *
+     * @return array<string, mixed> {@code {"scenarios":[{"scenarioName","currentState"}]}}.
+     * @throws MockServerException On communication errors.
+     */
+    public function scenarios(): array
+    {
+        $response = $this->get('/mockserver/scenario');
+
+        return $this->decodeScenarioResponse($response, 'list scenarios');
+    }
+
+    /**
+     * Get the current state of a single scenario.
+     *
+     * @internal Prefer {@see MockServerClient::scenario()}->state().
+     * @param string $name The scenario name.
+     * @return array<string, mixed> {@code {"scenarioName","currentState"}}.
+     * @throws MockServerException On communication errors.
+     */
+    public function getScenario(string $name): array
+    {
+        $response = $this->get('/mockserver/scenario/' . rawurlencode($name));
+
+        return $this->decodeScenarioResponse($response, 'get scenario');
+    }
+
+    /**
+     * Set a scenario's state, optionally scheduling a timed transition.
+     *
+     * @internal Prefer {@see MockServerClient::scenario()}->set().
+     * @param string $name The scenario name.
+     * @param string $state The state to set immediately.
+     * @param int|null $transitionAfterMs Milliseconds after which to transition.
+     * @param string|null $nextState The state to transition to.
+     * @return array<string, mixed> {@code {"scenarioName","currentState",...}}.
+     * @throws InvalidRequestException If the request is rejected (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function setScenario(
+        string $name,
+        string $state,
+        ?int $transitionAfterMs = null,
+        ?string $nextState = null,
+    ): array {
+        $payload = ['state' => $state];
+        if ($transitionAfterMs !== null) {
+            $payload['transitionAfterMs'] = $transitionAfterMs;
+        }
+        if ($nextState !== null) {
+            $payload['nextState'] = $nextState;
+        }
+
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/scenario/' . rawurlencode($name), $body);
+
+        return $this->decodeScenarioResponse($response, 'set scenario');
+    }
+
+    /**
+     * Trigger an immediate transition of a scenario to a new state.
+     *
+     * @internal Prefer {@see MockServerClient::scenario()}->trigger().
+     * @param string $name The scenario name.
+     * @param string $newState The state to transition to.
+     * @return array<string, mixed> {@code {"scenarioName","currentState"}}.
+     * @throws InvalidRequestException If the request is rejected (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function triggerScenario(string $name, string $newState): array
+    {
+        $body = json_encode(['newState' => $newState], JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/scenario/' . rawurlencode($name) . '/trigger', $body);
+
+        return $this->decodeScenarioResponse($response, 'trigger scenario');
+    }
+
+    // -----------------------------------------------------------------
+    // OpenAPI import
+    // -----------------------------------------------------------------
+
+    /**
+     * Import expectations from an OpenAPI / Swagger specification.
+     *
+     * The spec may be supplied as a URL, a file/classpath path, or inline
+     * (JSON or YAML) via {@see OpenAPIExpectation::openAPI()}.
+     *
+     * @param OpenAPIExpectation $expectation The OpenAPI definition to import
+     * @throws InvalidRequestException If the spec is rejected by the server
+     * @throws MockServerException On communication errors
+     */
+    public function openApiExpectation(OpenAPIExpectation $expectation): void
+    {
+        $body = json_encode($expectation->toArray(), JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/openapi', $body);
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 400 || $status === 406) {
+            throw new InvalidRequestException("Invalid OpenAPI expectation: {$responseBody}");
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Failed to create OpenAPI expectation (HTTP {$status}): {$responseBody}");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // gRPC descriptor management
+    // -----------------------------------------------------------------
+
+    /**
+     * Upload a compiled protobuf descriptor set so gRPC requests can be matched.
+     *
+     * The bytes must be the raw contents of a {@code FileDescriptorSet} (e.g. the
+     * output of {@code protoc --descriptor_set_out=... --include_imports}). They
+     * are sent verbatim as {@code application/octet-stream} (NOT base64-encoded).
+     *
+     * @param string $descriptorBytes Raw descriptor set bytes (binary string)
+     * @throws \InvalidArgumentException If the descriptor bytes are empty
+     * @throws InvalidRequestException If the descriptor set is rejected
+     * @throws MockServerException On communication errors
+     */
+    public function uploadGrpcDescriptor(string $descriptorBytes): void
+    {
+        if ($descriptorBytes === '') {
+            throw new \InvalidArgumentException('descriptor bytes must not be empty');
+        }
+
+        $response = $this->put(
+            '/mockserver/grpc/descriptors',
+            $descriptorBytes,
+            'application/octet-stream',
+        );
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 400) {
+            throw new InvalidRequestException("Invalid gRPC descriptor: {$responseBody}");
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Failed to upload gRPC descriptor (HTTP {$status}): {$responseBody}");
+        }
+    }
+
+    /**
+     * Retrieve the gRPC services registered from uploaded descriptor sets.
+     *
+     * Each entry has a "name" and a list of "methods", where each method has
+     * "name", "inputType", "outputType", "clientStreaming", "serverStreaming".
+     *
+     * @return array<int, array<string, mixed>> List of service descriptors
+     * @throws MockServerException On communication errors
+     */
+    public function retrieveGrpcServices(): array
+    {
+        $response = $this->put('/mockserver/grpc/services', '');
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status >= 400) {
+            throw new MockServerException("Failed to retrieve gRPC services (HTTP {$status}): {$responseBody}");
+        }
+
+        if ($responseBody !== '') {
+            $parsed = json_decode($responseBody, true);
+            if (is_array($parsed)) {
+                return $parsed;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Clear all uploaded gRPC descriptor sets and registered services.
+     *
+     * @throws MockServerException On communication errors
+     */
+    public function clearGrpcDescriptors(): void
+    {
+        $response = $this->put('/mockserver/grpc/clear', '');
+
+        $status = $response->getStatusCode();
+        if ($status >= 400) {
+            $responseBody = (string) $response->getBody();
+            throw new MockServerException("Failed to clear gRPC descriptors (HTTP {$status}): {$responseBody}");
+        }
+    }
+
     /**
      * Check if MockServer has started (polls with retries).
      *
@@ -393,8 +931,466 @@ class MockServerClient
     }
 
     // -----------------------------------------------------------------
+    // SRE control-plane: load generation
+    // -----------------------------------------------------------------
+
+    /**
+     * Register (load) an API load scenario in the server's registry.
+     *
+     * A scenario is an ordered list of templated request steps fired at a target
+     * load described by a staged {@see LoadProfile}. Each scenario carries a
+     * unique {@code name} the registry keys it by. Registration only loads the
+     * scenario; it does not drive any load — call {@see startLoadScenarios()} to
+     * run it. Registration is allowed even when load generation is disabled.
+     *
+     * @param LoadScenario|array<string, mixed> $scenario The scenario, as a
+     *        {@see LoadScenario} value object or an equivalent camelCase array.
+     * @return array<string, mixed> The registered reference ({name, state}).
+     * @throws InvalidRequestException If the scenario is rejected (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function loadScenario(LoadScenario|array $scenario): array
+    {
+        $body = json_encode(self::toPayload($scenario), JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/loadScenario', $body);
+
+        return $this->decodeSreResponse($response, 'register load scenario');
+    }
+
+    /**
+     * List all registered load scenarios with their current state.
+     *
+     * Each entry echoes the scenario's {@code name}, {@code state}, full
+     * {@code definition} (a valid {@code LoadScenario} body that can be
+     * re-submitted) and, for running/completed scenarios, an optional live
+     * {@code status}.
+     *
+     * @return array<string, mixed> The scenario list ({scenarios: [...]}).
+     * @throws MockServerException On communication errors.
+     */
+    public function loadScenarios(): array
+    {
+        $response = $this->get('/mockserver/loadScenario');
+
+        return $this->decodeSreResponse($response, 'list load scenarios');
+    }
+
+    /**
+     * Retrieve a single registered load scenario by name.
+     *
+     * @param string $name The unique scenario name.
+     * @return array<string, mixed> The scenario entry ({name, state, definition, status?}).
+     * @throws InvalidRequestException If no scenario with that name exists (HTTP 404).
+     * @throws MockServerException On communication errors.
+     */
+    public function getLoadScenario(string $name): array
+    {
+        $response = $this->get('/mockserver/loadScenario/' . rawurlencode($name));
+
+        return $this->decodeSreResponse($response, "get load scenario '{$name}'");
+    }
+
+    /**
+     * Remove a single registered load scenario by name.
+     *
+     * @param string $name The unique scenario name.
+     * @return array<string, mixed> The server response.
+     * @throws InvalidRequestException If no scenario with that name exists (HTTP 404).
+     * @throws MockServerException On communication errors.
+     */
+    public function deleteLoadScenario(string $name): array
+    {
+        $response = $this->delete('/mockserver/loadScenario/' . rawurlencode($name));
+
+        return $this->decodeSreResponse($response, "delete load scenario '{$name}'");
+    }
+
+    /**
+     * Remove all registered load scenarios. Idempotent.
+     *
+     * @return array<string, mixed> The server response.
+     * @throws MockServerException On communication errors.
+     */
+    public function clearLoadScenarios(): array
+    {
+        $response = $this->delete('/mockserver/loadScenario');
+
+        return $this->decodeSreResponse($response, 'clear load scenarios');
+    }
+
+    /**
+     * Start one or more previously-registered load scenarios.
+     *
+     * Drives the load for each named scenario, honouring its
+     * {@code startDelayMillis}. Off by default — the server returns 403 until
+     * started with {@code loadGenerationEnabled=true}.
+     *
+     * @param string|array<int, string> $names A single scenario name or a list of names.
+     * @return array<string, mixed> The started status ({started: [{name, state}], status}).
+     * @throws FeatureNotEnabledException If load generation is disabled (HTTP 403).
+     * @throws InvalidRequestException If a named scenario is unknown (HTTP 404)
+     *         or the request is invalid (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function startLoadScenarios(string|array $names): array
+    {
+        $body = json_encode(['names' => self::toNameList($names)], JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/loadScenario/start', $body);
+
+        return $this->decodeSreResponse(
+            $response,
+            'start load scenarios',
+            featureFlag: 'loadGenerationEnabled',
+        );
+    }
+
+    /**
+     * Stop running load scenarios.
+     *
+     * Pass a single name or a list of names to stop those scenarios, or null
+     * (the default) to stop all running scenarios. Idempotent.
+     *
+     * @param string|array<int, string>|null $names A scenario name, a list of
+     *        names, or null to stop all.
+     * @return array<string, mixed> The stopped status ({stopped: [...], status}).
+     * @throws MockServerException On communication errors.
+     */
+    public function stopLoadScenarios(string|array|null $names = null): array
+    {
+        if ($names === null) {
+            $body = '';
+        } else {
+            $body = json_encode(['names' => self::toNameList($names)], JSON_THROW_ON_ERROR);
+        }
+        $response = $this->put('/mockserver/loadScenario/stop', $body);
+
+        return $this->decodeSreResponse($response, 'stop load scenarios');
+    }
+
+    /**
+     * Convenience: register a load scenario and immediately start it.
+     *
+     * Equivalent to {@see loadScenario()} followed by {@see startLoadScenarios()}
+     * for the scenario's name.
+     *
+     * @param LoadScenario|array<string, mixed> $scenario The scenario to register and run.
+     * @return array<string, mixed> The started status ({started: [{name, state}], status}).
+     * @throws FeatureNotEnabledException If load generation is disabled (HTTP 403).
+     * @throws InvalidRequestException If the scenario is rejected (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function runLoadScenario(LoadScenario|array $scenario): array
+    {
+        $this->loadScenario($scenario);
+
+        return $this->startLoadScenarios(self::scenarioName($scenario));
+    }
+
+    // -----------------------------------------------------------------
+    // SRE control-plane: service-scoped HTTP chaos
+    // -----------------------------------------------------------------
+
+    /**
+     * Register a service-scoped HTTP chaos profile for a downstream host.
+     *
+     * The profile is applied to forward expectations targeting {@code $host} that
+     * do not define their own chaos. The host is matched case-insensitively,
+     * ignoring any {@code :port}. When {@code $ttlMillis} is supplied the chaos
+     * auto-reverts after that many milliseconds (a dead-man's switch).
+     *
+     * @param string $host The downstream host the chaos applies to.
+     * @param array<string, mixed> $profile The chaos profile (errorStatus,
+     *        errorProbability, latency{value,timeUnit}, connectionDrop, seed).
+     * @param int|null $ttlMillis Optional time-to-live in milliseconds.
+     * @return array<string, mixed> The server response.
+     * @throws InvalidRequestException If the chaos profile is invalid (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function setServiceChaos(string $host, array $profile, ?int $ttlMillis = null): array
+    {
+        $payload = ['host' => $host, 'chaos' => $profile];
+        if ($ttlMillis !== null) {
+            $payload['ttlMillis'] = $ttlMillis;
+        }
+
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/serviceChaos', $body);
+
+        return $this->decodeSreResponse($response, 'set service chaos');
+    }
+
+    // -----------------------------------------------------------------
+    // SRE control-plane: SLO verdicts
+    // -----------------------------------------------------------------
+
+    /**
+     * Verify a service-level objective over a window of recorded SLI samples.
+     *
+     * Returns the verdict with a {@code result} of PASS, FAIL or INCONCLUSIVE.
+     * A FAIL verdict (HTTP 406) raises {@see VerificationException} so a CI or
+     * chaos gate can assert on it directly; PASS and INCONCLUSIVE return the
+     * verdict array.
+     *
+     * Off by default — the server returns 400 until started with
+     * {@code sloTrackingEnabled=true}.
+     *
+     * @param array<string, mixed> $criteria The SLO criteria (name, window,
+     *        minimumSampleCount, upstreamHosts, objectives[{sli,comparator,threshold,scope}]).
+     * @return array<string, mixed> The SLO verdict (result PASS or INCONCLUSIVE).
+     * @throws VerificationException If the verdict is FAIL (HTTP 406).
+     * @throws InvalidRequestException If criteria are malformed or SLO tracking
+     *         is disabled (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function verifySlo(array $criteria): array
+    {
+        $body = json_encode($criteria, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/verifySLO', $body);
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 406) {
+            throw new VerificationException($responseBody ?: 'SLO verdict: FAIL');
+        }
+        if ($status === 400) {
+            throw new InvalidRequestException(
+                "Invalid SLO criteria (or SLO tracking disabled — set sloTrackingEnabled=true): {$responseBody}"
+            );
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Verify SLO failed (HTTP {$status}): {$responseBody}");
+        }
+
+        if ($responseBody !== '') {
+            $parsed = json_decode($responseBody, true);
+            if (is_array($parsed)) {
+                return $parsed;
+            }
+        }
+
+        return [];
+    }
+
+    // -----------------------------------------------------------------
+    // SRE control-plane: preemption (cordon / drain)
+    // -----------------------------------------------------------------
+
+    /**
+     * Cordon and drain the server (preemption simulation).
+     *
+     * Simulates a connection-lifecycle preemption (e.g. a Kubernetes node drain
+     * or spot reclamation). While cordoned, new exchanges are signalled to back
+     * off while in-flight requests drain. All fields are optional; an empty array
+     * uses server defaults (mode "both", drain from {@code stopDrainMillis}, no TTL).
+     *
+     * @param array<string, mixed> $request Preemption parameters
+     *        (mode, drainMillis, ttlMillis, lastStreamId). Defaults to empty.
+     * @return array<string, mixed> The preemption status.
+     * @throws InvalidRequestException If the request is invalid (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function setPreemption(array $request = []): array
+    {
+        $body = json_encode((object) $request, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/preemption', $body);
+
+        return $this->decodeSreResponse($response, 'set preemption');
+    }
+
+    /**
+     * Retrieve the current preemption (cordon/drain) status.
+     *
+     * @return array<string, mixed> The preemption status
+     *         (state, inFlight, drainRemainingMillis, mode).
+     * @throws MockServerException On communication errors.
+     */
+    public function preemptionStatus(): array
+    {
+        $response = $this->get('/mockserver/preemption');
+
+        return $this->decodeSreResponse($response, 'get preemption status');
+    }
+
+    /**
+     * Uncordon the server (clear any active preemption simulation). Idempotent.
+     *
+     * @return array<string, mixed> The cleared status ({state: "inactive"}).
+     * @throws MockServerException On communication errors.
+     */
+    public function clearPreemption(): array
+    {
+        $response = $this->delete('/mockserver/preemption');
+
+        return $this->decodeSreResponse($response, 'clear preemption');
+    }
+
+    // -----------------------------------------------------------------
+    // SRE control-plane: scheduled chaos experiments
+    // -----------------------------------------------------------------
+
+    /**
+     * Start a scheduled multi-stage chaos experiment.
+     *
+     * The experiment is an ordered sequence of stages, each applying
+     * service-scoped chaos profiles to one or more hosts for a duration; stages
+     * progress automatically. Only one experiment may be active at a time;
+     * starting a new one stops the previous one.
+     *
+     * @param array<string, mixed> $experiment The experiment definition
+     *        (name, loop, stages[{durationMillis, profiles{host: profile}}]).
+     * @return array<string, mixed> The started status ({status: "started", name}).
+     * @throws InvalidRequestException If the experiment definition is invalid (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function startChaosExperiment(array $experiment): array
+    {
+        $body = json_encode($experiment, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/chaosExperiment', $body);
+
+        return $this->decodeSreResponse($response, 'start chaos experiment');
+    }
+
+    // -----------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------
+
+    /**
+     * Coerce a value-object-or-array argument into a JSON-encodable array.
+     *
+     * @param object|array<string, mixed> $value
+     * @return array<string, mixed>|object
+     */
+    private static function toPayload(object|array $value): array|object
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        if (method_exists($value, 'toArray')) {
+            return $value->toArray();
+        }
+        if ($value instanceof \JsonSerializable) {
+            $serialized = $value->jsonSerialize();
+            if (is_array($serialized)) {
+                return $serialized;
+            }
+        }
+
+        return $value;
+    }
+
+    /**
+     * Normalise a single name or list of names into a list of strings.
+     *
+     * @param string|array<int, string> $names
+     * @return array<int, string>
+     */
+    private static function toNameList(string|array $names): array
+    {
+        return is_array($names) ? array_values($names) : [$names];
+    }
+
+    /**
+     * Extract the unique {@code name} of a scenario value object or array.
+     *
+     * @param LoadScenario|array<string, mixed> $scenario
+     * @throws InvalidRequestException If the scenario has no name.
+     */
+    private static function scenarioName(LoadScenario|array $scenario): string
+    {
+        $name = $scenario instanceof LoadScenario
+            ? $scenario->getName()
+            : ($scenario['name'] ?? null);
+
+        if (!is_string($name) || $name === '') {
+            throw new InvalidRequestException('Load scenario must have a non-empty "name" to run.');
+        }
+
+        return $name;
+    }
+
+    /**
+     * Decode a control-plane (SRE) JSON response, surfacing the common error
+     * statuses with clear, typed exceptions.
+     *
+     * @param \Psr\Http\Message\ResponseInterface $response
+     * @param string $action Human-readable action used in error messages.
+     * @param string|null $featureFlag When set, a 403 is surfaced as a
+     *        {@see FeatureNotEnabledException} naming the server flag to enable.
+     * @return array<string, mixed>
+     * @throws FeatureNotEnabledException
+     * @throws InvalidRequestException
+     * @throws MockServerException
+     */
+    private function decodeSreResponse(
+        \Psr\Http\Message\ResponseInterface $response,
+        string $action,
+        ?string $featureFlag = null,
+    ): array {
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 403) {
+            $hint = $featureFlag !== null
+                ? " (start MockServer with {$featureFlag}=true to enable it)"
+                : '';
+            throw new FeatureNotEnabledException(
+                "Failed to {$action}: feature is disabled{$hint} (HTTP 403): {$responseBody}"
+            );
+        }
+        if ($status === 400) {
+            throw new InvalidRequestException("Failed to {$action} (HTTP 400): {$responseBody}");
+        }
+        if ($status === 404) {
+            throw new InvalidRequestException("Failed to {$action}: not found (HTTP 404): {$responseBody}");
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Failed to {$action} (HTTP {$status}): {$responseBody}");
+        }
+
+        if ($responseBody !== '') {
+            $parsed = json_decode($responseBody, true);
+            if (is_array($parsed)) {
+                return $parsed;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Decode a scenario control-plane JSON response, surfacing the common error
+     * statuses with clear, typed exceptions.
+     *
+     * @param \Psr\Http\Message\ResponseInterface $response
+     * @param string $action Human-readable action used in error messages.
+     * @return array<string, mixed>
+     * @throws InvalidRequestException
+     * @throws MockServerException
+     */
+    private function decodeScenarioResponse(
+        \Psr\Http\Message\ResponseInterface $response,
+        string $action,
+    ): array {
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 400 || $status === 406) {
+            throw new InvalidRequestException("Failed to {$action} (HTTP {$status}): {$responseBody}");
+        }
+        if ($status >= 400) {
+            throw new MockServerException("Failed to {$action} (HTTP {$status}): {$responseBody}");
+        }
+
+        if ($responseBody !== '') {
+            $parsed = json_decode($responseBody, true);
+            if (is_array($parsed)) {
+                return $parsed;
+            }
+        }
+
+        return [];
+    }
 
     /**
      * Generic retrieve method.
@@ -429,19 +1425,109 @@ class MockServerClient
     }
 
     /**
+     * Retrieve raw (non-JSON) response body, e.g. generated SDK code.
+     *
+     * @param HttpRequest|null $request Filter
+     * @param string $type ACTIVE_EXPECTATIONS or RECORDED_EXPECTATIONS
+     * @param string $format Code-generation format (JAVA, PYTHON, GO, ...)
+     * @return string
+     */
+    private function retrieveRaw(?HttpRequest $request, string $type, string $format): string
+    {
+        $path = '/mockserver/retrieve?type=' . urlencode($type) . '&format=' . urlencode($format);
+        $body = $request !== null ? json_encode($request->toArray(), JSON_THROW_ON_ERROR) : '';
+
+        $response = $this->put($path, $body);
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status >= 400) {
+            throw new MockServerException("Retrieve ({$type}) failed (HTTP {$status}): {$responseBody}");
+        }
+
+        return $responseBody;
+    }
+
+    /**
      * Send a PUT request to MockServer.
      *
      * @param string $path Request path (including query string if any)
-     * @param string $body JSON body
+     * @param string $body Request body (JSON by default, or raw bytes)
+     * @param string|null $contentType Override the request Content-Type (e.g. application/octet-stream)
      * @return \Psr\Http\Message\ResponseInterface
      * @throws ConnectionException
      */
-    private function put(string $path, string $body): \Psr\Http\Message\ResponseInterface
-    {
+    private function put(
+        string $path,
+        string $body,
+        ?string $contentType = null,
+    ): \Psr\Http\Message\ResponseInterface {
+        $options = [
+            RequestOptions::BODY => $body,
+        ];
+        if ($contentType !== null) {
+            // Per-request Content-Type override (replaces the client default).
+            $options[RequestOptions::HEADERS] = ['Content-Type' => $contentType];
+        }
+
+        $options = $this->withControlPlaneOptions($options);
+
         try {
-            return $this->httpClient->request('PUT', $path, [
-                RequestOptions::BODY => $body,
-            ]);
+            return $this->httpClient->request('PUT', $path, $options);
+        } catch (ConnectException $e) {
+            throw new ConnectionException(
+                "Failed to connect to MockServer at {$this->baseUri}: {$e->getMessage()}",
+                (int) $e->getCode(),
+                $e
+            );
+        } catch (GuzzleException $e) {
+            throw new ConnectionException(
+                "Request to MockServer at {$this->baseUri} failed: {$e->getMessage()}",
+                (int) $e->getCode(),
+                $e
+            );
+        }
+    }
+
+    /**
+     * Send a GET request to MockServer (used by control-plane status endpoints).
+     *
+     * @param string $path Request path (including query string if any)
+     * @return \Psr\Http\Message\ResponseInterface
+     * @throws ConnectionException
+     */
+    private function get(string $path): \Psr\Http\Message\ResponseInterface
+    {
+        return $this->send('GET', $path);
+    }
+
+    /**
+     * Send a DELETE request to MockServer (used by control-plane stop/clear endpoints).
+     *
+     * @param string $path Request path (including query string if any)
+     * @return \Psr\Http\Message\ResponseInterface
+     * @throws ConnectionException
+     */
+    private function delete(string $path): \Psr\Http\Message\ResponseInterface
+    {
+        return $this->send('DELETE', $path);
+    }
+
+    /**
+     * Send a body-less request (GET/DELETE) to MockServer.
+     *
+     * @param string $method HTTP method
+     * @param string $path Request path (including query string if any)
+     * @return \Psr\Http\Message\ResponseInterface
+     * @throws ConnectionException
+     */
+    private function send(string $method, string $path): \Psr\Http\Message\ResponseInterface
+    {
+        $options = $this->withControlPlaneOptions([]);
+
+        try {
+            return $this->httpClient->request($method, $path, $options);
         } catch (ConnectException $e) {
             throw new ConnectionException(
                 "Failed to connect to MockServer at {$this->baseUri}: {$e->getMessage()}",

@@ -57,6 +57,7 @@ terraform/website/
 ├── variables.tf            # Input variables
 ├── outputs.tf              # Distribution IDs, role ARN, main bucket name
 ├── sites.tf                # S3 + CloudFront + Route 53 (per-version + main)
+├── binaries.tf             # downloads.mock-server.com: S3 + CloudFront for SNAPSHOT bundles
 ├── cross-account-role.tf   # IAM role assumed by the build-account Buildkite agent
 ├── terraform.tfvars        # Live values (committed; no secrets)
 └── terraform.tfvars.example
@@ -109,8 +110,11 @@ terraform apply
 The build account's Buildkite agents need to push releases into the website account. Rather than long-lived credentials, this module creates an IAM role (`mockserver-release-website`) in the website account whose trust policy permits assumption from `build_account_agent_role_arn`, guarded by an `sts:ExternalId` condition when `role_external_id` is supplied. The role's permissions are scoped:
 
 - Specific S3 object and bucket verbs on `arn:aws:s3:::aws-website-mockserver-*` only (ACL and website-configuration verbs removed — buckets use OAC + BucketOwnerEnforced)
+- Specific S3 bucket verbs on `arn:aws:s3:::aws-binaries-mockserver` (the `downloads.mock-server.com` bundle host in `binaries.tf`) — including `s3:PutBucketVersioning` and `s3:PutEncryptionConfiguration` (the bucket enables versioning + SSE) and `s3:ListBucket` (backs the provider's `HeadBucket` existence probe — without it the refresh gets a 403 the AWS provider misreads as "bucket deleted" and plans a destructive recreate). See the note below on why the release role needs this.
 - Specific CloudFront distribution and invalidation verbs account-wide (CloudFront doesn't support resource-level permissions for distribution-list/create)
 - Hosted-zone-scoped Route 53 read + `ChangeResourceRecordSets` on `mock-server.com` (`route53:GetHostedZone`, `ListResourceRecordSets`, `ListTagsForResource`, `ChangeResourceRecordSets`), plus account-wide `route53:GetChange` (needed to poll change propagation status — Route 53 doesn't support resource-level scoping for that one)
+
+> **Whole-state apply — every resource in this module needs release-role coverage.** `versioned-site.sh` runs `terraform plan`/`apply` over the **entire** `terraform/website/` state on each major/minor release. Terraform refreshes (and may create/update) **all** resources in the state, not just the website buckets — so any resource added here (e.g. `binaries.tf`) must have matching permissions in `cross-account-role.tf`, or the release pipeline's Versioned Site step fails with `AccessDenied` during refresh. The `aws-binaries-mockserver` bucket itself is **only written by the SNAPSHOT bundle CI step** (build-account agent, cross-account) — released versions ship via GitHub Releases — but because its Terraform definition lives in this release-applied state, the release role must still be able to manage it.
 
 The release pipeline (`scripts/release/components/website.sh`, `…/javadoc.sh`, `…/helm.sh`, `…/versioned-site.sh`) calls `sts:AssumeRole` against this role and uses the resulting credentials for the rest of the step.
 

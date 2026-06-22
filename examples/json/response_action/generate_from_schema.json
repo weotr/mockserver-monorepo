@@ -1,0 +1,9 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "generateFromSchema": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\"]}"
+  }
+}

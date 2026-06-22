@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_ENCODING;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
-import static junit.framework.TestCase.assertEquals;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assume.assumeTrue;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.matchers.Times.exactly;

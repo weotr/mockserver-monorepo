@@ -29,6 +29,24 @@ VERSION=$(grep -E '^version\s*=' "$PYTHON_DIR/pyproject.toml" | head -1 | sed 's
 [[ -n "$VERSION" ]] || { log_error "could not parse version from pyproject.toml"; exit 1; }
 log_info "Package version: $VERSION"
 
+# In dry-run, update-version-references (which bumps pyproject.toml) is skipped
+# and its bump would never reach this step's fresh checkout anyway, so the file
+# still holds the previous version. Bump it in-place to RELEASE_VERSION so the
+# dry-run builds/validates the real version; restore on exit (dry-run never commits).
+PYPROJECT_FILE="$PYTHON_DIR/pyproject.toml"
+if is_dry_run && [[ "$VERSION" != "$RELEASE_VERSION" ]]; then
+  mkdir -p "$REPO_ROOT/.tmp"
+  cp "$PYPROJECT_FILE" "$REPO_ROOT/.tmp/pyproject.toml.bak"
+  # shellcheck disable=SC2064  # expand the path now, not at trap-fire time
+  trap "cp '$REPO_ROOT/.tmp/pyproject.toml.bak' '$PYPROJECT_FILE' 2>/dev/null || true" EXIT
+  _newtoml="$REPO_ROOT/.tmp/pyproject.toml.new"
+  sed "s/^version = \".*\"/version = \"$RELEASE_VERSION\"/" "$PYPROJECT_FILE" > "$_newtoml" && mv "$_newtoml" "$PYPROJECT_FILE"
+  grep -qE "^version = \"$RELEASE_VERSION\"" "$PYPROJECT_FILE" \
+    || { log_error "dry-run: failed to bump pyproject.toml version (format changed?)"; exit 1; }
+  VERSION="$RELEASE_VERSION"
+  log_info "dry-run: bumped pyproject.toml version to $RELEASE_VERSION in-place (not committed)"
+fi
+
 # Fail-fast version guard. Must run BEFORE the "already on PyPI" idempotency
 # check, otherwise a stale pyproject.toml (e.g. prepare.sh didn't bump it)
 # would silently skip — masking the bug behind an "already published"

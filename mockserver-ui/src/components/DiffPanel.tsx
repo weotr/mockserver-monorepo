@@ -10,12 +10,17 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import Alert from '@mui/material/Alert';
 import CircularProgress from '@mui/material/CircularProgress';
+import { monospaceFontFamily } from '../theme';
 import type { DiffResult, FieldDiff } from '../lib/diff';
 
 interface DiffPanelProps {
   result: DiffResult | null;
   loading: boolean;
   error: string | null;
+  /** Heading shown above the diff table. Defaults to "Request Diff". */
+  title?: string;
+  /** Message shown when {@link DiffResult.identical} is true. */
+  identicalMessage?: string;
 }
 
 function diffTypeColor(diffType: string): 'success' | 'error' | 'warning' | 'default' {
@@ -31,12 +36,18 @@ function diffTypeColor(diffType: string): 'success' | 'error' | 'warning' | 'def
   }
 }
 
-export default function DiffPanel({ result, loading, error }: DiffPanelProps) {
+export default function DiffPanel({
+  result,
+  loading,
+  error,
+  title = 'Request Diff',
+  identicalMessage = 'The two requests are identical.',
+}: DiffPanelProps) {
   return (
     <Paper variant="outlined" sx={{ p: 1.25, mt: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Request Diff
+          {title}
         </Typography>
         {result && (
           <Chip
@@ -75,17 +86,17 @@ export default function DiffPanel({ result, loading, error }: DiffPanelProps) {
               {result.diffs.map((diff: FieldDiff, i: number) => (
                 <TableRow key={`${diff.field}-${i}`}>
                   <TableCell>
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+                    <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily }}>
                       {diff.field}
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
+                    <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
                       {diff.expectedValue ?? '-'}
                     </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="caption" sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
+                    <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
                       {diff.actualValue ?? '-'}
                     </Typography>
                   </TableCell>
@@ -113,7 +124,7 @@ export default function DiffPanel({ result, loading, error }: DiffPanelProps) {
 
       {result && result.identical && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 1 }}>
-          The two requests are identical.
+          {identicalMessage}
         </Typography>
       )}
     </Paper>

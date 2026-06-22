@@ -9,7 +9,7 @@ subsection: true
 sitemap:
   priority: 0.9
   changefreq: 'monthly'
-  lastmod: 2026-05-30T08:00:00+00:00
+  lastmod: 2026-06-09T08:00:00+00:00
 keywords: chaos testing, fault injection, resilience testing, latency injection, connection drop, simulate outage, outage window, time-based fault injection, SRE testing, retry and backoff testing, mock 429 rate limit, chaos testing in kubernetes
 schema_faq:
   - question: "How do I simulate a 429 rate limit with MockServer?"
@@ -42,6 +42,73 @@ schema_faq:
 </ul>
 
 <p>Because chaos profiles work on <strong>both mocked and forwarded responses</strong>, MockServer can act as a chaos proxy — sit it in front of a real service (upstream, third-party API, or internal dependency) and inject faults into the responses it relays. This makes it a powerful tool for SRE resilience testing, not just unit/integration test mocking.</p>
+
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>Jump straight to a chaos feature &mdash; pick a <strong>fault type</strong>, control <strong>where and how much</strong> it applies, target a <strong>protocol</strong>, or <strong>orchestrate and observe</strong> it:</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Fault types</th>
+			<th>Targeting &amp; control</th>
+			<th>Protocol-specific</th>
+			<th>Orchestrate &amp; observe</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#connection_drop_injection">Connection drop</a></li>
+					<li><a href="#error_injection">Error injection (e.g. 503/429)</a></li>
+					<li><a href="#latency_injection">Latency</a></li>
+					<li><a href="#slow_response">Slow (dribbled) response</a></li>
+					<li><a href="#body_corruption">Body corruption</a></li>
+					<li><a href="#graphql_error_injection">GraphQL errors</a></li>
+					<li><a href="#request_quota">Rate-limit quota</a></li>
+					<li><a href="#stateful_count_based_faults">Count-based faults</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#chaos_profile_fields">Chaos profile fields</a></li>
+					<li><a href="#where_chaos_applies">Where chaos applies</a></li>
+					<li><a href="#outage_windows">Outage windows (time-based)</a></li>
+					<li><a href="#reproducibility">Reproducibility (seed)</a></li>
+					<li><a href="#gradual_degradation">Gradual degradation</a></li>
+					<li><a href="#service_scoped_chaos">Service-scoped chaos</a></li>
+					<li><a href="#live_chaos_tuning">Live tuning (PATCH)</a></li>
+					<li><a href="#chaos_proxy">Chaos proxy (real services)</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#grpc_fault_injection">gRPC fault injection</a></li>
+					<li><a href="#tcp_layer_chaos">TCP-layer chaos</a></li>
+					<li><a href="#connection_lifecycle_faults">Connection-lifecycle faults</a></li>
+					<li><a href="#preemption_simulation">Preemption simulation</a></li>
+					<li><a href="#llm_chaos">LLM chaos</a></li>
+					<li><a href="#fleet_chaos">Fleet-wide (clustered)</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#chaos_experiments">Scheduled experiments</a></li>
+					<li><a href="#chaos_profile_library">Saved profile library</a></li>
+					<li><a href="#chaos_auto_halt">Auto-halt circuit-breaker</a></li>
+					<li><a href="#slo_resilience_verdicts">SLO resilience verdicts</a></li>
+					<li><a href="#chaos_observability">Observability</a></li>
+					<li><a href="#dashboard_ui">Dashboard UI</a></li>
+					<li><a href="#interaction_notes">Interaction with other features</a></li>
+					<li><a href="#chaos_examples">Examples</a> &middot; <a href="#faq">FAQ</a></li>
+				</ul>
+			</td>
+		</tr>
+	</tbody>
+</table>
 
 <a id="chaos_profile_fields" class="anchor" href="#chaos_profile_fields">&nbsp;</a>
 
@@ -522,7 +589,60 @@ PATCH /mockserver/serviceChaos
 
 <p>This turns MockServer into a <strong>chaos proxy</strong> — sit it between your application and a dependency (internal service or external API) and test what happens when that dependency becomes unreliable.</p>
 
-<p><strong>Deployment patterns:</strong></p>
+<h3>How HTTP chaos reaches proxied traffic</h3>
+
+<p>The plain proxy fall-through (when no expectation matches a request) does not add HTTP-level chaos. HTTP faults on proxied traffic flow through one of three mechanisms:</p>
+
+<ul>
+    <li><strong>Forwarding expectation with a chaos clause</strong> — an expectation whose action is <code class="inline code">httpForward</code> (pointing at the real upstream) and that carries a <code class="inline code">chaos</code> block. MockServer forwards the request, receives the real upstream response, applies the chaos profile to it, and returns the degraded response to the caller.</li>
+    <li><strong><a href="#service_scoped_chaos">Service-scoped chaos</a></strong> — register a chaos profile for an upstream host with <code class="inline code">PUT /mockserver/serviceChaos</code>. MockServer applies it to all matched forwards to that host without touching any expectation. Useful for live-patching a running deployment.</li>
+    <li><strong><a href="#tcp_layer_chaos">TCP-layer chaos</a></strong> — register connection-level faults with <code class="inline code">PUT /mockserver/tcpChaos</code>. These operate before HTTP is parsed, so they affect all traffic on a connection including proxied responses.</li>
+</ul>
+
+<h3>Pattern 1: catch-all forward expectation with chaos</h3>
+
+<p>The most common "misbehaving upstream" pattern: match everything, forward to the real backend, and degrade every response. Register a single catch-all expectation:</p>
+
+<pre class="prettyprint code"><code class="code">PUT /mockserver/expectation
+{
+  "httpRequest": {},
+  "httpForward": {
+    "host": "payments.example.com",
+    "port": 443,
+    "scheme": "HTTPS"
+  },
+  "chaos": {
+    "errorStatus": 503,
+    "errorProbability": 0.3,
+    "latency": {
+      "timeUnit": "MILLISECONDS",
+      "value": 500
+    }
+  },
+  "times": {
+    "unlimited": true
+  }
+}</code></pre>
+
+<p>This expectation matches <em>all</em> requests, forwards each one to <code class="inline code">payments.example.com:443</code>, and — before returning the response to the caller — injects a 503 error on 30% of responses and adds 500 ms latency to every response. Your application connects to MockServer; MockServer connects to the real backend. No application code changes are required.</p>
+
+<p>To restrict chaos injection to a specific path, add <code class="inline code">path</code> (or any other matcher) to <code class="inline code">httpRequest</code>. Requests that do not match the expectation are forwarded unchanged by the default proxy fall-through (<code class="inline code">attemptToProxyIfNoMatchingExpectation: true</code>).</p>
+
+<h3>Pattern 2: service-scoped chaos (live-patch without an expectation)</h3>
+
+<p>To degrade all forwarded traffic to a host without creating or modifying any expectation, use <a href="#service_scoped_chaos">service-scoped chaos</a>:</p>
+
+<pre class="prettyprint code"><code class="code">// Break payments.example.com for 5 minutes, then auto-heal
+PUT /mockserver/serviceChaos
+{ "host": "payments.example.com", "chaos": { "errorStatus": 503, "errorProbability": 0.3 }, "ttlMillis": 300000 }
+
+// Clear it immediately
+PUT /mockserver/serviceChaos
+{ "host": "payments.example.com", "remove": true }</code></pre>
+
+<p>See the <a href="#service_scoped_chaos">Service-scoped Chaos</a> section below for the full endpoint reference, PATCH live-tuning, TTL countdown, and client library wrappers.</p>
+
+<h3>Deployment patterns</h3>
 <ul>
     <li><strong>Forward proxy:</strong> configure your application's <code class="inline code">HTTP_PROXY</code> / <code class="inline code">HTTPS_PROXY</code> environment variables to point at MockServer, then create forward expectations with chaos profiles for specific hosts/paths</li>
     <li><strong>Reverse proxy:</strong> put MockServer in front of a specific upstream service (using MockServer's <code class="inline code">proxyRemoteHost</code> / <code class="inline code">proxyRemotePort</code> configuration) and add chaos profiles to inject faults</li>
@@ -616,6 +736,183 @@ sum(mock_server_active_service_chaos) &gt; 0
 
 # Active service-scoped chaos injecting connection drops
 mock_server_active_service_chaos{fault_type="drop"}</code></pre>
+
+<a id="slo_resilience_verdicts" class="anchor" href="#slo_resilience_verdicts">&nbsp;</a>
+
+<h2>SLO Resilience Verdicts</h2>
+
+<p>After injecting faults and driving load, you can ask MockServer synchronously: <strong>"did the traffic just handled meet a service-level objective?"</strong> The SLO verdict endpoint evaluates latency percentiles and error rates over a configurable time window and returns a PASS / FAIL verdict, with the HTTP status code encoding the result so a CI step or chaos gate can assert on it without parsing the body.</p>
+
+<p><strong>Enable tracking first.</strong> SLO tracking is off by default — set <code class="inline code">sloTrackingEnabled=true</code> so MockServer records a latency + error sample for every forwarded upstream round-trip. The endpoint returns <code class="inline code">400</code> with an error message if tracking is disabled.</p>
+
+<pre class="code"><code class="code">docker run -e MOCKSERVER_SLO_TRACKING_ENABLED=true mockserver/mockserver</code></pre>
+
+<h3>How it works</h3>
+
+<p>Each proxied upstream round-trip is recorded into a bounded sample window. <code class="inline code">PUT /mockserver/verifySLO</code> evaluates a named set of objectives over that window and returns a verdict. The HTTP status encodes the outcome:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Result</th>
+            <th>HTTP status</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">PASS</code></td>
+            <td><code class="inline code">200</code></td>
+            <td>All objectives met over the window</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">INCONCLUSIVE</code></td>
+            <td><code class="inline code">200</code></td>
+            <td>Fewer than <code class="inline code">minimumSampleCount</code> samples in the window, or an objective could not be computed (empty window)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">FAIL</code></td>
+            <td><code class="inline code">406</code></td>
+            <td>At least one objective did not hold</td>
+        </tr>
+        <tr>
+            <td>Error</td>
+            <td><code class="inline code">400</code></td>
+            <td>Malformed request body, or <code class="inline code">sloTrackingEnabled=false</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Request and response</h3>
+
+<pre class="prettyprint code"><code class="code">curl -s -w "\n%{http_code}" -X PUT http://localhost:1080/mockserver/verifySLO \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "checkout-slo",
+    "window": { "type": "LOOKBACK", "lookbackMillis": 60000 },
+    "minimumSampleCount": 20,
+    "upstreamHosts": ["payments.svc"],
+    "objectives": [
+      { "sli": "LATENCY_P95", "comparator": "LESS_THAN", "threshold": 250.0 },
+      { "sli": "ERROR_RATE",  "comparator": "LESS_THAN_OR_EQUAL", "threshold": 0.01 }
+    ]
+  }'</code></pre>
+
+<p>A passing response body looks like:</p>
+
+<pre class="code"><code class="code">{
+  "name": "checkout-slo",
+  "result": "PASS",
+  "windowFromEpochMillis": 1700000000000,
+  "windowToEpochMillis":   1700000060000,
+  "sampleCount": 137,
+  "objectiveResults": [
+    { "sli": "LATENCY_P95", "comparator": "LESS_THAN", "threshold": 250.0, "observedValue": 210.0, "result": "PASS" },
+    { "sli": "ERROR_RATE",  "comparator": "LESS_THAN_OR_EQUAL", "threshold": 0.01, "observedValue": 0.0, "result": "PASS" }
+  ]
+}</code></pre>
+
+<h3>SloCriteria fields</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">name</code></td>
+            <td>Display name echoed in the response (useful for CI logs).</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">window.type</code></td>
+            <td><code class="inline code">LOOKBACK</code> — <code class="inline code">[now - lookbackMillis, now]</code> evaluated with MockServer's controllable clock; <code class="inline code">EXPLICIT</code> — use <code class="inline code">fromEpochMillis</code> / <code class="inline code">toEpochMillis</code> verbatim.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">minimumSampleCount</code></td>
+            <td>If the window holds fewer than this many samples, the verdict is <code class="inline code">INCONCLUSIVE</code> rather than <code class="inline code">PASS</code>. Prevents a misleadingly clean result over an empty window.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">upstreamHosts</code></td>
+            <td>Optional list of target hostnames to restrict evaluation to samples from those hosts. Omit to evaluate across all recorded traffic.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">objectives</code></td>
+            <td>One or more SLI objectives. <strong>All</strong> must hold for a PASS verdict.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Supported SLIs</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>SLI</th>
+            <th>Comparators</th>
+            <th>Threshold</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">LATENCY_P50</code></td>
+            <td><code class="inline code">LESS_THAN</code>, <code class="inline code">LESS_THAN_OR_EQUAL</code></td>
+            <td>Milliseconds. P50 latency over the window's samples.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">LATENCY_P95</code></td>
+            <td><code class="inline code">LESS_THAN</code>, <code class="inline code">LESS_THAN_OR_EQUAL</code></td>
+            <td>Milliseconds. P95 latency over the window's samples.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">LATENCY_P99</code></td>
+            <td><code class="inline code">LESS_THAN</code>, <code class="inline code">LESS_THAN_OR_EQUAL</code></td>
+            <td>Milliseconds. P99 latency over the window's samples.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">ERROR_RATE</code></td>
+            <td><code class="inline code">LESS_THAN</code>, <code class="inline code">LESS_THAN_OR_EQUAL</code></td>
+            <td>Fraction 0.0 &ndash; 1.0. Errors are responses with status <code class="inline code">&ge; 500</code> or no status.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Configuration</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Property</th>
+            <th>Environment variable</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">mockserver.sloTrackingEnabled</code></td>
+            <td><code class="inline code">MOCKSERVER_SLO_TRACKING_ENABLED</code></td>
+            <td><code class="inline code">false</code></td>
+            <td>Enable the forward-path recording funnel. Must be <code class="inline code">true</code> for <code class="inline code">verifySLO</code> to evaluate over real traffic.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.sloWindowRetentionMillis</code></td>
+            <td><code class="inline code">MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS</code></td>
+            <td><code class="inline code">600000</code> (10 min)</td>
+            <td>Maximum sample age relative to the newest sample. Older samples are evicted automatically.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.sloWindowMaxSamples</code></td>
+            <td><code class="inline code">MOCKSERVER_SLO_WINDOW_MAX_SAMPLES</code></td>
+            <td><code class="inline code">50000</code></td>
+            <td>Maximum number of samples retained. Oldest samples are evicted when the cap is reached.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>SLO samples are cleared on server reset. Both load-scenario traffic and real proxied traffic are recorded under the same <code class="inline code">FORWARD</code> scope, keyed by host — use <code class="inline code">upstreamHosts</code> or a narrow <code class="inline code">EXPLICIT</code> window to scope a verdict to a specific run. See also <a href="/mock_server/load_injection.html">Load Injection</a> for driving synthetic traffic that feeds the SLO sample store.</p>
 
 <a id="dashboard_ui" class="anchor" href="#dashboard_ui">&nbsp;</a>
 
@@ -922,6 +1219,141 @@ PATCH /mockserver/tcpChaos
 
 <p><strong>Difference from HTTP chaos:</strong> TCP chaos operates at the raw byte level before HTTP decoding. This means it can simulate faults that are impossible to reproduce with HTTP-level chaos, such as TCP RST, connection timeouts (never sending FIN), bandwidth throttling, and data fragmentation. HTTP chaos operates on decoded HTTP requests/responses and can inject application-level faults like error status codes, body corruption, and rate limiting.</p>
 
+<a id="connection_lifecycle_faults" class="anchor" href="#connection_lifecycle_faults">&nbsp;</a>
+
+<h2>Connection-Lifecycle Faults</h2>
+
+<p>Connection-lifecycle faults simulate the patterns that appear when a server crashes <em>mid-response</em>, closes connections slowly, or signals graceful shutdown to HTTP/2 clients. These faults fire at response time — the client sees them while or after the response head is written — and are registered via the same <code class="inline code">PUT /mockserver/tcpChaos</code> endpoint as connect-time TCP faults, keyed by upstream host.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Fault</th>
+            <th>Field on <code class="inline code">TcpChaosProfile</code></th>
+            <th>Behaviour</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Mid-response RST</strong></td>
+            <td><code class="inline code">resetMidResponse</code> (boolean)</td>
+            <td>After the response head is flushed, forces a TCP RST (SO_LINGER 0 + immediate close) instead of a clean FIN. The client sees "connection reset" mid-stream — simulates a server that crashed while replying.</td>
+        </tr>
+        <tr>
+            <td><strong>Slow close</strong></td>
+            <td><code class="inline code">slowCloseDelay</code> (Delay object)</td>
+            <td>Delays the socket FIN on the response path by the configured amount (with optional jitter). Simulates a connection that lingers on teardown without requiring a per-expectation <code class="inline code">ConnectionOptions.closeSocketDelay</code>.</td>
+        </tr>
+        <tr>
+            <td><strong>HTTP/2 GOAWAY</strong></td>
+            <td><code class="inline code">http2GoAway</code> (boolean)</td>
+            <td>On HTTP/2 connections, emits a GOAWAY frame on the response path before the response head, signalling the client to stop opening new streams. Configurable with <code class="inline code">http2GoAwayErrorCode</code> (default 0 = NO_ERROR) and <code class="inline code">http2GoAwayLastStreamId</code>. HTTP/1.1 connections have no GOAWAY — MockServer degrades to <code class="inline code">Connection: close</code> + 503.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Register via <code class="inline code">PUT /mockserver/tcpChaos</code></strong> (same endpoint as connect-time TCP faults):</p>
+
+<pre class="code"><code class="code">// Mid-response RST — simulate server crash while replying
+PUT /mockserver/tcpChaos
+{ "host": "payments.svc", "chaos": { "resetMidResponse": true } }
+
+// Slow close — connection lingers for 2 seconds after the response
+PUT /mockserver/tcpChaos
+{ "host": "payments.svc", "chaos": { "slowCloseDelay": { "timeUnit": "SECONDS", "value": 2 } } }
+
+// HTTP/2 GOAWAY — client stops opening new streams on that connection
+PUT /mockserver/tcpChaos
+{ "host": "payments.svc", "chaos": { "http2GoAway": true, "http2GoAwayErrorCode": 0 } }</code></pre>
+
+<p><strong>Auto-halt integration.</strong> A mid-response RST is counted as a <code class="inline code">drop</code> fault and contributes to the <a href="#chaos_auto_halt">auto-halt circuit-breaker</a> window (controlled by <code class="inline code">connectionLifecycleAutoHaltCountsRst</code>, default <code class="inline code">true</code>). A GOAWAY and the preemption 503 are graceful signals and are not counted.</p>
+
+<p><strong>Streaming carve-out.</strong> The response-path faults (<code class="inline code">resetMidResponse</code>, <code class="inline code">slowCloseDelay</code>, <code class="inline code">http2GoAway</code>) apply to the non-streaming response path only. Streaming responses (SSE, chunked streaming) are not affected in the current version.</p>
+
+<a id="preemption_simulation" class="anchor" href="#preemption_simulation">&nbsp;</a>
+
+<h2>Preemption Simulation</h2>
+
+<p>The preemption endpoint simulates a Kubernetes node drain, EC2 Spot reclamation, or pre-SIGTERM sequence: MockServer <strong>cordons</strong> itself (turning away new data-plane exchanges), allows in-flight requests to drain for a bounded window, and signals HTTP/2 clients to drain via GOAWAY. It is a pure simulation — it never stops the JVM or event loops. The control plane (<code class="inline code">/mockserver/...</code> paths) is always exempt so you can observe and uncordon at any time.</p>
+
+<h3>Behaviour by protocol and mode</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Mode</th>
+            <th>HTTP/1.1 new requests</th>
+            <th>HTTP/2 new requests</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">reject503</code></td>
+            <td>503 + <code class="inline code">Retry-After</code> + <code class="inline code">Connection: close</code></td>
+            <td>503 + <code class="inline code">Retry-After</code> (no GOAWAY)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">goaway</code></td>
+            <td>Served normally (no GOAWAY in HTTP/1.1)</td>
+            <td>Connection-level GOAWAY; in-flight request still completes normally</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">both</code> (default)</td>
+            <td>503 + <code class="inline code">Retry-After</code> + <code class="inline code">Connection: close</code></td>
+            <td>GOAWAY <strong>and</strong> 503 + <code class="inline code">Retry-After</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Control-plane endpoints</h3>
+
+<pre class="code"><code class="code">// Start a preemption simulation (default mode = "both", drain = stop drain config value)
+PUT /mockserver/preemption
+{ "mode": "both", "drainMillis": 30000, "ttlMillis": 60000 }
+
+// Check current state (state: "inactive" | "draining" | "drained")
+GET /mockserver/preemption
+// -> { "state": "draining", "inFlight": 3, "drainRemainingMillis": 25000, "mode": "both" }
+
+// Uncordon immediately
+DELETE /mockserver/preemption</code></pre>
+
+<h3>Request fields</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">mode</code></td>
+            <td><code class="inline code">both</code></td>
+            <td>Rejection + GOAWAY strategy. See table above.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">drainMillis</code></td>
+            <td><code class="inline code">stopDrainMillis</code> config value</td>
+            <td>Duration of the drain window in milliseconds. Clamped to <code class="inline code">preemptionSimulationMaxDrainMillis</code> (default 24 h).</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">ttlMillis</code></td>
+            <td><code class="inline code">0</code> (no auto-uncordon)</td>
+            <td>Dead-man's switch: auto-clears the cordon after this many ms. Prevents a forgotten simulation from permanently blocking traffic.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">lastStreamId</code></td>
+            <td><code class="inline code">null</code></td>
+            <td>The <code class="inline code">Last-Stream-ID</code> value in the GOAWAY frame (HTTP/2 modes only). Defaults to the current connection's last stream.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Preemption state is cleared on server reset. Combine with <a href="#slo_resilience_verdicts">SLO verdicts</a> to assert that your load balancer correctly routes around a cordoned instance with no error budget impact.</p>
+
 <a id="llm_chaos" class="anchor" href="#llm_chaos">&nbsp;</a>
 
 <h2>LLM Chaos (fault injection for mocked LLM responses)</h2>
@@ -1057,6 +1489,215 @@ new MockServerClient("localhost", 1080)
 
 <p>In a single-node deployment, chaos registrations live in memory on that node. When MockServer runs as a <a href="/mock_server/centralized_deployment.html#option2">clustered HA fleet</a> (a shared, replicated state backend across several nodes), the control-plane chaos registrations — <strong>service-scoped HTTP chaos</strong> (<code class="inline code">PUT /mockserver/serviceChaos</code>), <strong>TCP chaos</strong> (<code class="inline code">PUT /mockserver/tcpChaos</code>) and <strong>gRPC chaos</strong> (<code class="inline code">PUT /mockserver/grpcChaos</code>) — <strong>replicate across all nodes</strong>. Register a fault once on any node and every node enforces it; remove or clear it on any node and it is reverted fleet-wide. TTL auto-revert and clearing on server reset apply consistently across the cluster, so you can break a host for the whole fleet with a single call. With no clustered backend configured (the default) this is a no-op and chaos stays node-local.</p>
 
+<a id="chaos_experiments" class="anchor" href="#chaos_experiments">&nbsp;</a>
+
+<h2>Scheduled Multi-Stage Chaos Experiments</h2>
+
+<p>For complex resilience scenarios that progress through multiple fault phases, MockServer supports <strong>scheduled multi-stage chaos experiments</strong>. An experiment is an ordered sequence of stages, each applying service-scoped chaos profiles to one or more hosts for a specified duration, advancing automatically when the stage timer elapses.</p>
+
+<h3>Starting an experiment</h3>
+
+<p>Start an experiment with <code class="inline code">PUT /mockserver/chaosExperiment</code>. The payload defines a name, an ordered list of stages (each with a duration and per-host chaos profiles), and an optional <code class="inline code">loop</code> flag:</p>
+
+<pre class="code"><code class="code">curl -sf -X PUT http://mockserver:1080/mockserver/chaosExperiment \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "progressive-degradation",
+    "loop": false,
+    "stages": [
+      {
+        "durationMillis": 60000,
+        "profiles": {
+          "payments.svc": {"errorStatus": 429, "errorProbability": 0.1, "latency": {"timeUnit": "MILLISECONDS", "value": 200}}
+        }
+      },
+      {
+        "durationMillis": 60000,
+        "profiles": {
+          "payments.svc": {"errorStatus": 503, "errorProbability": 0.5, "latency": {"timeUnit": "MILLISECONDS", "value": 1000}}
+        }
+      },
+      {
+        "durationMillis": 30000,
+        "profiles": {
+          "payments.svc": {"dropConnectionProbability": 1.0}
+        }
+      }
+    ]
+  }'</code></pre>
+
+<p>This experiment progressively degrades <code class="inline code">payments.svc</code>: first light errors and latency for one minute, then heavier errors for another minute, then a complete connection drop for 30 seconds. After the last stage completes, chaos is cleared automatically.</p>
+
+<h3>Scheduling the start (delayed / cron)</h3>
+
+<p>By default an experiment starts the moment you <code class="inline code">PUT</code> it. To start it later instead, add either of two optional fields to the experiment definition:</p>
+
+<ul>
+    <li><code class="inline code">startDelayMillis</code> &mdash; a fixed delay before the first stage is applied (for example <code class="inline code">300000</code> to start in 5 minutes). Maximum 7 days.</li>
+    <li><code class="inline code">cronSchedule</code> &mdash; a standard 5-field cron expression (<code class="inline code">minute hour day-of-month month day-of-week</code>) for the start time, evaluated in the server's local time zone. Supports <code class="inline code">*</code>, ranges (<code class="inline code">9-17</code>), comma lists (<code class="inline code">0,30</code>), and steps (<code class="inline code">0-59/5</code>). Day-of-week is <code class="inline code">0-6</code> with <code class="inline code">0</code> = Sunday.</li>
+</ul>
+
+<p>If you set both, the later of the two start times is used. Until the start time arrives, the experiment applies no chaos and reports <code class="inline code">status: "scheduled"</code> with a <code class="inline code">startRemainingMillis</code> countdown; you can cancel it with <code class="inline code">DELETE /mockserver/chaosExperiment</code> before it begins. Omitting both fields keeps the original behaviour (start immediately).</p>
+
+<pre class="code"><code class="code">curl -sf -X PUT http://mockserver:1080/mockserver/chaosExperiment \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "nightly-error-storm",
+    "cronSchedule": "0 2 * * *",
+    "stages": [
+      {
+        "durationMillis": 600000,
+        "profiles": {
+          "payments.svc": {"errorStatus": 503, "errorProbability": 0.3}
+        }
+      }
+    ]
+  }'</code></pre>
+
+<p>This experiment waits until the next 02:00 (server local time), then injects 503s into <code class="inline code">payments.svc</code> for 10 minutes &mdash; useful for rehearsing an off-peak incident without staying up to trigger it.</p>
+
+<h3>Safety limits</h3>
+
+<ul>
+    <li><strong>Maximum 50 stages</strong> per experiment</li>
+    <li><strong>Maximum 24 hours</strong> per stage duration</li>
+    <li><strong>Maximum 7 days</strong> for a deferred <code class="inline code">startDelayMillis</code></li>
+    <li><strong>Only one experiment at a time</strong> &mdash; starting a new experiment stops the previous one</li>
+    <li><strong>Auto-halt integration</strong> &mdash; if the <a href="#chaos_auto_halt">auto-halt circuit-breaker</a> fires while an experiment is running, the experiment stops immediately (status: <code class="inline code">halted_by_auto_halt</code>)</li>
+</ul>
+
+<h3>Monitoring</h3>
+
+<p>Check the current experiment status with <code class="inline code">GET /mockserver/chaosExperiment</code>:</p>
+
+<pre class="code"><code class="code">curl -sf http://mockserver:1080/mockserver/chaosExperiment
+# -> {"name":"progressive-degradation","status":"running","currentStageIndex":1,
+#     "totalStages":3,"stageElapsedMillis":15000,"stageRemainingMillis":45000,
+#     "loopIteration":0,"totalElapsedMillis":75000,"experiment":{...}}</code></pre>
+
+<p>The <code class="inline code">status</code> field is one of: <code class="inline code">scheduled</code> (a delayed/cron start is pending &mdash; the status also carries <code class="inline code">startRemainingMillis</code>), <code class="inline code">running</code>, <code class="inline code">completed</code>, <code class="inline code">stopped</code>, or <code class="inline code">halted_by_auto_halt</code>.</p>
+
+<h3>Stopping</h3>
+
+<p>Stop a running experiment and clear all chaos with <code class="inline code">DELETE /mockserver/chaosExperiment</code>:</p>
+
+<pre class="code"><code class="code">curl -sf -X DELETE http://mockserver:1080/mockserver/chaosExperiment</code></pre>
+
+<p>Stopping is idempotent &mdash; calling it when no experiment is running is a no-op.</p>
+
+<a id="chaos_profile_library" class="anchor" href="#chaos_profile_library">&nbsp;</a>
+
+<h3>Saved profile library (save / apply by name)</h3>
+
+<p>Frequently-used experiments can be saved as named, reusable <strong>profiles</strong> instead of re-sending the full experiment JSON every time. A profile is simply a saved experiment definition &mdash; the same JSON shape <code class="inline code">PUT /mockserver/chaosExperiment</code> accepts &mdash; stored under a name. Saving a profile does <em>not</em> start it; applying it does.</p>
+
+<p>Save (or replace) a profile under a name with <code class="inline code">PUT /mockserver/chaosExperiment/profiles/{name}</code>:</p>
+
+<pre class="code"><code class="code">curl -sf -X PUT http://mockserver:1080/mockserver/chaosExperiment/profiles/progressive-degradation \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "stages": [
+      {"durationMillis": 60000, "profiles": {"payments.svc": {"errorStatus": 503, "errorProbability": 0.5}}}
+    ]
+  }'</code></pre>
+
+<p>Apply (start) a saved profile by name with <code class="inline code">POST /mockserver/chaosExperiment/apply/{name}</code> &mdash; this starts that experiment exactly as if its definition had been sent to <code class="inline code">PUT /mockserver/chaosExperiment</code>:</p>
+
+<pre class="code"><code class="code">curl -sf -X POST http://mockserver:1080/mockserver/chaosExperiment/apply/progressive-degradation</code></pre>
+
+<p>List the saved profile names with <code class="inline code">GET /mockserver/chaosExperiment/profiles</code>, fetch one definition with <code class="inline code">GET /mockserver/chaosExperiment/profiles/{name}</code>, and delete a profile with <code class="inline code">DELETE /mockserver/chaosExperiment/profiles/{name}</code>:</p>
+
+<pre class="code"><code class="code">curl -sf http://mockserver:1080/mockserver/chaosExperiment/profiles
+# -> {"profiles":["progressive-degradation"]}
+
+curl -sf -X DELETE http://mockserver:1080/mockserver/chaosExperiment/profiles/progressive-degradation</code></pre>
+
+<p>Saved profiles are stored in MockServer's state backend, so they <strong>survive a server reset</strong> (unlike active chaos, which a reset clears) and <strong>replicate across all nodes</strong> in a <a href="/mock_server/centralized_deployment.html">clustered deployment</a>. Applying a profile that does not exist returns <code class="inline code">404 Not Found</code> with a clear error message. The dashboard Chaos panel exposes the same library as a <em>Saved Profiles</em> list with a "Save as Profile" button and one-click apply / delete.</p>
+
+<a id="chaos_auto_halt" class="anchor" href="#chaos_auto_halt">&nbsp;</a>
+
+<h2>Chaos Auto-Halt Circuit-Breaker</h2>
+
+<p>The auto-halt circuit-breaker is a safety guardrail for service-scoped chaos experiments. When enabled, MockServer monitors the rate of <em>destructive</em> fault injections and automatically disables all active service-scoped chaos profiles if that rate exceeds a configurable threshold — the "steady-state guardrail" that prevents a chaos experiment from cascading into a wider outage.</p>
+
+<h3>Which fault types count</h3>
+
+<p>Only <strong>destructive</strong> fault types contribute to the sliding error window:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr><th>Fault type</th><th>Counts toward auto-halt?</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code class="inline code">error</code> (synthetic 5xx)</td><td><strong>Yes</strong></td><td>Returns an error status to callers — directly visible failure</td></tr>
+        <tr><td><code class="inline code">drop</code> (connection drop)</td><td><strong>Yes</strong></td><td>Hard connection kill — severe disruption</td></tr>
+        <tr><td><code class="inline code">quota</code> (rate-limit rejection)</td><td><strong>Yes</strong></td><td>Rejects calls with 429 / quota error — service disruption</td></tr>
+        <tr><td><code class="inline code">latency</code></td><td>No</td><td>Adds delay but does not fail calls — a latency-only experiment will never auto-halt</td></tr>
+        <tr><td><code class="inline code">slow</code> (dribbled response)</td><td>No</td><td>Slows delivery but the response is still returned</td></tr>
+        <tr><td><code class="inline code">truncate</code> (body truncation)</td><td>No</td><td>Corrupts payload but does not reject the call outright</td></tr>
+        <tr><td><code class="inline code">malformed</code> (body corruption)</td><td>No</td><td>Corrupts payload but does not reject the call outright</td></tr>
+        <tr><td><code class="inline code">graphql</code> (GraphQL error envelope)</td><td>No</td><td>Returns HTTP 200 with a GraphQL error body — benign at the transport layer</td></tr>
+    </tbody>
+</table>
+
+<h3>How it works</h3>
+
+<p>MockServer maintains a lock-free sliding window of timestamps for destructive fault injections. On every destructive fault injection, it trims timestamps older than <code class="inline code">chaosAutoHaltWindowMillis</code> from the head of the window, then checks whether the remaining count meets or exceeds <code class="inline code">chaosAutoHaltErrorThreshold</code>. If it does:</p>
+
+<ol>
+    <li>All active service-scoped HTTP, gRPC, and TCP chaos registrations are cleared (equivalent to sending <code class="inline code">PUT /mockserver/serviceChaos {"clear": true}</code>).</li>
+    <li>Any running <a href="#chaos_experiments">multi-stage chaos experiment</a> is stopped immediately with status <code class="inline code">halted_by_auto_halt</code>.</li>
+    <li>The <code class="inline code">mock_server_chaos_auto_halt_total</code> counter is incremented.</li>
+    <li>A warning is logged with the window size, threshold, and window duration.</li>
+    <li>The sliding window is cleared so that new registrations are not immediately re-halted.</li>
+</ol>
+
+<p>The circuit-breaker evaluates each fault injection on the event-loop thread without locking, using a <code class="inline code">ConcurrentLinkedDeque</code> of timestamps for O(1) adds and amortised O(1) eviction.</p>
+
+<h3>Configuration</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr><th>Property</th><th>Environment variable</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">mockserver.chaosAutoHaltEnabled</code></td>
+            <td><code class="inline code">MOCKSERVER_CHAOS_AUTO_HALT_ENABLED</code></td>
+            <td><code class="inline code">false</code></td>
+            <td>Master switch. The circuit-breaker is <strong>disabled by default</strong> — set to <code class="inline code">true</code> to enable it.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.chaosAutoHaltErrorThreshold</code></td>
+            <td><code class="inline code">MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD</code></td>
+            <td><code class="inline code">50</code></td>
+            <td>Number of destructive fault injections within the window that triggers a halt. Lower values make the guardrail more sensitive.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.chaosAutoHaltWindowMillis</code></td>
+            <td><code class="inline code">MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS</code></td>
+            <td><code class="inline code">60000</code> (60&nbsp;s)</td>
+            <td>Sliding window duration in milliseconds. Error-class faults older than this are discarded from the window.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Example: to halt when 20 or more error-class faults fire within a 30-second window:</p>
+
+<pre class="code"><code class="code">docker run -e MOCKSERVER_CHAOS_AUTO_HALT_ENABLED=true \
+           -e MOCKSERVER_CHAOS_AUTO_HALT_ERROR_THRESHOLD=20 \
+           -e MOCKSERVER_CHAOS_AUTO_HALT_WINDOW_MILLIS=30000 \
+           mockserver/mockserver:latest</code></pre>
+
+<h3>Observability</h3>
+
+<p>When <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>, the <code class="inline code">mock_server_chaos_auto_halt_total</code> counter increments each time the circuit-breaker fires. Monitor it with:</p>
+
+<pre class="code"><code class="code"># Alert when the auto-halt has fired at least once
+mock_server_chaos_auto_halt_total &gt; 0</code></pre>
+
+<p>The counter is also reset on server reset. The circuit-breaker state (current window size, halt count) is not exposed as a separate endpoint — use the Prometheus metric to observe it.</p>
+
 <a id="coming_soon" class="anchor" href="#coming_soon">&nbsp;</a>
 
 <h2>Roadmap</h2>
@@ -1078,17 +1719,17 @@ new MockServerClient("localhost", 1080)
 
 <button id="button_faq_rate_limit" class="accordion">How do I simulate a 429 rate limit with MockServer?</button>
 <div class="panel">
-    <p>Add a chaos profile to your expectation with <code class="inline code">errorStatus</code> set to <code class="inline code">429</code>, <code class="inline code">errorProbability</code> set to <code class="inline code">1.0</code> (for every request) or a fraction like <code class="inline code">0.3</code> (for 30% of requests), and an optional <code class="inline code">retryAfter</code> value. The chaos profile works on both mocked responses and forwarded/proxied upstream calls. See the <a href="#button_chaos_rate_limit">rate limiting example</a> above.</p>
+    <p>Add a chaos profile to your expectation with <code class="inline code">errorStatus</code> set to <code class="inline code">429</code>, <code class="inline code">errorProbability</code> set to <code class="inline code">1.0</code> (for every request) or a fraction like <code class="inline code">0.3</code> (for 30% of requests), and an optional <code class="inline code">retryAfter</code> value. The chaos profile works on both mocked responses and forwarded/proxied upstream calls. See the <a href="#request_quota">Request Quota</a> section above.</p>
 </div>
 
 <button id="button_faq_latency" class="accordion">How do I inject latency into API responses?</button>
 <div class="panel">
-    <p>Add a chaos profile with a <code class="inline code">latency</code> field specifying the delay duration and time unit (e.g. 2000 milliseconds). Latency is injected into every matched response regardless of whether an error is also injected. This works on both mocked and forwarded responses. See the <a href="#button_chaos_latency_injection">latency injection example</a> above.</p>
+    <p>Add a chaos profile with a <code class="inline code">latency</code> field specifying the delay duration and time unit (e.g. 2000 milliseconds). Latency is injected into every matched response regardless of whether an error is also injected. This works on both mocked and forwarded responses. See the <a href="#latency_injection">Latency Injection</a> section above.</p>
 </div>
 
 <button id="button_faq_proxy" class="accordion">Can I inject faults into a real upstream or proxy?</button>
 <div class="panel">
-    <p>Yes. Chaos profiles apply to forwarded and proxied responses, not just mocked ones. Set up a forward expectation pointing at your real upstream service and attach a chaos profile to inject errors or latency into the responses MockServer returns to the caller. See the <a href="#button_chaos_forward_proxy">forward/proxy example</a> and the <a href="#chaos_proxy">Chaos Proxy</a> section above.</p>
+    <p>Yes. Chaos profiles apply to forwarded and proxied responses, not just mocked ones. Set up a forward expectation pointing at your real upstream service and attach a chaos profile to inject errors or latency into the responses MockServer returns to the caller. See the <a href="#chaos_proxy">Chaos Proxy</a> section above.</p>
 </div>
 
 <button id="button_faq_reproducible" class="accordion">How do I make chaos test results reproducible?</button>
@@ -1103,7 +1744,7 @@ new MockServerClient("localhost", 1080)
 
 <button id="button_faq_fail_then_recover" class="accordion">How do I make a mock fail the first few requests then recover?</button>
 <div class="panel">
-    <p>Use the <code class="inline code">succeedFirst</code> and <code class="inline code">failRequestCount</code> fields on the chaos profile. Set <code class="inline code">succeedFirst</code> to <code class="inline code">0</code> (or omit it) and <code class="inline code">failRequestCount</code> to the number of requests that should fail. For example, <code class="inline code">failRequestCount: 2</code> with <code class="inline code">errorStatus: 503</code> and <code class="inline code">errorProbability: 1.0</code> makes the first 2 matching requests return 503, and all subsequent requests return the normal response. This is useful for testing retry logic and backoff strategies. See the <a href="#button_chaos_fail_then_recover">fail-then-recover example</a> and the <a href="#stateful_count_based_faults">Stateful / Count-Based Faults</a> section above.</p>
+    <p>Use the <code class="inline code">succeedFirst</code> and <code class="inline code">failRequestCount</code> fields on the chaos profile. Set <code class="inline code">succeedFirst</code> to <code class="inline code">0</code> (or omit it) and <code class="inline code">failRequestCount</code> to the number of requests that should fail. For example, <code class="inline code">failRequestCount: 2</code> with <code class="inline code">errorStatus: 503</code> and <code class="inline code">errorProbability: 1.0</code> makes the first 2 matching requests return 503, and all subsequent requests return the normal response. This is useful for testing retry logic and backoff strategies. See the <a href="#stateful_count_based_faults">Stateful / Count-Based Faults</a> section above.</p>
 </div>
 
 <button id="button_faq_graphql_partial_error" class="accordion">How do I simulate a GraphQL partial error (data present alongside errors)?</button>
@@ -1121,6 +1762,7 @@ new MockServerClient("localhost", 1080)
 <h2>Related Pages</h2>
 
 <ul>
+    <li><a href="/mock_server/load_injection.html">Performance Testing / Load Injection</a> &mdash; drive synthetic API traffic with multi-stage VU or arrival-rate profiles and assert SLOs over the results — the natural complement to chaos testing</li>
     <li><a href="/mock_server/service_mesh.html">Service Mesh / Sidecar Mode</a> &mdash; deploy MockServer in-path as a transparent sidecar so you can inject the faults above into live traffic without changing application config</li>
     <li><a href="/mock_server/transparent_interception_recipes.html">Transparent Interception Recipes</a> &mdash; iptables REDIRECT / TPROXY recipes for routing real traffic through MockServer to apply chaos profiles</li>
     <li><a href="/mock_server/chaos_testing_kubernetes.html">Chaos Proxy in Kubernetes</a> &mdash; sidecar, egress, and reverse-proxy deployment patterns for injecting faults in a cluster</li>

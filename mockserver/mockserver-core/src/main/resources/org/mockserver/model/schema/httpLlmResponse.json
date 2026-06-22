@@ -15,7 +15,9 @@
         "GEMINI",
         "BEDROCK",
         "AZURE_OPENAI",
-        "OLLAMA"
+        "OLLAMA",
+        "COHERE",
+        "VOYAGE"
       ]
     },
     "model": {
@@ -69,6 +71,15 @@
         "outputSchema": {
           "type": "string"
         },
+        "enforceOutputSchema": {
+          "type": "boolean"
+        },
+        "toolChoice": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
         "streamingPhysics": {
           "type": "object",
           "additionalProperties": false,
@@ -99,6 +110,22 @@
       "properties": {
         "dimensions": {
           "type": "integer"
+        },
+        "deterministicFromInput": {
+          "type": "boolean"
+        },
+        "seed": {
+          "type": "integer"
+        }
+      }
+    },
+    "rerank": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "topN": {
+          "type": "integer",
+          "minimum": 0
         },
         "deterministicFromInput": {
           "type": "boolean"
@@ -209,6 +236,14 @@
         },
         "quotaErrorStatus": {
           "type": "integer"
+        },
+        "tokenQuotaLimit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tokenQuotaWindowMillis": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

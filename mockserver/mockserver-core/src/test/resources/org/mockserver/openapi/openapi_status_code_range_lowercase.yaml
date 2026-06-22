@@ -1,0 +1,18 @@
+openapi: 3.0.0
+info:
+  title: lowercase status code range example
+  version: 1.0.0
+paths:
+  /range:
+    get:
+      operationId: lowercaseRangeOnly
+      responses:
+        # Non-conformant lowercase range key; the generator accepts it, so the validator
+        # must match it case-insensitively against the "2XX" bucket.
+        '2xx':
+          description: success
+          content:
+            application/json:
+              schema:
+                type: string
+                example: "ok"

@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>7.0.1-SNAPSHOT</version>
+        <version>7.1.1-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -158,7 +158,24 @@
                     <groupId>org.apache.velocity</groupId>
                     <artifactId>velocity-engine-core</artifactId>
                 </exclusion>
+                <!-- velocity-tools-generic 3.1 drags commons-beanutils 1.9.4 directly and 1.8.3 via
+                     commons-digester3 — both vulnerable to GHSA-wxr5-93ph-8wr9 (CVE-2025-48734). This
+                     module's dependencyManagement pins 1.11.0 for its own build, but dependencyManagement
+                     is NOT transitive, so downstream consumers resolved the vulnerable versions from the
+                     published POM. Excluding commons-beanutils prunes the whole vulnerable subtree, and the
+                     fixed 1.11.0 is supplied as a direct dependency below so it propagates to consumers. -->
+                <exclusion>
+                    <groupId>commons-beanutils</groupId>
+                    <artifactId>commons-beanutils</artifactId>
+                </exclusion>
             </exclusions>
+        </dependency>
+        <!-- Fixed commons-beanutils for velocity-tools-generic / commons-digester3 (see exclusion above).
+             Declared directly so the published POM exposes 1.11.0 to downstream consumers. Version managed
+             in the parent pom's dependencyManagement. -->
+        <dependency>
+            <groupId>commons-beanutils</groupId>
+            <artifactId>commons-beanutils</artifactId>
         </dependency>
         <dependency>
             <groupId>com.samskivert</groupId>
@@ -255,6 +272,13 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <dependency>
+            <!-- RFC 6902 JSON Patch / RFC 7386 JSON Merge Patch applied to forwarded response
+                 bodies; declared directly rather than relying on the json-schema-validator
+                 transitive so the API stays available if that transitive changes. -->
+            <groupId>com.github.java-json-tools</groupId>
+            <artifactId>json-patch</artifactId>
+        </dependency>
 
         <!-- open api -->
         <dependency>
@@ -266,6 +290,12 @@
                  https://security.snyk.io/vuln/SNYK-JAVA-ORGMOZILLA-1314295 -->
             <groupId>org.mozilla</groupId>
             <artifactId>rhino</artifactId>
+        </dependency>
+
+        <!-- graphql -->
+        <dependency>
+            <groupId>com.graphql-java</groupId>
+            <artifactId>graphql-java</artifactId>
         </dependency>
 
         <!-- xml -->
@@ -483,27 +513,38 @@
                     <threadCount>4</threadCount>
                     <excludes>
                         <exclude>**/*IntegrationTest.java</exclude>
+                        <!-- Mutate the JVM-global LRUCache flags (allCachesEnabled / maxSizeOverride) or
+                             assert cache identity, so they must run single-threaded: otherwise one class
+                             flips the global cache-enabled flag mid-run of a cache-dependent class. -->
+                        <exclude>**/LRUCacheTest.java</exclude>
+                        <exclude>**/JsonSchemaValidatorCacheTest.java</exclude>
                         <exclude>**/ConfigurationTest.java</exclude>
                         <exclude>**/ProxyConfigurationTest.java</exclude>
                         <exclude>**/ExceptionHandlingTest.java</exclude>
                         <exclude>**/CustomJsonUnitMatcherLoaderTest.java</exclude>
                         <exclude>**/MockServerMatcherNotificationAndMetricsTest.java</exclude>
                         <exclude>**/MockServerEventLogTest.java</exclude>
+                        <exclude>**/MockServerEventLogVerifyByDispositionTest.java</exclude>
                         <exclude>**/HttpStateTest.java</exclude>
+                        <exclude>**/HttpStateAuditTest.java</exclude>
+                        <exclude>**/HttpStateAuthorizationTest.java</exclude>
+                        <exclude>**/HttpStateAuditEndpointTest.java</exclude>
                         <exclude>**/OtelMetricsExporterTest.java</exclude>
                         <exclude>**/TimeServiceTest.java</exclude>
                         <exclude>**/TimeToLiveTest.java</exclude>
                         <exclude>**/ExpectationTest.java</exclude>
                         <exclude>**/HttpActionHandlerChaosTest.java</exclude>
+                        <exclude>**/HttpActionHandlerRateLimitTest.java</exclude>
+                        <exclude>**/RateLimitRegistryTest.java</exclude>
                         <exclude>**/HttpActionHandlerForwardChaosTest.java</exclude>
+                        <exclude>**/HttpActionHandlerRecoverAfterTest.java</exclude>
+                        <exclude>**/RecoveryAttemptRegistryTest.java</exclude>
                         <exclude>**/ServiceChaosRegistryTest.java</exclude>
                         <exclude>**/TcpChaosRegistryTest.java</exclude>
                         <exclude>**/MetricsTest.java</exclude>
                         <exclude>**/MetricsHandlerTest.java</exclude>
                         <exclude>**/HttpRequestsPropertiesMatcherTest.java</exclude>
                         <exclude>**/HttpRequestPropertiesMatcherLogTest.java</exclude>
-                        <exclude>**/GenAiSpansTest.java</exclude>
-                        <exclude>**/RequestSpansTest.java</exclude>
                         <!-- Run sequentially: these render templates that evaluate several XPath
                              expressions, each bounded by xpathMatchingTimeoutMillis via the shared
                              MatchingTimeoutExecutor. Under heavy parallel CPU contention an eval can
@@ -511,12 +552,100 @@
                              single-threaded removes the contention without weakening the prod timeout. -->
                         <exclude>**/MustacheTemplateEngineTest.java</exclude>
                         <exclude>**/VelocityTemplateEngineTest.java</exclude>
+                        <!-- WS2.1 scenario-state template tests mutate the CrossProtocolEventBus singleton (live ScenarioManager) -->
+                        <exclude>**/VelocityScenarioStateTemplateTest.java</exclude>
+                        <exclude>**/JavaScriptScenarioStateTemplateTest.java</exclude>
+                        <!-- WS2.6 gRPC bidi scenario-state template test mutates the CrossProtocolEventBus singleton (live ScenarioManager) -->
+                        <exclude>**/GrpcStreamMessageScenarioTemplateTest.java</exclude>
+                        <!-- WS2.2 capture-rule test mutates the CrossProtocolEventBus singleton (live ScenarioManager) -->
+                        <exclude>**/CaptureProcessorTest.java</exclude>
+                        <!-- WS7.1 OIDC authorization-code test mutates the OidcAuthorizationStore singleton -->
+                        <exclude>**/OidcProviderGeneratorTest.java</exclude>
+                        <!-- OidcTokenCallback test registers providers into the OidcAuthorizationStore singleton -->
+                        <exclude>**/OidcTokenCallbackTest.java</exclude>
+                        <!-- WS7.7 SAML SSO test mutates the SamlAssertionStore singleton -->
+                        <exclude>**/SamlProviderGeneratorTest.java</exclude>
+                        <!-- Wave4 SCIM tests mutate the ScimResourceStore singleton -->
+                        <exclude>**/ScimProviderGeneratorTest.java</exclude>
+                        <exclude>**/ScimResourceStoreTest.java</exclude>
+                        <exclude>**/ScimConcurrentUpdateTest.java</exclude>
                         <!-- Mutates global ConfigurationProperties.generateRealisticExampleValues -->
                         <exclude>**/ExampleBuilderRealisticValuesTest.java</exclude>
                         <!-- Mutate shared static PrometheusRegistry / Metrics / ConfigurationProperties -->
                         <exclude>**/HttpActionHandlerGraphQLChaosTest.java</exclude>
                         <exclude>**/ChaosAutoHaltMonitorTest.java</exclude>
+                        <!-- Mutates global ConfigurationProperties.preemptionSimulationMaxDrainMillis + PreemptionSimulator singleton -->
+                        <exclude>**/PreemptionSimulatorTest.java</exclude>
+                        <exclude>**/LlmCostBudgetMonitorTest.java</exclude>
+                        <exclude>**/LlmMetricsTest.java</exclude>
+                        <!-- WS7.6: mutates the mockserver.perExpectationMetrics system property + static Metrics / default PrometheusRegistry -->
+                        <exclude>**/PerExpectationMetricsTest.java</exclude>
+                        <!-- T10: mutates the global mockserver.redactSecretsInLog system property -->
+                        <exclude>**/LogEntryRedactionTest.java</exclude>
+                        <!-- WS3.3: mutate global ConfigurationProperties.generateRealisticExampleValues -->
+                        <exclude>**/GenerationOptionsTest.java</exclude>
+                        <exclude>**/OpenAPIConverterGenerationOptionsTest.java</exclude>
+                        <!-- Mutate global ConfigurationProperties.llmProvider/llmApiKey/llmModel/llmBaseUrl/llmBackendsConfig -->
+                        <exclude>**/LlmBackendResolverTest.java</exclude>
+                        <exclude>**/LlmProviderSnifferTest.java</exclude>
+                        <exclude>**/ForwardPathGenAiSpansTest.java</exclude>
+                        <!-- Installs/removes the process-wide tracer in GenAiSpans/RequestSpans + mutates otelTracesEnabled -->
+                        <exclude>**/GenAiSpanExporterTest.java</exclude>
                         <exclude>**/BreakpointConfigurationTest.java</exclude>
+                        <!-- Mutate shared static singleton registries (StreamFrameBreakpointRegistry, BreakpointMatcherRegistry, BreakpointCallbackDispatcher) -->
+                        <exclude>**/HttpActionHandlerBreakpointTest.java</exclude>
+                        <exclude>**/BreakpointMatcherRegistryTest.java</exclude>
+                        <exclude>**/BreakpointMatcherEndpointTest.java</exclude>
+                        <exclude>**/BreakpointCallbackDispatcherTest.java</exclude>
+                        <exclude>**/StreamFrameCallbackDispatcherTest.java</exclude>
+                        <exclude>**/StreamFrameBreakpointRegistryTest.java</exclude>
+                        <exclude>**/InboundBreakpointTest.java</exclude>
+                        <exclude>**/MockStreamBreakpointTest.java</exclude>
+                        <!-- Mutates ServiceChaosRegistry + ChaosAutoHaltMonitor singletons, Metrics, ConfigurationProperties -->
+                        <exclude>**/ChaosExperimentOrchestratorTest.java</exclude>
+                        <!-- Resets the ChaosExperimentOrchestrator singleton in @After -->
+                        <exclude>**/HttpStateChaosProfileEndpointTest.java</exclude>
+                        <!-- Mutate global sloTrackingEnabled / sloWindow* ConfigurationProperties, the SloSampleStore singleton and the controllable clock -->
+                        <exclude>**/SloSampleStoreTest.java</exclude>
+                        <exclude>**/SloEvaluatorTest.java</exclude>
+                        <exclude>**/HttpStateVerifySloEndpointTest.java</exclude>
+                        <!-- Mutate the LoadScenarioOrchestrator singleton, Metrics, the SloSampleStore singleton and global loadGeneration* ConfigurationProperties -->
+                        <exclude>**/LoadScenarioOrchestratorTest.java</exclude>
+                        <exclude>**/LoadMetricsTest.java</exclude>
+                        <exclude>**/HttpStateLoadScenarioEndpointTest.java</exclude>
+                        <!-- Mutates the DriftAlertNotifier singleton (configure/setSender/reset/setClock) -->
+                        <exclude>**/DriftAlertNotifierTest.java</exclude>
+                        <!-- Mutate global ConfigurationProperties / singleton registries / Metrics (detected by GlobalStateMutationGuardTest) -->
+                        <exclude>**/MaxLlmConversationBodySizeTest.java</exclude>
+                        <exclude>**/SlowRequestConfigurationTest.java</exclude>
+                        <exclude>**/HttpActionHandlerLlmCostBudgetTest.java</exclude>
+                        <exclude>**/GrpcChaosRegistryTest.java</exclude>
+                        <exclude>**/ValidationProxyTest.java</exclude>
+                        <exclude>**/HttpLlmResponseActionHandlerTest.java</exclude>
+                        <exclude>**/HttpLlmResponseActionHandlerChaosTest.java</exclude>
+                        <exclude>**/HttpActionHandlerLlmEnforcementTest.java</exclude>
+                        <exclude>**/DnsIntentRegistryTest.java</exclude>
+                        <exclude>**/WasmRuntimeTest.java</exclude>
+                        <exclude>**/WasmRuntimeRealModuleTest.java</exclude>
+                        <!-- Mutates the shared static WasmRuntime.MODULE_CACHE and WasmStore singleton; asserts exact cache sizes -->
+                        <exclude>**/WasmRuntimeModuleCacheTest.java</exclude>
+                        <exclude>**/XPathEvaluatorTest.java</exclude>
+                        <exclude>**/WasmBodyMatcherTest.java</exclude>
+                        <exclude>**/GraphQLMatcherTest.java</exclude>
+                        <exclude>**/JsonRpcMatcherTest.java</exclude>
+                        <exclude>**/LlmConversationMatcherTest.java</exclude>
+                        <exclude>**/JsonStringMatcherTest.java</exclude>
+                        <exclude>**/RegexStringMatcherTest.java</exclude>
+                        <exclude>**/InetAddressValidatorTest.java</exclude>
+                        <exclude>**/JsonSchemaValidatorRemoteRefTest.java</exclude>
+                        <!-- Constructs a real HttpState (mutates ServiceChaosRegistry / Metrics / CrossProtocolEventBus singletons) -->
+                        <exclude>**/HttpStateReadinessTest.java</exclude>
+                        <!-- Sets/clears mockserver.* JVM system properties to exercise the print-config effective-config diagnostic -->
+                        <exclude>**/ConfigurationPropertiesEffectiveConfigGlobalStateTest.java</exclude>
+                        <!-- Mutates mockserver.llmOptimisationMaxCalls / fixtureBodyRedactFields global config -->
+                        <exclude>**/LlmOptimisationReportServiceTest.java</exclude>
+                        <!-- Resets the ForwardCircuitBreaker singleton (shared with the upstream_circuit_open gauge) -->
+                        <exclude>**/HttpForwardActionResilienceTest.java</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -534,34 +663,105 @@
                                 <exclude>**/*IntegrationTest.java</exclude>
                             </excludes>
                             <includes combine.self="override">
+                                <include>**/LRUCacheTest.java</include>
+                                <include>**/JsonSchemaValidatorCacheTest.java</include>
                                 <include>**/ConfigurationTest.java</include>
                                 <include>**/ProxyConfigurationTest.java</include>
                                 <include>**/ExceptionHandlingTest.java</include>
                                 <include>**/CustomJsonUnitMatcherLoaderTest.java</include>
                                 <include>**/MockServerMatcherNotificationAndMetricsTest.java</include>
                                 <include>**/MockServerEventLogTest.java</include>
+                                <include>**/MockServerEventLogVerifyByDispositionTest.java</include>
                                 <include>**/HttpStateTest.java</include>
+                                <include>**/HttpStateAuditTest.java</include>
+                                <include>**/HttpStateAuthorizationTest.java</include>
+                                <include>**/HttpStateAuditEndpointTest.java</include>
                                 <include>**/OtelMetricsExporterTest.java</include>
                                 <include>**/TimeServiceTest.java</include>
                                 <include>**/TimeToLiveTest.java</include>
                                 <include>**/ExpectationTest.java</include>
                                 <include>**/HttpActionHandlerChaosTest.java</include>
+                                <include>**/HttpActionHandlerRateLimitTest.java</include>
+                                <include>**/RateLimitRegistryTest.java</include>
                                 <include>**/HttpActionHandlerForwardChaosTest.java</include>
+                                <include>**/HttpActionHandlerRecoverAfterTest.java</include>
+                                <include>**/RecoveryAttemptRegistryTest.java</include>
                                 <include>**/ServiceChaosRegistryTest.java</include>
                                 <include>**/TcpChaosRegistryTest.java</include>
                                 <include>**/MetricsTest.java</include>
                                 <include>**/MetricsHandlerTest.java</include>
                                 <include>**/HttpRequestsPropertiesMatcherTest.java</include>
                                 <include>**/HttpRequestPropertiesMatcherLogTest.java</include>
-                                <include>**/GenAiSpansTest.java</include>
-                                <include>**/RequestSpansTest.java</include>
                                 <!-- XPath-in-template tests: sequential to avoid flaky timeout under contention -->
                                 <include>**/MustacheTemplateEngineTest.java</include>
                                 <include>**/VelocityTemplateEngineTest.java</include>
+                                <include>**/VelocityScenarioStateTemplateTest.java</include>
+                                <include>**/JavaScriptScenarioStateTemplateTest.java</include>
+                                <include>**/GrpcStreamMessageScenarioTemplateTest.java</include>
+                                <include>**/CaptureProcessorTest.java</include>
+                                <include>**/OidcProviderGeneratorTest.java</include>
+                                <include>**/OidcTokenCallbackTest.java</include>
+                                <include>**/SamlProviderGeneratorTest.java</include>
+                                <include>**/ScimProviderGeneratorTest.java</include>
+                                <include>**/ScimResourceStoreTest.java</include>
+                                <include>**/ScimConcurrentUpdateTest.java</include>
                                 <include>**/ExampleBuilderRealisticValuesTest.java</include>
                                 <include>**/HttpActionHandlerGraphQLChaosTest.java</include>
                                 <include>**/ChaosAutoHaltMonitorTest.java</include>
+                                <include>**/PreemptionSimulatorTest.java</include>
+                                <include>**/LlmCostBudgetMonitorTest.java</include>
+                                <include>**/LlmMetricsTest.java</include>
+                                <include>**/PerExpectationMetricsTest.java</include>
+                                <include>**/LogEntryRedactionTest.java</include>
+                                <include>**/GenerationOptionsTest.java</include>
+                                <include>**/OpenAPIConverterGenerationOptionsTest.java</include>
+                                <include>**/LlmBackendResolverTest.java</include>
+                                <include>**/LlmProviderSnifferTest.java</include>
+                                <include>**/ForwardPathGenAiSpansTest.java</include>
+                                <include>**/GenAiSpanExporterTest.java</include>
                                 <include>**/BreakpointConfigurationTest.java</include>
+                                <include>**/HttpActionHandlerBreakpointTest.java</include>
+                                <include>**/BreakpointMatcherRegistryTest.java</include>
+                                <include>**/BreakpointMatcherEndpointTest.java</include>
+                                <include>**/BreakpointCallbackDispatcherTest.java</include>
+                                <include>**/StreamFrameCallbackDispatcherTest.java</include>
+                                <include>**/StreamFrameBreakpointRegistryTest.java</include>
+                                <include>**/InboundBreakpointTest.java</include>
+                                <include>**/MockStreamBreakpointTest.java</include>
+                                <include>**/ChaosExperimentOrchestratorTest.java</include>
+                                <include>**/HttpStateChaosProfileEndpointTest.java</include>
+                                <include>**/SloSampleStoreTest.java</include>
+                                <include>**/SloEvaluatorTest.java</include>
+                                <include>**/HttpStateVerifySloEndpointTest.java</include>
+                                <include>**/LoadScenarioOrchestratorTest.java</include>
+                                <include>**/LoadMetricsTest.java</include>
+                                <include>**/HttpStateLoadScenarioEndpointTest.java</include>
+                                <include>**/DriftAlertNotifierTest.java</include>
+                                <include>**/MaxLlmConversationBodySizeTest.java</include>
+                                <include>**/SlowRequestConfigurationTest.java</include>
+                                <include>**/HttpActionHandlerLlmCostBudgetTest.java</include>
+                                <include>**/GrpcChaosRegistryTest.java</include>
+                                <include>**/ValidationProxyTest.java</include>
+                                <include>**/HttpLlmResponseActionHandlerTest.java</include>
+                                <include>**/HttpLlmResponseActionHandlerChaosTest.java</include>
+                                <include>**/HttpActionHandlerLlmEnforcementTest.java</include>
+                                <include>**/DnsIntentRegistryTest.java</include>
+                                <include>**/WasmRuntimeTest.java</include>
+                                <include>**/WasmRuntimeRealModuleTest.java</include>
+                                <include>**/WasmRuntimeModuleCacheTest.java</include>
+                                <include>**/XPathEvaluatorTest.java</include>
+                                <include>**/WasmBodyMatcherTest.java</include>
+                                <include>**/GraphQLMatcherTest.java</include>
+                                <include>**/JsonRpcMatcherTest.java</include>
+                                <include>**/LlmConversationMatcherTest.java</include>
+                                <include>**/JsonStringMatcherTest.java</include>
+                                <include>**/RegexStringMatcherTest.java</include>
+                                <include>**/InetAddressValidatorTest.java</include>
+                                <include>**/JsonSchemaValidatorRemoteRefTest.java</include>
+                                <include>**/HttpStateReadinessTest.java</include>
+                                <include>**/ConfigurationPropertiesEffectiveConfigGlobalStateTest.java</include>
+                                <include>**/LlmOptimisationReportServiceTest.java</include>
+                                <include>**/HttpForwardActionResilienceTest.java</include>
                             </includes>
                         </configuration>
                     </execution>

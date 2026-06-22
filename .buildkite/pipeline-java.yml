@@ -33,6 +33,15 @@ steps:
       - "mockserver/mockserver-netty-no-dependencies/target/mockserver-netty-no-dependencies-*.jar"
       - "mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar"
     timeout_in_minutes: 60
+    # The default queue is partly Spot; a reclaim mid-build kills the agent
+    # (exit -1 / agent lost). Auto-retry so an infra eviction re-runs the long
+    # build instead of failing it. Real test failures exit 1 and are NOT retried.
+    retry:
+      automatic:
+        - exit_status: -1   # agent lost (e.g. Spot reclamation)
+          limit: 2
+        - exit_status: 255  # agent forced shutdown
+          limit: 2
 
   - wait: ~
     continue_on_failure: true
@@ -64,13 +73,48 @@ steps:
     if: "build.branch == 'master'"
     command: ".buildkite/scripts/steps/java-deploy-snapshot.sh"
     timeout_in_minutes: 30
+    retry:
+      automatic:
+        - exit_status: -1   # agent lost (e.g. Spot reclamation)
+          limit: 2
+        - exit_status: 255  # agent forced shutdown
+          limit: 2
 
   - label: ":docker: container integration tests"
     if: "build.branch == 'master'"
     command: ".buildkite/scripts/steps/container-tests-run.sh"
     timeout_in_minutes: 30
+    retry:
+      automatic:
+        - exit_status: -1   # agent lost (e.g. Spot reclamation)
+          limit: 2
+        - exit_status: 255  # agent forced shutdown
+          limit: 2
 
   - label: ":docker: build and push :snapshot"
     if: "build.branch == 'master'"
     command: ".buildkite/scripts/steps/java-docker-push-snapshot.sh"
     timeout_in_minutes: 30
+    retry:
+      automatic:
+        - exit_status: -1   # agent lost (e.g. Spot reclamation)
+          limit: 2
+        - exit_status: 255  # agent forced shutdown
+          limit: 2
+
+  - label: ":package: publish snapshot binary bundles"
+    if: "build.branch == 'master'"
+    command: ".buildkite/scripts/steps/java-publish-snapshot-bundles.sh"
+    timeout_in_minutes: 45
+    soft_fail: true
+
+  # DRAFT (2026-06-11): opt-in pre-release publish of the language clients so a release can
+  # be smoke-tested from real registries before the release pipeline runs. Triggered by the
+  # PUBLISH_CLIENT_SNAPSHOTS=true build env var (not every master build — pre-releases on
+  # npm/PyPI/crates.io/NuGet are effectively permanent). Each client is gated on its registry
+  # secret + CLI being present, so it soft-skips before the one-time manual provisioning is done.
+  - label: ":package: publish client snapshots (opt-in)"
+    if: "build.branch == 'master' && build.env('PUBLISH_CLIENT_SNAPSHOTS') == 'true'"
+    command: ".buildkite/scripts/steps/clients-publish-snapshot.sh"
+    timeout_in_minutes: 30
+    soft_fail: true

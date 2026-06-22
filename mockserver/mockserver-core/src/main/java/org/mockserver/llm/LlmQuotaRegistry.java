@@ -45,16 +45,35 @@ public class LlmQuotaRegistry {
      * exceeds the limit for the current window.
      */
     public boolean tryAcquire(String name, int limit, long windowMillis) {
-        if (name == null || limit < 0 || windowMillis <= 0) {
+        return tryAcquire(name, (long) limit, windowMillis, 1L);
+    }
+
+    /**
+     * Record {@code amount} units (e.g. tokens) against the named quota and report
+     * whether the cumulative total is within the limit.
+     *
+     * <p>Semantics are the same fixed-window as {@link #tryAcquire(String, int, long)}
+     * but the counter increments by {@code amount} instead of 1, and the limit is a
+     * {@code long} to support large token-based quotas (TPM/TPD).
+     *
+     * @param name        shared counter key
+     * @param limit       maximum allowed units per window (must be &gt;= 0)
+     * @param windowMillis window length in milliseconds (must be &gt; 0)
+     * @param amount      units to consume (must be &gt;= 0)
+     * @return {@code true} if the cumulative in-window total (including this call)
+     * is at or below {@code limit}, {@code false} otherwise.
+     */
+    public boolean tryAcquire(String name, long limit, long windowMillis, long amount) {
+        if (name == null || limit < 0 || windowMillis <= 0 || amount < 0) {
             // misconfigured quota is a no-op (never rate-limits) — fail open
             return true;
         }
         long now = clock.getAsLong();
         Window updated = windows.compute(name, (key, existing) -> {
             if (existing == null || now - existing.startMillis >= windowMillis) {
-                return new Window(now, 1);
+                return new Window(now, amount);
             }
-            return new Window(existing.startMillis, existing.count + 1);
+            return new Window(existing.startMillis, existing.count + amount);
         });
         return updated.count <= limit;
     }

@@ -11,6 +11,13 @@ public class TimeService {
     public static final Instant FIXED_INSTANT_FOR_TESTS = Instant.now();
 
     /**
+     * Constant monotonic value returned by {@link #nanoTime()} when a test has pinned time. Any
+     * constant works; both the start and end reads in a duration measurement return it, so the
+     * delta is deterministically 0.
+     */
+    public static final long FIXED_NANOS_FOR_TESTS = System.nanoTime();
+
+    /**
      * Thread-safe frozen instant backing the controllable clock ({@link #freeze}, {@link #advance},
      * {@link #reset}). When non-null, {@link #now()} returns this value instead of the real clock.
      * This pin is intentionally JVM-global (it models a server-wide frozen clock for chaos
@@ -39,6 +46,24 @@ public class TimeService {
             return FIXED_INSTANT_FOR_TESTS;
         }
         return Instant.now();
+    }
+
+    /**
+     * Returns a monotonic nanosecond timestamp for measuring elapsed time, mirroring
+     * {@link System#nanoTime()}. In production (no test pin) this returns the real
+     * {@code System.nanoTime()} - monotonic semantics and overhead are unchanged (the fast path is a
+     * single volatile read of {@code fixedActiveCount == 0}). When a test has pinned time (per-thread
+     * via {@code org.mockserver.time.FixedTime} or globally via {@code GlobalFixedTime}), it returns
+     * the constant {@link #FIXED_NANOS_FOR_TESTS}, so both the start and end reads of a duration
+     * measurement are equal and the elapsed delta is deterministically 0. Unlike {@link #now()}, this
+     * is NOT affected by the controllable {@link #freeze(Instant)} clock, since elapsed-time
+     * measurements must remain monotonic.
+     */
+    public static long nanoTime() {
+        if (fixedActiveCount != 0 && (fixedGlobally || FIXED_ON_THREAD.get())) {
+            return FIXED_NANOS_FOR_TESTS;
+        }
+        return System.nanoTime();
     }
 
     /**

@@ -1,0 +1,17 @@
+meta {
+  name: delete a saved chaos profile
+  type: http
+  seq: 19
+}
+
+delete {
+  url: {{baseUrl}}/mockserver/chaosExperiment/profiles/checkout
+  body: none
+  auth: inherit
+}
+
+docs {
+  Removes the saved chaos profile with the given name. Idempotent — returns 200 with status "deleted" when the profile existed, or "absent" when it did not.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

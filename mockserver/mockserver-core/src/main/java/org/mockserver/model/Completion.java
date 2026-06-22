@@ -14,6 +14,9 @@ public class Completion extends ObjectWithJsonToString {
     private Boolean streaming;
     private StreamingPhysics streamingPhysics;
     private String outputSchema;
+    private Boolean enforceOutputSchema;
+    private String model;
+    private String toolChoice;
 
     public static Completion completion() {
         return new Completion();
@@ -158,6 +161,70 @@ public class Completion extends ObjectWithJsonToString {
         return outputSchema;
     }
 
+    /**
+     * Opt-in strict structured-output enforcement. When {@code true} <em>and</em> an
+     * {@link #getOutputSchema() outputSchema} is declared, the LLM response handler
+     * <strong>enforces</strong> conformance instead of merely flagging it: if the
+     * configured {@link #getText() text} does not conform to the schema, the handler
+     * fails loudly with a provider-correct error response rather than returning the
+     * non-conforming body.
+     *
+     * <p>This models real providers' strict {@code response_format: json_schema} mode,
+     * where the provider <em>guarantees</em> schema-valid output — so a non-conforming
+     * fixture is a configuration error that should surface rather than pass silently.
+     *
+     * <p>When unset or {@code false} (the default), behaviour is unchanged: a mismatch
+     * is fail-soft — the body is returned as configured and only the
+     * {@code x-mockserver-structured-output-invalid} diagnostic header + a warning log
+     * are added. Has no effect without an {@code outputSchema}.
+     */
+    public Completion withEnforceOutputSchema(Boolean enforceOutputSchema) {
+        this.enforceOutputSchema = enforceOutputSchema;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Completion enforceOutputSchema() {
+        return withEnforceOutputSchema(Boolean.TRUE);
+    }
+
+    public Boolean getEnforceOutputSchema() {
+        return enforceOutputSchema;
+    }
+
+    /**
+     * Optional model identifier extracted from the provider response. Set by
+     * {@code parseCompletionResponse} implementations so the caller can read
+     * the model without re-parsing the response body.
+     */
+    public Completion withModel(String model) {
+        this.model = model;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getModel() {
+        return model;
+    }
+
+    /**
+     * Optional tool-choice directive modelling the request's {@code tool_choice} for this
+     * mocked exchange. Recognised values: {@code auto} (model decides), {@code none}
+     * (never call a tool), {@code required} (must call a tool), or a named tool. When set to
+     * {@code required} and at least one tool call is configured, the encoded response's
+     * {@code finish_reason} is forced to {@code tool_calls}. Absent {@code toolChoice}
+     * leaves the existing finish-reason behaviour unchanged.
+     */
+    public Completion withToolChoice(String toolChoice) {
+        this.toolChoice = toolChoice;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getToolChoice() {
+        return toolChoice;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -176,13 +243,16 @@ public class Completion extends ObjectWithJsonToString {
             Objects.equals(usage, that.usage) &&
             Objects.equals(streaming, that.streaming) &&
             Objects.equals(streamingPhysics, that.streamingPhysics) &&
-            Objects.equals(outputSchema, that.outputSchema);
+            Objects.equals(outputSchema, that.outputSchema) &&
+            Objects.equals(enforceOutputSchema, that.enforceOutputSchema) &&
+            Objects.equals(model, that.model) &&
+            Objects.equals(toolChoice, that.toolChoice);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(text, toolCalls, stopReason, usage, streaming, streamingPhysics, outputSchema);
+            hashCode = Objects.hash(text, toolCalls, stopReason, usage, streaming, streamingPhysics, outputSchema, enforceOutputSchema, model, toolChoice);
         }
         return hashCode;
     }

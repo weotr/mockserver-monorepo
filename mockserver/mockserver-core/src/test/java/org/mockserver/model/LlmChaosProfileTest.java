@@ -154,4 +154,73 @@ public class LlmChaosProfileTest {
             () -> llmChaosProfile().withQuotaErrorStatus(600));
         assertThat(exception.getMessage(), is("quotaErrorStatus must be between 100 and 599, got 600"));
     }
+
+    // --- tokenQuotaLimit validation ---
+
+    @Test
+    public void withTokenQuotaLimitAcceptsNullAndPositive() {
+        llmChaosProfile().withTokenQuotaLimit(null);
+        llmChaosProfile().withTokenQuotaLimit(1L);
+        llmChaosProfile().withTokenQuotaLimit(100_000L);
+    }
+
+    @Test
+    public void withTokenQuotaLimitRejectsBelowOne() {
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+            () -> llmChaosProfile().withTokenQuotaLimit(0L));
+        assertThat(exception.getMessage(), is("tokenQuotaLimit must be >= 1, got 0"));
+    }
+
+    // --- tokenQuotaWindowMillis validation ---
+
+    @Test
+    public void withTokenQuotaWindowMillisAcceptsNullAndPositive() {
+        llmChaosProfile().withTokenQuotaWindowMillis(null);
+        llmChaosProfile().withTokenQuotaWindowMillis(1L);
+        llmChaosProfile().withTokenQuotaWindowMillis(86_400_000L);
+    }
+
+    @Test
+    public void withTokenQuotaWindowMillisRejectsBelowOne() {
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+            () -> llmChaosProfile().withTokenQuotaWindowMillis(0L));
+        assertThat(exception.getMessage(), is("tokenQuotaWindowMillis must be >= 1, got 0"));
+    }
+
+    // --- equals/hashCode with token quota fields ---
+
+    @Test
+    public void equalsShouldIncludeTokenQuotaFields() {
+        LlmChaosProfile a = llmChaosProfile()
+            .withQuotaName("acct")
+            .withTokenQuotaLimit(1000L)
+            .withTokenQuotaWindowMillis(60_000L);
+        LlmChaosProfile b = llmChaosProfile()
+            .withQuotaName("acct")
+            .withTokenQuotaLimit(1000L)
+            .withTokenQuotaWindowMillis(60_000L);
+        LlmChaosProfile c = llmChaosProfile()
+            .withQuotaName("acct")
+            .withTokenQuotaLimit(2000L)
+            .withTokenQuotaWindowMillis(60_000L);
+
+        assertThat(a.equals(b), is(true));
+        assertThat(a.hashCode() == b.hashCode(), is(true));
+        assertThat(a.equals(c), is(false));
+    }
+
+    @Test
+    public void hashCodeShouldDifferForDifferentTokenQuotaWindow() {
+        LlmChaosProfile a = llmChaosProfile()
+            .withQuotaName("acct")
+            .withTokenQuotaLimit(1000L)
+            .withTokenQuotaWindowMillis(60_000L);
+        LlmChaosProfile b = llmChaosProfile()
+            .withQuotaName("acct")
+            .withTokenQuotaLimit(1000L)
+            .withTokenQuotaWindowMillis(86_400_000L);
+
+        // Different window -> should not be equal (hashCode may collide, but equals must not)
+        assertThat(a.equals(b), is(false));
+    }
 }

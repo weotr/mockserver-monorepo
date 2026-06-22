@@ -12,6 +12,12 @@ import { buildBaseUrl } from './mcpClient';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import type { CassetteEntry } from './cassetteRegistry';
 
+/** Throw in the standard `MockServer returned <status>: <body>` shape for a non-2xx response. */
+async function throwServerError(res: Response): Promise<never> {
+  const body = await res.text().catch(() => '');
+  throw new Error(`MockServer returned ${res.status}: ${body}`);
+}
+
 interface ServerCassette {
   path: string;
   filename: string;
@@ -37,7 +43,7 @@ function toEntry(c: ServerCassette): CassetteEntry {
 /** List cassettes tracked server-side, as CassetteEntry values (lastUsed normalised to an ISO string). */
 export async function listServerCassettes(params: ConnectionParams, signal?: AbortSignal): Promise<CassetteEntry[]> {
   const res = await fetch(endpoint(params), { signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  if (!res.ok) await throwServerError(res);
   const body = (await res.json()) as { cassettes?: ServerCassette[] };
   return Array.isArray(body.cassettes) ? body.cassettes.map(toEntry) : [];
 }
@@ -52,11 +58,11 @@ export async function registerServerCassette(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(entry),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  if (!res.ok) await throwServerError(res);
 }
 
 /** Remove a cassette server-side by path. Best-effort. */
 export async function deleteServerCassette(params: ConnectionParams, path: string): Promise<void> {
   const res = await fetch(`${endpoint(params)}?path=${encodeURIComponent(path)}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+  if (!res.ok) await throwServerError(res);
 }

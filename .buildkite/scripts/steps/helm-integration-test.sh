@@ -48,8 +48,12 @@ fi
 
 echo "--- :docker: Building MockServer Docker image for testing"
 cp "$JAR_DIR/$JAR_NAME" docker/mockserver-netty-jar-with-dependencies.jar
+# The base docker/Dockerfile COPYs ca-bundle.pem; stage a placeholder (or the
+# corporate CA via MOCKSERVER_LOCAL_CA_BUNDLE) before building, clean up after.
+CA_BUNDLE_STATE=$(docker/ensure-ca-bundle.sh docker)
 docker build --no-cache -t mockserver/mockserver:integration_testing --build-arg source=copy docker
 rm docker/mockserver-netty-jar-with-dependencies.jar
+[ "$CA_BUNDLE_STATE" = "created" ] && rm -f docker/ca-bundle.pem
 
 echo "--- :helm: Installing helm (if needed)"
 # Build agents are spot instances and helm pre-installation is inconsistent
@@ -112,6 +116,36 @@ if ! command -v k3d &>/dev/null || [[ "$(k3d version 2>/dev/null | head -1)" != 
 
   chmod +x "$K3D_DIR/k3d"
   k3d version
+fi
+
+echo "--- :k8s: Installing kubectl (if needed)"
+# The helm test harness (helm-deploy.sh, logging.sh) shells out to kubectl, which
+# — like helm and k3d above — is not reliably present on the spot-instance AMI
+# snapshots, so install + SHA256-verify it explicitly. SHA256 published at
+# https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl.sha256
+KUBECTL_VERSION="v1.31.4"
+KUBECTL_DIR="${PWD}/.tmp/bin"
+export PATH="${KUBECTL_DIR}:${PATH}"
+
+declare -A KUBECTL_SHA256=(
+  [amd64]="298e19e9c6c17199011404278f0ff8168a7eca4217edad9097af577023a5620f"
+  [arm64]="b97e93c20e3be4b8c8fa1235a41b4d77d4f2022ed3d899230dbbbbd43d26f872"
+)
+
+if ! command -v kubectl &>/dev/null || [[ "$(kubectl version --client 2>/dev/null)" != *"${KUBECTL_VERSION}"* ]]; then
+  mkdir -p "$KUBECTL_DIR"
+  ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64;; aarch64) ARCH=arm64;; esac
+  curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" -o "$KUBECTL_DIR/kubectl"
+
+  EXPECTED_SHA="${KUBECTL_SHA256[$ARCH]:-}"
+  if [[ -z "$EXPECTED_SHA" ]]; then
+    echo "ERROR: no SHA256 pin for kubectl on $ARCH — refusing to install untrusted binary" >&2
+    exit 1
+  fi
+  echo "${EXPECTED_SHA}  ${KUBECTL_DIR}/kubectl" | sha256sum -c -
+
+  chmod +x "$KUBECTL_DIR/kubectl"
+  kubectl version --client
 fi
 
 echo "--- :helm: Running Helm integration tests"

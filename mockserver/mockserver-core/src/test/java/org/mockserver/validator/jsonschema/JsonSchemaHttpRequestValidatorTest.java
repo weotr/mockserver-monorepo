@@ -341,4 +341,26 @@ public class JsonSchemaHttpRequestValidatorTest {
         assertThat(result, containsString("$.headers[1]: string found, object expected"));
     }
 
+    @Test
+    public void shouldValidateNegatedRequestWithRawNotField() {
+        // when - a negated request matcher serializes a top-level "not" : true field
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"not\" : true," + NEW_LINE +
+            "    \"method\" : \"GET\"," + NEW_LINE +
+            "    \"path\" : \"/somePath\"" + NEW_LINE +
+            "  }"), is(""));
+    }
+
+    @Test
+    public void shouldValidateSerializedNegatedRequest() {
+        // given
+        org.mockserver.model.HttpRequest negatedRequest = request().withMethod("GET").withPath("/somePath");
+        negatedRequest.setNot(true);
+
+        // when - round trip a serialized negated matcher back through the schema
+        assertThat(jsonSchemaValidator.isValid(new HttpRequestSerializer(new MockServerLogger()).serialize(
+            negatedRequest
+        )), is(""));
+    }
+
 }

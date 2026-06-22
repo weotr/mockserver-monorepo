@@ -1,0 +1,11 @@
+#if ( $request.method == 'POST' && $request.path == '/somePath' )
+    {
+        'statusCode': 200,
+        'body': "{'name': 'value'}"
+    }
+#else
+    {
+        'statusCode': 406,
+        'body': "$!request.body"
+    }
+#end

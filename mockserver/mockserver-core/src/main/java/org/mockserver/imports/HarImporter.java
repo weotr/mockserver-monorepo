@@ -56,13 +56,31 @@ public class HarImporter {
     private static final int MAX_REQUEST_BODY_SIZE = 4096;
 
     /**
-     * Parses a HAR JSON string and returns one expectation per entry.
+     * Parses a HAR JSON string and returns one expectation per entry, with
+     * sensitive headers and body fields redacted (see {@link ImportRedaction}).
+     * Captured HAR files routinely contain real {@code Authorization}/API-key
+     * headers and secret body fields, so redaction is on by default.
      *
      * @param harJson the HAR document as a JSON string
      * @return the generated expectations (may be empty if there are no entries)
      * @throws IllegalArgumentException if the JSON is null, blank, or not a valid HAR
      */
     public List<Expectation> importExpectations(String harJson) {
+        return importExpectations(harJson, ImportRedaction.Options.enabled());
+    }
+
+    /**
+     * Parses a HAR JSON string and returns one expectation per entry, applying the
+     * supplied redaction options before the expectations are returned.
+     *
+     * @param harJson          the HAR document as a JSON string
+     * @param redactionOptions controls whether/how sensitive data is masked; pass
+     *                         {@link ImportRedaction.Options#disabled()} to keep
+     *                         imported values verbatim
+     * @return the generated expectations (may be empty if there are no entries)
+     * @throws IllegalArgumentException if the JSON is null, blank, or not a valid HAR
+     */
+    public List<Expectation> importExpectations(String harJson, ImportRedaction.Options redactionOptions) {
         if (harJson == null || harJson.trim().isEmpty()) {
             throw new IllegalArgumentException("HAR JSON body is required");
         }
@@ -93,7 +111,7 @@ public class HarImporter {
             }
             index++;
         }
-        return expectations;
+        return ImportRedaction.redact(expectations, redactionOptions);
     }
 
     private Expectation buildExpectation(JsonNode entry, int index) {

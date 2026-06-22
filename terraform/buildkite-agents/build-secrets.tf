@@ -88,7 +88,8 @@ resource "aws_secretsmanager_secret" "website_role" {
 # trigger-pipeline.sh (create/cancel builds) and cleanup-closed-pr-builds.sh
 # (cancel/delete). Change-detection (last-successful-commit.sh) uses the separate
 # READ-ONLY token below. The Terraform provider's pipeline/cluster management uses
-# yet another token (mockserver-build/buildkite-tf-token) read only by local admin.
+# yet another token (mockserver-build/buildkite-tf-token) read only by local admin —
+# no build-agent IAM policy grants it (see terraform/buildkite-pipelines/providers.tf).
 resource "aws_iam_policy" "read_buildkite_api_token" {
   name        = "buildkite-read-buildkite-api-token"
   description = "Allow Buildkite agents to read the Buildkite API token from Secrets Manager"
@@ -239,6 +240,45 @@ data "aws_secretsmanager_secret" "mcp_dns_key" {
   name = "mockserver-release/mcp-dns-key"
 }
 
+# NuGet publish token (mockserver-release/nuget, key: api_key) is created out of
+# band — it holds a publish credential we don't want in Terraform state — and is
+# read by scripts/release/components/client-dotnet.sh to push the MockServerClient
+# package. Referenced as a data source purely for its ARN in the IAM grant below.
+data "aws_secretsmanager_secret" "nuget" {
+  name = "mockserver-release/nuget"
+}
+
+# crates.io publish token (mockserver-release/crates, key: token) is likewise
+# created out of band and read by scripts/release/components/client-rust.sh to
+# publish the mockserver-client crate. Data source for its ARN only.
+data "aws_secretsmanager_secret" "crates" {
+  name = "mockserver-release/crates"
+}
+
+# Editor-extension publish tokens (created out of band; data sources for ARNs only).
+# vsce  -> Azure DevOps PAT, read by vscode.sh to publish to the VS Code Marketplace.
+# ovsx  -> Open VSX token, read by vscode.sh to publish to the Open VSX registry.
+# jetbrains -> JetBrains Marketplace token, read by jetbrains.sh to publish the plugin.
+data "aws_secretsmanager_secret" "vsce" {
+  name = "mockserver-release/vsce"
+}
+
+data "aws_secretsmanager_secret" "ovsx" {
+  name = "mockserver-release/ovsx"
+}
+
+data "aws_secretsmanager_secret" "jetbrains" {
+  name = "mockserver-release/jetbrains"
+}
+
+# Postman API key (mockserver-build/postman-api-key, key: api_key) is created out
+# of band and read by scripts/release/components/postman-collection.sh (release
+# queue) to publish the generated Postman collection to the public workspace.
+# Referenced as a data source purely for its ARN in the IAM grant below.
+data "aws_secretsmanager_secret" "postman_api_key" {
+  name = "mockserver-build/postman-api-key"
+}
+
 # Release-only secrets.
 resource "aws_iam_policy" "read_release_secrets" {
   name        = "buildkite-read-release-secrets"
@@ -257,9 +297,15 @@ resource "aws_iam_policy" "read_release_secrets" {
           aws_secretsmanager_secret.npm_token.arn,
           aws_secretsmanager_secret.swaggerhub.arn,
           aws_secretsmanager_secret.website_role.arn,
+          data.aws_secretsmanager_secret.nuget.arn,
+          data.aws_secretsmanager_secret.crates.arn,
           data.aws_secretsmanager_secret.cosign.arn,
           data.aws_secretsmanager_secret.ghcr_token.arn,
           data.aws_secretsmanager_secret.mcp_dns_key.arn,
+          data.aws_secretsmanager_secret.vsce.arn,
+          data.aws_secretsmanager_secret.ovsx.arn,
+          data.aws_secretsmanager_secret.jetbrains.arn,
+          data.aws_secretsmanager_secret.postman_api_key.arn,
         ]
       },
       {
@@ -271,6 +317,10 @@ resource "aws_iam_policy" "read_release_secrets" {
         #   - cosign-key  -> docker.sh + helm.sh image/chart signing
         #   - ghcr-token  -> docker.sh GHCR image mirror (MIRROR_GHCR gate)
         #   - mcp-dns-key -> mcp.sh MCP registry publish gate
+        #   - nuget       -> client-dotnet.sh NuGet publish gate (.NET client)
+        #   - crates      -> client-rust.sh crates.io publish gate (Rust client)
+        #   - vsce/ovsx   -> vscode.sh VS Code Marketplace + Open VSX publish gates
+        #   - jetbrains   -> jetbrains.sh JetBrains Marketplace publish gate
         # Metadata-only; the values are still read via GetSecretValue above.
         Effect = "Allow"
         Action = "secretsmanager:DescribeSecret"
@@ -278,6 +328,11 @@ resource "aws_iam_policy" "read_release_secrets" {
           data.aws_secretsmanager_secret.cosign.arn,
           data.aws_secretsmanager_secret.ghcr_token.arn,
           data.aws_secretsmanager_secret.mcp_dns_key.arn,
+          data.aws_secretsmanager_secret.nuget.arn,
+          data.aws_secretsmanager_secret.crates.arn,
+          data.aws_secretsmanager_secret.vsce.arn,
+          data.aws_secretsmanager_secret.ovsx.arn,
+          data.aws_secretsmanager_secret.jetbrains.arn,
         ]
       },
       {

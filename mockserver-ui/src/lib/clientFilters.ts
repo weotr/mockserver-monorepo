@@ -3,6 +3,31 @@
  * Applied to activeExpectations and other items in the UI.
  */
 
+import type { StringBodyMatcher } from '../types';
+
+/**
+ * Build the request-body matcher for the "Body contains" filter.
+ *
+ * It must do a substring (contains) match, not full-body equality: the filter
+ * object is serialized straight onto the WebSocket as the HttpRequest matcher,
+ * and the server's BodyDTODeserializer turns a bare string into a StringBody
+ * with `subString=false` (exact match) — which would contradict the "Body
+ * contains" label. Emitting the explicit STRING matcher with `subString: true`
+ * makes the server build a contains-matching StringBody instead.
+ */
+export function buildBodyMatcher(text: string): StringBodyMatcher {
+  return { type: 'STRING', string: text, subString: true };
+}
+
+/**
+ * Reference implementation of how the server's STRING body matcher decides a
+ * match, used as a behavioural oracle in tests. `subString: true` → contains;
+ * `subString: false` → exact equality. Mirrors StringBody on the server.
+ */
+export function matchesStringBody(matcher: StringBodyMatcher, actualBody: string): boolean {
+  return matcher.subString ? actualBody.includes(matcher.string) : actualBody === matcher.string;
+}
+
 export const ACTION_TYPES = [
   'httpResponse',
   'httpForward',

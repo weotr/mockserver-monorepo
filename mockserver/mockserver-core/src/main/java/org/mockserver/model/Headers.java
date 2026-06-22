@@ -32,6 +32,7 @@ public class Headers extends KeysToMultiValues<Header, Headers> {
     }
 
     protected void isModified() {
+        super.isModified();
     }
 
     public Headers withKeyMatchStyle(KeyMatchStyle keyMatchStyle) {

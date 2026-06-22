@@ -23,7 +23,7 @@ public class JsonSchemaOpenAPIExpectationValidatorTest {
     public void shouldValidateValidOpenAPIExpectationWithStringSpec() {
         // when
         assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
-            "    \"specUrlOrPayload\" : \"https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json\"" + NEW_LINE +
+            "    \"specUrlOrPayload\" : \"https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json\"" + NEW_LINE +
             "  }"), is(""));
     }
 

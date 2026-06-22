@@ -9,6 +9,7 @@ import org.mockserver.serialization.model.*;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
@@ -78,6 +79,53 @@ public class JsonSchemaExpectationValidatorTest {
                     )
             )
             .setTimes(new TimesDTO(Times.exactly(5))).buildObject().toString()), is(""));
+    }
+
+    @Test
+    public void shouldValidateExpectationWithCaptureRules() {
+        // when — a capture block (WS2.2) validates against the schema
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/login\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpResponse\" : {" + NEW_LINE +
+            "    \"body\" : \"ok\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"capture\" : [ {" + NEW_LINE +
+            "    \"source\" : \"jsonPath\"," + NEW_LINE +
+            "    \"expression\" : \"$.userId\"," + NEW_LINE +
+            "    \"into\" : \"user\"" + NEW_LINE +
+            "  } ]" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldRejectCaptureRuleWithUnknownSource() {
+        // when — an unknown capture source is rejected by the schema
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpResponse\" : {" + NEW_LINE +
+            "    \"body\" : \"ok\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"capture\" : [ {" + NEW_LINE +
+            "    \"source\" : \"notARealSource\"," + NEW_LINE +
+            "    \"expression\" : \"$.userId\"," + NEW_LINE +
+            "    \"into\" : \"user\"" + NEW_LINE +
+            "  } ]" + NEW_LINE +
+            "}"), is(not("")));
+    }
+
+    @Test
+    public void shouldValidateExpectationWithGenerateFromSchemaResponse() {
+        // when — an httpResponse carrying an inline JSON schema is accepted by the schema
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/users\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpResponse\" : {" + NEW_LINE +
+            "    \"statusCode\" : 200," + NEW_LINE +
+            "    \"generateFromSchema\" : \"{\\\"type\\\":\\\"object\\\"}\"" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
     }
 
     @Test
@@ -462,6 +510,45 @@ public class JsonSchemaExpectationValidatorTest {
     }
 
     @Test
+    public void shouldValidateExpectationWithResponseModifierJsonPatchAndMergePatch() {
+        // when
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"somePath\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
+            "    \"responseModifier\" : {" + NEW_LINE +
+            "      \"jsonPatch\" : [ {" + NEW_LINE +
+            "        \"op\" : \"replace\"," + NEW_LINE +
+            "        \"path\" : \"/name\"," + NEW_LINE +
+            "        \"value\" : \"new\"" + NEW_LINE +
+            "      } ]," + NEW_LINE +
+            "      \"jsonMergePatch\" : {" + NEW_LINE +
+            "        \"removed\" : null" + NEW_LINE +
+            "      }" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldRejectResponseModifierWithJsonPatchOfWrongType() {
+        // jsonPatch must be an array; an object is invalid
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"somePath\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
+            "    \"responseModifier\" : {" + NEW_LINE +
+            "      \"jsonPatch\" : {" + NEW_LINE +
+            "        \"op\" : \"replace\"" + NEW_LINE +
+            "      }" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(not("")));
+    }
+
+    @Test
     public void shouldValidateValidCompleteExpectationWithHttpForwardValidateAction() {
         // when
         assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
@@ -595,7 +682,7 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("5 error"));
+        assertThat(result, startsWith("6 error"));
         assertThat(result, containsString("$.httpRequest.operationId: integer found, string expected"));
         assertThat(result, containsString("$.httpRequest.binaryData: is missing, but is required"));
         assertThat(result, containsString("$.httpRequest.dnsName: is missing, but is required"));
@@ -631,7 +718,7 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("10 error"));
+        assertThat(result, startsWith("11 error"));
         assertThat(result, containsString("$.httpRequest.headers[0].name: integer found, string expected"));
         assertThat(result, containsString("$.httpRequest.headers: array found, object expected"));
         assertThat(result, containsString("$.httpResponse.headers[0].values[0]: integer found, string expected"));
@@ -690,7 +777,7 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("10 error"));
+        assertThat(result, startsWith("11 error"));
         assertThat(result, containsString("$.httpRequest.keepAlive: string found, boolean expected"));
         assertThat(result, containsString("$.httpRequest.secure: string found, boolean expected"));
         assertThat(result, containsString("$.httpRequest.socketAddress.port: string found, integer expected"));
@@ -721,7 +808,7 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("10 error"));
+        assertThat(result, startsWith("11 error"));
         assertThat(result, containsString("$.httpRequest.cookies[0].name: integer found, string expected"));
         assertThat(result, containsString("$.httpRequest.cookies: array found, object expected"));
         assertThat(result, containsString("$.httpResponse.cookies[0].value: integer found, string expected"));
@@ -750,7 +837,7 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("8 error"));
+        assertThat(result, startsWith("9 error"));
         assertThat(result, containsString("$.httpRequest.queryStringParameters[0].name: integer found, string expected"));
         assertThat(result, containsString("$.httpRequest.queryStringParameters: array found, object expected"));
         assertThat(result, containsString("$.httpResponse.body: should match one of its valid types"));
@@ -785,7 +872,7 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("13 error"));
+        assertThat(result, startsWith("14 error"));
         assertThat(result, containsString("$.httpRequest.queryStringParameters[0].name: integer found, string expected"));
         assertThat(result, containsString("$.httpRequest.headers[0].values[0]: integer found, string expected"));
         assertThat(result, containsString("$.httpResponse.cookies[0].name: integer found, string expected"));
@@ -923,12 +1010,136 @@ public class JsonSchemaExpectationValidatorTest {
             "}");
 
         // then
-        assertThat(result, startsWith("12 error"));
+        assertThat(result, startsWith("13 error"));
         assertThat(result, containsString("$.httpRequest.headers: array found, object expected"));
         assertThat(result, containsString("$.httpRequest.headers[0]: string found, object expected"));
         assertThat(result, containsString("$.httpRequest.headers[1]: string found, object expected"));
         assertThat(result, containsString("$.httpResponse.headers: array found, object expected"));
         assertThat(result, containsString("$.httpResponse.headers[0]: string found, object expected"));
         assertThat(result, containsString("$.httpResponse.headers[1]: string found, object expected"));
+    }
+
+    @Test
+    public void shouldValidateLegacyResponseModifierShape() {
+        // a plain (unconditional, single) response modifier still validates — backward compatible
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/some/path\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
+            "    \"responseModifier\" : {" + NEW_LINE +
+            "      \"headers\" : {" + NEW_LINE +
+            "        \"add\" : { \"X-Added\" : [ \"value\" ] }" + NEW_LINE +
+            "      }" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldValidateConditionalResponseModifier() {
+        // a response modifier gated by a condition validates
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/some/path\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
+            "    \"responseModifier\" : {" + NEW_LINE +
+            "      \"condition\" : {" + NEW_LINE +
+            "        \"statusCodeRange\" : \"5xx\"," + NEW_LINE +
+            "        \"responseHasHeader\" : \"Content-Type\"" + NEW_LINE +
+            "      }," + NEW_LINE +
+            "      \"headers\" : {" + NEW_LINE +
+            "        \"add\" : { \"X-Server-Error\" : [ \"true\" ] }" + NEW_LINE +
+            "      }" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldValidateChainedResponseModifiers() {
+        // an ordered chain of modifiers validates
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/some/path\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
+            "    \"responseModifier\" : {" + NEW_LINE +
+            "      \"modifiers\" : [ {" + NEW_LINE +
+            "        \"headers\" : { \"add\" : { \"X-Stage\" : [ \"a\" ] } }" + NEW_LINE +
+            "      }, {" + NEW_LINE +
+            "        \"condition\" : { \"statusCode\" : 200 }," + NEW_LINE +
+            "        \"headers\" : { \"replace\" : { \"X-Stage\" : [ \"b\" ] } }" + NEW_LINE +
+            "      } ]" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldRejectResponseModifierConditionWithUnknownProperty() {
+        // additionalProperties:false on the condition rejects unknown keys
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/some/path\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"httpOverrideForwardedRequest\" : {" + NEW_LINE +
+            "    \"responseModifier\" : {" + NEW_LINE +
+            "      \"condition\" : { \"notAReal\" : \"x\" }" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(not("")));
+    }
+
+    @Test
+    public void shouldValidateGrpcBidiResponseWithTemplatedEagerMessages() {
+        // when — a bidi response with a templateType on an eager message (WS2.6) validates against the schema
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/grpc.Service/BidiStream\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"grpcBidiResponse\" : {" + NEW_LINE +
+            "    \"messages\" : [ {" + NEW_LINE +
+            "      \"json\" : \"{ \\\"text\\\": \\\"$!request.body\\\" }\"," + NEW_LINE +
+            "      \"templateType\" : \"VELOCITY\"" + NEW_LINE +
+            "    } ]" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldValidateGrpcBidiResponseWithTemplatedRuleResponses() {
+        // when — a bidi response with a templateType on a rule response message (WS2.6) validates against the schema
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/grpc.Service/BidiStream\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"grpcBidiResponse\" : {" + NEW_LINE +
+            "    \"rules\" : [ {" + NEW_LINE +
+            "      \"matchJson\" : \"{ \\\"name\\\": \\\"ping\\\" }\"," + NEW_LINE +
+            "      \"responses\" : [ {" + NEW_LINE +
+            "        \"json\" : \"{ \\\"reply\\\": \\\"{{ request.body }}\\\" }\"," + NEW_LINE +
+            "        \"templateType\" : \"MUSTACHE\"" + NEW_LINE +
+            "      } ]" + NEW_LINE +
+            "    } ]" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(""));
+    }
+
+    @Test
+    public void shouldRejectGrpcBidiResponseWithUnknownTemplateType() {
+        // when — an unknown templateType is rejected by the schema enum
+        assertThat(jsonSchemaValidator.isValid("{" + NEW_LINE +
+            "  \"httpRequest\" : {" + NEW_LINE +
+            "    \"path\" : \"/grpc.Service/BidiStream\"" + NEW_LINE +
+            "  }," + NEW_LINE +
+            "  \"grpcBidiResponse\" : {" + NEW_LINE +
+            "    \"messages\" : [ {" + NEW_LINE +
+            "      \"json\" : \"{ }\"," + NEW_LINE +
+            "      \"templateType\" : \"NOT_A_REAL_TEMPLATE\"" + NEW_LINE +
+            "    } ]" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}"), is(not("")));
     }
 }

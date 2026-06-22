@@ -1,5 +1,8 @@
 package org.mockserver.openapi;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -52,8 +55,49 @@ public final class OpenApiSyncPlanner {
     }
 
     /**
-     * Derives a stable spec key from an OpenAPI title. The title is lowercased
-     * and every non-alphanumeric character is replaced with {@code '_'}.
+     * Derives a stable, collision-resistant spec key for the OpenAPI namespace.
+     *
+     * <p>The key is {@code <sanitizedTitle>_<shortHash>} (or just {@code <shortHash>}
+     * when the title is blank), where the hash is taken over the spec <em>source
+     * identity</em> rather than the human title alone. This is the critical
+     * correctness property: two <em>different</em> specs that happen to share the
+     * same {@code info.title} must never collide into the same namespace, otherwise
+     * importing one would prune/overwrite the other's expectations (cross-spec
+     * data loss).
+     *
+     * <p><b>Identity semantics by source kind</b>
+     * <ul>
+     *   <li><b>URL / file reference</b> ({@link OpenAPIParser#isSpecUrl} is true):
+     *       the source <em>reference string</em> is the stable identity. Re-importing
+     *       the same URL yields the same key (so incremental sync keeps pruning
+     *       removed operations) while a different URL yields a different key.</li>
+     *   <li><b>Inline payload</b>: the payload <em>content</em> is the identity.
+     *       Re-importing the byte-identical payload yields the same key (incremental
+     *       sync still works for the unchanged-payload case); editing the payload
+     *       changes the key, so the previous version's stale operations are NOT
+     *       pruned on edit — they simply become orphaned under the old namespace.
+     *       This trade-off is deliberate: collision-resistance (no cross-spec
+     *       deletion) outranks pruning-on-inline-edit. Callers that need clean
+     *       incremental sync of an evolving spec should reference it by URL/file.</li>
+     * </ul>
+     *
+     * @param title            the parsed {@code openAPI.getInfo().getTitle()}, may be null/blank
+     * @param specUrlOrPayload the raw spec URL/file reference or inline payload (the source identity)
+     * @return a non-null, collision-resistant spec key safe for use as a namespace token
+     */
+    public static String deriveSpecKey(String title, String specUrlOrPayload) {
+        String sanitizedTitle = specKeyFromTitle(title);
+        String hash = specKeyFromHash(specUrlOrPayload);
+        return sanitizedTitle == null ? hash : sanitizedTitle + "_" + hash;
+    }
+
+    /**
+     * Derives the human-readable portion of a spec key from an OpenAPI title. The
+     * title is lowercased and every non-alphanumeric character is replaced with
+     * {@code '_'}.
+     *
+     * <p>NOTE: a title alone is NOT a safe namespace — distinct specs can share a
+     * title. Use {@link #deriveSpecKey(String, String)} for the full collision-resistant key.
      *
      * @param title the parsed {@code openAPI.getInfo().getTitle()}, may be null/blank
      * @return sanitized key, or {@code null} if the title is blank
@@ -66,19 +110,33 @@ public final class OpenApiSyncPlanner {
     }
 
     /**
-     * Derives a stable spec key by hashing the spec payload/URL.
-     * Returns a short (8-char) hex hash suitable for use as a namespace token.
+     * Derives a stable spec key by hashing the spec payload/URL source identity.
+     * Returns a short 16-character hex hash suitable for use as a namespace token.
+     *
+     * <p>The same input always yields the same hash (so re-importing the same
+     * source re-targets the same namespace); different inputs yield different
+     * hashes with high probability (so distinct sources get distinct namespaces).
      *
      * @param specUrlOrPayload the raw spec URL or inline payload
-     * @return an 8-character lowercase hex string
+     * @return a 16-character lowercase hex string
      */
     public static String specKeyFromHash(String specUrlOrPayload) {
         if (specUrlOrPayload == null) {
-            return "00000000";
+            return "0000000000000000";
         }
-        // Use the lower 32 bits of a stable hash
-        int hash = specUrlOrPayload.hashCode();
-        return String.format("%08x", hash);
+        // SHA-256 (truncated) rather than String.hashCode(): a 32-bit hash is too
+        // collision-prone for a token that guards against cross-spec deletion.
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(specUrlOrPayload.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) {
+                hex.append(String.format("%02x", digest[i]));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is mandated by the JLS to be present on every JVM; fall back defensively.
+            return String.format("%016x", (long) specUrlOrPayload.hashCode());
+        }
     }
 
     /**

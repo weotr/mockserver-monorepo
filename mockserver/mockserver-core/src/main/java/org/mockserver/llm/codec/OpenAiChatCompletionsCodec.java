@@ -11,16 +11,10 @@ import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.StreamingPhysicsExpander;
 import org.mockserver.model.*;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.UUID;
 
 import static org.mockserver.model.HttpResponse.response;
@@ -87,7 +81,7 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
         }
 
         // finish_reason mapping
-        choice.put("finish_reason", mapFinishReason(completion.getStopReason(), hasToolCalls));
+        choice.put("finish_reason", mapFinishReason(completion.getStopReason(), hasToolCalls, completion.getToolChoice()));
 
         // usage
         ObjectNode usage = root.putObject("usage");
@@ -148,7 +142,7 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
         }
 
         // 4. Final chunk with finish_reason
-        String finishReason = mapFinishReason(completion.getStopReason(), hasToolCalls);
+        String finishReason = mapFinishReason(completion.getStopReason(), hasToolCalls, completion.getToolChoice());
         events.add(sseEvent().withData(buildChunk(id, created, modelName, "{}", finishReason)));
 
         // 5. [DONE] sentinel
@@ -181,6 +175,8 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
                 String textContent = "";
                 List<ToolUse> toolCalls = new ArrayList<>();
                 Map<String, String> toolResults = new LinkedHashMap<>();
+                List<ParsedMessage.ImagePart> images = new ArrayList<>();
+                List<ParsedMessage.AudioPart> audio = new ArrayList<>();
 
                 // Parse text content
                 if (contentNode != null) {
@@ -193,6 +189,13 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
                             if ("text".equals(partType)) {
                                 String text = part.has("text") ? part.get("text").asText("") : "";
                                 textBuilder.append(text);
+                            } else if ("image_url".equals(partType)) {
+                                // OpenAI image part: {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
+                                images.add(new ParsedMessage.ImagePart(mediaTypeFromDataUrl(part.path("image_url").path("url").asText(""))));
+                            } else if ("input_audio".equals(partType)) {
+                                // OpenAI audio part: {"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}
+                                String format = part.path("input_audio").path("format").asText("");
+                                audio.add(new ParsedMessage.AudioPart(format.isEmpty() ? null : format));
                             }
                         }
                         textContent = textBuilder.toString();
@@ -235,7 +238,9 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
                     role,
                     textContent,
                     toolCalls.isEmpty() ? null : toolCalls,
-                    toolResults.isEmpty() ? null : toolResults
+                    toolResults.isEmpty() ? null : toolResults,
+                    images.isEmpty() ? null : images,
+                    audio.isEmpty() ? null : audio
                 ));
             }
 
@@ -243,6 +248,22 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
         } catch (Exception e) {
             return ParsedConversation.empty();
         }
+    }
+
+    /**
+     * Extract the media type from an OpenAI image data URL
+     * ({@code data:image/png;base64,...}), or {@code null} for a remote https URL.
+     */
+    private static String mediaTypeFromDataUrl(String url) {
+        if (url != null && url.startsWith("data:")) {
+            int semi = url.indexOf(';');
+            int comma = url.indexOf(',');
+            int end = semi >= 0 ? semi : (comma >= 0 ? comma : -1);
+            if (end > 5) {
+                return url.substring(5, end);
+            }
+        }
+        return null;
     }
 
     private static ParsedMessage.Role mapOpenAiRole(String rawRole) {
@@ -265,19 +286,7 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
 
     @Override
     public HttpResponse encodeEmbedding(EmbeddingResponse embedding, String input) {
-        int dimensions = embedding.getDimensions() != null ? embedding.getDimensions() : 1536;
-        long seed = embedding.getSeed() != null ? embedding.getSeed() : 0L;
-        boolean deterministic = Boolean.TRUE.equals(embedding.getDeterministicFromInput());
-
-        double[] vector;
-        if (deterministic && input != null) {
-            vector = generateDeterministicVector(input, dimensions, seed);
-        } else {
-            vector = generateRandomVector(dimensions);
-        }
-
-        // L2-normalise
-        normalizeL2(vector);
+        double[] vector = EmbeddingVectors.build(embedding, input, 1536);
 
         // Build response
         ObjectNode root = OBJECT_MAPPER.createObjectNode();
@@ -295,7 +304,7 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
         root.put("model", "text-embedding-3-small");
 
         // approximate token count from input
-        int approxTokens = input != null ? Math.max(1, input.length() / 4) : 0;
+        int approxTokens = EmbeddingVectors.approximateTokens(input);
         ObjectNode usage = root.putObject("usage");
         usage.put("prompt_tokens", approxTokens);
         usage.put("total_tokens", approxTokens);
@@ -312,53 +321,11 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
     }
 
     static double[] generateDeterministicVector(String input, int dimensions, long seed) {
-        try {
-            byte[] seedBytes = String.valueOf(seed).getBytes(StandardCharsets.UTF_8);
-            byte[] dimensionsBytes = String.valueOf(dimensions).getBytes(StandardCharsets.UTF_8);
-            byte[] inputBytes = input.getBytes(StandardCharsets.UTF_8);
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update(seedBytes);
-            digest.update((byte) ':');
-            digest.update(dimensionsBytes);
-            digest.update((byte) ':');
-            digest.update(inputBytes);
-            byte[] hash = digest.digest();
-
-            // First 8 bytes as big-endian long
-            ByteBuffer buffer = ByteBuffer.wrap(hash, 0, 8);
-            long hashLong = buffer.getLong();
-
-            Random random = new Random(hashLong);
-            double[] vector = new double[dimensions];
-            for (int i = 0; i < dimensions; i++) {
-                vector[i] = random.nextDouble() * 2 - 1;
-            }
-            return vector;
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
-    }
-
-    private static double[] generateRandomVector(int dimensions) {
-        Random random = new Random();
-        double[] vector = new double[dimensions];
-        for (int i = 0; i < dimensions; i++) {
-            vector[i] = random.nextDouble() * 2 - 1;
-        }
-        return vector;
+        return EmbeddingVectors.generateDeterministicVector(input, dimensions, seed);
     }
 
     static void normalizeL2(double[] vector) {
-        double sumOfSquares = 0;
-        for (double v : vector) {
-            sumOfSquares += v * v;
-        }
-        double norm = Math.sqrt(sumOfSquares);
-        if (norm > 0) {
-            for (int i = 0; i < vector.length; i++) {
-                vector[i] /= norm;
-            }
-        }
+        EmbeddingVectors.normalizeL2(vector);
     }
 
     private String buildChunk(String id, long created, String model, String deltaJson, String finishReason) {
@@ -377,7 +344,12 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
         return sb.toString();
     }
 
-    private static String mapFinishReason(String stopReason, boolean hasToolCalls) {
+    private static String mapFinishReason(String stopReason, boolean hasToolCalls, String toolChoice) {
+        // When the request forces a tool call (tool_choice=required) and a tool is available,
+        // OpenAI returns finish_reason "tool_calls" regardless of any configured stop reason.
+        if (hasToolCalls && "required".equalsIgnoreCase(toolChoice)) {
+            return "tool_calls";
+        }
         if (stopReason == null) {
             return hasToolCalls ? "tool_calls" : "stop";
         }

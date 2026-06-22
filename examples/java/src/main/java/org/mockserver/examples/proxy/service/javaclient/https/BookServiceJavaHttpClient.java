@@ -1,7 +1,6 @@
 package org.mockserver.examples.proxy.service.javaclient.https;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.mockserver.configuration.Configuration;
 import org.mockserver.examples.proxy.model.Book;
 import org.mockserver.examples.proxy.service.BookService;
 import org.mockserver.logging.MockServerLogger;

@@ -88,7 +88,7 @@ const SELF_HOST = TARGET.hostname;
 const SELF_PORT = Number(TARGET.port || (TARGET.protocol === 'https:' ? 443 : 80));
 const SELF_SCHEME = TARGET.protocol === 'https:' ? 'HTTPS' : 'HTTP';
 
-const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, drift: 0, wasmModules: 0, scenarios: 0, grpcServices: 0, sideEffects: 0, cassettes: 0, asyncChannels: 0, mcpCalls: 0 };
+const counts = { expectations: 0, requests: 0, unmatched: 0, serviceChaos: 0, tcpChaos: 0, grpcHealth: 0, grpcChaos: 0, experiments: 0, drift: 0, wasmModules: 0, scenarios: 0, grpcServices: 0, sideEffects: 0, cassettes: 0, asyncChannels: 0, mcpCalls: 0, loadScenario: 0 };
 function log(msg) { if (!quiet) console.log(msg); }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +173,12 @@ const PROVIDERS = {
 };
 
 const SCENARIO = '__llm_conv_weather_agent__iso=header:x-agent-id';
+
+// A SECOND isolated conversation on a different provider (OpenAI), path
+// (/v1/chat/completions) and isolation key (header x-session-id). Driving it
+// for several session ids gives the Sessions tab additional distinct lanes
+// under a different provider, alongside the weather-agent lanes above.
+const SUPPORT_SCENARIO = '__llm_conv_support_bot__iso=header:x-session-id';
 
 // ---------------------------------------------------------------------------
 // 1. Plain HTTP expectations
@@ -308,6 +314,63 @@ async function proxyTraffic() {
 }
 
 // ---------------------------------------------------------------------------
+// 1c. Interactive-breakpoint loopback (Breakpoints panel · Live Exchanges / Live Streams)
+// ---------------------------------------------------------------------------
+
+// Breakpoints pause FORWARDED traffic and are resolved interactively over the
+// callback WebSocket by a connected callback client — the dashboard Breakpoints
+// panel is one. To give the panel something to pause, we set up a self-forwarded
+// (loopback) target with NO external upstream:
+//   GET /breakpoint/exchange  -> forwards to a buffered JSON mock on THIS server
+//                                 (RESPONSE-phase breakpoint -> Live Exchanges)
+//   GET /breakpoint/stream    -> forwards to a chunked streaming mock on THIS
+//                                 server (RESPONSE_STREAM breakpoint -> Live Streams)
+// The matched forward (httpOverrideForwardedRequest + socketAddress -> SELF) is
+// what makes the request a forwarded exchange the breakpoint engine can hold.
+async function breakpointLoopbackExpectations() {
+  log('\n→ Interactive-breakpoint loopback (Breakpoints · Live Exchanges / Live Streams)');
+
+  // Upstream mock served directly (the forward target) — buffered JSON.
+  await expectation('breakpoint upstream (JSON, buffered)', {
+    httpRequest: { method: 'GET', path: '/breakpoint-upstream/exchange' },
+    httpResponse: {
+      statusCode: 200,
+      headers: { 'content-type': ['application/json'] },
+      body: JSON.stringify({ id: 'demo-42', name: 'Ada Lovelace', role: 'forwarded-upstream', note: 'pause me at the response breakpoint, then Continue / Modify / Abort' }),
+    },
+  });
+
+  // Upstream mock served directly — chunked streaming (SSE-style), so the
+  // forwarded response is delivered frame-by-frame and each frame can be held.
+  await expectation('breakpoint upstream (chunked stream)', {
+    httpRequest: { method: 'GET', path: '/breakpoint-upstream/stream' },
+    httpResponse: {
+      statusCode: 200,
+      headers: { 'content-type': ['text/event-stream'] },
+      body: 'data: frame-1 hello\n\ndata: frame-2 from\n\ndata: frame-3 the\n\ndata: frame-4 loopback\n\ndata: frame-5 stream\n\ndata: frame-6 continue/modify/drop/inject/close me\n\n',
+      // chunkSize < body length => Transfer-Encoding: chunked, multiple frames;
+      // chunkDelay paces them so the per-frame holds are easy to watch.
+      connectionOptions: { chunkSize: 20, chunkDelay: { timeUnit: 'MILLISECONDS', value: 600 } },
+    },
+  });
+
+  // Loopback forwards: a matched forward back to THIS server (path-rewrite +
+  // socketAddress -> SELF), identical pattern to the /proxy/* forwards above.
+  await expectation('breakpoint forward  /breakpoint/exchange -> upstream', {
+    httpRequest: { method: 'GET', path: '/breakpoint/exchange' },
+    httpOverrideForwardedRequest: {
+      httpRequest: { path: '/breakpoint-upstream/exchange', socketAddress: { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME } },
+    },
+  });
+  await expectation('breakpoint forward  /breakpoint/stream   -> upstream', {
+    httpRequest: { method: 'GET', path: '/breakpoint/stream' },
+    httpOverrideForwardedRequest: {
+      httpRequest: { path: '/breakpoint-upstream/stream', socketAddress: { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME } },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // 2. LLM response expectations (one per provider + tool / streaming / chaos)
 // ---------------------------------------------------------------------------
 
@@ -407,7 +470,7 @@ async function conversationExpectations() {
       provider: 'ANTHROPIC',
       model: 'claude-sonnet-4-20250514',
       completion: {
-        text: 'It is 18°C and sunny in Paris.',
+        text: 'Here is the current weather for that city.',
         stopReason: 'end_turn',
         usage: { inputTokens: 360, outputTokens: 24 },
       },
@@ -444,6 +507,44 @@ async function conversationExpectations() {
           dropVolatileFields: ['request_id', 'timestamp'],
         },
       },
+    },
+  });
+
+  // Second isolated conversation: an OpenAI "support bot" isolated by the
+  // x-session-id header (SUPPORT_SCENARIO). A two-turn loop — user question →
+  // assistant tool_use (lookup_order) → user tool_result → assistant final
+  // answer — driven below for several session ids so the Sessions tab shows
+  // additional distinct OpenAI lanes. turnIndex counts prior user turns.
+  await expectation('support bot · turn 0 (tool_use)', {
+    scenarioName: SUPPORT_SCENARIO,
+    priority: 15,
+    httpRequest: { method: 'POST', path: '/v1/chat/completions' },
+    httpLlmResponse: {
+      provider: 'OPENAI',
+      model: 'gpt-4o',
+      completion: {
+        text: 'Let me look up your order status.',
+        toolCalls: [{ id: 'call_s0', name: 'lookup_order', arguments: '{"orderId":"A-4291"}' }],
+        stopReason: 'tool_calls',
+        usage: { inputTokens: 180, outputTokens: 32 },
+      },
+      conversationPredicates: { turnIndex: 0, latestMessageRole: 'USER' },
+    },
+  });
+
+  await expectation('support bot · turn 1 (final answer, after tool_result)', {
+    scenarioName: SUPPORT_SCENARIO,
+    priority: 15,
+    httpRequest: { method: 'POST', path: '/v1/chat/completions' },
+    httpLlmResponse: {
+      provider: 'OPENAI',
+      model: 'gpt-4o',
+      completion: {
+        text: 'Your order A-4291 shipped yesterday and arrives Thursday.',
+        stopReason: 'stop',
+        usage: { inputTokens: 300, outputTokens: 22 },
+      },
+      conversationPredicates: { turnIndex: 1, containsToolResultFor: 'lookup_order' },
     },
   });
 }
@@ -597,6 +698,52 @@ async function grpcChaosExamples() {
     counts.grpcChaos++;
     log(`   ~ grpc chaos     ${entry.service}${entry.ttlMillis ? `  (ttl ${entry.ttlMillis}ms)` : ''}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 3b-ii. Multi-stage chaos experiment (Chaos tab -> Experiments section)
+// ---------------------------------------------------------------------------
+
+// A multi-stage chaos experiment registered against the orchestrator endpoint
+// (PUT /mockserver/chaosExperiment). Unlike the single service-chaos
+// registrations above, an experiment progresses automatically through ordered
+// stages on a timer. The stages are long and the experiment loops so the
+// Experiments section's live status (current stage, elapsed/remaining, loop
+// iteration) stays visible while exploring the dashboard. The host profiles
+// target fictitious upstreams, so this does not affect the demo's own traffic.
+const CHAOS_EXPERIMENT = {
+  name: 'Black Friday checkout degradation',
+  loop: true,
+  stages: [
+    {
+      durationMillis: 120000,
+      profiles: {
+        'checkout.svc': { latency: { timeUnit: 'MILLISECONDS', value: 300 }, seed: 42 },
+      },
+    },
+    {
+      durationMillis: 120000,
+      profiles: {
+        'checkout.svc': { errorStatus: 503, errorProbability: 0.25, latency: { timeUnit: 'MILLISECONDS', value: 800 }, seed: 42 },
+        'payments.svc': { errorStatus: 429, retryAfter: '30', errorProbability: 0.5 },
+      },
+    },
+    {
+      durationMillis: 120000,
+      profiles: {
+        'checkout.svc': { dropConnectionProbability: 0.4 },
+        'payments.svc': { errorStatus: 503, errorProbability: 0.8 },
+      },
+    },
+  ],
+};
+
+async function chaosExperimentExample() {
+  log('\n→ Multi-stage chaos experiment (Chaos tab · Experiments)');
+  const res = await api('PUT', '/mockserver/chaosExperiment', CHAOS_EXPERIMENT);
+  if (!res.ok) throw new Error(`Failed to start chaos experiment "${CHAOS_EXPERIMENT.name}": HTTP ${res.status}`);
+  counts.experiments++;
+  log(`   ~ experiment     ${CHAOS_EXPERIMENT.name}  (${CHAOS_EXPERIMENT.stages.length} stages, looping)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -882,6 +1029,18 @@ async function plainHttpTraffic() {
   await traffic('unmatched', 'POST', '/api/unknown', { body: { foo: 'bar' } });
 }
 
+// A final burst of cleanly-matched requests, run LAST so these matched entries are
+// the freshest in the dashboard's reverse-chronological event log — making the
+// "request matched expectation → response returned" lane unmistakable at a glance
+// (rather than scrolling past the intentionally-unmatched diagnostics traffic).
+async function matchedShowcaseTraffic() {
+  log('\n→ Matched-expectation showcase (freshest entries in the dashboard log)');
+  await traffic('matched · list users', 'GET', '/api/users');
+  await traffic('matched · get user (path+query)', 'GET', '/api/users/42?expand=profile&expand=orders');
+  await traffic('matched · priority override', 'GET', '/api/priority');
+  await traffic('matched · create order (before/after side-effects)', 'POST', '/api/orders', { body: { sku: 'A-1', qty: 2 } });
+}
+
 async function llmTraffic() {
   log('\n→ LLM traffic (one classified lane per provider, with token usage)');
   for (const [provider, p] of Object.entries(PROVIDERS)) {
@@ -902,33 +1061,44 @@ async function llmTraffic() {
 }
 
 async function agentLoops() {
-  log('\n→ Agent loops (Sessions + call graph, grouped by x-agent-id)');
+  log('\n→ Agent loops (Sessions + call graph, grouped by x-agent-id + x-session-id)');
 
-  // A full two-turn weather agent loop for agent-001: user → assistant tool_use
-  // → user tool_result → assistant final answer. The request bodies carry the
-  // growing history the call graph is reconstructed from.
-  const turn1Body = {
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    messages: [{ role: 'user', content: 'What is the weather in Paris?' }],
-  };
-  const turn2Body = {
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1024,
-    messages: [
-      { role: 'user', content: 'What is the weather in Paris?' },
-      {
-        role: 'assistant',
-        content: [
-          { type: 'text', text: 'Let me search for the weather.' },
-          { type: 'tool_use', id: 'toolu_w0', name: 'search_weather', input: { city: 'Paris' } },
-        ],
-      },
-      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_w0', content: '18C, sunny' }] },
-    ],
+  // A full two-turn weather agent loop per agent: user → assistant tool_use →
+  // user tool_result → assistant final answer. The request bodies carry the
+  // growing history the call graph is reconstructed from. Each agent asks about
+  // a DIFFERENT city so that, once the call graph is scoped to a single session
+  // server-side, each lane's graph shows a distinct USER question instead of the
+  // same merged Paris graph. The turn expectations match on turnIndex / path /
+  // containsToolResultFor (NOT the city), so varying the city text is safe.
+  const agentCities = {
+    'agent-001': 'Paris',
+    'agent-002': 'Tokyo',
+    'agent-003': 'London',
+    'agent-004': 'Berlin',
   };
 
-  for (const agent of ['agent-001', 'agent-002']) {
+  for (const [agent, city] of Object.entries(agentCities)) {
+    const turn1Body = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [{ role: 'user', content: `What is the weather in ${city}?` }],
+    };
+    const turn2Body = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      messages: [
+        { role: 'user', content: `What is the weather in ${city}?` },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Let me search for the weather.' },
+            { type: 'tool_use', id: 'toolu_w0', name: 'search_weather', input: { city } },
+          ],
+        },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_w0', content: `18C, sunny in ${city}` }] },
+      ],
+    };
+
     await traffic(`${agent} turn 1`, 'POST', '/v1/messages', {
       body: turn1Body,
       headers: { 'x-agent-id': agent },
@@ -936,6 +1106,44 @@ async function agentLoops() {
     await traffic(`${agent} turn 2`, 'POST', '/v1/messages', {
       body: turn2Body,
       headers: { 'x-agent-id': agent },
+    });
+  }
+
+  // Second isolated conversation: an OpenAI "support bot" grouped by the
+  // x-session-id header (SUPPORT_SCENARIO above). Same two-turn shape but a
+  // clearly different question / tool / answer so the lanes read distinctly.
+  // Driven to /v1/chat/completions to match the conversation expectation path.
+  const supportTurn1Body = {
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: 'Where is my order A-4291?' }],
+  };
+  const supportTurn2Body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'user', content: 'Where is my order A-4291?' },
+      {
+        role: 'assistant',
+        content: 'Let me look up your order status.',
+        tool_calls: [
+          {
+            id: 'call_s0',
+            type: 'function',
+            function: { name: 'lookup_order', arguments: '{"orderId":"A-4291"}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_s0', content: 'shipped 2024-01-01, ETA Thursday' },
+    ],
+  };
+
+  for (const session of ['sess-alpha', 'sess-bravo', 'sess-charlie']) {
+    await traffic(`${session} turn 1`, 'POST', '/v1/chat/completions', {
+      body: supportTurn1Body,
+      headers: { 'x-session-id': session },
+    });
+    await traffic(`${session} turn 2`, 'POST', '/v1/chat/completions', {
+      body: supportTurn2Body,
+      headers: { 'x-session-id': session },
     });
   }
 }
@@ -1356,6 +1564,326 @@ async function mcpToolCallExamples() {
 }
 
 // ---------------------------------------------------------------------------
+// 8. LLM cost-optimisation showcase (Optimise tab — all six signals fire)
+// ---------------------------------------------------------------------------
+
+// A single coherent agent "run" — a customer-support triage agent making seven
+// OpenAI Chat Completions calls — crafted so the optimisation report
+// (GET /mockserver/llm/optimisationReport) fires ALL SIX deterministic signals.
+//
+// Why OpenAI /v1/chat/completions: its codec is the one that decodes a `system`
+// role message into a SYSTEM ParsedMessage (so the system-prompt signals fire),
+// parses assistant `tool_calls` (deterministic-tool detection) and `tool` role
+// messages with `tool_call_id` (oversized-tool-result detection). The report is
+// built from RECORDED request/response pairs: signal inputs come from each
+// request body's decoded conversation, and the token counts come from each
+// mocked response's `usage` block (so costIsEstimated=false — real numbers).
+//
+// How each signal is provoked (see OptimisationSignals.java thresholds):
+//   REPEATED_SYSTEM_PROMPT (HIGH)      every call resends the same large system
+//                                       prompt (≥1000 tokens, repeated ≥3 times).
+//   LARGE_STATIC_CONTEXT_RESENT (HIGH) that same system prompt is ≥2000 tokens
+//                                       (systemPromptTokens = ceil(chars/4), so the
+//                                       block below is sized to ~9k chars ⇒ ~2.3k tokens).
+//   DETERMINISTIC_TOOL_CALL (MEDIUM)   the assistant calls lookup_ticket with the
+//                                       SAME arguments, and that assistant turn is
+//                                       carried in ≥2 calls' message history.
+//   OVERSIZED_TOOL_RESULT (MEDIUM)     a tool result message ≥1000 tokens (≥4k chars).
+//   OUTPUT_TOKEN_BLOAT (LOW)           one call's response usage.completion_tokens is
+//                                       ≥1500 while the others are small.
+//   DUPLICATE_CONSECUTIVE_CALL (MEDIUM) two CONSECUTIVE calls with identical request
+//                                       shape (path/model/messageCount/systemPrompt
+//                                       fingerprint/inputTokens) — a retry.
+//
+// The calls are keyed by an `opt` query parameter and given high priority so each
+// returns its own exact `usage`, winning over the generic OpenAI single-shot mock.
+
+const OPTIMISE_MODEL = 'gpt-4o-mini';
+const OPTIMISE_PATH = '/v1/chat/completions';
+
+// A large, static instruction + context block (~9k chars ⇒ ~2.3k tokens) reused
+// verbatim on every call so its fingerprint is identical run-wide. Padded with a
+// realistic, repetitive policy/runbook body — exactly the kind of static context
+// that should be cached or retrieved rather than resent every turn.
+const OPTIMISE_SYSTEM_PROMPT = (() => {
+  const header =
+    'You are ACME Corp\'s customer-support triage agent. Follow the support runbook ' +
+    'precisely and never invent policy. Classify each ticket, decide the next action, ' +
+    'and call the provided tools when a lookup is required.\n\n';
+  // A long, static policy/runbook block. Repeated bullet sections pad it out to a
+  // realistically large (and resent-every-turn) static context.
+  const policyUnit =
+    'POLICY: Refunds are permitted within 30 days of delivery for unused items in original ' +
+    'packaging. Shipping fees are non-refundable except where the item arrived damaged or the ' +
+    'wrong item was sent. Always verify the order id against the ticket before promising a refund. ' +
+    'Escalate to a human agent for chargeback threats, legal language, or order values over 500 GBP. ' +
+    'For delivery delays, check the carrier status before responding and set expectations conservatively. ' +
+    'Never share another customer\'s personal data. Log every action to the audit trail. ';
+  let body = header;
+  // 16 sections ⇒ ~9k chars ⇒ ~2.3k tokens (comfortably over the 2,000-token
+  // LARGE_STATIC_CONTEXT_RESENT threshold; systemPromptTokens = ceil(chars/4)).
+  for (let i = 1; i <= 16; i++) {
+    body += `RUNBOOK SECTION ${i}. ${policyUnit}\n`;
+  }
+  return body;
+})();
+
+// The single deterministic tool call the agent keeps making (identical args).
+const LOOKUP_TICKET = {
+  id: 'call_lookup_ticket_0',
+  type: 'function',
+  function: { name: 'lookup_ticket', arguments: '{"ticketId":"TICKET-1001"}' },
+};
+
+// An oversized (~4.5k char ⇒ ~1.1k token) tool result — a giant raw ticket dump
+// that gets re-sent as input on every subsequent turn.
+const OVERSIZED_TOOL_RESULT = (() => {
+  const line =
+    'event: status_change; from: open; to: pending; actor: system; note: customer contacted carrier; ';
+  let dump = 'TICKET-1001 full history dump (verbose): ';
+  for (let i = 0; i < 45; i++) {
+    dump += `[#${i}] ${line}`;
+  }
+  return dump;
+})();
+
+// Build the message history for a given turn. Each call resends the full system
+// prompt + the growing conversation (this is what real agent frameworks do).
+function optimiseMessages(turn) {
+  const messages = [
+    { role: 'system', content: OPTIMISE_SYSTEM_PROMPT },
+    { role: 'user', content: 'Customer asks: where is my refund for order TICKET-1001?' },
+  ];
+  if (turn >= 2) {
+    // assistant decides to look the ticket up (the deterministic tool call)
+    messages.push({ role: 'assistant', content: null, tool_calls: [LOOKUP_TICKET] });
+  }
+  if (turn >= 3) {
+    // the oversized tool result is fed back, then re-sent every later turn
+    messages.push({ role: 'tool', tool_call_id: LOOKUP_TICKET.id, content: OVERSIZED_TOOL_RESULT });
+    messages.push({ role: 'user', content: 'Please summarise the refund status for the customer.' });
+  }
+  return messages;
+}
+
+// The crafted run: seven calls. usage.prompt_tokens drives inputTokens (must be
+// identical for the two duplicate calls); usage.completion_tokens drives
+// outputTokens (one call is deliberately bloated). Two consecutive calls (5 and 6)
+// share an identical body AND identical prompt_tokens ⇒ DUPLICATE_CONSECUTIVE_CALL.
+const OPTIMISE_RUN = [
+  { opt: 1, turn: 1, text: 'Let me check the refund policy and the order.', usage: { input: 2400, output: 40 } },
+  { opt: 2, turn: 2, text: 'I need to look up the ticket.', toolUse: true, usage: { input: 2410, output: 45 } },
+  { opt: 3, turn: 3, text: 'The order was delivered 12 days ago; a refund is permitted.', usage: { input: 3590, output: 60 } },
+  { opt: 4, turn: 3, text: 'Here is a very long, over-verbose answer that should have been constrained.', usage: { input: 3620, output: 1800 } },
+  // Calls 5 and 6 are an identical retry pair (same body AND same prompt_tokens) ⇒ DUPLICATE_CONSECUTIVE_CALL.
+  { opt: 5, turn: 3, text: 'Refund approved — processed to the original payment method.', usage: { input: 3600, output: 55 } },
+  { opt: 6, turn: 3, text: 'Refund approved — processed to the original payment method.', usage: { input: 3600, output: 55 } },
+  { opt: 7, turn: 3, text: 'Anything else I can help with?', usage: { input: 3610, output: 30 } },
+];
+
+async function optimisationShowcase() {
+  log('\n→ LLM cost-optimisation showcase (Optimise tab — all six signals)');
+
+  // One high-priority mock per call, keyed by ?opt=N, returning the exact usage.
+  for (const call of OPTIMISE_RUN) {
+    const completion = {
+      text: call.text,
+      stopReason: call.toolUse ? 'tool_calls' : 'stop',
+      usage: { inputTokens: call.usage.input, outputTokens: call.usage.output },
+    };
+    if (call.toolUse) {
+      completion.toolCalls = [{ id: LOOKUP_TICKET.id, name: 'lookup_ticket', arguments: LOOKUP_TICKET.function.arguments }];
+    }
+    await expectation(`optimise call ${call.opt} (usage in=${call.usage.input} out=${call.usage.output})`, {
+      priority: 50,
+      httpRequest: { method: 'POST', path: OPTIMISE_PATH, queryStringParameters: { opt: [String(call.opt)] } },
+      httpLlmResponse: { provider: 'OPENAI', model: OPTIMISE_MODEL, completion },
+    });
+  }
+
+  // Drive the run, back-to-back so the duplicate pair stays consecutive in the log.
+  for (const call of OPTIMISE_RUN) {
+    await traffic(`optimise run · call ${call.opt}`, 'POST', `${OPTIMISE_PATH}?opt=${call.opt}`, {
+      body: { model: OPTIMISE_MODEL, messages: optimiseMessages(call.turn) },
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  log('   ↳ open the dashboard Optimise tab (or curl /mockserver/llm/optimisationReport?format=markdown) to see all six signals');
+}
+
+// ---------------------------------------------------------------------------
+// 6b. Load injection (Performance tab — live load scenario vs a delayed target)
+// ---------------------------------------------------------------------------
+
+// Opt-in via DEMO_WITH_LOAD_INJECTION=true (the launcher's --with-load-injection flag,
+// which also starts the server with -Dmockserver.loadGenerationEnabled=true so the
+// /mockserver/loadScenario control plane is enabled, and -Dmockserver.sloTrackingEnabled
+// so the load run's samples feed the SLO store). This registers a few SELF-TARGET
+// endpoints with realistic delays, then PUTs a long-running load scenario that drives
+// traffic at them — so opening the dashboard's Performance tab shows a running scenario
+// with live latency / throughput against a real (delayed) target you can watch and edit.
+
+// Endpoints the load scenario drives. Each is a normal mock on THIS server with a
+// deliberate delay so the latency histogram has something non-trivial to show. The
+// slow endpoint uses a UNIFORM delay distribution for per-request jitter (so p50/p95
+// differ); the others use a fixed delay. All are unlimited so the scenario can hammer
+// them for the whole run.
+const LOAD_TARGETS = [
+  {
+    label: 'fast health (≈5ms)',
+    path: '/demo-target/health',
+    response: {
+      statusCode: 200,
+      headers: { 'content-type': ['application/json'] },
+      body: '{"status":"UP"}',
+      delay: { timeUnit: 'MILLISECONDS', value: 5 },
+    },
+  },
+  {
+    label: 'slow checkout (≈250ms ± jitter)',
+    path: '/demo-target/checkout',
+    response: {
+      statusCode: 200,
+      headers: { 'content-type': ['application/json'] },
+      body: '{"order":"placed","ms":250}',
+      // UNIFORM jitter 180–320ms → realistic spread so p50 < p95 < p99 in the metrics.
+      delay: { timeUnit: 'MILLISECONDS', value: 250, distribution: { type: 'UNIFORM', min: 180, max: 320 } },
+    },
+  },
+  {
+    // Parameterised: a path regex so /demo-target/orders/<anything> matches; the
+    // scenario step varies the id via the iteration.index template var below.
+    label: 'parameterised order (≈80ms)',
+    path: '/demo-target/orders/.*',
+    response: {
+      statusCode: 200,
+      headers: { 'content-type': ['application/json'] },
+      body: '{"order":"found"}',
+      delay: { timeUnit: 'MILLISECONDS', value: 80 },
+    },
+  },
+];
+
+async function loadInjectionExamples() {
+  if (process.env.DEMO_WITH_LOAD_INJECTION !== 'true') return;
+  log('\n→ Load injection (Performance tab — live load scenario vs a delayed target)');
+
+  // a) Register the delayed self-target endpoints (unlimited times).
+  for (const t of LOAD_TARGETS) {
+    await expectation(`load target  GET ${t.path}  (${t.label})`, {
+      httpRequest: { method: 'GET', path: t.path },
+      httpResponse: t.response,
+    });
+  }
+
+  // b) LOAD (register) a long-running CONSTANT load scenario that self-targets THIS server, then
+  //    TRIGGER it to start. Loading no longer runs the scenario — PUT /loadScenario registers it
+  //    (LOADED), and PUT /loadScenario/start triggers it (RUNNING). A 1-hour duration + a high
+  //    maxRequests keeps it running while the user explores the UI; 5 VUs with per-step think-time
+  //    keeps the self-load gentle. The path uses $iteration.index (Velocity) so the order id varies.
+  const scenario = {
+    name: 'demo checkout journey',
+    templateType: 'VELOCITY',
+    // Cap well above what 5 VUs hit in an hour so the run is bounded but never ends early.
+    maxRequests: 2000000,
+    labels: { team: 'demo', env: 'local' },
+    // A short VU ramp (1->5 over 30s) then hold at 5 VUs for the rest of the hour, so the
+    // dashboard shows a real ramp followed by a steady state. Stages run in sequence; the
+    // total duration is the documented 1-hour max.
+    profile: {
+      stages: [
+        { type: 'VU', startVus: 1, endVus: 5, durationMillis: 30000, curve: 'LINEAR' },
+        { type: 'VU', vus: 5, durationMillis: 3570000 },
+      ],
+    },
+    steps: [
+      {
+        name: 'health',
+        request: {
+          method: 'GET',
+          path: '/demo-target/health',
+          socketAddress: { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME },
+        },
+        thinkTime: { timeUnit: 'MILLISECONDS', value: 50 },
+      },
+      {
+        name: 'checkout',
+        request: {
+          method: 'GET',
+          path: '/demo-target/checkout',
+          socketAddress: { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME },
+        },
+        thinkTime: { timeUnit: 'MILLISECONDS', value: 100 },
+      },
+      {
+        name: 'order',
+        request: {
+          method: 'GET',
+          // iteration.index varies the order id each iteration so the data isn't static.
+          path: '/demo-target/orders/$iteration.index',
+          socketAddress: { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME },
+        },
+        thinkTime: { timeUnit: 'MILLISECONDS', value: 50 },
+      },
+    ],
+  };
+
+  // A SECOND scenario, registered with a startDelayMillis so it begins ~20s AFTER it is triggered —
+  // showcasing staggered concurrent runs. It hits only the health endpoint at a steady 2 VUs.
+  const delayedScenario = {
+    name: 'demo background poller',
+    templateType: 'VELOCITY',
+    maxRequests: 2000000,
+    labels: { team: 'demo', env: 'local' },
+    // Begin 20s after the start trigger so the dashboard shows it PENDING then RUNNING alongside
+    // the checkout journey (two concurrent runs, staggered).
+    startDelayMillis: 20000,
+    profile: {
+      stages: [
+        { type: 'VU', vus: 2, durationMillis: 3580000 },
+      ],
+    },
+    steps: [
+      {
+        name: 'poll-health',
+        request: {
+          method: 'GET',
+          path: '/demo-target/health',
+          socketAddress: { host: SELF_HOST, port: SELF_PORT, scheme: SELF_SCHEME },
+        },
+        thinkTime: { timeUnit: 'MILLISECONDS', value: 250 },
+      },
+    ],
+  };
+
+  // LOAD (register) both scenarios. Loading is allowed even when load generation is disabled.
+  const loadRes = await api('PUT', '/mockserver/loadScenario', scenario);
+  if (!loadRes.ok) throw new Error(`Failed to load load scenario "${scenario.name}": HTTP ${loadRes.status}`);
+  const loadRes2 = await api('PUT', '/mockserver/loadScenario', delayedScenario);
+  if (!loadRes2.ok) throw new Error(`Failed to load load scenario "${delayedScenario.name}": HTTP ${loadRes2.status}`);
+
+  // TRIGGER both to start in one call (each honours its own startDelayMillis).
+  const startRes = await api('PUT', '/mockserver/loadScenario/start', {
+    names: [scenario.name, delayedScenario.name],
+  });
+  if (startRes.status === 403) {
+    // Shouldn't happen via the launcher (it sets loadGenerationEnabled=true), but be helpful.
+    log('   ! load scenarios LOADED but NOT started — server returned 403 (load generation disabled).');
+    log('     Start MockServer with -Dmockserver.loadGenerationEnabled=true (the launcher\'s');
+    log('     --with-load-injection flag does this) and re-run, or use: npm run demo -- --with-load-injection');
+    counts.loadScenario = 2;
+    return;
+  }
+  if (!startRes.ok) throw new Error(`Failed to start load scenarios: HTTP ${startRes.status}`);
+  counts.loadScenario = 2;
+  log(`   ⚡ load scenario  "${scenario.name}"  (VU ramp 1→5 then hold, ${scenario.steps.length} steps: health / checkout / order)`);
+  log(`   ⚡ load scenario  "${delayedScenario.name}"  (startDelayMillis 20000 → PENDING then RUNNING, 2 VUs)`);
+  log('   ↳ two load scenarios are now triggered against the delayed self-target endpoints —');
+  log('     open the dashboard Performance tab to watch live throughput + latency and to edit them,');
+  log(`     or curl ${BASE}/mockserver/loadScenario for the live JSON list.`);
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
 
@@ -1385,12 +1913,14 @@ async function main() {
 
   await plainHttpExpectations();
   await proxyExpectations();
+  await breakpointLoopbackExpectations();
   await llmExpectations();
   await conversationExpectations();
   await serviceChaosExamples();
   await tcpChaosExamples();
   await grpcHealthExamples();
   await grpcChaosExamples();
+  await chaosExperimentExample();
   await grpcMockExpectations();
   await dnsMockExpectations();
   await wasmModuleExample();
@@ -1404,7 +1934,10 @@ async function main() {
   await proxyTraffic();
   await llmTraffic();
   await agentLoops();
+  await optimisationShowcase();
   await mcpToolCallExamples();
+  await matchedShowcaseTraffic();
+  await loadInjectionExamples();
 
   log('\n========================================');
   log(' Demo data loaded');
@@ -1415,6 +1948,7 @@ async function main() {
   log(` TCP chaos hosts      : ${counts.tcpChaos} (2 with an auto-revert TTL countdown)`);
   log(` gRPC health statuses : ${counts.grpcHealth} (NOT_SERVING / SERVICE_UNKNOWN / SERVING)`);
   log(` gRPC chaos services  : ${counts.grpcChaos} (incl. streaming/trailer faults + auto-revert TTL)`);
+  log(` Chaos experiments    : ${counts.experiments} (3-stage looping experiment; live status in Chaos · Experiments)`);
   log(` WASM modules         : ${counts.wasmModules} (example Rust match module + a WASM-matched expectation)`);
   log(` Side-effect exps     : ${counts.sideEffects} (before-actions [blocking/non-blocking] + after-actions [webhook])`);
   log(` Scenarios            : ${counts.scenarios} (incl. one timed auto-transition; listed in the Scenarios panel)`);
@@ -1423,6 +1957,9 @@ async function main() {
   log(` Drift scenarios      : ${counts.drift} (status / schema-added / schema-removed+type / header)`);
   log(` AsyncAPI channels    : ${counts.asyncChannels}${process.env.DEMO_MQTT_BROKER_URL ? ' (live MQTT broker — Recorded Messages ticking up)' : ' (broker-less; Recorded Messages need --with-broker)'}`);
   log(` MCP tool calls       : ${counts.mcpCalls} (read-only tools; Metrics · "MCP tool calls" chart + Tools · MCP panel)`);
+  if (counts.loadScenario) {
+    log(` Load scenarios       : ${counts.loadScenario} loaded+triggered (checkout journey now + a 20s-delayed background poller; concurrent runs live in the Performance tab)`);
+  }
   log('');
 
   // The example cassettes are registered in the server-side registry (so they appear in the
@@ -1440,10 +1977,50 @@ async function main() {
   log('   Mocks              — HTTP, gRPC (stream/unary), DNS (A/AAAA/CNAME/NXDOMAIN) mocks listed per kind');
   log('   Traffic            — recorded + proxied (forwarded) requests, incl. a lane per LLM provider + token/cost');
   log('   Sessions           — agent-001 / agent-002 loops + call graphs; Scenarios panel lists the seeded scenario state machines');
-  log('   Chaos              — HTTP service chaos (incl. GraphQL-semantic) + gRPC chaos (health + fault injection with streaming/trailer faults) + TCP-layer chaos');
+  log('   Optimise           — LLM cost-optimisation brief from a crafted 7-call support-agent run; all six signals fire (REPEATED_SYSTEM_PROMPT, LARGE_STATIC_CONTEXT_RESENT, DETERMINISTIC_TOOL_CALL, OVERSIZED_TOOL_RESULT, OUTPUT_TOKEN_BLOAT, DUPLICATE_CONSECUTIVE_CALL)');
+  log('   Chaos              — HTTP service chaos (incl. GraphQL-semantic) + gRPC chaos (health + fault injection with streaming/trailer faults) + TCP-layer chaos + a looping multi-stage Experiment');
   log('   Drift              — schema / status / header drift records from proxied-vs-stub comparison');
   log('   AsyncAPI           — Tools · AsyncAPI Broker Mock: loaded spec + Channels table (5 channels, varied schema/example counts)');
   log('   Metrics            — request activity, throughput, MCP tool calls (6 tools), chaos faults' + (process.env.DEMO_MQTT_BROKER_URL ? ', async messages' : ''));
+  log('   Breakpoints        — register a matcher (Matchers tab), then trigger the loopback below to pause Live Exchanges / Live Streams');
+  if (counts.loadScenario) {
+    log('   Performance        — two load scenarios triggered (checkout journey RUNNING + a 20s-delayed background poller) against delayed self-target endpoints; watch live throughput + latency, and edit/restart them');
+  }
+  log('');
+
+  // --- Interactive breakpoints: loopback endpoints + how to drive them ---
+  log('========================================');
+  log(' Interactive breakpoints — Live Exchanges & Live Streams');
+  log('========================================');
+  log(' Breakpoints pause matched exchanges (forwards, mock responses, and unmatched 404s)');
+  log(' and are resolved live in the dashboard Breakpoints panel (which connects to the');
+  log(' callback WebSocket as a client). This demo seeded two self-forwarded (loopback)');
+  log(' endpoints to pause:');
+  log(`   GET ${BASE}/breakpoint/exchange   (buffered JSON  -> Live Exchanges, REQUEST + RESPONSE phases)`);
+  log(`   GET ${BASE}/breakpoint/stream     (chunked stream -> Live Streams,   RESPONSE_STREAM phase)`);
+  log('');
+  log(' 0) Sanity-check the loopback works (no breakpoint registered yet):');
+  log(`      curl -s ${BASE}/breakpoint/exchange`);
+  log(`      curl -N -s ${BASE}/breakpoint/stream`);
+  log('');
+  log(' 1) Live Exchanges:');
+  log('      • Dashboard → Breakpoints → Matchers tab → Add matcher:');
+  log('          method GET, path /breakpoint/exchange, phase = Request and/or Response');
+  log('      • Then run:');
+  log(`          curl -s ${BASE}/breakpoint/exchange`);
+  log('      • Request phase pauses BEFORE the forward (Continue / Modify / Abort); Response');
+  log('        phase pauses the forwarded response before it is written. Both show in Live Exchanges.');
+  log('');
+  log(' 2) Live Streams:');
+  log('      • Matchers tab → Add matcher:');
+  log('          method GET, path /breakpoint/stream, phase = Response stream frames');
+  log('      • Then run (note -N to disable curl buffering so frames arrive one at a time):');
+  log(`          curl -N -s ${BASE}/breakpoint/stream`);
+  log('      • Each chunk pauses in the Live Streams tab — Continue / Modify / Drop / Inject / Close.');
+  log('');
+  log(' (Matcher registration uses the dashboard\'s own callback clientId automatically.');
+  log('  The equivalent REST call is PUT /mockserver/breakpoint/matcher with');
+  log('  {httpRequest, phases, clientId} — clientId must be a CONNECTED callback client.)');
   log('');
 }
 

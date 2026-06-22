@@ -5,6 +5,7 @@ import {
   conversationToMcpArgs,
   conversationToMcpCall,
   draftFromScenarioExpectations,
+  hasRangeErrors,
   type ConversationDraft,
 } from '../lib/conversationCodegen';
 
@@ -110,6 +111,20 @@ describe('conversationToJava', () => {
 
     expect(java).toContain('.streaming()');
   });
+
+  it('emits timeToFirstToken as Delay with TimeUnit import', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { timeToFirstToken: 200, tokensPerSecond: 50 };
+    const java = conversationToJava(draft);
+
+    expect(java).toContain('timeToFirstToken(200L, TimeUnit.MILLISECONDS)');
+    expect(java).toContain('import java.util.concurrent.TimeUnit;');
+    // tokensPerSecond is a plain number, not a Delay
+    expect(java).toContain('tokensPerSecond(50)');
+    // fragments are passed as varargs to withStreamingPhysics, not chained
+    expect(java).toContain('.withStreamingPhysics(timeToFirstToken(200L, TimeUnit.MILLISECONDS), tokensPerSecond(50))');
+  });
 });
 
 describe('conversationToJson', () => {
@@ -166,6 +181,29 @@ describe('conversationToJson', () => {
       path: '/v1/messages',
     });
   });
+
+  it('emits timeToFirstToken as a Delay object (not a plain number)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { timeToFirstToken: 200, tokensPerSecond: 50, jitter: 0.1 };
+    const parsed = JSON.parse(conversationToJson(draft));
+    const sp = parsed[0].httpLlmResponse.completion.streamingPhysics;
+
+    expect(sp.timeToFirstToken).toEqual({ timeUnit: 'MILLISECONDS', value: 200 });
+    // tokensPerSecond and jitter are plain numbers
+    expect(sp.tokensPerSecond).toBe(50);
+    expect(sp.jitter).toBe(0.1);
+  });
+
+  it('emits outputSchema as a raw string, not a parsed object', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.outputSchema = '{"type":"object","properties":{"name":{"type":"string"}}}';
+    const parsed = JSON.parse(conversationToJson(draft));
+    const schema = parsed[0].httpLlmResponse.completion.outputSchema;
+
+    expect(typeof schema).toBe('string');
+    expect(schema).toBe('{"type":"object","properties":{"name":{"type":"string"}}}');
+  });
 });
 
 describe('conversationToMcpArgs', () => {
@@ -214,6 +252,29 @@ describe('conversationToMcpArgs', () => {
     const args = conversationToMcpArgs(draft);
 
     expect(args).not.toHaveProperty('model');
+  });
+
+  it('emits timeToFirstToken as a Delay object in MCP args', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { timeToFirstToken: 300 };
+    const args = conversationToMcpArgs(draft);
+    const turns = args['turns'] as Record<string, unknown>[];
+    const response = turns[0]!['response'] as Record<string, unknown>;
+    const sp = response['streamingPhysics'] as Record<string, unknown>;
+
+    expect(sp['timeToFirstToken']).toEqual({ timeUnit: 'MILLISECONDS', value: 300 });
+  });
+
+  it('emits outputSchema as a raw string in MCP args', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.outputSchema = '{"type":"object"}';
+    const args = conversationToMcpArgs(draft);
+    const turns = args['turns'] as Record<string, unknown>[];
+    const response = turns[0]!['response'] as Record<string, unknown>;
+
+    expect(typeof response['outputSchema']).toBe('string');
+    expect(response['outputSchema']).toBe('{"type":"object"}');
   });
 });
 
@@ -391,5 +452,199 @@ describe('chaos profile', () => {
     const chaos = turns[0]!['chaos'] as Record<string, unknown>;
     expect(chaos['truncateMode']).toBeUndefined();
     expect(chaos['errorStatus']).toBe(500);
+  });
+});
+
+describe('timeToFirstToken Delay round-trip', () => {
+  function streamingDraft(): ConversationDraft {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { timeToFirstToken: 200, tokensPerSecond: 50, jitter: 0.1 };
+    return draft;
+  }
+
+  it('round-trips timeToFirstToken Delay through draftFromScenarioExpectations', () => {
+    const json = JSON.parse(conversationToJson(streamingDraft())) as Array<Record<string, unknown>>;
+    const { draft } = draftFromScenarioExpectations(
+      json.map((value, i) => ({ key: `k${i}`, value })),
+    );
+    expect(draft.turns[0]!.response.streamingPhysics?.timeToFirstToken).toBe(200);
+    expect(draft.turns[0]!.response.streamingPhysics?.tokensPerSecond).toBe(50);
+    expect(draft.turns[0]!.response.streamingPhysics?.jitter).toBe(0.1);
+  });
+});
+
+describe('outputSchema as string', () => {
+  it('round-trips outputSchema string through draftFromScenarioExpectations', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.outputSchema = '{"type":"object","properties":{"name":{"type":"string"}}}';
+    const json = JSON.parse(conversationToJson(draft)) as Array<Record<string, unknown>>;
+    const { draft: reloaded } = draftFromScenarioExpectations(
+      json.map((value, i) => ({ key: `k${i}`, value })),
+    );
+    expect(reloaded.turns[0]!.response.outputSchema).toBe('{"type":"object","properties":{"name":{"type":"string"}}}');
+  });
+
+  it('does not JSON.parse outputSchema in the wire format', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.outputSchema = '{"type":"object"}';
+    // JSON path
+    const parsed = JSON.parse(conversationToJson(draft));
+    expect(typeof parsed[0].httpLlmResponse.completion.outputSchema).toBe('string');
+    // MCP path
+    const args = conversationToMcpArgs(draft);
+    const turns = args['turns'] as Array<Record<string, unknown>>;
+    const response = turns[0]!['response'] as Record<string, unknown>;
+    expect(typeof response['outputSchema']).toBe('string');
+  });
+});
+
+describe('outputSchema in Java codegen', () => {
+  it('emits withOutputSchema in Java when outputSchema is set', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.outputSchema = '{"type":"object","properties":{"name":{"type":"string"}}}';
+    const java = conversationToJava(draft);
+    expect(java).toContain('.withOutputSchema("{\\"type\\":\\"object\\",\\"properties\\":{\\"name\\":{\\"type\\":\\"string\\"}}}")');
+  });
+
+  it('omits withOutputSchema in Java when outputSchema is not set', () => {
+    const java = conversationToJava(baseDraft());
+    expect(java).not.toContain('withOutputSchema');
+  });
+
+  it('Java / JSON / MCP all emit outputSchema consistently', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.outputSchema = '{"type":"object"}';
+    const java = conversationToJava(draft);
+    const json = JSON.parse(conversationToJson(draft));
+    const args = conversationToMcpArgs(draft);
+    const turns = args['turns'] as Array<Record<string, unknown>>;
+    const response = turns[0]!['response'] as Record<string, unknown>;
+
+    // Java emits withOutputSchema
+    expect(java).toContain('.withOutputSchema("{\\"type\\":\\"object\\"}")');
+    // JSON emits outputSchema string
+    expect(json[0].httpLlmResponse.completion.outputSchema).toBe('{"type":"object"}');
+    // MCP emits outputSchema string
+    expect(response['outputSchema']).toBe('{"type":"object"}');
+  });
+});
+
+describe('conversationToMcpArgs with existingIds (edit flow)', () => {
+  it('includes ids when existingIds length matches turn count (in-place update)', () => {
+    const draft = baseDraft(); // 2 turns
+    const ids = ['id-1', 'id-2'];
+    const args = conversationToMcpArgs(draft, ids);
+    expect(args['ids']).toEqual(['id-1', 'id-2']);
+  });
+
+  it('omits ids when existingIds is undefined (new conversation)', () => {
+    const args = conversationToMcpArgs(baseDraft());
+    expect(args).not.toHaveProperty('ids');
+  });
+
+  it('omits ids when existingIds is empty', () => {
+    const args = conversationToMcpArgs(baseDraft(), []);
+    expect(args).not.toHaveProperty('ids');
+  });
+
+  it('includes ids even when lengths differ (caller decides whether to pass them)', () => {
+    // When the LlmConversationForm detects a turn-count mismatch, it passes
+    // undefined for existingIds and clears the old expectations separately.
+    // The conversationToMcpArgs function itself is agnostic — it includes whatever
+    // ids the caller passes. This test documents that the function trusts the caller.
+    const draft = baseDraft(); // 2 turns
+    const ids = ['id-1']; // only 1 id
+    const args = conversationToMcpArgs(draft, ids);
+    expect(args['ids']).toEqual(['id-1']);
+  });
+});
+
+describe('hasRangeErrors', () => {
+  it('returns false for valid turns', () => {
+    expect(hasRangeErrors(baseDraft().turns)).toBe(false);
+  });
+
+  it('returns true when tokensPerSecond is out of range (server: 1–10000)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { tokensPerSecond: 0 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.response.streamingPhysics = { tokensPerSecond: 10001 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.response.streamingPhysics = { tokensPerSecond: 50 };
+    expect(hasRangeErrors(draft.turns)).toBe(false);
+  });
+
+  it('returns true when jitter is out of range (server: 0.0–1.0)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { jitter: -0.1 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.response.streamingPhysics = { jitter: 1.5 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.response.streamingPhysics = { jitter: 0.5 };
+    expect(hasRangeErrors(draft.turns)).toBe(false);
+  });
+
+  it('returns true for NaN values in numeric fields (e.g. from a partially-typed input)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = true;
+    draft.turns[0]!.response.streamingPhysics = { jitter: NaN };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.response.streamingPhysics = { tokensPerSecond: NaN };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.response.streamingPhysics = undefined;
+    draft.turns[0]!.chaos = { truncateAtFraction: NaN };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+  });
+
+  it('returns true when chaos errorStatus is out of range (server: 100–599)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.chaos = { errorStatus: 99 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.chaos = { errorStatus: 600 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.chaos = { errorStatus: 429 };
+    expect(hasRangeErrors(draft.turns)).toBe(false);
+  });
+
+  it('returns true when chaos errorProbability is out of range (server: 0.0–1.0)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.chaos = { errorProbability: -0.5 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.chaos = { errorProbability: 1.1 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.chaos = { errorProbability: 0.5 };
+    expect(hasRangeErrors(draft.turns)).toBe(false);
+  });
+
+  it('returns true when chaos truncateAtFraction is out of range (server: 0.0–1.0)', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.chaos = { truncateAtFraction: -0.1 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.chaos = { truncateAtFraction: 1.5 };
+    expect(hasRangeErrors(draft.turns)).toBe(true);
+
+    draft.turns[0]!.chaos = { truncateAtFraction: 0.8 };
+    expect(hasRangeErrors(draft.turns)).toBe(false);
+  });
+
+  it('does not flag streaming physics errors when streaming is off', () => {
+    const draft = baseDraft();
+    draft.turns[0]!.response.streaming = false;
+    draft.turns[0]!.response.streamingPhysics = { tokensPerSecond: 0 };
+    expect(hasRangeErrors(draft.turns)).toBe(false);
   });
 });

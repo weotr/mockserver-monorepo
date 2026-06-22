@@ -1,0 +1,52 @@
+meta {
+  name: import expectations from a HAR or Postman collection
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/import
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+params:query {
+  ~format: har
+}
+
+body:json {
+  {
+    "log": {
+      "version": "1.2",
+      "entries": [
+        {
+          "request": {
+            "method": "GET",
+            "url": "http://example.com/api/users",
+            "headers": [],
+            "queryString": []
+          },
+          "response": {
+            "status": 200,
+            "headers": [],
+            "content": {
+              "text": "{\"users\":[{\"id\":1,\"name\":\"Alice\"}]}"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
+docs {
+  Converts an HTTP Archive (HAR) export or a Postman collection into MockServer expectations and adds them. The format is auto-detected from the document structure or can be forced with the format query parameter.
+  
+  HAR or Postman collection JSON document to import
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -1,0 +1,17 @@
+meta {
+  name: list all registered breakpoint matchers (PUT variant)
+  type: http
+  seq: 19
+}
+
+put {
+  url: {{baseUrl}}/mockserver/breakpoint/matchers
+  body: none
+  auth: inherit
+}
+
+docs {
+  Same as GET /mockserver/breakpoint/matchers. The PUT variant exists for consistency with other control-plane endpoints that use PUT for idempotent queries.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -1,0 +1,63 @@
+---
+title: Packagist
+description: Install the mock-server/mockserver-client Composer package from Packagist to drive MockServer from PHP tests — fluent API and full REST control-plane coverage.
+layout: page
+pageOrder: 6.6
+section: 'Where'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-11T08:00:00+01:00
+---
+
+<h2>Packagist &nbsp;&nbsp;<a target="_blank" href="https://packagist.org/packages/mock-server/mockserver-client" rel="noopener noreferrer"><img src="https://img.shields.io/packagist/v/mock-server/mockserver-client.svg" alt="Packagist version" style="max-width:100%;"></a></h2>
+
+<p>The <a target="_blank" href="https://packagist.org/packages/mock-server/mockserver-client" rel="noopener noreferrer"><code>mock-server/mockserver-client</code></a> package provides a PHP client for MockServer's control-plane REST API, with a fluent builder API covering expectations, verification, retrieval, and control operations. PHP 8.1+ and Composer are required.</p>
+
+<h3>Install</h3>
+
+<pre><code class="code">composer require mock-server/mockserver-client</code></pre>
+
+<h3>Quick start</h3>
+
+<pre><code class="code php">&lt;?php
+
+use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+use MockServer\VerificationTimes;
+
+// Connect to MockServer
+$client = new MockServerClient('localhost', 1080);
+
+// Create an expectation
+$client-&gt;when(
+    HttpRequest::request()-&gt;method('GET')-&gt;path('/hello')
+)-&gt;respond(
+    HttpResponse::response()
+        -&gt;statusCode(200)
+        -&gt;header('Content-Type', 'application/json')
+        -&gt;body('{"message":"world"}')
+);
+
+// Verify the request was received
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/hello'),
+    VerificationTimes::atLeast(1)
+);
+
+// Reset
+$client-&gt;reset();</code></pre>
+
+<h3>Starting MockServer</h3>
+
+<p>The PHP client does not include a binary launcher. To start MockServer, use one of these approaches:</p>
+
+<ul>
+    <li><strong>Docker:</strong> <code>docker run -d -p 1080:1080 mockserver/mockserver</code></li>
+    <li><strong>Another client's launcher:</strong> the Python, Ruby, Go, .NET, and Rust clients can each download and start MockServer automatically &mdash; see <a href="/mock_server/running_mock_server.html#client_library_launcher">Running MockServer &mdash; client library launcher</a>.</li>
+    <li><strong>Executable JAR / Homebrew:</strong> see <a href="/where/downloads.html">Downloads</a> and <a href="/where/homebrew.html">Homebrew</a>.</li>
+</ul>
+
+<p>For the full PHP client API, see <a href="/mock_server/mockserver_clients.html">MockServer clients</a>.</p>

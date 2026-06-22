@@ -2,6 +2,7 @@ package org.mockserver.serialization.java;
 
 import org.junit.Test;
 import org.mockserver.model.Delay;
+import org.mockserver.model.HttpTemplate;
 
 import java.util.concurrent.TimeUnit;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -46,6 +47,24 @@ public class DelayToJavaSerializerTest {
                 Delay.gaussian(TimeUnit.MILLISECONDS, 200, 50)
             )
         , is("Delay.gaussian(TimeUnit.MILLISECONDS, 200, 50)"));
+    }
+
+    @Test
+    public void shouldSerializeTemplateDelayAsJava() {
+        assertThat(
+            new DelayToJavaSerializer().serialize(1,
+                Delay.template(HttpTemplate.TemplateType.VELOCITY, "$request.body.length()")
+            )
+        , is("Delay.template(HttpTemplate.TemplateType.VELOCITY, \"$request.body.length()\")"));
+    }
+
+    @Test
+    public void shouldEscapeSpecialCharactersInTemplateDelay() {
+        assertThat(
+            new DelayToJavaSerializer().serialize(1,
+                Delay.template(HttpTemplate.TemplateType.MUSTACHE, "#set($x = \"a\")\n$x")
+            )
+        , is("Delay.template(HttpTemplate.TemplateType.MUSTACHE, \"#set($x = \\\"a\\\")\\n$x\")"));
     }
 
     @Test

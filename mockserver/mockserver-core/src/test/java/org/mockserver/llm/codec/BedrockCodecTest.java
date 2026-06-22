@@ -194,9 +194,56 @@ public class BedrockCodecTest {
         assertThat(parsed.getMessages(), is(empty()));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldThrowForEmbeddings() {
-        codec.encodeEmbedding(EmbeddingResponse.embedding(), "test input");
+    @Test
+    public void shouldEncodeEmbeddingInTitanShapeByDefault() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding()
+            .withDimensions(8)
+            .withDeterministicFromInput(true)
+            .withSeed(1L);
+
+        // when — no model hint defaults to Amazon Titan: {"embedding":[...],"inputTextTokenCount":N}
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input");
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("embedding").isArray(), is(true));
+        assertThat(root.get("embedding").size(), is(8));
+        assertThat(root.has("inputTextTokenCount"), is(true));
+    }
+
+    @Test
+    public void shouldEncodeEmbeddingInCohereShapeForCohereModel() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding()
+            .withDimensions(8)
+            .withDeterministicFromInput(true)
+            .withSeed(1L);
+
+        // when — cohere model selects the Cohere shape: {"embeddings":[[...]]}
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input", "cohere.embed-english-v3");
+
+        // then
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.has("embedding"), is(false));
+        JsonNode embeddings = root.get("embeddings");
+        assertThat(embeddings.isArray(), is(true));
+        assertThat(embeddings.size(), is(1));
+        assertThat(embeddings.get(0).size(), is(8));
+    }
+
+    @Test
+    public void shouldDefaultBedrockEmbeddingDimensionsTo1024() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding().withDeterministicFromInput(true);
+
+        // when
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input");
+
+        // then
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        assertThat(root.get("embedding").size(), is(1024));
     }
 
     // --- Streaming Format ---

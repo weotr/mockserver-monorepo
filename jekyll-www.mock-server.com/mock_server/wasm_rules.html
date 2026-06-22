@@ -35,6 +35,8 @@ mockserver.wasmEnabled=true
 
 <p>Your WASM module must export a function called <span class="inline_code">match</span> with the following signature:</p>
 
+<p><strong>Full runnable examples:</strong> the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/wasm" rel="noopener noreferrer">WASM custom-rule examples</a> in the repository implement the <em>same</em> body matcher in both <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/wasm/rust" rel="noopener noreferrer">Rust</a> and <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/wasm/go" rel="noopener noreferrer">Go</a> &mdash; including a prebuilt <span class="inline_code">.wasm</span>, the MockServer WASM ABI contract, and build instructions.</p>
+
 <pre class="prettyprint code">
 ;; WAT (WebAssembly Text Format)
 (module
@@ -62,6 +64,42 @@ pub extern "C" fn match_fn(ptr: *const u8, len: usize) -> i32 {
 </pre>
 
 <p><strong>Note:</strong> When compiling Rust to WASM, export the function as <span class="inline_code">match</span> (you may need <span class="inline_code">#[export_name = "match"]</span> since <span class="inline_code">match</span> is a Rust keyword).</p>
+
+<h3>Matching on method, path and headers (richer ABI)</h3>
+
+<p>The body-only <span class="inline_code">match</span> export above sees only the request body. If you also need the request <strong>method</strong>, <strong>path</strong> or <strong>headers</strong>, export a function called <span class="inline_code">match_request</span> instead. MockServer prefers <span class="inline_code">match_request</span> when present and falls back to <span class="inline_code">match</span> otherwise, so existing body-only modules keep working unchanged.</p>
+
+<p>Instead of just the body, MockServer writes a UTF-8 <strong>JSON envelope</strong> into linear memory at offset 0 and calls <span class="inline_code">match_request(0, len)</span>:</p>
+
+<pre class="prettyprint lang-json code">
+{
+  "method": "POST",
+  "path": "/orders",
+  "headers": { "X-Tenant": ["acme"], "Accept": ["application/json"] },
+  "body": "..."
+}
+</pre>
+
+<p>Each header name maps to an array of values (so multi-valued headers are preserved); <span class="inline_code">body</span> is the request body, or <span class="inline_code">null</span> when absent.</p>
+
+<h4>Authoring SDK</h4>
+
+<p>To save you hand-parsing that envelope, the repository ships a tiny, dependency-free Rust authoring crate <span class="inline_code">mockserver-wasm-sdk</span> with typed accessors (<span class="inline_code">req.method()</span>, <span class="inline_code">req.path()</span>, <span class="inline_code">req.header("X-Tenant")</span>, <span class="inline_code">req.body()</span>) and an <span class="inline_code">export_match_request!</span> macro that wires up the ABI:</p>
+
+<pre class="prettyprint lang-rust code">
+#![no_std]
+use mockserver_wasm_sdk::{export_match_request, Request};
+
+fn rule(req: &Request) -> bool {
+    req.method() == "POST"
+        && req.path() == "/orders"
+        && req.header("X-Tenant") == Some("acme")
+}
+
+export_match_request!(rule);
+</pre>
+
+<p>See the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/wasm/sdk-rust" rel="noopener noreferrer">SDK crate</a> and a <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/wasm/rust-request" rel="noopener noreferrer">sample module</a> (method + path + header) in the repository, including a prebuilt <span class="inline_code">.wasm</span>.</p>
 
 <h3>Uploading a WASM module</h3>
 
@@ -108,6 +146,27 @@ curl -X DELETE "http://localhost:1080/mockserver/wasm/modules?name=myMatcher"
 </pre>
 
 <p>All WASM modules are also cleared when calling <span class="inline_code">PUT /mockserver/reset</span>.</p>
+
+<h4>Test a module against a sample request</h4>
+
+<p>To check what a module does before wiring it into an expectation, <span class="inline_code">POST</span> the module plus a sample request to <span class="inline_code">/mockserver/wasm/test</span>. This is handy for IDE integrations and quick local iteration &mdash; it runs the module against your sample and tells you whether it matched, without storing the module or creating an expectation.</p>
+
+<pre class="prettyprint lang-bash code">
+curl -X POST "http://localhost:1080/mockserver/wasm/test" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "module": "&lt;base64-encoded .wasm&gt;",
+        "request": {
+          "method": "POST",
+          "path": "/orders",
+          "headers": { "X-Tenant": ["acme"] },
+          "body": "{}"
+        }
+      }'
+# Returns: {"matched":true}
+</pre>
+
+<p>Supply either <span class="inline_code">module</span> (base64-encoded WASM bytes) or <span class="inline_code">moduleName</span> (a module already uploaded). The <span class="inline_code">request</span> object is optional and defaults to an empty body-only request. Like live matching, this is fail-closed: an invalid module returns <span class="inline_code">{"matched":false}</span> rather than an error.</p>
 
 <h3>Configuration properties</h3>
 

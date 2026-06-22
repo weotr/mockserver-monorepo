@@ -1,0 +1,59 @@
+openapi: 3.0.0
+info:
+  title: status code range example
+  version: 1.0.0
+paths:
+  /range:
+    get:
+      operationId: rangeOnly
+      responses:
+        '2XX':
+          description: success
+          content:
+            application/json:
+              schema:
+                type: string
+                example: "ok"
+  /notFound:
+    get:
+      operationId: notFoundRange
+      responses:
+        '4XX':
+          description: client error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                required:
+                  - message
+  /exactAndRange:
+    get:
+      operationId: exactAndRange
+      responses:
+        '200':
+          description: exact success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exact:
+                    type: string
+                required:
+                  - exact
+                additionalProperties: false
+        '2XX':
+          description: range success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  range:
+                    type: string
+                required:
+                  - range
+                additionalProperties: false

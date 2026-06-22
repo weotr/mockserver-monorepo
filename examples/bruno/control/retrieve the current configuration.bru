@@ -1,0 +1,17 @@
+meta {
+  name: retrieve the current configuration
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/mockserver/configuration
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns the current MockServer configuration as JSON
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

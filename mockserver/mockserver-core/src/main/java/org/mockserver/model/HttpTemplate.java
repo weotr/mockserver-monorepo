@@ -1,8 +1,11 @@
 package org.mockserver.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import org.mockserver.file.FileReader;
 
 import java.util.Objects;
+
+import static org.apache.commons.lang3.StringUtils.isNotBlank;
 
 /**
  * @author jamesdbloom
@@ -11,6 +14,7 @@ public class HttpTemplate extends Action<HttpTemplate> {
     private int hashCode;
     private final TemplateType templateType;
     private String template;
+    private String templateFile;
     private Type actionType;
     private HttpResponse responseOverride;
     private HttpResponseModifier responseModifier;
@@ -46,6 +50,37 @@ public class HttpTemplate extends Action<HttpTemplate> {
     }
 
     public String getTemplate() {
+        return template;
+    }
+
+    /**
+     * Load the template from a file (resolved from the classpath or the filesystem) instead of
+     * providing it inline. The inline template, when present, always takes precedence over the file.
+     *
+     * @param templateFile path to the file containing the template
+     */
+    public HttpTemplate withTemplateFile(String templateFile) {
+        this.templateFile = templateFile;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getTemplateFile() {
+        return templateFile;
+    }
+
+    /**
+     * Resolves the template content used by the template engines: the inline template when set,
+     * otherwise the contents of {@link #getTemplateFile()} read from the classpath or filesystem.
+     */
+    @JsonIgnore
+    public String getTemplateContent() {
+        if (isNotBlank(template)) {
+            return template;
+        }
+        if (isNotBlank(templateFile)) {
+            return FileReader.readFileFromClassPathOrPath(templateFile);
+        }
         return template;
     }
 
@@ -103,6 +138,7 @@ public class HttpTemplate extends Action<HttpTemplate> {
         HttpTemplate that = (HttpTemplate) o;
         return templateType == that.templateType &&
             Objects.equals(template, that.template) &&
+            Objects.equals(templateFile, that.templateFile) &&
             actionType == that.actionType &&
             Objects.equals(responseOverride, that.responseOverride) &&
             Objects.equals(responseModifier, that.responseModifier);
@@ -111,7 +147,7 @@ public class HttpTemplate extends Action<HttpTemplate> {
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), templateType, template, actionType, responseOverride, responseModifier);
+            hashCode = Objects.hash(super.hashCode(), templateType, template, templateFile, actionType, responseOverride, responseModifier);
         }
         return hashCode;
     }

@@ -1,8 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import Alert from '@mui/material/Alert';
+import AlertTitle from '@mui/material/AlertTitle';
 import Snackbar from '@mui/material/Snackbar';
 import { useDashboardStore } from './store';
 import { buildTheme } from './theme';
@@ -12,33 +14,78 @@ import { useDebugMismatch } from './hooks/useDebugMismatch';
 import { DebugMismatchContext } from './hooks/DebugMismatchContext';
 import { useGenerateStub } from './hooks/useGenerateStub';
 import { GenerateStubContext } from './hooks/GenerateStubContext';
+import { SetBreakpointContext } from './hooks/SetBreakpointContext';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import AppBar from './components/AppBar';
+import AppBar, { NAV_TAB_DESCRIPTIONS } from './components/AppBar';
 import FilterPanel from './components/FilterPanel';
 import DashboardGrid from './components/DashboardGrid';
 import TrafficInspector from './components/TrafficInspector';
 import SessionInspector from './components/SessionInspector';
-import ComposerView from './components/ComposerView';
 import LibraryView from './components/LibraryView';
 import ServiceChaosPanel from './components/ServiceChaosPanel';
 import DriftPanel from './components/DriftPanel';
 import VerificationView from './components/VerificationView';
 import AsyncApiPanel from './components/AsyncApiPanel';
+import GrpcServicesPanel from './components/GrpcServicesPanel';
 import BreakpointsPanel from './components/BreakpointsPanel';
+import ContractTestPanel from './components/ContractTestPanel';
+import ClusterPanel from './components/ClusterPanel';
 import OnboardingPanel from './components/OnboardingPanel';
 import DebugMismatchDialog from './components/DebugMismatchDialog';
 import GenerateStubDialog from './components/GenerateStubDialog';
+import ConfirmDialog from './components/ConfirmDialog';
+import ErrorBoundary from './components/ErrorBoundary';
 import type { RequestFilter } from './types';
 
 // Lazy-loaded so the @mui/x-charts bundle only loads when the Metrics tab is
 // opened, keeping it off the initial dashboard load.
 const MetricsView = lazy(() => import('./components/MetricsView'));
 
+// Lazy-loaded so the Monaco editor (multi-MB) bundle only loads when the
+// Composer tab is opened, keeping it off the initial dashboard load.
+const ComposerView = lazy(() => import('./components/ComposerView'));
+
+// Lazy-loaded so the LLM Optimise screen's report rendering stays off the initial
+// dashboard load (it is only needed when the LLM Optimise tab is opened).
+const OptimiseView = lazy(() => import('./components/OptimiseView'));
+
+// Lazy-loaded so the @mui/x-charts bundle (shared with Metrics) only loads when
+// the Performance tab is opened, keeping it off the initial dashboard load.
+const LoadScenarioPanel = lazy(() => import('./components/LoadScenarioPanel'));
+
+// How long the WebSocket must stay down before the persistent connection-loss
+// banner appears. Brief reconnects (the common case under StrictMode remount or
+// a server restart) clear well before this, so the banner only nags on a real,
+// sustained outage.
+const CONNECTION_LOSS_BANNER_DELAY_MS = 8000;
+
 export default function App() {
   const themeMode = useDashboardStore((s) => s.themeMode);
   const view = useDashboardStore((s) => s.view);
   const error = useDashboardStore((s) => s.error);
+  const connectionStatus = useDashboardStore((s) => s.connectionStatus);
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
+
+  // Persistent connection-loss banner: shown once the socket has been down
+  // (disconnected/error) continuously for CONNECTION_LOSS_BANNER_DELAY_MS, and
+  // dismissable by the user. It re-arms on the next sustained outage.
+  const [lostSince, setLostSince] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const isDown = connectionStatus === 'disconnected' || connectionStatus === 'error';
+  useEffect(() => {
+    if (!isDown) {
+      // Reconnected — arm the banner + dismissal for the next outage. Setting
+      // state from the effect cleanup (rather than synchronously in the body)
+      // keeps this off the synchronous render path.
+      return () => {
+        setLostSince(false);
+        setBannerDismissed(false);
+      };
+    }
+    const timer = setTimeout(() => setLostSince(true), CONNECTION_LOSS_BANNER_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [isDown]);
+  const connectionLost = isDown && lostSince;
 
   const generateStubOpen = useDashboardStore((s) => s.generateStubOpen);
   const generateStubSuggestions = useDashboardStore((s) => s.generateStubSuggestions);
@@ -51,13 +98,19 @@ export default function App() {
   const { connect, sendFilter, clearServer } = useWebSocket(params);
   const { debugMismatch } = useDebugMismatch(params);
   const { generateStub } = useGenerateStub(params);
-  const initialConnectDone = useRef(false);
+  // "Set breakpoint" from a log row: seed the matcher form + switch to the
+  // Breakpoints view. The store action is stable, so this provider value is too.
+  const setBreakpointPrefill = useDashboardStore((s) => s.setBreakpointPrefill);
 
+  // Open the WebSocket on mount. `connect` is stable (its deps — params and the
+  // Zustand actions — are all stable), so this runs once per mount rather than
+  // on every render, and useWebSocket tears the socket down on unmount. Crucially
+  // there is NO once-only ref guard here: under React StrictMode the initial
+  // mount is immediately unmounted and remounted, and the unmount disconnects the
+  // socket — a guard would skip the remount's reconnect and leave the connection
+  // dead (status stuck until a later action lazily reconnects).
   useEffect(() => {
-    if (!initialConnectDone.current) {
-      initialConnectDone.current = true;
-      connect({});
-    }
+    connect({});
   }, [connect]);
 
   const handleFilterChange = useCallback(
@@ -68,23 +121,21 @@ export default function App() {
   );
 
   const logSearchInputRef = useRef<HTMLInputElement>(null);
+  const [clearLogsConfirm, setClearLogsConfirm] = useState(false);
 
   const shortcutHandlers = useMemo(
     () => ({
       onSearch: () => {
         logSearchInputRef.current?.focus();
       },
-      // ⌘L clears the server LOGS only — a benign, frequent action. A full reset (which also
-      // drops every expectation and recorded request) is intentionally NOT bound to a keystroke;
-      // it lives behind a confirmation in the Clear menu.
       onClear: () => {
-        void clearServer('log');
+        setClearLogsConfirm(true);
       },
       onToggleFilter: () => {
         useDashboardStore.getState().toggleFilterExpanded();
       },
     }),
-    [clearServer],
+    [],
   );
 
   useKeyboardShortcuts(shortcutHandlers);
@@ -106,36 +157,95 @@ export default function App() {
       <CssBaseline />
       <DebugMismatchContext.Provider value={debugMismatch}>
       <GenerateStubContext.Provider value={generateStub}>
+      <SetBreakpointContext.Provider value={setBreakpointPrefill}>
         <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
           <AppBar
             onClearServer={handleClearServer}
             onClearLogs={handleClearLogs}
             onClearExpectations={handleClearExpectations}
           />
+          {NAV_TAB_DESCRIPTIONS[view] && (
+            <Typography
+              variant="body2"
+              data-testid="view-description"
+              sx={{
+                flexShrink: 0,
+                px: 1.5,
+                py: 0.5,
+                color: 'text.secondary',
+                bgcolor: 'action.hover',
+                borderBottom: 1,
+                borderColor: 'divider',
+                fontSize: '0.8rem',
+              }}
+            >
+              {NAV_TAB_DESCRIPTIONS[view]}
+            </Typography>
+          )}
+          {connectionLost && !bannerDismissed && (
+            <Alert
+              severity="warning"
+              role="alert"
+              aria-live="assertive"
+              onClose={() => setBannerDismissed(true)}
+              sx={{ mx: 1, mt: 1, flexShrink: 0 }}
+              data-testid="connection-loss-banner"
+            >
+              <AlertTitle>Connection lost</AlertTitle>
+              The dashboard has lost its live connection to MockServer and is trying to
+              reconnect. Displayed data may be stale until the connection is restored.
+            </Alert>
+          )}
           {(view === 'dashboard' || view === 'traffic' || view === 'sessions') && (
             <FilterPanel onFilterChange={handleFilterChange} />
           )}
           {error && (
-            <Alert severity="error" sx={{ mx: 1, mt: 1, flexShrink: 0 }}>
+            <Alert severity="error" role="alert" sx={{ mx: 1, mt: 1, flexShrink: 0 }}>
               {error}
             </Alert>
           )}
-          {view === 'get-started' && <OnboardingPanel connectionParams={params} />}
-          {view === 'dashboard' && <DashboardGrid />}
-          {view === 'traffic' && <TrafficInspector />}
-          {view === 'sessions' && <SessionInspector connectionParams={params} />}
-          {view === 'composer' && <ComposerView connectionParams={params} />}
-          {view === 'library' && <LibraryView connectionParams={params} />}
-          {view === 'metrics' && (
-            <Suspense fallback={<Box sx={{ p: 2 }}>Loading metrics…</Box>}>
-              <MetricsView connectionParams={params} />
-            </Suspense>
-          )}
-          {view === 'chaos' && <ServiceChaosPanel connectionParams={params} />}
-          {view === 'drift' && <DriftPanel connectionParams={params} />}
-          {view === 'verification' && <VerificationView connectionParams={params} />}
-          {view === 'async' && <AsyncApiPanel connectionParams={params} />}
-          {view === 'breakpoints' && <BreakpointsPanel connectionParams={params} />}
+          {/*
+            One ErrorBoundary around the whole view-switching region, reset on
+            `view`. A crash in any single view (including a failed lazy() chunk
+            import for Metrics) shows the fallback panel instead of blanking the
+            entire app, and clears automatically when the user switches tabs. The
+            AppBar above stays OUTSIDE the boundary so navigation always works.
+          */}
+          <ErrorBoundary label="this view" resetKeys={[view]}>
+            {view === 'get-started' && <OnboardingPanel connectionParams={params} />}
+            {view === 'dashboard' && <DashboardGrid />}
+            {view === 'traffic' && <TrafficInspector />}
+            {view === 'sessions' && <SessionInspector connectionParams={params} />}
+            {view === 'composer' && (
+              <Suspense fallback={<Box sx={{ p: 2 }}>Loading composer…</Box>}>
+                <ComposerView connectionParams={params} />
+              </Suspense>
+            )}
+            {view === 'library' && <LibraryView connectionParams={params} />}
+            {view === 'metrics' && (
+              <Suspense fallback={<Box sx={{ p: 2 }}>Loading metrics…</Box>}>
+                <MetricsView connectionParams={params} />
+              </Suspense>
+            )}
+            {view === 'optimise' && (
+              <Suspense fallback={<Box sx={{ p: 2 }}>Loading LLM Optimise…</Box>}>
+                <OptimiseView connectionParams={params} />
+              </Suspense>
+            )}
+            {view === 'chaos' && <ServiceChaosPanel connectionParams={params} />}
+            {view === 'performance' && (
+              <Suspense fallback={<Box sx={{ p: 2 }}>Loading performance…</Box>}>
+                <LoadScenarioPanel connectionParams={params} />
+              </Suspense>
+            )}
+            {view === 'drift' && <DriftPanel connectionParams={params} />}
+            {view === 'verification' && <VerificationView connectionParams={params} />}
+            {view === 'async' && <AsyncApiPanel connectionParams={params} />}
+            {view === 'grpc' && <GrpcServicesPanel connectionParams={params} />}
+            {view === 'breakpoints' && <BreakpointsPanel connectionParams={params} />}
+            {view === 'contract' && <ContractTestPanel connectionParams={params} />}
+            {view === 'cluster' && <ClusterPanel connectionParams={params} />}
+          </ErrorBoundary>
         </Box>
         <Snackbar
           open={notification !== null}
@@ -147,6 +257,7 @@ export default function App() {
             <Alert
               severity={notification.severity}
               variant="filled"
+              role="alert"
               onClose={() => setNotification(null)}
               sx={{ width: '100%' }}
             >
@@ -162,6 +273,15 @@ export default function App() {
           confidence={generateStubConfidence}
           connectionParams={params}
         />
+        <ConfirmDialog
+          open={clearLogsConfirm}
+          title="Clear server logs?"
+          message="This removes all server log messages. Expectations and recorded requests are kept."
+          confirmLabel="Clear logs"
+          onConfirm={() => { void clearServer('log'); }}
+          onClose={() => setClearLogsConfirm(false)}
+        />
+      </SetBreakpointContext.Provider>
       </GenerateStubContext.Provider>
       </DebugMismatchContext.Provider>
     </ThemeProvider>

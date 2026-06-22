@@ -16,6 +16,7 @@ from mockserver.models import (
     HttpRequestAndHttpResponse,
     HttpResponse,
     HttpTemplate,
+    LoadScenario,
     OpenAPIExpectation,
     TimeToLive,
     Times,
@@ -74,11 +75,51 @@ class SyncForwardChainExpectation:
     def forward_with_template(self, template) -> list[Expectation]:
         return self._run(self._async_chain.forward_with_template(template))
 
+    def respond_with_class_callback(self, class_callback) -> list[Expectation]:
+        return self._run(self._async_chain.respond_with_class_callback(class_callback))
+
     def forward_with_class_callback(self, class_callback) -> list[Expectation]:
         return self._run(self._async_chain.forward_with_class_callback(class_callback))
 
     def error(self, error: HttpError) -> list[Expectation]:
         return self._run(self._async_chain.error(error))
+
+
+class SyncScenarioHandle:
+    """A synchronous handle to a single named stateful scenario on the server.
+
+    Obtained via :meth:`MockServerClient.scenario`. Wraps the
+    ``/mockserver/scenario/{name}`` control-plane endpoints.
+    """
+
+    def __init__(self, async_handle, run_fn: Callable) -> None:
+        self._async_handle = async_handle
+        self._run = run_fn
+
+    @property
+    def name(self) -> str:
+        return self._async_handle.name
+
+    def state(self) -> str | None:
+        """Return the current state of this scenario (``None`` if not yet set)."""
+        return self._run(self._async_handle.state())
+
+    def set(
+        self,
+        state: str,
+        transition_after_ms: int | None = None,
+        next_state: str | None = None,
+    ) -> dict:
+        """Set this scenario's state, optionally scheduling a timed transition
+        to ``next_state`` after ``transition_after_ms`` milliseconds.
+        """
+        return self._run(
+            self._async_handle.set(state, transition_after_ms, next_state)
+        )
+
+    def trigger(self, new_state: str) -> dict:
+        """Trigger an external advance of this scenario to ``new_state``."""
+        return self._run(self._async_handle.trigger(new_state))
 
 
 class MockServerClient:
@@ -90,6 +131,10 @@ class MockServerClient:
         secure: bool = False,
         ca_cert_path: str | None = None,
         tls_verify: bool = True,
+        client_cert_path: str | None = None,
+        client_key_path: str | None = None,
+        control_plane_bearer_token: str | None = None,
+        control_plane_bearer_token_supplier: Callable[[], str] | None = None,
     ) -> None:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
@@ -97,7 +142,16 @@ class MockServerClient:
         )
         self._thread.start()
         self._async_client = AsyncMockServerClient(
-            host, port, context_path, secure, ca_cert_path, tls_verify=tls_verify
+            host,
+            port,
+            context_path,
+            secure,
+            ca_cert_path,
+            tls_verify=tls_verify,
+            client_cert_path=client_cert_path,
+            client_key_path=client_key_path,
+            control_plane_bearer_token=control_plane_bearer_token,
+            control_plane_bearer_token_supplier=control_plane_bearer_token_supplier,
         )
 
     def _run(self, coro):
@@ -146,6 +200,24 @@ class MockServerClient:
         """Query the current clock status."""
         return self._run(self._async_client.clock_status())
 
+    def upload_grpc_descriptor(self, descriptor_set_bytes: bytes) -> None:
+        """Upload a compiled protobuf descriptor set so gRPC requests can be matched.
+
+        *descriptor_set_bytes* must be the raw bytes of a ``FileDescriptorSet``
+        (e.g. the output of ``protoc --descriptor_set_out=... --include_imports``).
+        """
+        return self._run(
+            self._async_client.upload_grpc_descriptor(descriptor_set_bytes)
+        )
+
+    def retrieve_grpc_services(self) -> list[dict]:
+        """Retrieve the gRPC services registered from uploaded descriptor sets."""
+        return self._run(self._async_client.retrieve_grpc_services())
+
+    def clear_grpc_descriptors(self) -> None:
+        """Clear all uploaded gRPC descriptor sets and registered services."""
+        return self._run(self._async_client.clear_grpc_descriptors())
+
     def set_service_chaos(
         self, host: str, chaos: HttpChaosProfile, ttl_millis: int | None = None
     ) -> dict:
@@ -167,15 +239,76 @@ class MockServerClient:
         """Query the current service-scoped chaos registrations."""
         return self._run(self._async_client.service_chaos_status())
 
+    def load_scenario(self, scenario: LoadScenario | dict) -> dict:
+        """Register (load) a load-injection scenario in the server-side registry.
+
+        The scenario must carry a unique ``name``. Registration adds it in the
+        ``LOADED`` state but does not start generating load; it is allowed even
+        when the server was started without ``loadGenerationEnabled``. Use
+        :meth:`start_load_scenarios` to begin generating load.
+        """
+        return self._run(self._async_client.load_scenario(scenario))
+
+    def load_scenarios(self) -> dict:
+        """List every registered load scenario."""
+        return self._run(self._async_client.load_scenarios())
+
+    def get_load_scenario(self, name: str) -> dict:
+        """Retrieve a single registered load scenario by *name* (404 if absent)."""
+        return self._run(self._async_client.get_load_scenario(name))
+
+    def delete_load_scenario(self, name: str) -> dict:
+        """Remove a single registered load scenario by *name* (stops it if running)."""
+        return self._run(self._async_client.delete_load_scenario(name))
+
+    def clear_load_scenarios(self) -> dict:
+        """Remove every registered load scenario (stopping any that are running)."""
+        return self._run(self._async_client.clear_load_scenarios())
+
+    def start_load_scenarios(self, names: str | list[str]) -> dict:
+        """Start one or more registered load scenarios by name.
+
+        The server must have been started with ``loadGenerationEnabled``;
+        otherwise this raises an error reporting the ``403`` response.
+        """
+        return self._run(self._async_client.start_load_scenarios(names))
+
+    def stop_load_scenarios(self, names: str | list[str] | None = None) -> dict:
+        """Stop running load scenarios (``None`` stops every running scenario)."""
+        return self._run(self._async_client.stop_load_scenarios(names))
+
+    def run_load_scenario(self, scenario: LoadScenario | dict) -> dict:
+        """Convenience: register *scenario* then immediately start it."""
+        return self._run(self._async_client.run_load_scenario(scenario))
+
+    def scenario(self, name: str) -> SyncScenarioHandle:
+        """Return a handle to the named stateful scenario, wrapping the
+        ``/mockserver/scenario/{name}`` control-plane endpoints.
+        """
+        return SyncScenarioHandle(self._async_client.scenario(name), self._run)
+
+    def scenarios(self) -> list[dict]:
+        """List every known scenario and its current state.
+
+        Returns a list of dicts each with ``scenarioName`` and ``currentState``.
+        """
+        return self._run(self._async_client.scenarios())
+
     def verify(
         self,
-        request: HttpRequest,
+        request: HttpRequest | None = None,
         times: VerificationTimes | None = None,
+        *,
+        response: HttpResponse | None = None,
     ) -> None:
-        return self._run(self._async_client.verify(request, times))
+        return self._run(self._async_client.verify(request, times, response=response))
 
-    def verify_sequence(self, *requests: HttpRequest) -> None:
-        return self._run(self._async_client.verify_sequence(*requests))
+    def verify_sequence(
+        self,
+        *requests: HttpRequest,
+        responses: list[HttpResponse] | None = None,
+    ) -> None:
+        return self._run(self._async_client.verify_sequence(*requests, responses=responses))
 
     def verify_zero_interactions(self) -> None:
         return self._run(self._async_client.verify_zero_interactions())
@@ -194,6 +327,28 @@ class MockServerClient:
         self, request: HttpRequest | None = None
     ) -> list[Expectation]:
         return self._run(self._async_client.retrieve_recorded_expectations(request))
+
+    def retrieve_expectations_as_code(
+        self, fmt: str = "java", request: HttpRequest | None = None
+    ) -> str:
+        """Retrieve the active expectations as MockServer SDK setup code in the
+        requested language (``java``, ``javascript``, ``python``, ``go``,
+        ``csharp``, ``ruby``, ``rust`` or ``php``).
+        """
+        return self._run(
+            self._async_client.retrieve_expectations_as_code(fmt, request)
+        )
+
+    def retrieve_recorded_expectations_as_code(
+        self, fmt: str = "java", request: HttpRequest | None = None
+    ) -> str:
+        """Retrieve the recorded (proxied) request/response pairs as MockServer
+        SDK setup code in the requested language (``java``, ``javascript``,
+        ``python``, ``go``, ``csharp``, ``ruby``, ``rust`` or ``php``).
+        """
+        return self._run(
+            self._async_client.retrieve_recorded_expectations_as_code(fmt, request)
+        )
 
     def retrieve_recorded_requests_and_responses(
         self, request: HttpRequest | None = None
@@ -236,6 +391,58 @@ class MockServerClient:
         return self._run(
             self._async_client.mock_with_callback(request, callback, times, time_to_live)
         )
+
+    # -------------------------------------------------------------------
+    # Breakpoint matcher management
+    # -------------------------------------------------------------------
+
+    def add_breakpoint(
+        self,
+        matcher,
+        phases: list[str],
+        request_handler=None,
+        response_handler=None,
+        stream_frame_handler=None,
+    ) -> str:
+        """Register a breakpoint matcher with callback handlers.
+
+        Returns the server-assigned breakpoint matcher id (UUID string).
+        """
+        return self._run(
+            self._async_client.add_breakpoint(
+                matcher, phases, request_handler, response_handler, stream_frame_handler
+            )
+        )
+
+    def add_request_breakpoint(self, matcher, request_handler) -> str:
+        """Convenience: register a REQUEST-only breakpoint."""
+        return self._run(
+            self._async_client.add_request_breakpoint(matcher, request_handler)
+        )
+
+    def add_request_and_response_breakpoint(
+        self, matcher, request_handler, response_handler
+    ) -> str:
+        """Convenience: register a REQUEST+RESPONSE breakpoint."""
+        return self._run(
+            self._async_client.add_request_and_response_breakpoint(
+                matcher, request_handler, response_handler
+            )
+        )
+
+    def list_breakpoint_matchers(self) -> dict:
+        """List all registered breakpoint matchers."""
+        return self._run(self._async_client.list_breakpoint_matchers())
+
+    def remove_breakpoint_matcher(self, breakpoint_id: str) -> dict:
+        """Remove a breakpoint matcher by id."""
+        return self._run(
+            self._async_client.remove_breakpoint_matcher(breakpoint_id)
+        )
+
+    def clear_breakpoint_matchers(self) -> dict:
+        """Clear all registered breakpoint matchers."""
+        return self._run(self._async_client.clear_breakpoint_matchers())
 
     def mock_with_forward_callback(
         self,

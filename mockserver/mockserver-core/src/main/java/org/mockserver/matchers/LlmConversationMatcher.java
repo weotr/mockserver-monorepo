@@ -33,7 +33,11 @@ public class LlmConversationMatcher {
     private Integer turnIndex;
     private String latestMessageContains;
     private String latestMessageMatchesSource; // regex source string
-    private Pattern latestMessageMatches;      // lazily compiled from source
+    // volatile: getLatestMessageMatches() lazily compiles this from the source string on the
+    // concurrent match path of a shared matcher. A compiled Pattern is immutable, so volatile
+    // guarantees safe publication — a thread observing a non-null reference sees a fully
+    // constructed pattern (a benign duplicate compile is the only race, never an unsafe read).
+    private volatile Pattern latestMessageMatches; // lazily compiled from source
     private ParsedMessage.Role latestMessageRole;
     private String containsToolResultFor;
     private String semanticMatchAgainst; // opt-in fuzzy LLM-judged match (off by default)

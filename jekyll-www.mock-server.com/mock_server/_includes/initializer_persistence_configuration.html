@@ -73,6 +73,24 @@
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.watchInitializationJson="false"</code></pre>
 </div>
 
+<button id="button_configuration_fail_on_initialization_error" class="accordion title"><strong>Fail On Initialization Error</strong></button>
+<div class="panel title">
+    <p>If enabled a failure to load any expectation initializer (a malformed initialization JSON or OpenAPI file, or a broken initialization class) will fail server startup with an exception, instead of logging a warning and continuing with zero expectations from that source.</p>
+    <p>By default (<span class="this_value">false</span>) a broken initializer is logged once at WARN and MockServer still starts — which can silently leave you with missing mocks in CI or Kubernetes. Enable this when a half-initialized server is worse than a crash, so the failure is loud and visible.</p>
+    <p>For slow (but valid) initializers, use the readiness probe at <span class="keyword">GET /mockserver/ready</span> instead, which returns 503 until initialization completes and 200 thereafter.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.failOnInitializationError(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.failOnInitializationError=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FAIL_ON_INITIALIZATION_ERROR=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.failOnInitializationError=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.failOnInitializationError="true"</code></pre>
+</div>
+
 <button id="button_configuration_persist_expectations_as_json" class="accordion title"><strong>Persist Expectations As JSON</strong></button>
 <div class="panel title">
     <p>Enable the persisting of expectations as json, which is updated whenever the expectation state is updated (i.e. add, clear, expires, etc)</p>

@@ -34,6 +34,7 @@ public class Expectation extends ObjectWithJsonToString {
     private int priority;
     private Integer percentage;
     private HttpChaosProfile chaos;
+    private RateLimit rateLimit;
     private SortableExpectationId sortableExpectationId;
     private final RequestDefinition httpRequest;
     private final Times times;
@@ -62,7 +63,11 @@ public class Expectation extends ObjectWithJsonToString {
     private List<ExpectationStep> steps;
     private List<HttpResponse> httpResponses;
     private ResponseMode responseMode;
+    private List<Integer> responseWeights;
+    private Integer switchAfter;
     private List<CrossProtocolScenario> crossProtocolScenarios;
+    private List<CaptureRule> capture;
+    private String namespace;
     private String scenarioName;
     private String scenarioState;
     private String newScenarioState;
@@ -360,6 +365,16 @@ public class Expectation extends ObjectWithJsonToString {
         return chaos;
     }
 
+    public Expectation withRateLimit(RateLimit rateLimit) {
+        this.rateLimit = rateLimit;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public RateLimit getRateLimit() {
+        return rateLimit;
+    }
+
     @JsonIgnore
     public boolean matchesByPercentage() {
         if (percentage == null || percentage == 100) {
@@ -635,6 +650,49 @@ public class Expectation extends ObjectWithJsonToString {
         return this;
     }
 
+    public List<Integer> getResponseWeights() {
+        return responseWeights != null ? Collections.unmodifiableList(responseWeights) : null;
+    }
+
+    /**
+     * Specify the relative weight of each response in {@code httpResponses} (index-aligned), used when
+     * {@link ResponseMode#WEIGHTED} selection is active. A missing or {@code null} weight defaults to 1.
+     * Weights are ignored unless the response mode is {@code WEIGHTED}.
+     */
+    public Expectation withResponseWeights(List<Integer> responseWeights) {
+        if (responseWeights != null && !responseWeights.isEmpty()) {
+            this.responseWeights = new ArrayList<>(responseWeights);
+            this.hashCode = 0;
+        }
+        return this;
+    }
+
+    public Integer getSwitchAfter() {
+        return switchAfter;
+    }
+
+    /**
+     * Lightweight per-expectation hit-count branching, used when {@link ResponseMode#SWITCH} selection is active.
+     * <p>
+     * With an index-aligned {@code httpResponses} list and a positive {@code switchAfter} of {@code N}, the
+     * expectation serves the first response for its first {@code N} matches, then advances one index for every
+     * further block of {@code N} matches, clamping at the last response. The common case — a list of two
+     * responses — therefore serves the first response for {@code N} calls and the second response for every
+     * call after that, letting a single expectation "respond differently after the Nth call" without a full
+     * scenario. A {@code null} or non-positive {@code switchAfter} (or a response mode other than {@code SWITCH})
+     * leaves behaviour unchanged.
+     *
+     * @param switchAfter the number of matches served by each response before advancing to the next (must be &gt;= 1)
+     */
+    public Expectation withSwitchAfter(Integer switchAfter) {
+        if (switchAfter != null && switchAfter < 1) {
+            throw new IllegalArgumentException("switchAfter must be greater than or equal to 1");
+        }
+        this.switchAfter = switchAfter;
+        this.hashCode = 0;
+        return this;
+    }
+
     public Expectation withBeforeActions(AfterAction... beforeActions) {
         if (beforeActions != null && beforeActions.length > 0) {
             this.beforeActions = new ArrayList<>(Arrays.asList(beforeActions));
@@ -667,6 +725,43 @@ public class Expectation extends ObjectWithJsonToString {
         return this;
     }
 
+    /**
+     * <p>
+     * Set the optional namespace (a.k.a. tenant) that this expectation belongs to,
+     * enabling multiple teams or test-suites to share a single MockServer instance
+     * without their expectations colliding.
+     * </p>
+     * <p>
+     * A {@code null} namespace (the default) places the expectation in the global
+     * namespace, which is matched regardless of any request namespace. A non-null
+     * namespace scopes the expectation so it only matches requests that carry the
+     * configured namespace header ({@code matchNamespaceHeader}, default
+     * {@code X-MockServer-Namespace}) with this exact value.
+     * </p>
+     *
+     * <p>
+     * The value is normalised at the source: a null, empty or whitespace-only
+     * namespace is stored as {@code null} (global), so a blank namespace is
+     * unambiguously "global" and can never produce an expectation that matches
+     * everything yet cannot be cleared by namespace.
+     * </p>
+     *
+     * @param namespace the namespace (tenant) for this expectation, or null for global
+     */
+    public Expectation withNamespace(String namespace) {
+        if (namespace != null) {
+            String trimmed = namespace.trim();
+            namespace = trimmed.isEmpty() ? null : trimmed;
+        }
+        this.namespace = namespace;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getNamespace() {
+        return namespace;
+    }
+
     public Expectation withScenarioName(String scenarioName) {
         this.scenarioName = scenarioName;
         this.hashCode = 0;
@@ -695,6 +790,26 @@ public class Expectation extends ObjectWithJsonToString {
 
     public String getNewScenarioState() {
         return newScenarioState;
+    }
+
+    public List<CaptureRule> getCapture() {
+        return capture != null ? Collections.unmodifiableList(capture) : null;
+    }
+
+    public Expectation withCapture(List<CaptureRule> capture) {
+        if (capture != null && !capture.isEmpty()) {
+            this.capture = new ArrayList<>(capture);
+            this.hashCode = 0;
+        }
+        return this;
+    }
+
+    public Expectation withCapture(CaptureRule... capture) {
+        if (capture != null && capture.length > 0) {
+            this.capture = new ArrayList<>(Arrays.asList(capture));
+            this.hashCode = 0;
+        }
+        return this;
     }
 
     public List<CrossProtocolScenario> getCrossProtocolScenarios() {
@@ -848,9 +963,64 @@ public class Expectation extends ObjectWithJsonToString {
         if (responseMode == ResponseMode.RANDOM) {
             return httpResponses.get(ThreadLocalRandom.current().nextInt(httpResponses.size()));
         }
+        if (responseMode == ResponseMode.WEIGHTED) {
+            return selectWeightedResponse();
+        }
         Integer consumed = lastConsumedCount.get();
         int count = Math.max(0, (consumed != null ? consumed : matchCount.get()) - 1);
+        if (responseMode == ResponseMode.SWITCH) {
+            return selectSwitchedResponse(count);
+        }
         return httpResponses.get(count % httpResponses.size());
+    }
+
+    /**
+     * Selects a response with probability proportional to its weight using cumulative-weight random
+     * selection. A missing or non-positive weight is treated as 1. If the total effective weight is
+     * non-positive (which cannot happen given the floor-of-1 per response, but is guarded defensively),
+     * selection falls back to uniform random.
+     */
+    @JsonIgnore
+    private HttpResponse selectWeightedResponse() {
+        int size = httpResponses.size();
+        int total = 0;
+        int[] effectiveWeights = new int[size];
+        for (int i = 0; i < size; i++) {
+            Integer weight = (responseWeights != null && i < responseWeights.size()) ? responseWeights.get(i) : null;
+            int effective = (weight != null && weight > 0) ? weight : 1;
+            effectiveWeights[i] = effective;
+            total += effective;
+        }
+        if (total <= 0) {
+            // defensive uniform fallback
+            return httpResponses.get(ThreadLocalRandom.current().nextInt(size));
+        }
+        int target = ThreadLocalRandom.current().nextInt(total);
+        int cumulative = 0;
+        for (int i = 0; i < size; i++) {
+            cumulative += effectiveWeights[i];
+            if (target < cumulative) {
+                return httpResponses.get(i);
+            }
+        }
+        // unreachable given target < total, but keep the compiler and edge-cases happy
+        return httpResponses.get(size - 1);
+    }
+
+    /**
+     * Selects a response using lightweight hit-count branching ({@link ResponseMode#SWITCH}). The first
+     * {@code switchAfter} matches return the first response; each subsequent block of {@code switchAfter}
+     * matches advances one index, clamping at the last response. When {@code switchAfter} is unset or
+     * non-positive the threshold defaults to 1, so each match advances one index (clamped) — equivalent to
+     * serving the first response once and the second response thereafter for a two-element list.
+     *
+     * @param zeroBasedCount the zero-based index of this match (0 for the first match)
+     */
+    @JsonIgnore
+    private HttpResponse selectSwitchedResponse(int zeroBasedCount) {
+        int threshold = (switchAfter != null && switchAfter > 0) ? switchAfter : 1;
+        int index = Math.min(zeroBasedCount / threshold, httpResponses.size() - 1);
+        return httpResponses.get(index);
     }
 
     @JsonIgnore
@@ -1176,6 +1346,8 @@ public class Expectation extends ObjectWithJsonToString {
             .withCreated(created)
             .withPercentage(percentage)
             .withChaos(chaos)
+            .withRateLimit(rateLimit)
+            .withNamespace(namespace)
             .withScenarioName(scenarioName)
             .withScenarioState(scenarioState)
             .withNewScenarioState(newScenarioState)
@@ -1199,7 +1371,9 @@ public class Expectation extends ObjectWithJsonToString {
             .thenRespondWithDns(dnsResponse)
             .thenError(httpError)
             .thenRespond(httpResponses)
-            .withResponseMode(responseMode);
+            .withResponseMode(responseMode)
+            .withResponseWeights(responseWeights)
+            .withSwitchAfter(switchAfter);
         if (beforeActions != null) {
             clone.beforeActions = new ArrayList<>(beforeActions);
         }
@@ -1211,6 +1385,9 @@ public class Expectation extends ObjectWithJsonToString {
         }
         if (crossProtocolScenarios != null) {
             clone.crossProtocolScenarios = new ArrayList<>(crossProtocolScenarios);
+        }
+        if (capture != null) {
+            clone.capture = new ArrayList<>(capture);
         }
         return clone;
     }
@@ -1263,16 +1440,20 @@ public class Expectation extends ObjectWithJsonToString {
             Objects.equals(steps, that.steps) &&
             Objects.equals(httpResponses, that.httpResponses) &&
             Objects.equals(responseMode, that.responseMode) &&
+            Objects.equals(responseWeights, that.responseWeights) &&
+            Objects.equals(switchAfter, that.switchAfter) &&
+            Objects.equals(namespace, that.namespace) &&
             Objects.equals(scenarioName, that.scenarioName) &&
             Objects.equals(scenarioState, that.scenarioState) &&
             Objects.equals(newScenarioState, that.newScenarioState) &&
-            Objects.equals(crossProtocolScenarios, that.crossProtocolScenarios);
+            Objects.equals(crossProtocolScenarios, that.crossProtocolScenarios) &&
+            Objects.equals(capture, that.capture);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(priority, percentage, chaos, httpRequest, times, timeToLive, httpResponse, httpResponseTemplate, httpResponseClassCallback, httpResponseObjectCallback, httpForward, httpForwardTemplate, httpForwardClassCallback, httpForwardObjectCallback, httpOverrideForwardedRequest, httpForwardValidateAction, httpForwardWithFallback, httpSseResponse, httpLlmResponse, httpWebSocketResponse, grpcStreamResponse, grpcBidiResponse, binaryResponse, dnsResponse, httpError, beforeActions, afterActions, steps, httpResponses, responseMode, scenarioName, scenarioState, newScenarioState, crossProtocolScenarios);
+            hashCode = Objects.hash(priority, percentage, chaos, httpRequest, times, timeToLive, httpResponse, httpResponseTemplate, httpResponseClassCallback, httpResponseObjectCallback, httpForward, httpForwardTemplate, httpForwardClassCallback, httpForwardObjectCallback, httpOverrideForwardedRequest, httpForwardValidateAction, httpForwardWithFallback, httpSseResponse, httpLlmResponse, httpWebSocketResponse, grpcStreamResponse, grpcBidiResponse, binaryResponse, dnsResponse, httpError, beforeActions, afterActions, steps, httpResponses, responseMode, responseWeights, switchAfter, namespace, scenarioName, scenarioState, newScenarioState, crossProtocolScenarios, capture);
         }
         return hashCode;
     }

@@ -1,0 +1,15 @@
+[package]
+name = "mockserver-wasm-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal authoring SDK for MockServer WASM matcher rules — typed accessors for the request envelope ABI"
+license = "Apache-2.0"
+
+[lib]
+# Used both as a normal Rust dependency (by rule crates) and standalone.
+crate-type = ["rlib"]
+
+[features]
+# `std` is only needed for the unit tests; rule modules built for
+# wasm32-unknown-unknown depend on this crate with default-features = false.
+default = []

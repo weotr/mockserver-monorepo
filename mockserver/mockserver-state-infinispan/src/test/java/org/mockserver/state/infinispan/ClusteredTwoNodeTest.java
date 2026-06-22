@@ -237,6 +237,38 @@ class ClusteredTwoNodeTest {
     }
 
     @Test
+    void clusterInfoShouldReportBothMembersWithSingleCoordinator() {
+        // clusterInfo() reads real JGroups membership from the cache manager
+        ClusterInfo infoA = nodeA.clusterInfo();
+        ClusterInfo infoB = nodeB.clusterInfo();
+
+        assertTrue(infoA.clustered(), "node A reports clustered");
+        assertTrue(infoB.clustered(), "node B reports clustered");
+
+        // both nodes see the full 2-member fleet
+        assertThat(infoA.members(), hasSize(2));
+        assertThat(infoB.members(), hasSize(2));
+
+        // exactly one coordinator across the fleet, agreed by both nodes
+        assertThat(infoA.members().stream().filter(ClusterInfo.Member::coordinator).count(), is(1L));
+        assertThat(infoB.members().stream().filter(ClusterInfo.Member::coordinator).count(), is(1L));
+        assertThat("both nodes agree on the coordinator", infoA.coordinator(), is(infoB.coordinator()));
+
+        // each node flags exactly one member (itself) as local, and the two
+        // nodes' local members are distinct
+        assertThat(infoA.members().stream().filter(ClusterInfo.Member::local).count(), is(1L));
+        assertThat(infoB.members().stream().filter(ClusterInfo.Member::local).count(), is(1L));
+        String localOnA = infoA.members().stream().filter(ClusterInfo.Member::local).findFirst().get().id();
+        String localOnB = infoB.members().stream().filter(ClusterInfo.Member::local).findFirst().get().id();
+        assertNotEquals(localOnA, localOnB, "each node's local member is its own address");
+        assertThat(infoA.nodeId(), is(localOnA));
+        assertThat(infoB.nodeId(), is(localOnB));
+
+        // the cluster name is reported
+        assertThat(infoA.clusterName(), is(clusterName));
+    }
+
+    @Test
     void clearOnNodeAShouldClearNodeB() {
         nodeA.scenarioStates().put("s1", "v1");
         nodeA.scenarioStates().put("s2", "v2");
@@ -497,6 +529,67 @@ class ClusteredTwoNodeTest {
     }
 
     /**
+     * Opt-out: with {@code clusterSharedTimesEnabled=false}, limited-Times
+     * matching takes the NODE-LOCAL fast path even on a clustered backend —
+     * the synchronous shared-counter CAS (a replicated write on the request
+     * worker thread) is bypassed entirely. We prove the bypass by asserting
+     * the shared backend {@code remainingTimes} counter is NEVER decremented
+     * by matching: node A serves the match via its node-local {@code Times},
+     * while the replicated backend entry still reads its seeded value.
+     * <p>
+     * (The default shared path DOES decrement the backend counter — asserted
+     * by {@link #backendRemainingTimesShouldReachZeroWhenExhausted()} and by
+     * the fleet-wide exactly-N guarantee in
+     * {@link #timesExactlyNShouldBeServedExactlyNTimesAcrossTwoNodes()}.)
+     * <p>
+     * The trade-off — that node-local Times makes fleet-wide N approximate —
+     * is documented in docs/code/clustered-state.md; we deliberately assert
+     * the verifiable "no shared CAS" invariant rather than a brittle total
+     * match count (the first node to exhaust removes the shared entry, which
+     * replicates, so the exact cross-node total is order-dependent).
+     */
+    @Test
+    void sharedTimesCasBypassedWhenSharedTimesDisabled() throws Exception {
+        final int N = 3;
+        // Node A opts OUT of cluster-wide shared-Times CAS.
+        RequestMatchers nodeAMatchers = createNodeMatchers(nodeA, false);
+
+        Expectation expectation = Expectation.when(
+            HttpRequest.request("/times-no-cas"),
+            Times.exactly(N),
+            org.mockserver.matchers.TimeToLive.unlimited()
+        ).thenRespond(HttpResponse.response("no-cas"));
+        nodeAMatchers.add(expectation, RequestMatchers.Cause.API);
+
+        // Backend entry seeded with the full allotment, replicated to node B.
+        awaitCondition(
+            () -> nodeB.expectations().get(expectation.getId())
+                .map(v -> v.getValue().getRemainingTimes() == N).orElse(false),
+            Duration.ofSeconds(5),
+            "node B should see remainingTimes=" + N
+        );
+
+        HttpRequest request = HttpRequest.request("/times-no-cas");
+
+        // Serve a match on node A — node-local Times decrements, NOT the
+        // shared backend counter (no CAS round-trip).
+        Expectation matched = nodeAMatchers.firstMatchingExpectation(request);
+        nodeAMatchers.postProcess(matched);
+        assertThat("node A should serve via node-local Times", matched, is(notNullValue()));
+        assertThat("node A node-local Times decremented (3 -> 2)",
+            matched.getTimes().getRemainingTimes(), is(N - 1));
+
+        // The shared backend counter is UNTOUCHED on both nodes — the
+        // replicated CAS write on the worker thread was bypassed.
+        assertThat("shared backend counter not decremented on node A",
+            nodeA.expectations().get(expectation.getId()).get().getValue().getRemainingTimes(),
+            is(N));
+        assertThat("shared backend counter not decremented on node B (replica)",
+            nodeB.expectations().get(expectation.getId()).get().getValue().getRemainingTimes(),
+            is(N));
+    }
+
+    /**
      * G10: unlimited-Times expectations with a clustered backend should
      * still work without CAS overhead. Both nodes should be able to match
      * indefinitely.
@@ -666,6 +759,94 @@ class ClusteredTwoNodeTest {
     }
 
     /**
+     * Cross-node serving guard (review-final): two nodes racing the SAME
+     * Started-&gt;Step1 scenario step through the production serving path
+     * ({@link RequestMatchers#firstMatchingExpectation}) must serve the
+     * response from EXACTLY ONE node. The loser's commit-point CAS
+     * (matchesAndTransition) fails and it falls through without serving.
+     * <p>
+     * This closes the gap that {@link #twoNodesCannotDoubleTransitionSameScenario}
+     * left open: that test exercises {@link ScenarioManager} directly, not the
+     * production serving path where an unconditional put would have allowed
+     * both nodes to serve the same step.
+     */
+    @Test
+    void scenarioStepShouldBeServedExactlyOnceAcrossTwoNodes() throws Exception {
+        RequestMatchers nodeAMatchers = createNodeMatchers(nodeA);
+        RequestMatchers nodeBMatchers = createNodeMatchers(nodeB);
+        wireReconciliationListener(nodeA, nodeAMatchers);
+        wireReconciliationListener(nodeB, nodeBMatchers);
+
+        // setStateBackend (in createNodeMatchers) already wired each node's
+        // internal ScenarioManager to that node's view of the SAME replicated
+        // scenarioStates() store, so the commit-point CAS races cross-node
+        // exactly as in production.
+        ScenarioManager managerA = nodeAMatchers.getScenarioManager();
+        ScenarioManager managerB = nodeBMatchers.getScenarioManager();
+
+        // A single Started->Step1 scenario expectation (unlimited Times) so
+        // the ONLY thing gating the second serve is the scenario CAS.
+        Expectation expectation = Expectation.when(
+            HttpRequest.request("/scenario-step")
+        ).thenRespond(HttpResponse.response("step1-served"))
+            .withScenarioName("raceScenario")
+            .withScenarioState(ScenarioManager.STARTED)
+            .withNewScenarioState("Step1");
+        nodeAMatchers.add(expectation, RequestMatchers.Cause.API);
+
+        awaitCondition(
+            () -> nodeBMatchers.peekFirstMatchingExpectation(
+                HttpRequest.request("/scenario-step")) != null,
+            Duration.ofSeconds(5),
+            "node B should see the scenario expectation"
+        );
+
+        HttpRequest request = HttpRequest.request("/scenario-step");
+        CyclicBarrier barrier = new CyclicBarrier(2);
+        AtomicReference<Expectation> resultA = new AtomicReference<>();
+        AtomicReference<Expectation> resultB = new AtomicReference<>();
+        AtomicReference<Throwable> error = new AtomicReference<>();
+
+        Thread threadA = new Thread(() -> {
+            try {
+                barrier.await();
+                Expectation matched = nodeAMatchers.firstMatchingExpectation(request);
+                resultA.set(matched);
+                nodeAMatchers.postProcess(matched);
+            } catch (Exception e) {
+                error.set(e);
+            }
+        });
+        Thread threadB = new Thread(() -> {
+            try {
+                barrier.await();
+                Expectation matched = nodeBMatchers.firstMatchingExpectation(request);
+                resultB.set(matched);
+                nodeBMatchers.postProcess(matched);
+            } catch (Exception e) {
+                error.set(e);
+            }
+        });
+
+        threadA.start();
+        threadB.start();
+        threadA.join(10_000);
+        threadB.join(10_000);
+
+        assertNull(error.get(), "no exceptions expected");
+
+        // Exactly one node should have served the step; the loser's
+        // commit-point CAS failed and it returned null.
+        int totalServed = (resultA.get() != null ? 1 : 0) + (resultB.get() != null ? 1 : 0);
+        assertThat("Started->Step1 scenario step should be served by exactly 1 node, got " + totalServed,
+            totalServed, is(1));
+
+        // The scenario advanced exactly once, visible on both nodes.
+        assertThat(managerA.getState("raceScenario"), is("Step1"));
+        assertThat(managerB.getState("raceScenario"), is("Step1"));
+    }
+
+    /**
      * G10: scenario clear on node A should be visible on node B.
      */
     @Test
@@ -727,11 +908,25 @@ class ClusteredTwoNodeTest {
     // --- Helpers for clustered Times tests ---
 
     /**
-     * Creates a {@link RequestMatchers} wired to the given backend node.
+     * Creates a {@link RequestMatchers} wired to the given backend node,
+     * with cluster-wide shared-Times CAS enforcement enabled (the default).
      */
     private RequestMatchers createNodeMatchers(InfinispanStateBackend backend) {
+        return createNodeMatchers(backend, true);
+    }
+
+    /**
+     * Creates a {@link RequestMatchers} wired to the given backend node,
+     * with shared-Times CAS enforcement explicitly enabled or disabled.
+     *
+     * @param sharedTimesEnabled {@code true} for fleet-wide exactly-N via
+     *                           backend CAS; {@code false} for node-local
+     *                           Times fallback (no backend round-trip)
+     */
+    private RequestMatchers createNodeMatchers(InfinispanStateBackend backend, boolean sharedTimesEnabled) {
         Configuration config = Configuration.configuration()
-            .maxExpectations(MAX_EXPECTATIONS);
+            .maxExpectations(MAX_EXPECTATIONS)
+            .clusterSharedTimesEnabled(sharedTimesEnabled);
         RequestMatchers matchers = new RequestMatchers(
             config, new MockServerLogger(),
             mock(Scheduler.class), mock(WebSocketClientRegistry.class));

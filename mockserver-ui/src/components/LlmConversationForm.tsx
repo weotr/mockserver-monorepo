@@ -16,12 +16,15 @@ import {
   conversationToMcpArgs,
   draftFromScenarioExpectations,
   listConversationScenarios,
+  hasRangeErrors,
 } from '../lib/conversationCodegen';
 import { callMcpTool, buildBaseUrl } from '../lib/mcpClient';
+import { humanizeError } from '../lib/errorMessage';
 import { useDashboardStore } from '../store';
 import ConversationWizardStep1 from './ConversationWizardStep1';
 import ConversationWizardStep2 from './ConversationWizardStep2';
 import ConversationWizardStep3 from './ConversationWizardStep3';
+import { monospaceFontFamily } from '../theme';
 
 function emptyDraft(): ConversationDraft {
   return {
@@ -85,6 +88,28 @@ export default function LlmConversationForm({
         editingScenario && existingIds.length === draft.turns.length
           ? existingIds
           : undefined;
+
+      // When editing an existing conversation and the turn count has changed,
+      // the old expectations can't be reused 1:1. Clear them first so we don't
+      // orphan a duplicate scenario with stale expectations.
+      if (editingScenario && existingIds.length > 0 && !idsToReuse) {
+        for (const oldId of existingIds) {
+          const clearRes = await fetch(`${baseUrl}/mockserver/clear?type=expectations`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: oldId }),
+          });
+          // Abort if a clear fails (e.g. auth-enforced 403) — otherwise we'd
+          // register the new turns on top of the un-cleared old ones, recreating
+          // the duplicate-scenario bug this is meant to prevent.
+          if (!clearRes.ok) {
+            setError(`Failed to clear existing turn ${oldId} (HTTP ${clearRes.status}); aborted to avoid duplicating the conversation.`);
+            setRegistering(false);
+            return;
+          }
+        }
+      }
+
       const args = conversationToMcpArgs(draft, idsToReuse);
       const result = await callMcpTool(baseUrl, 'create_llm_conversation', args);
       if (result.ok) {
@@ -98,13 +123,13 @@ export default function LlmConversationForm({
         );
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(humanizeError(err).message);
     } finally {
       setRegistering(false);
     }
   }, [connectionParams, draft, editingScenario, existingIds]);
 
-  const canRegister = draft.path.trim().length > 0 && draft.turns.length > 0;
+  const canRegister = draft.path.trim().length > 0 && draft.turns.length > 0 && !hasRangeErrors(draft.turns);
 
   return (
     <>
@@ -155,13 +180,21 @@ export default function LlmConversationForm({
             {registering
               ? 'Registering…'
               : editingScenario
-                ? `Update ${existingIds.length} expectation${existingIds.length === 1 ? '' : 's'}`
+                ? existingIds.length === draft.turns.length
+                  ? `Update ${existingIds.length} expectation${existingIds.length === 1 ? '' : 's'}`
+                  : `Replace conversation (${existingIds.length} → ${draft.turns.length} turns)`
                 : 'Register on server'}
           </Button>
           {editingScenario ? (
-            <Typography variant="caption" color="success.main" sx={{ fontSize: '0.7rem' }}>
-              Editing — the existing expectation IDs will be reused so this updates in place.
-            </Typography>
+            existingIds.length === draft.turns.length ? (
+              <Typography variant="caption" color="success.main" sx={{ fontSize: '0.7rem' }}>
+                Editing — the existing expectation IDs will be reused so this updates in place.
+              </Typography>
+            ) : (
+              <Typography variant="caption" color="warning.main" sx={{ fontSize: '0.7rem' }}>
+                Turn count changed — the old expectations will be removed and replaced.
+              </Typography>
+            )
           ) : (
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
               Pick an existing conversation above to update it in place, or leave blank to create a new one.
@@ -170,7 +203,7 @@ export default function LlmConversationForm({
         </Box>
         {error && (
           <Alert severity="error" sx={{ mt: 2 }}>
-            <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre-wrap', m: 0 }}>
+            <Box component="pre" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.7rem', whiteSpace: 'pre-wrap', m: 0 }}>
               {error}
             </Box>
           </Alert>
@@ -184,7 +217,7 @@ export default function LlmConversationForm({
               )}
             </Typography>
             {Array.isArray(registrationResult['states']) && (
-              <Box component="pre" sx={{ fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre-wrap', m: 0, mt: 0.5 }}>
+              <Box component="pre" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.7rem', whiteSpace: 'pre-wrap', m: 0, mt: 0.5 }}>
                 {JSON.stringify(registrationResult['states'], null, 2)}
               </Box>
             )}

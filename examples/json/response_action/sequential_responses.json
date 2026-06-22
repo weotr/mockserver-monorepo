@@ -1,0 +1,9 @@
+{
+  "httpRequest": { "path": "/some/path" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "first" },
+    { "statusCode": 503, "body": "second" },
+    { "statusCode": 200, "body": "third" }
+  ],
+  "responseMode": "SEQUENTIAL"
+}

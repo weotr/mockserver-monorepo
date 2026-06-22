@@ -1,0 +1,17 @@
+meta {
+  name: list loaded WebAssembly modules
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/mockserver/wasm/modules
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns the names of all currently loaded WebAssembly custom rule modules
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

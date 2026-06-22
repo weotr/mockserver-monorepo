@@ -1,0 +1,17 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponses": [
+    {
+      "statusCode": 200,
+      "body": "success"
+    },
+    {
+      "statusCode": 500,
+      "body": "error"
+    }
+  ],
+  "responseMode": "WEIGHTED",
+  "responseWeights": [90, 10]
+}

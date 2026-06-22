@@ -93,6 +93,51 @@ mockServerClient("localhost", 1080)
 
 For the full documentation see [MockServer - Creating Expectations](https://mock-server.com/mock_server/creating_expectations.html).
 
+### Advanced Response Builders
+
+For non-HTTP and streaming protocols there are dedicated builders that take a path (or full request matcher)
+plus the response action object, with optional `times`, `priority`, `timeToLive`, and `id` arguments:
+
+```javascript
+// Server-Sent Events (SSE)
+client.respondWithSse('/events', {
+    events: [
+        { event: 'message', data: 'first' },
+        { event: 'message', data: 'second' }
+    ],
+    closeConnection: true
+});
+
+// WebSocket
+client.respondWithWebSocket('/ws', {
+    messages: [ { text: 'hello' } ],
+    closeConnection: false
+});
+
+// DNS
+client.respondWithDns('example.com', {
+    answerRecords: [
+        { name: 'example.com', type: 'A', ttl: 300, value: '127.0.0.1' }
+    ],
+    responseCode: 'NOERROR'
+});
+
+// Raw binary
+client.respondWithBinary('/binary', {
+    binaryData: Buffer.from('hello').toString('base64')
+});
+
+// gRPC server-streaming
+client.respondWithGrpcStream('/my.Service/StreamItems', {
+    statusName: 'OK',
+    messages: [
+        { json: '{"value":"first"}' },
+        { json: '{"value":"second"}' }
+    ],
+    closeConnection: true
+});
+```
+
 ## Verify Requests
 
 It is also possible to verify that request were made:
@@ -146,6 +191,101 @@ mockServerClient("localhost", 1080)
 ```
 
 For the full documentation see [MockServer - Verifying Requests](https://mock-server.com/mock_server/verification.html).
+
+## Interactive Breakpoints
+
+The client supports matcher-driven interactive breakpoints over the callback WebSocket. Register a breakpoint matcher to pause forwarded/proxied exchanges at specific phases and inspect/modify/continue them via callback handlers.
+
+### Register a breakpoint
+
+```js
+// REQUEST phase only
+client.addRequestBreakpoint(
+    { path: '/api/.*' },
+    function (request) {
+        // inspect or modify the request; return a request to continue or a response to abort
+        request.path = '/api/modified';
+        return request;
+    }
+).then(function (breakpointId) {
+    console.log('Breakpoint registered:', breakpointId);
+});
+
+// REQUEST + RESPONSE phases
+client.addRequestAndResponseBreakpoint(
+    { path: '/api/.*' },
+    function (request) { return request; },           // REQUEST handler
+    function (request, response) { return response; } // RESPONSE handler
+).then(function (breakpointId) {
+    console.log('Breakpoint registered:', breakpointId);
+});
+
+// All phases with stream frame handler
+client.addBreakpoint(
+    { path: '/stream/.*' },
+    ['REQUEST', 'RESPONSE', 'RESPONSE_STREAM', 'INBOUND_STREAM'],
+    function (request) { return request; },
+    function (request, response) { return response; },
+    function (pausedFrame) {
+        // pausedFrame has: correlationId, streamId, sequenceNumber, direction, phase, body (base64)
+        return { action: 'CONTINUE' };
+        // Other actions: MODIFY (with body), DROP, INJECT (with body), CLOSE
+    }
+).then(function (breakpointId) {
+    console.log('Breakpoint registered:', breakpointId);
+});
+```
+
+### Manage breakpoints
+
+```js
+// List all matchers
+client.listBreakpointMatchers().then(function (result) {
+    console.log(result.matchers);
+});
+
+// Remove a specific matcher
+client.removeBreakpointMatcher(breakpointId);
+
+// Clear all matchers
+client.clearBreakpointMatchers();
+```
+
+## Using in tests
+
+The client supports TC39 explicit resource management, so a `using` / `await using`
+binding resets the server automatically when it goes out of scope — no manual
+`afterEach(() => client.reset())` needed:
+
+```js
+const { mockServerClient } = require('mockserver-client');
+
+it('records the request', async () => {
+    await using client = mockServerClient('localhost', 1080);
+    // ... register expectations, make requests ...
+    // the server is reset when `client` goes out of scope
+});
+```
+
+If your runtime/transpiler does not yet support `await using`, reset explicitly
+in a Jest/Mocha hook:
+
+```js
+const { mockServerClient } = require('mockserver-client');
+const client = mockServerClient('localhost', 1080);
+
+afterEach(() => client.reset());
+```
+
+## Start / Launch MockServer
+
+This package (`mockserver-client`) is the REST/WebSocket client for communicating with a running MockServer. To **download and launch** a local MockServer instance (no Java or Docker required), use the companion [`mockserver-node`](https://www.npmjs.org/package/mockserver-node) package:
+
+```shell
+npx -p mockserver-node mockserver run -p 1080
+```
+
+`mockserver-node` downloads a self-contained platform bundle (`mockserver-<version>-<os>-<arch>`) from the GitHub Release, verifies its SHA-256, caches it per-user, and starts it. See the [mockserver-node README](https://www.npmjs.org/package/mockserver-node) for full details including environment variables (`MOCKSERVER_BINARY_BASE_URL`, `MOCKSERVER_BINARY_CACHE`, `MOCKSERVER_SKIP_BINARY_DOWNLOAD`) and supported platforms (linux/darwin/windows on x86_64/aarch64).
 
 ## Contributing
 In lieu of a formal styleguide, take care to maintain the existing coding style. Add unit tests for any new or changed functionality. Lint and test your code using [Grunt](http://gruntjs.com/).

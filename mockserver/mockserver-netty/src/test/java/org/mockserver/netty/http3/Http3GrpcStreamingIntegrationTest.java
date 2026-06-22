@@ -29,10 +29,13 @@ import org.mockserver.grpc.GrpcJsonMessageConverter;
 import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.grpc.GrpcStatusMapper;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.mock.breakpoint.BreakpointPhase;
 import org.mockserver.model.GrpcBidiResponse;
 import org.mockserver.model.GrpcBidiRule;
 import org.mockserver.model.GrpcStreamResponse;
 import org.mockserver.netty.MockServer;
+import org.mockserver.serialization.model.PausedStreamFrameDTO;
+import org.mockserver.serialization.model.StreamFrameDecisionDTO;
 
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
@@ -41,10 +44,13 @@ import java.net.InetSocketAddress;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -226,10 +232,167 @@ public class Http3GrpcStreamingIntegrationTest {
             grpcStatus, is(not("0")));
     }
 
+    /**
+     * End-to-end INBOUND_STREAM breakpoint over a real HTTP/3 (QUIC) gRPC-bidi client:
+     * an interactive callback-WebSocket client DROPs the inbound frame carrying "Alice" and
+     * CONTINUEs the rest. The breakpoint must intercept both inbound frames, and dropping
+     * Alice's request frame must suppress its response so only "Hello Bob" is returned.
+     */
+    @Test
+    public void shouldDropInboundBidiFrameOverHttp3ViaBreakpoint() throws Exception {
+        int http3Port = startMockServer(configuration()
+            .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
+            .grpcBidiStreamingEnabled(true)
+            .attemptToProxyIfNoMatchingExpectation(false));
+
+        mockServerClient.when(
+            request().withMethod("POST").withPath("/" + SERVICE + "/Chat")
+        ).respondWithGrpcBidi(
+            GrpcBidiResponse.grpcBidiResponse()
+                .withStatusName("OK")
+                .withRule(GrpcBidiRule.grpcBidiRule(".*Alice.*").withResponse("{\"greeting\": \"Hello Alice\"}"))
+                .withRule(GrpcBidiRule.grpcBidiRule(".*Bob.*").withResponse("{\"greeting\": \"Hello Bob\"}"))
+        );
+
+        List<String> intercepted = new CopyOnWriteArrayList<>();
+        mockServerClient.addBreakpoint(
+            request().withPath("/" + SERVICE + "/Chat"),
+            EnumSet.of(BreakpointPhase.INBOUND_STREAM),
+            pausedFrame -> {
+                String json = decodeInboundFrame(pausedFrame, "Chat");
+                intercepted.add(pausedFrame.getDirection() + "|" + pausedFrame.getPhase() + "|" + json);
+                String action = json.contains("Alice") ? "DROP" : "CONTINUE";
+                return new StreamFrameDecisionDTO()
+                    .setCorrelationId(pausedFrame.getCorrelationId())
+                    .setAction(action);
+            });
+
+        GrpcH3Response result = sendGrpcOverHttp3(http3Port, "/" + SERVICE + "/Chat",
+            java.util.Arrays.asList(chatFrame("Alice"), chatFrame("Bob")));
+
+        assertThat("trailing grpc-status should be 0",
+            result.trailingHeaders.get(GrpcStatusMapper.GRPC_STATUS_HEADER), is("0"));
+        assertThat("breakpoint should have intercepted both inbound frames", intercepted.size(), is(2));
+        assertThat("both frames are client->server INBOUND_STREAM",
+            intercepted.get(0), containsString("INBOUND|INBOUND_STREAM|"));
+        assertThat(intercepted.get(1), containsString("INBOUND|INBOUND_STREAM|"));
+
+        List<byte[]> messages = GrpcFrameCodec.decode(result.bodyBytes);
+        assertThat("dropping the Alice inbound frame yields only Bob's response", messages.size(), is(1));
+        assertThat(decode(messages.get(0), "Chat"), containsString("Hello Bob"));
+        assertThat(decode(messages.get(0), "Chat"), not(containsString("Alice")));
+    }
+
+    /**
+     * End-to-end CONTINUE: the breakpoint intercepts every inbound bidi frame over real HTTP/3
+     * and continues it unchanged, so the stream behaves exactly as without a breakpoint (both
+     * rule responses returned) -- proving interception is transparent on the continue path.
+     */
+    @Test
+    public void shouldContinueInboundBidiFramesOverHttp3ViaBreakpoint() throws Exception {
+        int http3Port = startMockServer(configuration()
+            .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
+            .grpcBidiStreamingEnabled(true)
+            .attemptToProxyIfNoMatchingExpectation(false));
+
+        mockServerClient.when(
+            request().withMethod("POST").withPath("/" + SERVICE + "/Chat")
+        ).respondWithGrpcBidi(
+            GrpcBidiResponse.grpcBidiResponse()
+                .withStatusName("OK")
+                .withRule(GrpcBidiRule.grpcBidiRule(".*Alice.*").withResponse("{\"greeting\": \"Hello Alice\"}"))
+                .withRule(GrpcBidiRule.grpcBidiRule(".*Bob.*").withResponse("{\"greeting\": \"Hello Bob\"}"))
+        );
+
+        List<String> intercepted = new CopyOnWriteArrayList<>();
+        mockServerClient.addBreakpoint(
+            request().withPath("/" + SERVICE + "/Chat"),
+            EnumSet.of(BreakpointPhase.INBOUND_STREAM),
+            pausedFrame -> {
+                intercepted.add(decodeInboundFrame(pausedFrame, "Chat"));
+                return new StreamFrameDecisionDTO()
+                    .setCorrelationId(pausedFrame.getCorrelationId())
+                    .setAction("CONTINUE");
+            });
+
+        GrpcH3Response result = sendGrpcOverHttp3(http3Port, "/" + SERVICE + "/Chat",
+            java.util.Arrays.asList(chatFrame("Alice"), chatFrame("Bob")));
+
+        assertThat("trailing grpc-status should be 0",
+            result.trailingHeaders.get(GrpcStatusMapper.GRPC_STATUS_HEADER), is("0"));
+        assertThat("breakpoint intercepted both inbound frames in order", intercepted.size(), is(2));
+        assertThat(intercepted.get(0), containsString("Alice"));
+        assertThat(intercepted.get(1), containsString("Bob"));
+
+        List<byte[]> messages = GrpcFrameCodec.decode(result.bodyBytes);
+        assertThat("continue preserves both rule responses", messages.size(), is(2));
+        assertThat(decode(messages.get(0), "Chat"), containsString("Hello Alice"));
+        assertThat(decode(messages.get(1), "Chat"), containsString("Hello Bob"));
+    }
+
+    /**
+     * End-to-end MODIFY: the breakpoint rewrites the inbound "Alice" request frame to a "Bob"
+     * request frame over real HTTP/3, so the modified bytes reach the rule matcher and the
+     * server returns "Hello Bob" -- proving a modified inbound frame is what gets processed.
+     */
+    @Test
+    public void shouldModifyInboundBidiFrameOverHttp3ViaBreakpoint() throws Exception {
+        int http3Port = startMockServer(configuration()
+            .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
+            .grpcBidiStreamingEnabled(true)
+            .attemptToProxyIfNoMatchingExpectation(false));
+
+        mockServerClient.when(
+            request().withMethod("POST").withPath("/" + SERVICE + "/Chat")
+        ).respondWithGrpcBidi(
+            GrpcBidiResponse.grpcBidiResponse()
+                .withStatusName("OK")
+                .withRule(GrpcBidiRule.grpcBidiRule(".*Alice.*").withResponse("{\"greeting\": \"Hello Alice\"}"))
+                .withRule(GrpcBidiRule.grpcBidiRule(".*Bob.*").withResponse("{\"greeting\": \"Hello Bob\"}"))
+        );
+
+        mockServerClient.addBreakpoint(
+            request().withPath("/" + SERVICE + "/Chat"),
+            EnumSet.of(BreakpointPhase.INBOUND_STREAM),
+            pausedFrame -> {
+                StreamFrameDecisionDTO decision = new StreamFrameDecisionDTO()
+                    .setCorrelationId(pausedFrame.getCorrelationId());
+                String json = decodeInboundFrame(pausedFrame, "Chat");
+                if (json.contains("Alice")) {
+                    return decision.setAction("MODIFY").setBody(Base64.getEncoder().encodeToString(chatFrame("Bob")));
+                }
+                return decision.setAction("CONTINUE");
+            });
+
+        GrpcH3Response result = sendGrpcOverHttp3(http3Port, "/" + SERVICE + "/Chat",
+            java.util.Collections.singletonList(chatFrame("Alice")));
+
+        assertThat("trailing grpc-status should be 0",
+            result.trailingHeaders.get(GrpcStatusMapper.GRPC_STATUS_HEADER), is("0"));
+
+        List<byte[]> messages = GrpcFrameCodec.decode(result.bodyBytes);
+        assertThat("the modified Bob frame should drive the response", messages.size(), is(1));
+        assertThat(decode(messages.get(0), "Chat"), containsString("Hello Bob"));
+        assertThat(decode(messages.get(0), "Chat"), not(containsString("Alice")));
+    }
+
     // ---- helpers ----
 
     private String decode(byte[] protobuf, String method) {
         return converter.toJson(protobuf, descriptorStore.getMethod(SERVICE, method).getOutputType());
+    }
+
+    /** Encode a {@code {"name":<who>}} Chat request message as a single gRPC-framed DATA payload. */
+    private byte[] chatFrame(String who) {
+        return GrpcFrameCodec.encode(converter.toProtobuf(
+            "{\"name\":\"" + who + "\"}", descriptorStore.getMethod(SERVICE, "Chat").getInputType()));
+    }
+
+    /** Decode a paused INBOUND stream frame DTO back to its request-message JSON. */
+    private String decodeInboundFrame(PausedStreamFrameDTO pausedFrame, String method) {
+        byte[] frameBytes = Base64.getDecoder().decode(pausedFrame.getBody());
+        List<byte[]> messages = GrpcFrameCodec.decode(frameBytes);
+        return converter.toJson(messages.get(0), descriptorStore.getMethod(SERVICE, method).getInputType());
     }
 
     private int startMockServer(Configuration config) {

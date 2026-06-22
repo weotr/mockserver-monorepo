@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
 import CaptureAsMockDialog from '../components/CaptureAsMockDialog';
 import { _clearMcpSessionCache } from '../lib/mcpClient';
+import { useDashboardStore } from '../store';
 import type { AnthropicParsed, OpenAiParsed, GenericParsed } from '../lib/llmTraffic';
 
 function renderDialog(overrides: Partial<Parameters<typeof CaptureAsMockDialog>[0]> = {}) {
@@ -96,6 +97,37 @@ describe('CaptureAsMockDialog', () => {
     // Should show the Java representation
     expect(screen.getByText(/import static org.mockserver.client.Llm.\*/)).toBeInTheDocument();
     expect(screen.getByText(/withProvider\(Provider.ANTHROPIC\)/)).toBeInTheDocument();
+  });
+
+  it('shows a before→after preview diff of the mock that will be created', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole('tab', { name: 'Preview diff' }));
+
+    // The diff is rendered (mocked DiffEditor exposes original/modified panes).
+    expect(screen.getByTestId('json-diff-viewer')).toBeInTheDocument();
+    // "before" is an empty object — capture creates a brand-new mock.
+    expect(screen.getByTestId('monaco-diff-original')).toHaveValue('{}');
+    // "after" is the generated expectation JSON that will be registered.
+    const modified = screen.getByTestId('monaco-diff-modified') as HTMLTextAreaElement;
+    expect(modified.value).toMatch(/httpLlmResponse/);
+    expect(modified.value).toMatch(/ANTHROPIC/);
+  });
+
+  it('previewed JSON matches the JSON the Copy tab shows', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole('tab', { name: 'Preview diff' }));
+    const previewModified = (screen.getByTestId('monaco-diff-modified') as HTMLTextAreaElement).value;
+
+    await user.click(screen.getByRole('tab', { name: 'Copy as JSON' }));
+    const copyJson = screen.getByText(/httpLlmResponse/).textContent ?? '';
+
+    // The diff's "after" pane is exactly what the Copy-as-JSON tab outputs, so the
+    // preview is faithful to what gets PUT.
+    expect(previewModified.trim()).toBe(copyJson.trim());
   });
 
   it('populates fields from OpenAI traffic', () => {
@@ -300,6 +332,121 @@ describe('CaptureAsMockDialog', () => {
     expect(body).not.toHaveProperty('httpLlmResponse');
   });
 
+  // -------------------------------------------------------------------------
+  // Dialog correctness: reset-on-reopen + addable body matcher + humanised error
+  // -------------------------------------------------------------------------
+
+  it('exposes the Request Body matcher even when no body was captured', () => {
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    renderDialog({
+      parsed: genericParsed,
+      path: '/api/health',
+      itemValue: {
+        // No request body in the capture.
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200, body: '{"status":"ok"}' },
+      },
+    });
+
+    // The Request Body field must still be available so a body matcher can be ADDED.
+    const bodyField = screen.getByLabelText('Request Body');
+    expect(bodyField).toBeInTheDocument();
+    expect(bodyField).toHaveValue('');
+    expect(
+      screen.getByText(/add one to match on the request body/),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the Request Body matcher only in loose precision', async () => {
+    const user = userEvent.setup();
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    renderDialog({
+      parsed: genericParsed,
+      path: '/api/health',
+      itemValue: {
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200 },
+      },
+    });
+
+    expect(screen.getByLabelText('Request Body')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Loose precision' }));
+    expect(screen.queryByLabelText('Request Body')).not.toBeInTheDocument();
+  });
+
+  it('clears a prior error and edits when the same item is reopened', async () => {
+    const user = userEvent.setup();
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    // Register fails -> humanised error Alert appears.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: () => Promise.resolve('boom: invalid expectation'),
+    }));
+
+    const props = {
+      open: true,
+      onClose: vi.fn(),
+      parsed: genericParsed,
+      path: '/api/health',
+      connectionParams: { host: 'localhost', port: '1080', secure: false },
+      itemValue: {
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200 },
+      },
+    };
+
+    const { rerender } = render(
+      <ThemeProvider theme={buildTheme('dark')}>
+        <CaptureAsMockDialog {...props} />
+      </ThemeProvider>,
+    );
+
+    // Edit a field, then trigger the failing register.
+    fireEvent.change(screen.getByLabelText('Response Body'), { target: { value: 'EDITED' } });
+    await user.click(screen.getByRole('button', { name: 'Register' }));
+
+    // Humanised message (400 -> "rejected as invalid") + Details expander with raw body.
+    expect(await screen.findByText(/rejected as invalid/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(/boom: invalid expectation/)).toBeInTheDocument();
+
+    // Cancel (close) the dialog with the SAME path.
+    rerender(
+      <ThemeProvider theme={buildTheme('dark')}>
+        <CaptureAsMockDialog {...props} open={false} />
+      </ThemeProvider>,
+    );
+    // Reopen the SAME captured item.
+    rerender(
+      <ThemeProvider theme={buildTheme('dark')}>
+        <CaptureAsMockDialog {...props} open />
+      </ThemeProvider>,
+    );
+
+    // The stale error must be gone and the edit reverted to the captured default.
+    expect(screen.queryByText(/rejected as invalid/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Response Body')).not.toHaveValue('EDITED');
+  });
+
   it('generates Java code for generic traffic', async () => {
     const user = userEvent.setup();
     const genericParsed: GenericParsed = {
@@ -324,5 +471,45 @@ describe('CaptureAsMockDialog', () => {
     expect(screen.getByText(/import static org.mockserver.model.HttpResponse.response/)).toBeInTheDocument();
     expect(screen.getByText(/withStatusCode\(200\)/)).toBeInTheDocument();
     expect(screen.queryByText(/llmResponse/)).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Refine in Composer handoff (generic HTTP only)
+  // -------------------------------------------------------------------------
+
+  it('hands a generic capture off to the Composer via editExpectation', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const genericParsed: GenericParsed = {
+      kind: 'generic',
+      method: 'GET',
+      path: '/api/health',
+      statusCode: 200,
+    };
+
+    useDashboardStore.setState({ pendingEditExpectation: null, view: 'traffic' });
+
+    renderDialog({
+      onClose,
+      parsed: genericParsed,
+      path: '/api/health',
+      itemValue: {
+        httpRequest: { method: 'GET', path: '/api/health' },
+        httpResponse: { statusCode: 200, body: '{"status":"ok"}' },
+      },
+    });
+
+    await user.click(screen.getByRole('button', { name: /Refine in Composer/ }));
+
+    const state = useDashboardStore.getState();
+    expect(state.view).toBe('composer');
+    expect(state.pendingEditExpectation).toHaveProperty('httpRequest');
+    expect(state.pendingEditExpectation).toHaveProperty('httpResponse');
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('does not offer Refine in Composer for LLM traffic', () => {
+    renderDialog();
+    expect(screen.queryByRole('button', { name: /Refine in Composer/ })).not.toBeInTheDocument();
   });
 });

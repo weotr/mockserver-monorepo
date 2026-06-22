@@ -66,6 +66,14 @@ public class PactExporter {
             }
             final ObjectNode interaction = interactions.addObject();
             interaction.put("description", describe(expectation, request));
+            // round-trip the Pact provider state (the "given ..." precondition) when this
+            // expectation was gated on one (see PactImporter / PactProviderStates)
+            if (PactProviderStates.SCENARIO_NAME.equals(expectation.getScenarioName())
+                && expectation.getScenarioState() != null) {
+                interaction.putArray("providerStates")
+                    .addObject()
+                    .put("name", expectation.getScenarioState());
+            }
             interaction.set("request", buildRequest(request));
             interaction.set("response", buildResponse(response));
         }

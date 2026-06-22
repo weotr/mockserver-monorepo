@@ -1,0 +1,43 @@
+meta {
+  name: register a generated CRUD data store
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/crud
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "basePath": "/api/users",
+    "idField": "id",
+    "idStrategy": "AUTO_INCREMENT",
+    "initialData": [
+      {
+        "id": 1,
+        "name": "Alice",
+        "email": "alice@example.com"
+      },
+      {
+        "id": 2,
+        "name": "Bob",
+        "email": "bob@example.com"
+      }
+    ]
+  }
+}
+
+docs {
+  Registers a REST resource backed by an in-memory data store that automatically handles list, read, create, update and delete operations under the supplied base path.
+  
+  CRUD resource definition including the base path and id strategy
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

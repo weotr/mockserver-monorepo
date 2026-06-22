@@ -1,0 +1,31 @@
+meta {
+  name: bind additional listening ports
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}/mockserver/bind
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "ports": [
+      1090
+    ]
+  }
+}
+
+docs {
+  only supported on Netty version
+  
+  list of ports to bind to, where 0 indicates dynamically bind to any available port
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

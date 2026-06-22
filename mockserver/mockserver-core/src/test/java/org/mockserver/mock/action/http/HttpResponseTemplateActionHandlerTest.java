@@ -137,6 +137,53 @@ public class HttpResponseTemplateActionHandlerTest {
     }
 
     @Test
+    public void shouldHandleHttpRequestsWithVelocityTemplateLoadedFromFile() {
+        // given - template provided via withTemplateFile instead of inline withTemplate
+        HttpTemplate template = template(HttpTemplate.TemplateType.VELOCITY)
+            .withTemplateFile("org/mockserver/templates/sample_velocity_response.vm");
+
+        // when
+        HttpResponse actualHttpResponse = httpResponseTemplateActionHandler.handle(template, request()
+            .withPath("/somePath")
+            .withMethod("POST")
+            .withBody("some_body")
+        );
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(200)
+                .withBody("{'name': 'value'}")
+        ));
+    }
+
+    @Test
+    public void shouldPreferInlineTemplateOverTemplateFile() {
+        // given - both inline template and templateFile set; inline wins
+        HttpTemplate template = template(HttpTemplate.TemplateType.VELOCITY, "#if ( $request.method == 'POST' && $request.path == '/somePath' )" + NEW_LINE +
+            "    {" + NEW_LINE +
+            "        'statusCode': 201," + NEW_LINE +
+            "        'body': \"{'from': 'inline'}\"" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "#end")
+            .withTemplateFile("org/mockserver/templates/sample_velocity_response.vm");
+
+        // when
+        HttpResponse actualHttpResponse = httpResponseTemplateActionHandler.handle(template, request()
+            .withPath("/somePath")
+            .withMethod("POST")
+            .withBody("some_body")
+        );
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(201)
+                .withBody("{'from': 'inline'}")
+        ));
+    }
+
+    @Test
     public void shouldHandleHttpRequestsWithVelocityTemplateSecondExample() {
         // given
         HttpTemplate template = template(HttpTemplate.TemplateType.VELOCITY, "#if ( $request.method == 'POST' && $request.path == '/somePath' )" + NEW_LINE +

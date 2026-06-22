@@ -131,4 +131,79 @@ public class LlmQuotaRegistryTest {
         // exactly `limit` of the 1600 attempts may be allowed — no lost/duplicated increments
         assertThat(allowed.get(), is(limit));
     }
+
+    // --- token-based (amount) overload ---
+
+    @Test
+    public void shouldSumAmountsAndRejectWhenLimitCrossed() {
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        // limit = 100 tokens; charge 40, 40, 30 -> 40+40=80 ok, 80+30=110 over
+        assertThat(registry.tryAcquire("tok", 100L, 60_000, 40L), is(true));   // total = 40
+        assertThat(registry.tryAcquire("tok", 100L, 60_000, 40L), is(true));   // total = 80
+        assertThat(registry.tryAcquire("tok", 100L, 60_000, 30L), is(false));  // total = 110 > 100
+    }
+
+    @Test
+    public void shouldAllowExactlyAtLimit() {
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        assertThat(registry.tryAcquire("tok", 100L, 60_000, 100L), is(true));  // exactly at limit
+        assertThat(registry.tryAcquire("tok", 100L, 60_000, 1L), is(false));   // one over
+    }
+
+    @Test
+    public void shouldResetTokenWindowAfterExpiry() {
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        assertThat(registry.tryAcquire("tok", 50L, 60_000, 50L), is(true));    // total = 50 (at limit)
+        assertThat(registry.tryAcquire("tok", 50L, 60_000, 1L), is(false));    // over
+
+        clock.advance(60_000);                                                  // window expires
+        assertThat(registry.tryAcquire("tok", 50L, 60_000, 30L), is(true));    // fresh window
+    }
+
+    @Test
+    public void shouldDelegateFromRequestCountOverloadToAmountOverload() {
+        // Verify that the int overload (amount=1) still works correctly
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        assertThat(registry.tryAcquire("req", 2, 60_000), is(true));   // 1
+        assertThat(registry.tryAcquire("req", 2, 60_000), is(true));   // 2
+        assertThat(registry.tryAcquire("req", 2, 60_000), is(false));  // 3 -> over
+    }
+
+    @Test
+    public void shouldFailOpenForNegativeAmount() {
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        // negative amount is misconfigured -> fail open
+        assertThat(registry.tryAcquire("tok", 100L, 60_000, -5L), is(true));
+    }
+
+    @Test
+    public void shouldFailOpenForBadInputOnAmountOverload() {
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        assertThat(registry.tryAcquire(null, 100L, 60_000, 10L), is(true));
+        assertThat(registry.tryAcquire("x", -1L, 60_000, 10L), is(true));
+        assertThat(registry.tryAcquire("x", 100L, 0, 10L), is(true));
+    }
+
+    @Test
+    public void shouldAllowZeroAmount() {
+        FakeClock clock = new FakeClock();
+        LlmQuotaRegistry registry = new LlmQuotaRegistry(clock::get);
+
+        // amount=0 should be allowed and not consume any quota
+        assertThat(registry.tryAcquire("tok", 10L, 60_000, 0L), is(true));   // total = 0
+        assertThat(registry.tryAcquire("tok", 10L, 60_000, 10L), is(true));  // total = 10 (at limit)
+        assertThat(registry.tryAcquire("tok", 10L, 60_000, 1L), is(false));  // total = 11 > 10
+    }
 }

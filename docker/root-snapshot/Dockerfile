@@ -8,10 +8,27 @@
 ARG source=download
 
 # build image — downloads snapshot artifacts from Sonatype, tcnative from Maven Central
-FROM alpine:3.23 as download
+FROM alpine:3.24 as download
 
+# Optional: trust a corporate root CA before `apk add`. The build context contains
+# ca-bundle.pem (empty in CI, populated locally behind a TLS-inspecting proxy).
+COPY ca-bundle.pem /tmp/local-ca.pem
+RUN if [ -s /tmp/local-ca.pem ]; then \
+      mkdir -p /etc/ssl/certs && \
+      cp /tmp/local-ca.pem /etc/ssl/cert.pem && \
+      cp /tmp/local-ca.pem /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
+    apk add --update openssl ca-certificates bash wget && \
+    if [ -s /tmp/local-ca.pem ]; then \
+      mkdir -p /usr/local/share/ca-certificates && \
+      cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
+      update-ca-certificates >/dev/null 2>&1 || true; \
+    fi
+# Harden Maven Central downloads against transient DNS/connection blips (e.g. flaky
+# networks, CI). GNU wget retries host-resolution + connection-refused errors;
+# BusyBox wget ignores /etc/wgetrc, so this is a safe no-op there.
+RUN printf 'tries=5\ntimeout=60\nwaitretry=10\nretry_on_host_error=on\nretry_connrefused=on\n' >> /etc/wgetrc
 # Audit finding F-DKR-06: SHA256-verify all Maven repo downloads.
-RUN apk add --update openssl ca-certificates bash wget
 ARG VERSION=5.16.0-SNAPSHOT
 ARG REPOSITORY_URL=https://central.sonatype.com/repository/maven-snapshots/org/mock-server/mockserver-netty/${VERSION}/mockserver-netty-${VERSION}-jar-with-dependencies.jar
 RUN wget --max-redirect=10 -O mockserver-netty-jar-with-dependencies.jar "$REPOSITORY_URL" \
@@ -29,9 +46,24 @@ RUN if [ "$TARGETARCH" = "amd64" ]; \
 RUN unzip netty-tcnative-boringssl-static.jar
 
 # build image — copies JAR from context, downloads tcnative from Maven Central
-FROM alpine:3.23 as copy
+FROM alpine:3.24 as copy
 
-RUN apk add --update ca-certificates wget
+COPY ca-bundle.pem /tmp/local-ca.pem
+RUN if [ -s /tmp/local-ca.pem ]; then \
+      mkdir -p /etc/ssl/certs && \
+      cp /tmp/local-ca.pem /etc/ssl/cert.pem && \
+      cp /tmp/local-ca.pem /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
+    apk add --update ca-certificates wget && \
+    if [ -s /tmp/local-ca.pem ]; then \
+      mkdir -p /usr/local/share/ca-certificates && \
+      cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
+      update-ca-certificates >/dev/null 2>&1 || true; \
+    fi
+# Harden Maven Central downloads against transient DNS/connection blips (e.g. flaky
+# networks, CI). GNU wget retries host-resolution + connection-refused errors;
+# BusyBox wget ignores /etc/wgetrc, so this is a safe no-op there.
+RUN printf 'tries=5\ntimeout=60\nwaitretry=10\nretry_on_host_error=on\nretry_connrefused=on\n' >> /etc/wgetrc
 COPY mockserver-netty-jar-with-dependencies.jar .
 ARG TARGETARCH=amd64
 ARG NETTY_TCNATIVE=2.0.77.Final

@@ -146,6 +146,56 @@ describe('LogEntry collapsible', () => {
   });
 });
 
+describe('LogEntry timestamp', () => {
+  it('renders a compact time with the absolute timestamp on hover', () => {
+    const entry: LogEntryValue = {
+      timestamp: '2025-05-05 10:57:18.895',
+      description: 'GET /api/test',
+      messageParts: [{ key: 'msg_0', value: 'matched' }],
+    };
+    render(<LogEntry entry={entry} />);
+    const time = screen.getByRole('time');
+    // Renders a <time> element with a machine-readable dateTime and an
+    // accessible label carrying the absolute time.
+    expect(time.tagName.toLowerCase()).toBe('time');
+    expect(time).toHaveAttribute('datetime');
+    expect(time.getAttribute('aria-label')).toMatch(/^Logged at /);
+    // The inline label is non-empty (locale-formatted time-of-day).
+    expect(time.textContent && time.textContent.length).toBeTruthy();
+  });
+
+  it('renders the timestamp on a collapsible row', () => {
+    const entry: LogEntryValue = {
+      timestamp: '2025-05-05 10:57:18.895',
+      description: '05-05 10:57:18.895 INFO',
+      messageParts: [{ key: 'msg_0', value: 'loaded CA private key from path' }],
+    };
+    render(<LogEntry entry={entry} collapsible />);
+    expect(screen.getByRole('time')).toBeInTheDocument();
+  });
+
+  it('renders no time element when the entry has no timestamp', () => {
+    const entry: LogEntryValue = {
+      description: 'GET /api/test',
+      messageParts: [{ key: 'msg_0', value: 'matched' }],
+    };
+    render(<LogEntry entry={entry} />);
+    expect(screen.queryByRole('time')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the raw string when the timestamp is unparseable', () => {
+    const entry: LogEntryValue = {
+      timestamp: 'not-a-date',
+      messageParts: [{ key: 'msg_0', value: 'orphan' }],
+    };
+    render(<LogEntry entry={entry} />);
+    const time = screen.getByRole('time');
+    expect(time).toHaveTextContent('not-a-date');
+    // No machine-readable dateTime when it could not be parsed.
+    expect(time).not.toHaveAttribute('datetime');
+  });
+});
+
 describe('entryToText', () => {
   it('includes string description', () => {
     const entry: LogEntryValue = {

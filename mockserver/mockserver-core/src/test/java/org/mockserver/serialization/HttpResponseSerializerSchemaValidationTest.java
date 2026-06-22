@@ -622,6 +622,28 @@ public class HttpResponseSerializerSchemaValidationTest {
     }
 
     @Test
+    public void shouldDeserializeResponseWithTemplateDelay() {
+        // given
+        String requestBytes = "{" + NEW_LINE +
+            "  \"statusCode\" : 200," + NEW_LINE +
+            "  \"body\" : \"test\"," + NEW_LINE +
+            "  \"delay\" : {" + NEW_LINE +
+            "    \"templateType\" : \"VELOCITY\"," + NEW_LINE +
+            "    \"template\" : \"$request.body.length()\"" + NEW_LINE +
+            "  }" + NEW_LINE +
+            "}";
+
+        // when
+        HttpResponse httpResponse = new HttpResponseSerializer(new MockServerLogger()).deserialize(requestBytes);
+
+        // then
+        assertThat(httpResponse.getDelay(), is(notNullValue()));
+        assertThat(httpResponse.getDelay().hasTemplate(), is(true));
+        assertThat(httpResponse.getDelay().getTemplate(), is("$request.body.length()"));
+        assertThat(httpResponse.getDelay().getTemplateType(), is(org.mockserver.model.HttpTemplate.TemplateType.VELOCITY));
+    }
+
+    @Test
     public void shouldDeserializeResponseWithLogNormalDistributionDelay() {
         // given
         String requestBytes = "{" + NEW_LINE +

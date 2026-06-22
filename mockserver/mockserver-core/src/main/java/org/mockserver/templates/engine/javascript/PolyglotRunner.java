@@ -12,11 +12,13 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.serialization.model.DTO;
 import org.mockserver.templates.engine.TemplateFunctions;
+import org.mockserver.templates.engine.helpers.RequestBodyExtractionHelper;
 import org.mockserver.templates.engine.model.HttpRequestTemplateObject;
 import org.mockserver.templates.engine.model.HttpResponseTemplateObject;
 import org.mockserver.templates.engine.serializer.HttpTemplateOutputDeserializer;
 import org.slf4j.event.Level;
 
+import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static org.mockserver.log.model.LogEntry.LogMessageType.TEMPLATE_GENERATED;
@@ -38,6 +40,7 @@ final class PolyglotRunner {
         boolean includeResponse,
         HttpRequest request,
         HttpResponse response,
+        org.mockserver.load.IterationContext iteration,
         Predicate<String> classFilter,
         ObjectMapper objectMapper,
         MockServerLogger mockServerLogger,
@@ -72,6 +75,23 @@ final class PolyglotRunner {
             TemplateFunctions.BUILT_IN_FUNCTIONS.forEach((key, supplier) ->
                 jsBindings.putMember(key, supplier.get()));
             TemplateFunctions.BUILT_IN_HELPERS.forEach(jsBindings::putMember);
+
+            // Expose jsonPath('$.field') and xPath('//field') request-body extraction functions to the
+            // script scope, sharing the same extraction logic / error handling as the Mustache and
+            // Velocity engines. Registered as java.util.function.Function so GraalJS treats them as
+            // callable JS functions. The "jsonPath"/"xPath" names are not used by BUILT_IN_FUNCTIONS or
+            // BUILT_IN_HELPERS, so this does not shadow (or get shadowed by) a built-in.
+            RequestBodyExtractionHelper bodyExtractionHelper = new RequestBodyExtractionHelper(request, mockServerLogger);
+            jsBindings.putMember("jsonPath", (Function<String, Object>) bodyExtractionHelper::jsonPath);
+            jsBindings.putMember("xPath", (Function<String, Object>) bodyExtractionHelper::xPath);
+
+            // Load-generation only: expose the per-iteration variable as a JS host object so a
+            // load-scenario JavaScript step can read iteration.getIndex() etc. Null for every
+            // non-load template execution, so the standard response/forward template path is
+            // byte-for-byte unchanged.
+            if (iteration != null) {
+                jsBindings.putMember("iteration", iteration);
+            }
 
             Source source = Source.create("js", fullScript);
             context.eval(source);

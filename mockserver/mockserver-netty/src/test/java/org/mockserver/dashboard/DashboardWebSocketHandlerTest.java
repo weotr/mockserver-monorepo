@@ -102,6 +102,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {\n" +
             "    \"key\" : \"" + logEntries.get(10).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(10).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(10).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -118,6 +119,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(8).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(8).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(8).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -134,6 +136,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(6).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(6).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(6).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -150,6 +153,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(4).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(4).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(4).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -167,6 +171,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -184,6 +189,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -274,6 +280,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {\n" +
             "    \"key\" : \"" + logEntries.get(5).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(5).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(5).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -290,6 +297,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(4).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(4).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(4).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -306,6 +314,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(3).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(3).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(3).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -322,6 +331,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -339,6 +349,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -356,6 +367,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -446,6 +458,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {\n" +
             "    \"key\" : \"" + logEntries.get(5).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(5).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(5).getTimestamp(), "-") + " RECEIVED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -462,6 +475,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\",\n" +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " INFO               \",\n" +
             "      \"style\" : {\n" +
             "        \"style.whiteSpace\" : \"pre-wrap\",\n" +
@@ -545,6 +559,7 @@ public class DashboardWebSocketHandlerTest {
                 "  \"logMessages\" : [ {" + NEW_LINE +
                 "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
                 "    \"value\" : {" + NEW_LINE +
+                "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
                 "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
                 "      \"style\" : {" + NEW_LINE +
                 "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -570,6 +585,7 @@ public class DashboardWebSocketHandlerTest {
                 "  }, {" + NEW_LINE +
                 "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
                 "    \"value\" : {" + NEW_LINE +
+                "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
                 "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
                 "      \"style\" : {" + NEW_LINE +
                 "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -620,6 +636,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -637,6 +654,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -690,6 +708,7 @@ public class DashboardWebSocketHandlerTest {
             "    \"group\" : {" + NEW_LINE +
             "      \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "      \"value\" : {" + NEW_LINE +
+            "        \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "        \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "        \"style\" : {" + NEW_LINE +
             "          \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -704,6 +723,7 @@ public class DashboardWebSocketHandlerTest {
             "    \"value\" : [ {" + NEW_LINE +
             "      \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "      \"value\" : {" + NEW_LINE +
+            "        \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "        \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "        \"style\" : {" + NEW_LINE +
             "          \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -721,6 +741,7 @@ public class DashboardWebSocketHandlerTest {
             "    }, {" + NEW_LINE +
             "      \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "      \"value\" : {" + NEW_LINE +
+            "        \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "        \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "        \"style\" : {" + NEW_LINE +
             "          \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -780,6 +801,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(3).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(3).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(3).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -797,6 +819,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -816,6 +839,7 @@ public class DashboardWebSocketHandlerTest {
             "    \"group\" : {" + NEW_LINE +
             "      \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "      \"value\" : {" + NEW_LINE +
+            "        \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "        \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "        \"style\" : {" + NEW_LINE +
             "          \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -830,6 +854,7 @@ public class DashboardWebSocketHandlerTest {
             "    \"value\" : [ {" + NEW_LINE +
             "      \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "      \"value\" : {" + NEW_LINE +
+            "        \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "        \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "        \"style\" : {" + NEW_LINE +
             "          \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -847,6 +872,7 @@ public class DashboardWebSocketHandlerTest {
             "    }, {" + NEW_LINE +
             "      \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "      \"value\" : {" + NEW_LINE +
+            "        \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "        \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "        \"style\" : {" + NEW_LINE +
             "          \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -888,6 +914,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(4).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(4).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(4).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -913,6 +940,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(3).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(3).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(3).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -926,6 +954,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -943,6 +972,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -956,6 +986,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " INFO   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"style.whiteSpace\" : \"pre-wrap\"," + NEW_LINE +
@@ -998,6 +1029,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(3).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(3).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(3).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1014,6 +1046,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1030,6 +1063,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1046,6 +1080,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1116,6 +1151,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1128,6 +1164,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1140,6 +1177,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " RECEIVED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1266,6 +1304,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(3).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(3).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(3).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1282,6 +1321,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1298,6 +1338,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1314,6 +1355,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1409,6 +1451,7 @@ public class DashboardWebSocketHandlerTest {
             "  \"logMessages\" : [ {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(3).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(3).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(3).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1421,6 +1464,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(2).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(2).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(2).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1437,6 +1481,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(1).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(1).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(1).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -1453,6 +1498,7 @@ public class DashboardWebSocketHandlerTest {
             "  }, {" + NEW_LINE +
             "    \"key\" : \"" + logEntries.get(0).id() + "_log\"," + NEW_LINE +
             "    \"value\" : {" + NEW_LINE +
+            "      \"timestamp\" : \"" + logEntries.get(0).getTimestamp() + "\"," + NEW_LINE +
             "      \"description\" : \"" + StringUtils.substringAfter(logEntries.get(0).getTimestamp(), "-") + " FORWARDED_REQUEST   \"," + NEW_LINE +
             "      \"style\" : {" + NEW_LINE +
             "        \"paddingBottom\" : \"4px\"," + NEW_LINE +

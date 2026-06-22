@@ -10,7 +10,7 @@ The end-to-end checklist a release manager follows. **Use this every release.** 
 
 Run the `/prepare-release` slash command from this repo. It inspects `changelog.md`, `mockserver/pom.xml`, and the latest `mockserver-X.Y.Z` git tag, then recommends:
 
-- `release-version` (e.g. `7.0.0`)
+- `release-version` (e.g. `7.1.0`)
 - `next-version` (e.g. `6.1.1-SNAPSHOT`)
 - `old-version` (e.g. `6.0.0` — auto-derived, you don't need to type it on the form)
 - `release-type` (almost always `full`)
@@ -49,7 +49,7 @@ Open https://buildkite.com/mockserver/mockserver-release → "New Build" and fil
 | Create Versioned Site? | `Yes` for major/minor, `No` for patch |
 | **Dry Run?** | **`Yes — build/validate only, skip publish`** |
 
-The dry-run exercises every step inside the actual Buildkite container images. Treat it as the final gate before publishing. It still requires the TOTP and downstream-approval block steps.
+The dry-run exercises every step inside the actual Buildkite container images. Treat it as the final gate before publishing. It still requires the TOTP block step (there is no longer a downstream-approval gate — see step 7).
 
 ### 4. Trigger the real release
 
@@ -74,11 +74,11 @@ Open these URLs in tabs while step 5's job runs:
   - The pipeline polls this URL itself; you can watch the same thing in your browser
 - **Central artifact view** (what end users see): https://central.sonatype.com/artifact/org.mock-server/mockserver-netty/<release-version>
 
-### 7. Manual gate 2 — approve downstream publish
+### 7. Downstream publish (automatic — no gate)
 
-After Maven Central is live, the pipeline pauses at a second `block` step labelled "Approve downstream publish". Sanity-check Maven Central one more time (the link above), then click **Unblock**.
+There is no second manual approval. The `Maven Central` step's sync wait already polls repo1 until the main MockServer artifacts (`mockserver-netty`, `mockserver-client-java`, `mockserver-core`, `mockserver-junit-jupiter`) for this release are live — all modules publish in one Central deployment and sync together, so that poll *is* the gate. As soon as it succeeds the pipeline proceeds automatically (the timeout is a generous ~2h, so a lagging sync won't fail the release).
 
-Everything downstream now runs in parallel: Versioned Site, Maven Plugin, Docker, npm, Helm, Javadoc, SwaggerHub, Website, JSON Schema, PyPI, RubyGems, GitHub Release.
+Versioned Site and Update Version References run first (sequentially), then the remaining channels publish in parallel: Maven Plugin, Docker, npm, Helm, Javadoc, SwaggerHub, Website, JSON Schema, PyPI, RubyGems, GitHub Release.
 
 ### 8. Verify the publishes
 
@@ -114,7 +114,24 @@ If a bump ever does not happen within a day or two of release, check:
 
 If a manual bump is genuinely required (e.g. the bot is broken), `brew bump-formula-pr --strict --version=<release-version> mockserver` from a workstation with `brew` and an authenticated `gh` CLI will open the PR by hand.
 
-### 10. Announce (optional)
+### 10. Postman & Bruno collections — automated, no action required
+
+The Postman and Bruno collections are now **part of the pipeline**. The `postman-collection`
+component (`scripts/release/components/postman-collection.sh`, a `soft_fail` step in the parallel
+publish group) regenerates both collections from the OpenAPI spec
+(`jekyll-www.mock-server.com/mockserver-openapi.yaml` — the single source of truth, version-stamped
+by `prepare.sh`), validates the examples, and republishes the Postman collection to the public
+workspace via the Postman API (key in Secrets Manager at `mockserver-build/postman-api-key`). Bruno
+is git-native — the committed `.bru` files *are* the published collection.
+
+**To change a request or add an endpoint:** edit the OpenAPI spec, then run
+`python3 scripts/collections/generate_collections.py` and commit the regenerated
+`examples/postman/**` + `examples/bruno/**`. The release component's drift guard fails if the
+committed collections are out of sync with the spec. Validate locally with
+`python3 scripts/collections/test_collections.py` (starts a MockServer in Docker and fires every
+example).
+
+### 11. Announce (optional)
 
 If this is a notable release, post to:
 
@@ -171,17 +188,17 @@ scripts/release/
 # 2. Run the entire pipeline in dry-run mode. Builds everything, but skips
 #    every external write (npm publish, twine upload, S3 sync, gh release
 #    create, git push, etc.).
-./scripts/release/release.sh --version 7.0.0 --dry-run
+./scripts/release/release.sh --version 7.1.0 --dry-run
 
 # 3. Run a single component.
 ./scripts/release/components/npm.sh --dry-run        # exits with `RELEASE_VERSION` unset
-RELEASE_VERSION=7.0.0 ./scripts/release/components/npm.sh --dry-run
+RELEASE_VERSION=7.1.0 ./scripts/release/components/npm.sh --dry-run
 
 # 4. Run only a few components.
-./scripts/release/release.sh --version 7.0.0 --only=npm,pypi --dry-run
+./scripts/release/release.sh --version 7.1.0 --only=npm,pypi --dry-run
 
 # 5. Skip components.
-./scripts/release/release.sh --version 7.0.0 --skip=docker --dry-run
+./scripts/release/release.sh --version 7.1.0 --skip=docker --dry-run
 ```
 
 DRY_RUN defaults to `true` unless you pass `--execute`. **Locally you almost never want `--execute`** — that publishes for real.
@@ -209,7 +226,7 @@ Buildkite outage on release day? No problem. From a developer machine with `dock
 aws sso login --profile mockserver-build
 
 # Run the same scripts the CI would have run
-RELEASE_VERSION=7.0.0 \
+RELEASE_VERSION=7.1.0 \
 NEXT_VERSION=6.1.1-SNAPSHOT \
 RELEASE_TYPE=full \
 CREATE_VERSIONED_SITE=yes \
@@ -314,7 +331,7 @@ If, say, the Maven Central step succeeded but `npm` failed:
 # release-runner.sh adapter re-reads meta-data and re-invokes.
 
 # Locally:
-RELEASE_VERSION=7.0.0 ./scripts/release/components/npm.sh --execute
+RELEASE_VERSION=7.1.0 ./scripts/release/components/npm.sh --execute
 ```
 
 ### Reproduce a CI failure locally
@@ -322,7 +339,7 @@ RELEASE_VERSION=7.0.0 ./scripts/release/components/npm.sh --execute
 ```bash
 # Pull the same env vars Buildkite was using (or set them by hand) and run
 # the same script.
-RELEASE_VERSION=7.0.0 \
+RELEASE_VERSION=7.1.0 \
 NEXT_VERSION=6.1.1-SNAPSHOT \
 ./scripts/release/components/maven-central.sh --dry-run
 ```

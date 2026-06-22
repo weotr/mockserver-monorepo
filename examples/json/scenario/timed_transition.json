@@ -1,0 +1,6 @@
+{
+  "_comment": "PUT this body to /mockserver/scenario/DeployFlow to set state Deploying and auto-transition to Deployed after 1000ms. Register the two state-gated expectations from the README first.",
+  "state": "Deploying",
+  "transitionAfterMs": 1000,
+  "nextState": "Deployed"
+}

@@ -1,0 +1,32 @@
+meta {
+  name: verify AsyncAPI messages
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/mockserver/asyncapi/verify
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "channel": "user/signedup",
+    "count": {
+      "atLeast": 0
+    }
+  }
+}
+
+docs {
+  Verifies that messages were published/received against the loaded AsyncAPI mock. Requires the mockserver-async module on the classpath.
+  
+  AsyncAPI message verification request
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -104,13 +104,15 @@ public class ChaosAutoHaltMonitor {
             return;
         }
 
-        long now = clock.getAsLong();
-        errorTimestamps.addLast(now);
-
         long threshold = ConfigurationProperties.chaosAutoHaltErrorThreshold();
         if (threshold <= 0) {
+            // With a non-positive threshold the circuit-breaker can never fire,
+            // so skip recording to avoid unbounded timestamp accumulation.
             return;
         }
+
+        long now = clock.getAsLong();
+        errorTimestamps.addLast(now);
 
         // Evict expired entries and read the window size under the same lock to
         // prevent the TOCTOU race where two threads both peek the same expired
@@ -130,16 +132,24 @@ public class ChaosAutoHaltMonitor {
                     synchronized (evictLock) {
                         recheck = errorTimestamps.size();
                     }
-                    if (recheck >= threshold && !ServiceChaosRegistry.getInstance().entries().isEmpty()) {
+                    boolean serviceChaosActive = !ServiceChaosRegistry.getInstance().entries().isEmpty();
+                    boolean tcpChaosActive = TcpChaosRegistry.getInstance().activeCount() > 0;
+                    if (recheck >= threshold && (serviceChaosActive || tcpChaosActive)) {
                         haltCount.incrementAndGet();
                         LOG.warn(
-                            "chaos auto-halt triggered: {} error-class faults (5xx/dropped/quota) in the last {} ms "
-                                + "exceeded threshold of {} — disabling all active service-scoped chaos profiles",
+                            "chaos auto-halt triggered: {} error-class faults (5xx/dropped/quota/connection-lifecycle RST) in the last {} ms "
+                                + "exceeded threshold of {} — disabling all active service-scoped and TCP-layer chaos profiles",
                             recheck,
                             ConfigurationProperties.chaosAutoHaltWindowMillis(),
                             threshold
                         );
                         ServiceChaosRegistry.getInstance().reset();
+                        // Connection-lifecycle faults (mid-response RST, host slow-close, HTTP/2 GOAWAY)
+                        // live in the TcpChaosRegistry, so the halt must also clear it — otherwise a
+                        // RST storm driven by a TCP-layer profile would keep firing after the breaker
+                        // trips. The mid-response RST records a "drop" fault here, so this is the
+                        // path that stops a lifecycle RST storm.
+                        TcpChaosRegistry.getInstance().reset();
                         Metrics.incrementChaosAutoHalt();
                         // Clear the window after halt so the circuit-breaker does not
                         // re-trigger immediately if new chaos is registered

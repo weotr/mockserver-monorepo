@@ -61,6 +61,7 @@ public abstract class Body<T> extends Not {
         JSON_PATH,
         PARAMETERS,
         REGEX,
+        FUZZY,
         STRING,
         XML,
         XML_SCHEMA,
@@ -70,6 +71,7 @@ public abstract class Body<T> extends Not {
         LOG_EVENT,
         FILE,
         WASM,
+        MULTIPART,
     }
 
     @Override

@@ -71,6 +71,38 @@ public class SampleDataGenerator {
         return dateTime.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
     }
 
+    /**
+     * Generates a valid {@code HH:mm:ss}-style time value for the {@code time} string format.
+     */
+    public String timeString() {
+        return String.format(
+            "%02d:%02d:%02d",
+            random.nextInt(24),
+            random.nextInt(60),
+            random.nextInt(60)
+        );
+    }
+
+    /**
+     * Generates a string matching the supplied regular expression, reusing Datafaker's
+     * seeded regex generator so output stays deterministic. Returns {@code null} if the
+     * pattern cannot be generated from (the caller falls back to its default behaviour).
+     */
+    public String regexify(String pattern) {
+        if (pattern == null || pattern.isEmpty()) {
+            return null;
+        }
+        try {
+            // also catch StackOverflowError: Datafaker's regex engine (dk.brics.automaton) can recurse
+            // on pathological patterns; it is an Error not a RuntimeException. We do NOT catch broader
+            // Throwable so unrecoverable JVM errors (OutOfMemoryError) still propagate. Either way the
+            // caller falls back to its default behaviour rather than failing generation.
+            return faker.regexify(pattern);
+        } catch (RuntimeException | StackOverflowError unsupportedPattern) {
+            return null;
+        }
+    }
+
     public String uri() {
         return faker.internet().url();
     }

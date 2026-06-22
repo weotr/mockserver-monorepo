@@ -14,6 +14,7 @@ import io.netty.handler.codec.http2.*;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.ssl.ApplicationProtocolNames;
 import io.netty.handler.ssl.SslHandler;
+import io.netty.util.ReferenceCountUtil;
 import org.mockserver.codec.StreamingAwareHttpObjectAggregator;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.lifecycle.LifeCycle;
@@ -21,7 +22,6 @@ import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.LoggingHandler;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.Protocol;
-import org.mockserver.netty.unification.PortUnificationHandler;
 import org.slf4j.event.Level;
 
 import java.net.InetSocketAddress;
@@ -72,9 +72,10 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
 
                 @Override
                 public void channelRead(ChannelHandlerContext mockServerCtx, Object msg) {
-                    if (msg instanceof ByteBuf) {
-                        byte[] bytes = ByteBufUtil.getBytes((ByteBuf) msg);
-                        if (new String(bytes, StandardCharsets.UTF_8).startsWith(PROXIED_RESPONSE)) {
+                    if (msg instanceof ByteBuf && new String(ByteBufUtil.getBytes((ByteBuf) msg), StandardCharsets.UTF_8).startsWith(PROXIED_RESPONSE)) {
+                        // this branch consumes the message (it does not forward it via fireChannelRead), so the
+                        // inbound ByteBuf must be released here to avoid leaking one pooled buffer per tunnel setup
+                        try {
                             proxyClientCtx
                                 .writeAndFlush(successResponse(request))
                                 .addListener((ChannelFutureListener) channelFuture -> {
@@ -118,9 +119,12 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                                         configurePipelines(pipelineToMockServer, pipelineToProxyClient, mockServerCtx, proxyClientCtx, http2EnabledDownstream);
                                     }
                                 });
-                        } else {
-                            mockServerCtx.fireChannelRead(msg);
+                        } finally {
+                            ReferenceCountUtil.release(msg);
                         }
+                    } else {
+                        // ownership of the message passes to the next handler, which is responsible for releasing it
+                        mockServerCtx.fireChannelRead(msg);
                     }
                 }
             });

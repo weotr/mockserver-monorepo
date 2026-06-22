@@ -1,0 +1,16 @@
+{
+  "title": "recover after",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "failTimes": {
+      "type": "integer"
+    },
+    "failResponse": {
+      "type": "object"
+    },
+    "idempotencyHeader": {
+      "type": "string"
+    }
+  }
+}

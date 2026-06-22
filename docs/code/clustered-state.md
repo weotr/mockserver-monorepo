@@ -150,6 +150,27 @@ For the default `InMemoryStateBackend`, this is backed by a `ConcurrentHashMap` 
 
 `ScenarioManager` uses no node-local cache for scenario state; all reads go through `KeyValueStore.get()` and all writes through `put()` or `compareAndSet()`. This read-through design means no `InvalidationListener` is needed for scenario state (unlike expectations, which maintain a node-local compiled-matcher cache).
 
+## Cluster Status Endpoint
+
+`GET /mockserver/cluster` (control-plane, gated by `controlPlaneRequestAuthenticated`) returns a JSON snapshot of cluster membership and health, backed by the `StateBackend.clusterInfo()` SPI method.
+
+```mermaid
+flowchart LR
+    GET["GET /mockserver/cluster"]
+    HS["HttpState.handleClusterGet()"]
+    SB["StateBackend.clusterInfo()"]
+    IM["InMemory / LOCAL\n(default): singleNode()"]
+    INF["Infinispan CLUSTERED:\nreal JGroups members"]
+    GET --> HS --> SB
+    SB --> IM
+    SB --> INF
+```
+
+- **SPI method** — `StateBackend.clusterInfo()` returns a `ClusterInfo` record (`clustered`, `nodeId`, `coordinator`, `clusterName`, `members[]`; each `Member` has `id`, `coordinator`, `local`). The interface provides a **default** that returns the degenerate single-node snapshot (`ClusterInfo.singleNode(nodeId())`), so `InMemoryStateBackend` and any other backend compile unchanged.
+- **Single-node / in-memory / LOCAL mode** — `clustered=false`, exactly one member (this node), which is its own coordinator. `InfinispanStateBackend` in LOCAL mode (no transport) also falls back to this snapshot.
+- **Infinispan CLUSTERED mode** — `InfinispanStateBackend.clusterInfo()` reads `EmbeddedCacheManager.getMembers()`, `getAddress()`, `getCoordinator()`, and `getClusterName()` to report the real fleet, flagging the coordinator and the local node. It is fail-soft: any error degrades to the single-node snapshot rather than failing the endpoint.
+- **Metric** — when metrics are enabled, the `mock_server_cluster_members` Prometheus gauge (a `GaugeWithCallback`) reports the live member count at scrape time via a supplier `HttpState` registers (`Metrics.setClusterMemberCountSupplier`), reading `stateBackend.clusterInfo().members().size()`. Defaults to `1` (single local node) when no supplier is set or the supplier fails.
+
 ## Factory and Classpath Discovery
 
 `StateBackendFactory` in `mockserver-core` manages backend creation without a compile-time dependency on Infinispan:
@@ -259,6 +280,7 @@ Add the module to the classpath and configure the blob store type plus backend-s
 | `mockserver.clusterEnabled` | `MOCKSERVER_CLUSTER_ENABLED` | `false` | Enable JGroups cluster transport (Infinispan CLUSTERED mode) |
 | `mockserver.clusterName` | `MOCKSERVER_CLUSTER_NAME` | `mockserver-cluster` | JGroups cluster identifier; all nodes that should share state must use the same value |
 | `mockserver.clusterTransportConfig` | `MOCKSERVER_CLUSTER_TRANSPORT_CONFIG` | _(built-in loopback stack)_ | Path to a custom JGroups XML transport configuration; leave empty to use the built-in loopback stack (suitable for embedded tests; use a UDP or TCP stack for production) |
+| `mockserver.clusterSharedTimesEnabled` | `MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED` | `true` | Enforce per-expectation `Times` limits cluster-wide via shared backend CAS (exactly-N across the fleet). Set `false` to fall back to node-local `Times` (no synchronous replicated write on the request worker thread; fleet-wide N becomes approximate). Only relevant when `clusterEnabled=true`. See "Clustered Times Counters". |
 
 ## Enabling Infinispan
 
@@ -386,6 +408,24 @@ When the state backend is not clustered (default `InMemoryStateBackend` or `Infi
 
 Per-expectation `Times` match limits (e.g. `Times.exactly(3)`, `Times.once()`) are enforced **cluster-wide** when a clustered backend is active. On a match, the consuming node atomically decrements a shared remaining-count on the backend `ExpectationEntry` (CAS) *before* serving; if the allotment is already exhausted (another node took the last one) it falls through without serving. So a `Times.exactly(3)` expectation serves exactly 3 times total across the whole fleet — not 3 per node. Unlimited `Times` and the default (non-clustered) path take the node-local fast path with no backend round-trip. See `RequestMatchers.consumeTimesViaBackendCas`.
 
+### Event-loop blocking trade-off and the opt-out
+
+The shared-Times CAS (`consumeTimesViaBackendCas`) runs **synchronously on the Netty request-worker (event-loop) thread**, inside `firstMatchingExpectation`. The backend `get()` reads from the node-local `REPL_SYNC` replica (no network), but each `compareAndSet` is a **synchronous replicated write** — a network round-trip that waits for replication acks from all cluster members. Under cross-node contention on the *same* limited-Times expectation, the CAS loop retries (re-read + re-write) up to a bound:
+
+| | Bound |
+|---|---|
+| Worst-case replicated writes on the worker thread, per match | `MAX_CAS_RETRIES` = **10** |
+| Common (uncontended) case | **1** replicated write |
+| `get()` round-trips | **0** (local replica read) |
+
+This is gated narrowly — only when the backend is clustered **and** the expectation has limited `Times`. Unlimited-`Times` and all non-clustered/single-node paths never enter it (byte-for-byte the pre-clustering fast path). In practice limited-`Times` expectations are low-count and rarely contended, so the worst case is unlikely; but a latency-sensitive clustered deployment that cannot tolerate replicated writes on the request path can disable shared-Times enforcement:
+
+```
+-Dmockserver.clusterSharedTimesEnabled=false
+```
+
+(or `Configuration.clusterSharedTimesEnabled(false)`, env `MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED=false`). With shared-Times **disabled**, limited-`Times` matching reverts to the **node-local** fast path: each node enforces `Times` independently with no backend round-trip on the worker. The trade-off is that fleet-wide exactly-N becomes **approximate** — a `Times.exactly(3)` expectation may serve up to 3 times *per node* (like the chaos/quota counters below). The property defaults to `true`, preserving the exactly-N guarantee for everyone who does not opt out.
+
 ## Limitations and Known Follow-Ups
 
 | Limitation | Detail |
@@ -395,6 +435,8 @@ Per-expectation `Times` match limits (e.g. `Times.exactly(3)`, `Times.once()`) a
 | JGroups stack configuration | The built-in loopback stack is suitable for embedded tests only. Production clusters require a UDP or TCP JGroups stack configured via `clusterTransportConfig`. |
 | Chaos TTL clock skew | TTL-based auto-expiry uses the node-local controllable clock (`TimeService`). In a clustered deployment, clock advances (via `PUT /mockserver/clock`) are node-local, so a TTL-bearing profile may expire at different wall-clock times on different nodes if their clocks are advanced independently. For production use, rely on the REST API `remove` endpoint rather than TTL for deterministic cross-node cleanup. |
 | Chaos match counters | Per-service gRPC match counters (`incrementMatchCount`) and per-host quota counters remain node-local. A quota limit of 100 on a two-node cluster allows up to 200 total requests. |
+| Rate-limit counters (`rateLimit` clause) | v1 of the declarative `rateLimit` expectation clause (`RateLimitRegistry`, `org.mockserver.ratelimit`) is **node-local** — like the chaos quota and gRPC match counters above. A `limit` of 100 on a two-node cluster allows up to 200 total requests. A future clustered mode would enforce the limit fleet-wide via a per-request shared-backend `compareAndSet` (the same mechanism as the clustered `Times` counters — see "Clustered Times Counters"), trading a synchronous replicated write on the request-worker thread for exactly-N across the fleet. Not implemented in v1. |
+| Shared-Times CAS on the worker thread | When `clusterSharedTimesEnabled=true` (default), limited-`Times` matching performs up to 10 synchronous replicated CAS writes on the Netty request-worker thread (worst case, under same-expectation cross-node contention). Disable via `clusterSharedTimesEnabled=false` to use node-local `Times` (no worker-thread round-trip, but exactly-N becomes approximate — up to N *per node*). See "Clustered Times Counters". |
 
 ## Source Locations
 
@@ -406,6 +448,7 @@ Per-expectation `Times` match limits (e.g. `Times.exactly(3)`, `Times.once()`) a
 | `org.mockserver.state.BlobStore` | `mockserver-core` | Blob store abstraction |
 | `org.mockserver.state.InvalidationListener` | `mockserver-core` | Change notification callback |
 | `org.mockserver.state.ExpectationEntry` | `mockserver-core` | Serializable expectation carrier |
+| `org.mockserver.state.ClusterInfo` | `mockserver-core` | Cluster membership/health snapshot for `GET /mockserver/cluster` |
 | `org.mockserver.state.InMemoryStateBackend` | `mockserver-core` | Default in-memory implementation |
 | `org.mockserver.state.StateBackendFactory` | `mockserver-core` | Pluggable factory with classpath auto-discovery |
 | `org.mockserver.mock.RequestMatchers` | `mockserver-core` | Node-local matcher cache; `reconcileFromBackend()` |

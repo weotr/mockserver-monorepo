@@ -95,6 +95,29 @@ class HttpResponse implements \JsonSerializable
         return $this;
     }
 
+    /**
+     * Set the response body as a file reference.
+     *
+     * @param string $filePath Path to the file to serve
+     * @param string|null $contentType Optional content type for the response
+     * @param string|null $templateType Optional template type ("VELOCITY" or "MUSTACHE") for templating the file
+     */
+    public function fileBody(string $filePath, ?string $contentType = null, ?string $templateType = null): self
+    {
+        $body = [
+            'type' => 'FILE',
+            'filePath' => $filePath,
+        ];
+        if ($contentType !== null) {
+            $body['contentType'] = $contentType;
+        }
+        if ($templateType !== null) {
+            $body['templateType'] = $templateType;
+        }
+        $this->body = $body;
+        return $this;
+    }
+
     public function delay(Delay $delay): self
     {
         $this->delay = $delay;

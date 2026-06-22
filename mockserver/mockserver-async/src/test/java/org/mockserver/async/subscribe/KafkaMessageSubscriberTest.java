@@ -182,13 +182,18 @@ public class KafkaMessageSubscriberTest {
         // Verify that subscribe() does NOT directly call consumer.subscribe() synchronously.
         // Instead it queues the op. We verify by checking no consumer.subscribe() call
         // happens until the poll thread has a chance to run.
+        // Stub poll() BEFORE subscribe() starts the background poll loop: the poll thread
+        // calls the mock concurrently, and Mockito's when(...) stubbing is not thread-safe,
+        // so stubbing after subscribe() races with the poll thread and intermittently throws
+        // CannotStubVoidMethodWithReturnValue (overloaded subscribe/poll resolution). Matches
+        // the race-free ordering used by the other tests in this class.
+        when(mockConsumer.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
+
         subscriber.subscribe("queued-topic");
 
-        // At this point the consumer.subscribe should NOT yet have been called because
-        // the poll loop needs to drain the queue first. However, since the executor
-        // starts the poll loop immediately, we just verify that subscribe DID eventually
-        // get called on the poll thread (not the test thread).
-        when(mockConsumer.poll(any(Duration.class))).thenReturn(ConsumerRecords.empty());
+        // The consumer.subscribe should NOT have been called synchronously on the caller
+        // thread; it is queued and executed on the poll thread, so we verify it eventually
+        // happens there (not on the test thread).
         Thread.sleep(300);
 
         // The consumer.subscribe call should eventually happen (from the poll thread)

@@ -5,11 +5,31 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
+ * Priority-ordered queue with insertion-order eviction past {@code maxSize}.
+ * <p>
+ * <b>Concurrency contract:</b> all mutating methods ({@link #add(Object)},
+ * {@link #remove(Object)}, {@link #replaceValue(Object, Object)},
+ * {@link #addPriorityKey(Object)}, {@link #removePriorityKey(Object)},
+ * {@link #setMaxSize(int)} and {@link #setEvictionListener(java.util.function.Consumer)})
+ * are <b>single-writer</b> — callers serialize them on the control plane (the
+ * Netty event loop / per-store synchronization). Read methods
+ * ({@link #stream()}, {@link #toSortedList()}, {@link #getByKey(Object)},
+ * {@link #size()}, {@link #keyMap()}) may run concurrently with the single
+ * writer and are eventually consistent: a read concurrent with an in-flight
+ * mutation may not yet reflect it, but never returns nulls (the
+ * {@code filter(nonNull)} guard) or corrupt state.
+ * <p>
+ * <b>Precondition:</b> {@link #add(Object)} must not be called for a key that
+ * already exists in the queue — use {@link #replaceValue(Object, Object)} for
+ * in-place updates. Adding a duplicate key would push the key twice into the
+ * insertion-order queue and corrupt eviction accounting.
+ *
  * @author jamesdbloom
  */
 public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
@@ -17,18 +37,47 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
     private final Function<V, SLK> skipListKeyFunction;
     private final Function<V, K> mapKeyFunction;
     private final ConcurrentSkipListSet<SLK> sortOrderSkipList;
-    private final ConcurrentLinkedQueue<V> insertionOrderQueue = new ConcurrentLinkedQueue<>();
+    // Insertion-order queue holds KEYS, not values. Insertion order only
+    // matters for eviction (poll the eldest on overflow) and a key never
+    // changes on an in-place update, so storing keys lets replaceValue run
+    // in O(log n) (byKey.put + skip-list swap) instead of rebuilding the
+    // whole queue. The live value for a key is always resolved via byKey.
+    // Tradeoff: an element's eviction slot is fixed by its first insertion;
+    // an in-place replaceValue leaves that slot untouched (which is the
+    // desired semantics — eviction order follows original insertion time).
+    private final ConcurrentLinkedQueue<K> insertionOrderQueue = new ConcurrentLinkedQueue<>();
     private final ConcurrentMap<K, V> byKey = new ConcurrentHashMap<>();
     // Cached snapshot of the sorted list; nulled on every mutation so toSortedList()
     // rebuilds lazily. volatile ensures the null write is visible to all threads
     // immediately (no stale-cache reads after an add/remove).
     private volatile List<V> sortedCache = null;
+    // Invoked once for every element evicted by overflow past maxSize, AFTER the
+    // element has been removed from all three backing structures. Default is a
+    // no-op so existing users/tests are unaffected. Used to clean up satellite
+    // state keyed by the evicted element (e.g. a versions map) that would
+    // otherwise leak for overflow-evicted keys.
+    private volatile Consumer<V> evictionListener = element -> {
+    };
 
     public CircularPriorityQueue(int maxSize, Comparator<? super SLK> skipListComparator, Function<V, SLK> skipListKeyFunction, Function<V, K> mapKeyFunction) {
         sortOrderSkipList = new ConcurrentSkipListSet<>(skipListComparator);
         this.maxSize = maxSize;
         this.skipListKeyFunction = skipListKeyFunction;
         this.mapKeyFunction = mapKeyFunction;
+    }
+
+    /**
+     * Registers a listener invoked once for every element evicted because the
+     * queue grew past {@code maxSize}. The listener is called AFTER the element
+     * has been removed from the insertion queue, sort skip-list and byKey map,
+     * so satellite state can be cleaned up safely. It is NOT invoked on explicit
+     * {@link #remove(Object)} or {@link #replaceValue(Object, Object)}.
+     *
+     * @param evictionListener the listener, or {@code null} to restore the no-op default
+     */
+    public void setEvictionListener(Consumer<V> evictionListener) {
+        this.evictionListener = evictionListener != null ? evictionListener : element -> {
+        };
     }
 
     public void setMaxSize(int maxSize) {
@@ -48,13 +97,27 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
 
     public void add(V element) {
         if (maxSize > 0 && element != null) {
-            insertionOrderQueue.offer(element);
+            K key = mapKeyFunction.apply(element);
+            // Publish to byKey BEFORE the insertion-order queue so a concurrent
+            // reader never sees a key in the queue (or its eviction accounting)
+            // whose value is not yet resolvable via byKey.
+            byKey.put(key, element);
             sortOrderSkipList.add(skipListKeyFunction.apply(element));
-            byKey.put(mapKeyFunction.apply(element), element);
+            insertionOrderQueue.offer(key);
             while (insertionOrderQueue.size() > maxSize) {
-                V elementToRemove = insertionOrderQueue.poll();
-                sortOrderSkipList.remove(skipListKeyFunction.apply(elementToRemove));
-                byKey.remove(mapKeyFunction.apply(elementToRemove));
+                K keyToRemove = insertionOrderQueue.poll();
+                // Resolve the live value via byKey, remove it, then update the
+                // skip-list and fire the eviction listener. Under the single-
+                // writer contract byKey.remove is non-null here (the key was
+                // just polled from the insertion queue and no concurrent writer
+                // exists); the guard defends against a precondition violation
+                // (duplicate-key add) so eviction never NPEs or double-strips
+                // the skip-list / fires the listener for a missing element.
+                V elementToRemove = byKey.remove(keyToRemove);
+                if (elementToRemove != null) {
+                    sortOrderSkipList.remove(skipListKeyFunction.apply(elementToRemove));
+                    evictionListener.accept(elementToRemove);
+                }
             }
             sortedCache = null;
         }
@@ -63,9 +126,10 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
     /**
      * Replaces the value associated with the given key in place, preserving
      * the element's position in {@code insertionOrderQueue} (and therefore
-     * its eviction order). The old value is swapped out of the insertion
-     * queue and byKey map and the new value takes its slot. Priority-sort
-     * keys are updated (old removed, new added).
+     * its eviction order). Because the insertion queue holds keys and the key
+     * is invariant on update, the queue is left untouched — the element keeps
+     * its exact eviction slot. Only the byKey map and the priority sort keys
+     * (old removed, new added) are updated. O(log n).
      *
      * @param key      the key that identifies the existing element
      * @param newValue the replacement value
@@ -75,25 +139,6 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
         V existing = byKey.get(key);
         if (existing == null) {
             return false;
-        }
-        // Swap in the insertion-order queue: replace the old element with
-        // the new one at the same logical position.  ConcurrentLinkedQueue
-        // does not offer an index-based replace, so we copy into a list,
-        // swap, and rebuild.  This is O(n) but executions are serialized
-        // by the caller (single-writer contract) and n == maxExpectations
-        // which is typically small (hundreds).
-        List<V> snapshot = new ArrayList<>(insertionOrderQueue);
-        int idx = snapshot.indexOf(existing);
-        if (idx < 0) {
-            // Element not in insertion queue — shouldn't happen, but fall
-            // back to a safe add-at-end to avoid data loss.
-            insertionOrderQueue.offer(newValue);
-        } else {
-            snapshot.set(idx, newValue);
-            insertionOrderQueue.clear();
-            for (V v : snapshot) {
-                insertionOrderQueue.offer(v);
-            }
         }
         // Update byKey
         byKey.put(key, newValue);
@@ -106,8 +151,9 @@ public class CircularPriorityQueue<K, V, SLK extends Keyed<K>> {
 
     public boolean remove(V element) {
         if (element != null) {
-            insertionOrderQueue.remove(element);
-            byKey.remove(mapKeyFunction.apply(element));
+            K key = mapKeyFunction.apply(element);
+            insertionOrderQueue.remove(key);
+            byKey.remove(key);
             boolean removed = sortOrderSkipList.remove(skipListKeyFunction.apply(element));
             sortedCache = null;
             return removed;

@@ -4,7 +4,12 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockserver.configuration.ConfigurationProperties;
+import org.mockserver.model.HttpRequest;
 import org.mockserver.wasm.WasmStore;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
@@ -78,5 +83,56 @@ public class WasmBodyMatcherTest {
     public void shouldReportNotBlankWhenModuleNameIsSet() {
         WasmBodyMatcher matcher = new WasmBodyMatcher("myModule");
         assertThat(matcher.isBlank(), is(false));
+    }
+
+    @Test
+    public void shouldExposeMethodPathAndHeadersFromContextToRicherAbiModule() throws IOException {
+        ConfigurationProperties.wasmEnabled(true);
+        WasmStore.getInstance().put("orders", matchRequestModule());
+        WasmBodyMatcher matcher = new WasmBodyMatcher("orders");
+
+        // module matches POST /orders with X-Tenant: acme
+        HttpRequest matching = HttpRequest.request()
+            .withMethod("POST")
+            .withPath("/orders")
+            .withHeader("X-Tenant", "acme");
+        assertThat(matcher.matches(new MatchDifference(false, matching), "{}"), is(true));
+    }
+
+    @Test
+    public void shouldNotMatchRicherAbiModuleWhenHeaderMissingInContext() throws IOException {
+        ConfigurationProperties.wasmEnabled(true);
+        WasmStore.getInstance().put("orders", matchRequestModule());
+        WasmBodyMatcher matcher = new WasmBodyMatcher("orders");
+
+        HttpRequest noTenant = HttpRequest.request()
+            .withMethod("POST")
+            .withPath("/orders");
+        assertThat(matcher.matches(new MatchDifference(false, noTenant), "{}"), is(false));
+    }
+
+    @Test
+    public void shouldNotMatchRicherAbiModuleWhenMethodDiffersInContext() throws IOException {
+        ConfigurationProperties.wasmEnabled(true);
+        WasmStore.getInstance().put("orders", matchRequestModule());
+        WasmBodyMatcher matcher = new WasmBodyMatcher("orders");
+
+        HttpRequest wrongMethod = HttpRequest.request()
+            .withMethod("GET")
+            .withPath("/orders")
+            .withHeader("X-Tenant", "acme");
+        assertThat(matcher.matches(new MatchDifference(false, wrongMethod), "{}"), is(false));
+    }
+
+    private static byte[] matchRequestModule() throws IOException {
+        try (InputStream in = WasmBodyMatcherTest.class.getResourceAsStream("/org/mockserver/wasm/match-request.wasm")) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            return out.toByteArray();
+        }
     }
 }

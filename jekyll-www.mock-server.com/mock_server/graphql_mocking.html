@@ -1,0 +1,270 @@
+---
+title: Mocking GraphQL APIs
+description: Mock GraphQL queries, mutations, and subscriptions in MockServer — import a schema or introspection document to auto-generate schema-valid responses, or write explicit expectations with AST-level field matching.
+shortTitle: GraphQL Mocking
+layout: page
+pageOrder: 4.5
+section: 'Protocols & Advanced'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-21T00:00:00+00:00
+---
+
+<p>MockServer can mock GraphQL APIs in two complementary ways:</p>
+
+<ol>
+    <li><strong>Schema import</strong> &mdash; send a GraphQL SDL or introspection document to <code class="inline code">PUT /mockserver/graphql</code> and MockServer generates one expectation per root operation type. Matched queries receive a schema-valid, synthesized <code class="inline code">{"data": {...}}</code> response with no hand-authored JSON required.</li>
+    <li><strong>Explicit GraphQL expectations</strong> &mdash; write an expectation whose body matcher is a <code class="inline code">GRAPHQL</code> body with a query string, operation name, or field list, giving precise control over which operations are matched and what response is returned.</li>
+</ol>
+
+<p>GraphQL matching works on standard HTTP: a GraphQL request arrives as a POST to <code class="inline code">/graphql</code> (or a configurable path) with the operation in the JSON body. MockServer does not require any protocol plugin — it matches and responds to GraphQL traffic using the same HTTP expectation mechanism as REST.</p>
+
+<a id="schema_import" class="anchor" href="#schema_import">&nbsp;</a>
+
+<h2>Schema Import — <code class="inline code">PUT /mockserver/graphql</code></h2>
+
+<p>The schema import endpoint parses a GraphQL SDL or introspection document and generates mock expectations automatically — one per root operation type (Query, Mutation, Subscription) defined by the schema.</p>
+
+<p>Send the schema as the raw request body with <code class="inline code">Content-Type: application/graphql</code> (for SDL) or <code class="inline code">Content-Type: application/json</code> (for an introspection result):</p>
+
+<pre class="prettyprint code"><code class="code"># Import from SDL
+curl -s -X PUT "http://localhost:1080/mockserver/graphql" \
+  -H "Content-Type: application/graphql" \
+  --data-raw '
+type Query {
+  user(id: ID!): User
+  products(category: String): [Product]
+}
+type Mutation {
+  createOrder(input: OrderInput!): Order
+}
+type User  { id: ID! name: String email: String }
+type Product { id: ID! name: String price: Float inStock: Boolean }
+type Order   { id: ID! status: String total: Float }
+input OrderInput { productId: ID! quantity: Int }
+'</code></pre>
+
+<pre class="prettyprint code"><code class="code"># Import from an introspection JSON result (both envelope forms are accepted)
+curl -s -X PUT "http://localhost:1080/mockserver/graphql" \
+  -H "Content-Type: application/json" \
+  -d '{ "data": { "__schema": { ... } } }'</code></pre>
+
+<p>The optional <code class="inline code">?path=</code> query parameter overrides the default <code class="inline code">/graphql</code> request path the generated expectations match:</p>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT "http://localhost:1080/mockserver/graphql?path=/api/graphql" \
+  -H "Content-Type: application/graphql" \
+  --data-raw 'type Query { ping: String }'</code></pre>
+
+<p>On success, the endpoint returns <code class="inline code">201 Created</code> with a JSON array of the generated expectations. On a schema parse error it returns <code class="inline code">400 Bad Request</code> with a plain-text error message.</p>
+
+<a id="schema_driven_synthesis" class="anchor" href="#schema_driven_synthesis">&nbsp;</a>
+
+<h2>Schema-Driven Response Synthesis</h2>
+
+<p>When a matched GraphQL expectation has a schema attached — either via schema import or a <code class="inline code">schema</code> field on a <code class="inline code">GRAPHQL</code> body — MockServer synthesizes a schema-valid response for the <em>actual</em> query at request time, rather than returning a fixed stub. Only the fields the client requested appear in the response (the selection set is honoured).</p>
+
+<p>Synthesis rules follow GraphQL execution semantics:</p>
+
+<ul>
+    <li><strong>Scalar placeholders</strong> — <code class="inline code">String</code> &rarr; <code class="inline code">"string"</code>, <code class="inline code">Int</code> &rarr; <code class="inline code">0</code>, <code class="inline code">Float</code> &rarr; <code class="inline code">0.0</code>, <code class="inline code">Boolean</code> &rarr; <code class="inline code">true</code>, <code class="inline code">ID</code> &rarr; <code class="inline code">"id"</code></li>
+    <li><strong>Enum types</strong> — the first declared value</li>
+    <li><strong>List types</strong> — a single-element array containing the synthesized element</li>
+    <li><strong>Object types</strong> — recurse into the sub-selection set</li>
+    <li><strong>Inline fragments and named fragment spreads</strong> — flattened into the selection set</li>
+    <li><strong>Non-null wrappers</strong> — unwrapped transparently</li>
+</ul>
+
+<p>The synthesized response is wrapped in a <code class="inline code">{"data": {...}}</code> envelope. An explicit response body on the expectation always takes precedence — schema synthesis only fires when the response body is absent.</p>
+
+<p><strong>Example:</strong> given the schema above, a client query of <code class="inline code">{ user(id: "1") { name email } }</code> produces:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "data": {
+    "user": {
+      "name": "string",
+      "email": "string"
+    }
+  }
+}</code></pre>
+
+<a id="graphql_body_matcher" class="anchor" href="#graphql_body_matcher">&nbsp;</a>
+
+<h2>GraphQL Body Matcher in Expectations</h2>
+
+<p>To match specific GraphQL operations, set the request body type to <code class="inline code">GRAPHQL</code> in an expectation. The body matcher supports three match modes:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Match mode</th>
+            <th><code class="inline code">selectionSetMatchType</code></th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Normalised string (default)</td>
+            <td><code class="inline code">NORMALISED_STRING</code></td>
+            <td>Whitespace-normalised string comparison of the full query text. Use this when you want to match a known, fixed query string exactly.</td>
+        </tr>
+        <tr>
+            <td>Exact AST</td>
+            <td><code class="inline code">AST_EXACT</code></td>
+            <td>The operation type, name, and top-level field set must match exactly.</td>
+        </tr>
+        <tr>
+            <td>Subset AST</td>
+            <td><code class="inline code">AST_SUBSET</code></td>
+            <td>The expected fields must be a subset of the actual query's top-level fields. Useful when matching "any query that includes field X" regardless of what other fields are requested.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Additional body matcher fields:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Type</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">query</code></td>
+            <td>string</td>
+            <td>The GraphQL query/mutation/subscription string to match against. For <code class="inline code">NORMALISED_STRING</code> mode, whitespace is normalised before comparison.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">operationName</code></td>
+            <td>string</td>
+            <td>Optional exact operation name to match (plain string or regex). Only applies to named operations.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">variablesSchema</code></td>
+            <td>string</td>
+            <td>Optional JSON Schema string. When set, the <code class="inline code">variables</code> in the GraphQL request body are validated against this schema as an additional match condition.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">schema</code></td>
+            <td>string</td>
+            <td>GraphQL SDL or introspection JSON to attach to this expectation. When present and the response body is absent, MockServer synthesizes a schema-valid response for the matched query.</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="explicit_expectation_examples" class="anchor" href="#explicit_expectation_examples">&nbsp;</a>
+
+<h2>Explicit Expectation Examples</h2>
+
+<h3>Match a specific query string and return an explicit response</h3>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/expectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "httpRequest": {
+      "method": "POST",
+      "path": "/graphql",
+      "body": {
+        "type": "GRAPHQL",
+        "query": "query GetUser($id: ID!) { user(id: $id) { name email } }"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": { "Content-Type": ["application/json"] },
+      "body": "{\"data\":{\"user\":{\"name\":\"Alice\",\"email\":\"alice@example.com\"}}}"
+    }
+  }'</code></pre>
+
+<h3>Match any query that includes a specific field (subset AST)</h3>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/expectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "httpRequest": {
+      "method": "POST",
+      "path": "/graphql",
+      "body": {
+        "type": "GRAPHQL",
+        "query": "query { user { email } }",
+        "selectionSetMatchType": "AST_SUBSET"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": { "Content-Type": ["application/json"] },
+      "body": "{\"data\":{\"user\":{\"id\":\"1\",\"name\":\"Alice\",\"email\":\"alice@example.com\"}}}"
+    }
+  }'</code></pre>
+
+<h3>Match by operation name and validate variables with JSON Schema</h3>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/expectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "httpRequest": {
+      "method": "POST",
+      "path": "/graphql",
+      "body": {
+        "type": "GRAPHQL",
+        "query": "mutation CreateOrder($input: OrderInput!) { createOrder(input: $input) { id status } }",
+        "operationName": "CreateOrder",
+        "variablesSchema": "{\"type\":\"object\",\"properties\":{\"input\":{\"type\":\"object\",\"required\":[\"productId\",\"quantity\"]}},\"required\":[\"input\"]}"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": { "Content-Type": ["application/json"] },
+      "body": "{\"data\":{\"createOrder\":{\"id\":\"order-42\",\"status\":\"PENDING\"}}}"
+    }
+  }'</code></pre>
+
+<h3>Schema-attached expectation (response synthesized from query)</h3>
+
+<p>Provide a schema on the body and omit the response body — MockServer synthesizes a schema-valid response for whatever fields the client requests:</p>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/expectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "httpRequest": {
+      "method": "POST",
+      "path": "/graphql",
+      "body": {
+        "type": "GRAPHQL",
+        "query": "query { }",
+        "selectionSetMatchType": "AST_SUBSET",
+        "schema": "type Query { user(id: ID!): User } type User { id: ID! name: String email: String }"
+      }
+    },
+    "httpResponse": {}
+  }'</code></pre>
+
+<a id="graphql_error_injection" class="anchor" href="#graphql_error_injection">&nbsp;</a>
+
+<h2>GraphQL Error Injection (Chaos)</h2>
+
+<p>GraphQL APIs return HTTP 200 even for errors — error details live in an <code class="inline code">errors</code> array in the response body. Standard HTTP error injection (which changes the status code) does not reproduce this pattern. Use the <code class="inline code">graphqlErrors</code> chaos profile field to inject a spec-compliant GraphQL error envelope.</p>
+
+<p>See <a href="/mock_server/chaos_testing.html#graphql_error_injection">GraphQL Error Injection</a> in the Chaos Testing page for the full reference including <code class="inline code">graphqlErrorMessage</code>, <code class="inline code">graphqlErrorCode</code>, <code class="inline code">graphqlNullifyData</code>, and how to apply it via service-scoped chaos (<code class="inline code">PUT /mockserver/serviceChaos</code>).</p>
+
+<a id="subscriptions" class="anchor" href="#subscriptions">&nbsp;</a>
+
+<h2>GraphQL Subscriptions</h2>
+
+<p>MockServer generates a subscription expectation from the schema when a <code class="inline code">Subscription</code> root type is present. Subscription operations are matched using the same <code class="inline code">GRAPHQL</code> body type. The transport (WebSocket or SSE) depends on how the client connects; MockServer handles both via its WebSocket response action (<code class="inline code">httpWebSocketResponse</code>). See the <a href="/mock_server/creating_expectations.html">Creating Expectations</a> page for WebSocket response details.</p>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/using_openapi.html">OpenAPI Import</a> &mdash; import an OpenAPI 3.x spec to generate REST mock expectations; the same schema-import pattern as GraphQL</li>
+    <li><a href="/mock_server/grpc_mocking.html">gRPC Mocking</a> &mdash; import a proto descriptor to generate gRPC mock expectations with response synthesis</li>
+    <li><a href="/mock_server/asyncapi_messaging.html">AsyncAPI Messaging</a> &mdash; mock message-broker interactions from an AsyncAPI spec</li>
+    <li><a href="/mock_server/chaos_testing.html#graphql_error_injection">GraphQL Error Injection</a> &mdash; inject spec-compliant GraphQL error envelopes via chaos profiles</li>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; full reference for the expectation model, body matchers, and response actions</li>
+</ul>

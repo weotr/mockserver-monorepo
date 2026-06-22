@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, memo, useDeferredValue, Fragment } from 'react';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
@@ -7,13 +7,17 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import HelpOutlinedIcon from '@mui/icons-material/HelpOutlined';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import PauseCircleIcon from '@mui/icons-material/PauseCircle';
 import type { LogEntryValue, MessagePart } from '../types';
 import JsonViewer from './JsonViewer';
 import BecauseSection from './BecauseSection';
 import CopyButton from './CopyButton';
 import { useDebugMismatchContext } from '../hooks/DebugMismatchContext';
 import { useGenerateStubContext } from '../hooks/GenerateStubContext';
+import { useSetBreakpointContext } from '../hooks/SetBreakpointContext';
 import { entryToText } from '../lib/logEntryText';
+import { parseLogTimestamp, formatCompactTime, formatAbsoluteTime } from '../lib/logEntryTime';
+import { monospaceFontFamily } from '../theme';
 
 // ---------------------------------------------------------------------------
 // W3C traceparent pill (F8)
@@ -115,7 +119,7 @@ function TraceparentPill({ info }: { info: TraceparentInfo }) {
 
   return (
     <Tooltip
-      title={<Box component="pre" sx={{ m: 0, fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre-wrap' }}>{tooltipText}</Box>}
+      title={<Box component="pre" sx={{ m: 0, fontFamily: monospaceFontFamily, typography: 'caption', whiteSpace: 'pre-wrap' }}>{tooltipText}</Box>}
     >
       <Chip
         label={`[T] ${abbrev}`}
@@ -125,11 +129,41 @@ function TraceparentPill({ info }: { info: TraceparentInfo }) {
         sx={{
           height: 18,
           fontSize: '0.6rem',
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           ml: 0.5,
           '& .MuiChip-label': { px: 0.5 },
         }}
       />
+    </Tooltip>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Log entry timestamp (compact inline time, absolute on hover)
+// ---------------------------------------------------------------------------
+
+function LogTime({ timestamp }: { timestamp: string }) {
+  const parsed = useMemo(() => parseLogTimestamp(timestamp), [timestamp]);
+  const compact = formatCompactTime(parsed);
+  const absolute = formatAbsoluteTime(parsed);
+  return (
+    <Tooltip title={absolute}>
+      <Box
+        component="time"
+        aria-label={`Logged at ${absolute}`}
+        {...(parsed.date ? { dateTime: parsed.date.toISOString() } : {})}
+        sx={{
+          fontFamily: monospaceFontFamily,
+          typography: 'caption',
+          color: 'text.secondary',
+          mr: 0.75,
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+          cursor: 'default',
+        }}
+      >
+        {compact}
+      </Box>
     </Tooltip>
   );
 }
@@ -141,6 +175,15 @@ interface LogEntryProps {
   indent?: boolean;
   divider?: boolean;
   collapsible?: boolean;
+  /**
+   * Controlled expand state, lifted to the panel so it survives the row being
+   * unmounted while scrolled out of a virtualized list. `entryKey` is the
+   * stable key of the enclosing log message (LogEntryValue itself carries no
+   * key). When omitted the row falls back to its own internal state.
+   */
+  entryKey?: string;
+  expanded?: boolean;
+  onToggleExpand?: (key: string) => void;
 }
 
 function addLinks(value: string) {
@@ -171,7 +214,7 @@ function renderMessagePart(part: MessagePart) {
 
   if (!part.argument) {
     return (
-      <Box key={part.key} component="span" sx={{ fontFamily: 'monospace' }}>
+      <Box key={part.key} component="span" sx={{ fontFamily: monospaceFontFamily }}>
         {addLinks(String(part.value))}
       </Box>
     );
@@ -204,7 +247,7 @@ function renderMessagePart(part: MessagePart) {
       );
     }
     return (
-      <Box key={part.key} component="span" sx={{ fontFamily: 'monospace', pl: 0.5 }}>
+      <Box key={part.key} component="span" sx={{ fontFamily: monospaceFontFamily, pl: 0.5 }}>
         {String(part.value)}
       </Box>
     );
@@ -214,7 +257,7 @@ function renderMessagePart(part: MessagePart) {
     <Box
       key={part.key}
       component="span"
-      sx={{ fontFamily: 'monospace', pl: 0.5, letterSpacing: '0.08em', whiteSpace: 'pre' }}
+      sx={{ fontFamily: monospaceFontFamily, pl: 0.5, letterSpacing: '0.08em', whiteSpace: 'pre' }}
     >
       {addLinks(String(part.value))}
     </Box>
@@ -262,17 +305,51 @@ function extractRequestFromEntry(entry: LogEntryValue): Record<string, unknown> 
   return null;
 }
 
-export default function LogEntry({ entry, indent = false, divider = false, collapsible = false }: LogEntryProps) {
+/**
+ * Derive a breakpoint prefill (method + path) from a log row's request. Handles
+ * both a flat request object (`{method, path}`) and one nested under
+ * `httpRequest` — the two shapes the log message parts use. Returns `null` when
+ * neither a method nor a path can be read, so the "Set breakpoint" action is
+ * only offered on rows that carry a request.
+ */
+function extractBreakpointPrefill(entry: LogEntryValue): { method?: string; path?: string } | null {
+  const found = extractRequestFromEntry(entry);
+  if (!found) return null;
+  const nested = found['httpRequest'];
+  const request = (nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? (nested as Record<string, unknown>)
+    : found);
+  const method = typeof request['method'] === 'string' ? (request['method'] as string) : undefined;
+  const path = typeof request['path'] === 'string' ? (request['path'] as string) : undefined;
+  if (!method && !path) return null;
+  return { method, path };
+}
+
+function LogEntry({ entry, indent = false, divider = false, collapsible = false, entryKey, expanded: expandedProp, onToggleExpand }: LogEntryProps) {
   const style = entry.style ?? {};
   const hasBody = entry.messageParts && entry.messageParts.length > 0;
   const canCollapse = collapsible && hasBody;
-  const [expanded, setExpanded] = useState(false);
+  const [internalExpanded, setInternalExpanded] = useState(false);
+  const expanded = expandedProp ?? internalExpanded;
+  const handleToggle = () => {
+    if (onToggleExpand && entryKey !== undefined) onToggleExpand(entryKey);
+    else setInternalExpanded((prev) => !prev);
+  };
+  // Defer the expanded body (which may contain a heavy JsonViewer for JSON
+  // message parts) so the click toggling `expanded` repaints the chevron
+  // immediately and the body builds in a non-blocking follow-up render.
+  const showBody = useDeferredValue(expanded);
   const debugMismatch = useDebugMismatchContext();
   const generateStub = useGenerateStubContext();
+  const setBreakpoint = useSetBreakpointContext();
   const isUnmatched = isNotMatchedEntry(entry);
   const showWhyButton = isUnmatched && debugMismatch !== null;
   const showGenerateStubButton = isUnmatched && generateStub !== null;
   const traceparent = useMemo(() => extractTraceparent(entry), [entry]);
+  // A breakpoint can be seeded from any row that carries a request (matched or
+  // not), so the user can pause future occurrences of this exact method+path.
+  const breakpointPrefill = useMemo(() => extractBreakpointPrefill(entry), [entry]);
+  const showSetBreakpointButton = setBreakpoint !== null && breakpointPrefill !== null;
 
   return (
     <Box
@@ -303,14 +380,25 @@ export default function LogEntry({ entry, indent = false, divider = false, colla
               cursor: 'pointer',
               userSelect: 'none',
             }}
-            onClick={() => setExpanded((prev) => !prev)}
+            onClick={handleToggle}
           >
-            <IconButton size="small" sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}>
+            {/* The chevron IconButton is the accessible/keyboard control (a real
+                button, focusable, with aria-expanded). The surrounding row stays
+                click-to-toggle for the mouse but is not itself a button — that
+                would nest the action buttons below inside a button (invalid ARIA). */}
+            <IconButton
+              size="small"
+              aria-label={expanded ? 'Collapse' : 'Expand'}
+              aria-expanded={expanded}
+              onClick={(e) => { e.stopPropagation(); handleToggle(); }}
+              sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}
+            >
               {expanded ? <ExpandMoreIcon /> : <ChevronRightIcon />}
             </IconButton>
+            {entry.timestamp && <LogTime timestamp={entry.timestamp} />}
             <Box
               component="span"
-              sx={{ whiteSpace: 'pre', fontFamily: 'monospace' }}
+              sx={{ whiteSpace: 'pre', fontFamily: monospaceFontFamily }}
             >
               {descriptionText(entry) || 'SYSTEM_MESSAGE'}
             </Box>
@@ -349,16 +437,41 @@ export default function LogEntry({ entry, indent = false, divider = false, colla
                 </IconButton>
               </Tooltip>
             )}
-            {!expanded && (
-              <Box
-                component="span"
-                sx={{ fontFamily: 'monospace', color: 'text.secondary', ml: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}
-              >
-                {getSummary(entry)}
-              </Box>
+            {showSetBreakpointButton && (
+              <Tooltip title="Set a breakpoint on this request (method + path)">
+                <IconButton
+                  size="small"
+                  aria-label="Set breakpoint on this request"
+                  sx={{ p: 0, ml: 0.5, '& .MuiSvgIcon-root': { fontSize: '0.9rem' } }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (breakpointPrefill && setBreakpoint) {
+                      setBreakpoint(breakpointPrefill);
+                    }
+                  }}
+                >
+                  <PauseCircleIcon sx={{ color: 'secondary.main' }} />
+                </IconButton>
+              </Tooltip>
             )}
+            {!expanded && (() => {
+              const summary = getSummary(entry);
+              return (
+                <Tooltip title={summary} disableHoverListener={!summary}>
+                  <Box
+                    component="span"
+                    // Hidden on narrow viewports (mobile and the IDE-embedded
+                    // dashboard) where it wraps one word per line and looks broken;
+                    // the full message is still available by expanding the row.
+                    sx={{ fontFamily: monospaceFontFamily, color: 'text.secondary', ml: 1, overflow: 'hidden', textOverflow: 'ellipsis', display: { xs: 'none', md: 'inline-block' } }}
+                  >
+                    {summary}
+                  </Box>
+                </Tooltip>
+              );
+            })()}
           </Box>
-          {expanded && (
+          {showBody && (
             <Box sx={{ pl: 2.5, pt: 0.5 }}>
               {entry.messageParts?.map(renderMessagePart)}
             </Box>
@@ -366,18 +479,22 @@ export default function LogEntry({ entry, indent = false, divider = false, colla
         </>
       ) : (
         <>
-          {entry.description && (
+          {entry.description ? (
             <Box
+              title={descriptionText(entry)}
               sx={{
                 whiteSpace: 'pre',
-                fontFamily: 'monospace',
+                fontFamily: monospaceFontFamily,
                 display: 'flex',
                 alignItems: 'center',
               }}
             >
+              {entry.timestamp && <LogTime timestamp={entry.timestamp} />}
               {descriptionText(entry)}
               {traceparent && <TraceparentPill info={traceparent} />}
             </Box>
+          ) : (
+            entry.timestamp && <LogTime timestamp={entry.timestamp} />
           )}
           {entry.messageParts?.map(renderMessagePart)}
         </>
@@ -388,3 +505,9 @@ export default function LogEntry({ entry, indent = false, divider = false, colla
     </Box>
   );
 }
+
+// Memoized: the log panel re-renders on every WebSocket push. With the store
+// now preserving the `entry` reference for unchanged entries (reconcileByKey,
+// which reuses whole objects so a log group's nested entries are stable too),
+// default shallow prop comparison lets unchanged log rows skip re-rendering.
+export default memo(LogEntry);

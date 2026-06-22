@@ -23,7 +23,7 @@
 ## Creating Expectations
 - [Creating Expectations](https://www.mock-server.com/mock_server/creating_expectations.html): How to set up request matchers and response actions including literal responses, templated responses, class/closure callbacks, forwards, and errors
 - [OpenAPI Expectations](https://www.mock-server.com/mock_server/using_openapi.html): Generate expectations from OpenAPI/Swagger specifications
-- [Importing Expectations](https://www.mock-server.com/mock_server/importing_expectations.html): Import expectations from HAR (HTTP Archive) or Postman Collection files via a single PUT /mockserver/import request, with format auto-detection
+- [Importing Expectations](https://www.mock-server.com/mock_server/importing_expectations.html): Import expectations from HAR (HTTP Archive), Postman Collection, or Pact v3 contract files via a single PUT /mockserver/import request, with format auto-detection
 - [Expectation Initializers](https://www.mock-server.com/mock_server/initializing_expectations.html): Load expectations automatically when MockServer starts using a Java initializer class, JSON file, OpenAPI spec, or Maven plugin initializer
 - [Persisting Expectations](https://www.mock-server.com/mock_server/persisting_expectations.html): Persist expectations and recorded proxy traffic to disk so they survive restarts and enable record-and-replay workflows
 - [Before & After Actions](https://www.mock-server.com/mock_server/before_and_after_actions.html): Run extra HTTP webhooks or callbacks before or after an expectation's response — to mirror (tee), shadow, fan-out, or gate live traffic against other services
@@ -33,8 +33,8 @@
 
 ## Verification
 - [Verifying Requests](https://www.mock-server.com/mock_server/verification.html): Verify that requests were received, including exact counts and sequence verification
-- [Pact Contract Export & Verification](https://www.mock-server.com/mock_server/pact_export.html): Export active expectations as a Pact v3 consumer contract, or verify expectations satisfy a Pact contract — closing the contract-testing loop
-- [Mock Drift Detection](https://www.mock-server.com/mock_server/drift_detection.html): Detect when real upstream services have drifted from your mock stubs — status code mismatches, added or removed JSON fields, type and header changes
+- [Pact Contract Import, Export & Verification](https://www.mock-server.com/mock_server/pact_export.html): Import a Pact v3 contract to create stub expectations, export active expectations as a contract, or verify expectations satisfy a contract — the complete contract-testing loop
+- [Mock Drift Detection](https://www.mock-server.com/mock_server/drift_detection.html): Detect when real upstream services have drifted from your mock stubs — status code mismatches, added or removed JSON fields, type and header changes; compare two sets of expectations offline with the baseline compare endpoint
 
 ## Configuration
 - [Configuration Properties](https://www.mock-server.com/mock_server/configuration_properties.html): All configuration properties with defaults, including memory limits, logging, TLS, and performance tuning
@@ -55,6 +55,9 @@
 ## Data Store & File Storage
 - [File Storage](https://www.mock-server.com/mock_server/file_storage.html): Store, retrieve, list, and delete named binary or text files in MockServer's in-memory file store to use as response bodies, test fixtures, or certificate payloads
 - [CRUD Data Store](https://www.mock-server.com/mock_server/crud_data_store.html): Auto-generate a fully functional REST CRUD API over an in-memory JSON data store using a single PUT /mockserver/crud request, with no expectations required
+
+## Interactive Breakpoints
+- [Interactive Breakpoints](https://www.mock-server.com/mock_server/interactive_breakpoints.html): Pause live HTTP exchanges and streaming frames (SSE, gRPC server-streaming, WebSocket, GraphQL subscription) mid-flight, inspect or modify them, and continue, drop, inject, or close via the control-plane REST API
 
 ## Chaos Testing & Fault Injection
 - [Chaos Testing](https://www.mock-server.com/mock_server/chaos_testing.html): Inject errors, latency, and outages into mocked and proxied responses using declarative chaos profiles for resilience testing

@@ -1,0 +1,17 @@
+meta {
+  name: retrieve a saved chaos profile
+  type: http
+  seq: 18
+}
+
+get {
+  url: {{baseUrl}}/mockserver/chaosExperiment/profiles/checkout
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns the full saved chaos experiment definition stored under the given name
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

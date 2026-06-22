@@ -48,8 +48,10 @@ This preserves file history in Git, making `git log --follow` work correctly.
 If a file has already been moved with `mv`, recover history tracking by staging it as a rename:
 
 ```bash
-git add -A  # Git detects the delete + create as a rename if similarity >= 50%
+git add <old-path> <new-path>  # stage the delete + create together; Git detects the rename if similarity >= 50%
 ```
+
+Never use `git add -A` / `git add .` for this — blanket staging breaks parallel-session safety (it picks up other sessions' files). Stage the explicit old and new paths. See [[commit-workflow]].
 
 ### Exception
 

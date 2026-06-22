@@ -52,14 +52,11 @@ sitemap:
 <p>The MockServer CA certificate (PEM format) is available at:</p>
 
 <ul>
-    <li><strong>From the running container or JAR:</strong> <code class="code inline">http://localhost:1080/mockserver/ca.pem</code> — download this once MockServer is running</li>
     <li><strong>From the GitHub repository:</strong> <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/blob/master/mockserver/mockserver-core/src/main/resources/org/mockserver/socket/CertificateAuthorityCertificate.pem" rel="noopener noreferrer">CertificateAuthorityCertificate.pem</a></li>
     <li><strong>From the classpath</strong> (if using the Java API): <code class="code inline">/org/mockserver/socket/CertificateAuthorityCertificate.pem</code></li>
 </ul>
 
-<p>Download it to a local file:</p>
-
-<pre class="prettyprint code"><code class="code">curl -s http://localhost:1080/mockserver/ca.pem -o mockserver-ca.pem</code></pre>
+<p>Save the certificate to a local file (e.g. <code class="code inline">mockserver-ca.pem</code>) and point your tools at it as shown below.</p>
 
 <p>See <a href="/mock_server/HTTPS_TLS.html#verify_trust_chain">HTTPS &amp; TLS — Ensure MockServer Certificates Are Trusted</a> for full details on adding the CA to operating systems, JVMs, and HTTP clients.</p>
 
@@ -452,6 +449,7 @@ curl -s -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES
     <li><a href="/mock_server/ai_mcp_tools.html"><strong>MCP Tools Reference</strong></a> — the <code class="code inline">retrieve_recorded_requests</code> and related tools used to inspect captured traffic</li>
     <li><a href="/mock_server/configuration_properties.html#proxy_configuration"><strong>Proxying Configuration</strong></a> — all proxy-related configuration properties</li>
     <li><a href="/mock_server/mockserver_ui.html"><strong>MockServer UI</strong></a> — dashboard overview</li>
+    <li><a href="/mock_server/ai_optimisation.html"><strong>LLM Cost Optimisation</strong></a> — export a one-click optimisation brief from captured LLM traffic to find ways to cut inference cost</li>
 </ul>
 
 {% include_subpage _includes/ai_see_also.html %}

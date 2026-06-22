@@ -3,6 +3,7 @@ package org.mockserver.responsewriter;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.cors.CORSHeaders;
+import org.mockserver.responseheaders.DefaultResponseHeaders;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.ConnectionOptions;
@@ -29,11 +30,13 @@ public abstract class ResponseWriter {
     protected final Configuration configuration;
     protected final MockServerLogger mockServerLogger;
     private final CORSHeaders corsHeaders;
+    private final DefaultResponseHeaders defaultResponseHeaders;
 
     protected ResponseWriter(Configuration configuration, MockServerLogger mockServerLogger) {
         this.configuration = configuration;
         this.mockServerLogger = mockServerLogger;
         corsHeaders = new CORSHeaders(configuration);
+        defaultResponseHeaders = new DefaultResponseHeaders(configuration);
     }
 
     public void writeResponse(final HttpRequest request, final HttpResponseStatus responseStatus) {
@@ -64,6 +67,12 @@ public abstract class ResponseWriter {
         if (configuration.enableCORSForAllResponses() || apiResponse) {
             corsHeaders.addCORSHeaders(request, response);
         }
+        // Stamp the configured default response headers (add-if-absent) onto every response
+        // MockServer returns - mock responses, control-plane / dashboard responses, and
+        // forwarded / proxied responses all funnel through writeResponse - so an explicit
+        // response header always wins. Default is empty, so behaviour is unchanged unless
+        // defaultResponseHeaders is configured.
+        defaultResponseHeaders.addDefaultResponseHeaders(response);
         String contentLengthHeader = response.getFirstHeader(CONTENT_LENGTH.toString());
         if (isNotBlank(contentLengthHeader)) {
             try {

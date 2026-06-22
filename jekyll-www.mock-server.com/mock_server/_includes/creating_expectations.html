@@ -2,7 +2,7 @@
 
 <button class="accordion"><strong>Java Code Example</strong></button>
 <div class="panel">
-    <p><em><strong>Please Note:</strong> There are over 100 more detailed code examples in Java, JavaScript and the REST API below.</em></p>
+    <p><em><strong>Please Note:</strong> There are over 100 more detailed code examples in Java, JavaScript, Python, Ruby, Go, .NET, Rust, PHP and the REST API below.</em></p>
 
     <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .when(
@@ -25,7 +25,7 @@
 
 <button class="accordion"><strong>JavaScript Code Example</strong></button>
 <div class="panel">
-    <p><em><strong>Please Note:</strong> There are over 100 more detailed code examples in Java, JavaScript and the REST API below.</em></p>
+    <p><em><strong>Please Note:</strong> There are over 100 more detailed code examples in Java, JavaScript, Python, Ruby, Go, .NET, Rust, PHP and the REST API below.</em></p>
 
     <pre class="prettyprint lang-java code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
 mockServerClient("localhost", 1080).mockAnyResponse({
@@ -58,6 +58,116 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
 </div>
 
+<button class="accordion"><strong>Python Code Example</strong></button>
+<div class="panel">
+    <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient, HttpRequest, HttpResponse
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest(
+        method="POST",
+        path="/login",
+        body="{username: 'foo', password: 'bar'}"
+    )
+).respond(
+    HttpResponse(
+        status_code=302,
+        headers={"Location": ["https://www.mock-server.com"]}
+    )
+)</code></pre>
+</div>
+
+<button class="accordion"><strong>Ruby Code Example</strong></button>
+<div class="panel">
+    <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+  HttpRequest.new(
+    method: 'POST',
+    path: '/login',
+    body: "{username: 'foo', password: 'bar'}"
+  )
+).respond(
+  HttpResponse.new(
+    status_code: 302,
+    headers: { 'Location' => ['https://www.mock-server.com'] }
+  )
+)</code></pre>
+</div>
+
+<button class="accordion"><strong>Go Code Example</strong></button>
+<div class="panel">
+    <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().
+        Method("POST").
+        Path("/login").
+        Body("{username: 'foo', password: 'bar'}"),
+).Respond(
+    mockserver.Response().
+        StatusCode(302).
+        Header("Location", "https://www.mock-server.com"),
+)</code></pre>
+</div>
+
+<button class="accordion"><strong>.NET Code Example</strong></button>
+<div class="panel">
+    <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request()
+        .WithMethod("POST")
+        .WithPath("/login")
+        .WithBody("{username: 'foo', password: 'bar'}")
+).Respond(
+    HttpResponse.Response()
+        .WithStatusCode(302)
+        .WithHeader("Location", "https://www.mock-server.com")
+);</code></pre>
+</div>
+
+<button class="accordion"><strong>Rust Code Example</strong></button>
+<div class="panel">
+    <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(
+    HttpRequest::new()
+        .method("POST")
+        .path("/login")
+        .body("{username: 'foo', password: 'bar'}"),
+).respond(
+    HttpResponse::new()
+        .status_code(302)
+        .header("Location", "https://www.mock-server.com"),
+).unwrap();</code></pre>
+</div>
+
+<button class="accordion"><strong>PHP Code Example</strong></button>
+<div class="panel">
+    <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;method('POST')
+        -&gt;path('/login')
+        -&gt;body("{username: 'foo', password: 'bar'}")
+)-&gt;respond(
+    HttpResponse::response()
+        -&gt;statusCode(302)
+        -&gt;header('Location', 'https://www.mock-server.com')
+);</code></pre>
+</div>
+
 <p>To use the Java client add the <strong>org.mock-server:mockserver-client-java-no-dependencies:{{ site.mockserver_version }}</strong> dependency. The <code>-no-dependencies</code> artifact bundles all dependencies with relocated packages, so it declares zero transitive dependencies — this avoids classpath conflicts and CVE scanning noise from unused transitive dependencies.</p>
 
 <p>For more details about the different dependency versions see the page on <a href="/where/maven_central.html#mockserver_client_java">Maven Central</a></p>
@@ -79,7 +189,7 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     <li><strong><a href="#button_match_request_by_priority">priority</a></strong> <em>(optional)</em> - matching is ordered by priority (highest first) then creation (earliest first)</li>
     <li><strong><a href="#button_match_request_update_by_id">id</a></strong> <em>(optional)</em> - used for updating an existing expectation (i.e. when the id matches)</li>
     <li><strong><a href="#stateful_scenarios">scenario</a></strong> <em>(optional)</em> - used for stateful multi-step API flows where the response changes based on prior interactions</li>
-    <li><strong><a href="#sequential_responses">httpResponses</a></strong> <em>(optional)</em> - an array of responses to cycle through sequentially or randomly on each match</li>
+    <li><strong><a href="/mock_server/stateful_scenarios.html#sequential_cycling_responses">httpResponses</a></strong> <em>(optional)</em> - an array of responses to cycle through sequentially or randomly on each match</li>
 </ul>
 
 <p><strong><a href="/mock_server/using_openapi.html#generate_expectation_from_openapi">open api expectations</a></strong> are also supported using an <a target="_blank" href="https://swagger.io/docs/specification/basic-structure/" rel="noopener noreferrer"><strong>OpenAPI
@@ -109,447 +219,11 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 
 <h4>Stateful Scenarios</h4>
 
-<p>Stateful scenarios let you model <strong>multi-step API conversations</strong> where MockServer's response changes based on prior interactions. Each scenario is an independent named state machine that starts in the <span class="inline_code">"Started"</span> state.</p>
+<p>MockServer can model <strong>multi-step, stateful API behaviour</strong> &mdash; where the response to a request depends on what happened before. This covers named state-machine scenarios (using <span class="inline_code">scenarioName</span> / <span class="inline_code">scenarioState</span> / <span class="inline_code">newScenarioState</span>), sequential / cycling responses (<span class="inline_code">httpResponses</span> + <span class="inline_code">responseMode</span>), timed and externally-triggered state transitions, and cross-protocol scenario correlation.</p>
 
-<p>An expectation can participate in a scenario by specifying:</p>
-<ul>
-    <li><strong>scenarioName</strong> - the name of the scenario this expectation belongs to</li>
-    <li><strong>scenarioState</strong> - the state the scenario must be in for this expectation to match</li>
-    <li><strong>newScenarioState</strong> - the state the scenario transitions to after this expectation matches</li>
-</ul>
+<p>These features have their own page with a feature overview and runnable examples for every client &mdash; Java, JavaScript, Python, Ruby, Go, .NET, Rust, PHP, the REST API and JSON:</p>
 
-<p>If <span class="inline_code">scenarioName</span> is not set, the expectation behaves normally without any scenario filtering. The default initial state for all scenarios is <span class="inline_code">"Started"</span>.</p>
-
-<p><strong>Example - Login Flow:</strong> First call returns a token, subsequent calls using that token get a different response.</p>
-<pre class="prettyprint lang-java code"><code class="code">// Step 1: Login returns a token (scenario starts in "Started" state)
-{
-    "httpRequest": {
-        "method": "POST",
-        "path": "/login"
-    },
-    "httpResponse": {
-        "statusCode": 200,
-        "body": "{\"token\": \"abc123\"}"
-    },
-    "scenarioName": "LoginFlow",
-    "scenarioState": "Started",
-    "newScenarioState": "LoggedIn",
-    "times": { "remainingTimes": 1 }
-}
-
-// Step 2: After login, GET /profile returns user data
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/profile"
-    },
-    "httpResponse": {
-        "statusCode": 200,
-        "body": "{\"name\": \"Alice\", \"email\": \"alice@example.com\"}"
-    },
-    "scenarioName": "LoginFlow",
-    "scenarioState": "LoggedIn"
-}
-
-// Step 3: Before login, GET /profile returns 401
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/profile"
-    },
-    "httpResponse": {
-        "statusCode": 401,
-        "body": "{\"error\": \"Not authenticated\"}"
-    },
-    "scenarioName": "LoginFlow",
-    "scenarioState": "Started"
-}</code></pre>
-
-<p><strong>Example - Pagination:</strong> Successive calls to the same endpoint return different pages of data.</p>
-<pre class="prettyprint lang-java code"><code class="code">// Page 1 (initial state)
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/items"
-    },
-    "httpResponse": {
-        "statusCode": 200,
-        "body": "{\"items\": [\"a\", \"b\"], \"page\": 1, \"hasMore\": true}"
-    },
-    "scenarioName": "Pagination",
-    "scenarioState": "Started",
-    "newScenarioState": "Page2",
-    "times": { "remainingTimes": 1 }
-}
-
-// Page 2
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/items"
-    },
-    "httpResponse": {
-        "statusCode": 200,
-        "body": "{\"items\": [\"c\", \"d\"], \"page\": 2, \"hasMore\": true}"
-    },
-    "scenarioName": "Pagination",
-    "scenarioState": "Page2",
-    "newScenarioState": "Page3",
-    "times": { "remainingTimes": 1 }
-}
-
-// Page 3 (last page)
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/items"
-    },
-    "httpResponse": {
-        "statusCode": 200,
-        "body": "{\"items\": [\"e\"], \"page\": 3, \"hasMore\": false}"
-    },
-    "scenarioName": "Pagination",
-    "scenarioState": "Page3"
-}</code></pre>
-
-<p><strong>Example - Retry Testing:</strong> First two calls return 503, third call succeeds.</p>
-<pre class="prettyprint lang-java code"><code class="code">// First call: 503
-{
-    "httpRequest": { "path": "/api/data" },
-    "httpResponse": { "statusCode": 503, "body": "{\"error\": \"Service Unavailable\"}" },
-    "scenarioName": "RetryTest",
-    "scenarioState": "Started",
-    "newScenarioState": "Attempt2",
-    "times": { "remainingTimes": 1 }
-}
-
-// Second call: 503
-{
-    "httpRequest": { "path": "/api/data" },
-    "httpResponse": { "statusCode": 503, "body": "{\"error\": \"Service Unavailable\"}" },
-    "scenarioName": "RetryTest",
-    "scenarioState": "Attempt2",
-    "newScenarioState": "Ready",
-    "times": { "remainingTimes": 1 }
-}
-
-// Third call onwards: 200
-{
-    "httpRequest": { "path": "/api/data" },
-    "httpResponse": { "statusCode": 200, "body": "{\"data\": \"success\"}" },
-    "scenarioName": "RetryTest",
-    "scenarioState": "Ready"
-}</code></pre>
-
-<p><strong>Example - Order State Machine:</strong> Model an order lifecycle with state transitions.</p>
-<pre class="prettyprint lang-java code"><code class="code">// Create order
-{
-    "httpRequest": { "method": "POST", "path": "/orders" },
-    "httpResponse": { "statusCode": 201, "body": "{\"id\": 1, \"status\": \"CREATED\"}" },
-    "scenarioName": "OrderLifecycle",
-    "scenarioState": "Started",
-    "newScenarioState": "OrderCreated",
-    "times": { "remainingTimes": 1 }
-}
-
-// Pay for order (only available after creation)
-{
-    "httpRequest": { "method": "PUT", "path": "/orders/1/pay" },
-    "httpResponse": { "statusCode": 200, "body": "{\"id\": 1, \"status\": \"PAID\"}" },
-    "scenarioName": "OrderLifecycle",
-    "scenarioState": "OrderCreated",
-    "newScenarioState": "OrderPaid",
-    "times": { "remainingTimes": 1 }
-}
-
-// Get order - returns CREATED status
-{
-    "httpRequest": { "method": "GET", "path": "/orders/1" },
-    "httpResponse": { "statusCode": 200, "body": "{\"id\": 1, \"status\": \"CREATED\"}" },
-    "scenarioName": "OrderLifecycle",
-    "scenarioState": "OrderCreated"
-}
-
-// Get order - returns PAID status
-{
-    "httpRequest": { "method": "GET", "path": "/orders/1" },
-    "httpResponse": { "statusCode": 200, "body": "{\"id\": 1, \"status\": \"PAID\"}" },
-    "scenarioName": "OrderLifecycle",
-    "scenarioState": "OrderPaid"
-}</code></pre>
-
-<p><strong>Example - Rate Limiting:</strong> Allow a fixed number of calls, then return 429.</p>
-<pre class="prettyprint lang-java code"><code class="code">// First 3 calls succeed
-{
-    "httpRequest": { "path": "/api/resource" },
-    "httpResponse": { "statusCode": 200, "body": "{\"data\": \"ok\"}" },
-    "scenarioName": "RateLimit",
-    "scenarioState": "Started",
-    "newScenarioState": "Call2",
-    "times": { "remainingTimes": 1 }
-}
-{
-    "httpRequest": { "path": "/api/resource" },
-    "httpResponse": { "statusCode": 200, "body": "{\"data\": \"ok\"}" },
-    "scenarioName": "RateLimit",
-    "scenarioState": "Call2",
-    "newScenarioState": "Call3",
-    "times": { "remainingTimes": 1 }
-}
-{
-    "httpRequest": { "path": "/api/resource" },
-    "httpResponse": { "statusCode": 200, "body": "{\"data\": \"ok\"}" },
-    "scenarioName": "RateLimit",
-    "scenarioState": "Call3",
-    "newScenarioState": "RateLimited",
-    "times": { "remainingTimes": 1 }
-}
-
-// Subsequent calls: 429 Too Many Requests
-{
-    "httpRequest": { "path": "/api/resource" },
-    "httpResponse": { "statusCode": 429, "body": "{\"error\": \"Rate limit exceeded\"}" },
-    "scenarioName": "RateLimit",
-    "scenarioState": "RateLimited"
-}</code></pre>
-
-<a id="llm_conversation_example" class="anchor" href="#llm_conversation_example">&nbsp;</a>
-
-<p><strong>Example - Multi-Turn LLM Conversation:</strong> Script a two-turn agent loop where the model first calls a tool, then answers after receiving the tool result. Each turn advances the scenario state automatically. Use <span class="inline_code">isolateBy</span> so concurrent sessions (identified by a header, query parameter, or cookie) maintain independent state.</p>
-
-<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.client.LlmConversationBuilder.conversation;
-import static org.mockserver.model.Completion.completion;
-import static org.mockserver.model.ToolUse.toolUse;
-import static org.mockserver.llm.IsolationSource.header;
-
-conversation()
-    .withPath("/v1/messages")
-    .withProvider(Provider.ANTHROPIC)
-    .withModel("claude-sonnet-4")
-    .isolateBy(header("x-session-id"))
-    .turn()
-        .whenTurnIndex(0)
-        .respondingWith(
-            completion()
-                .withToolCall(toolUse("search").withArguments("{\"query\":\"weather\"}"))
-                .withStopReason("tool_use"))
-    .andThen()
-    .turn()
-        .whenContainsToolResultFor("search")
-        .respondingWith(
-            completion()
-                .withText("Based on the search results, it will be sunny.")
-                .withStopReason("end_turn"))
-    .applyTo(mockServerClient);</code></pre>
-
-<p>JSON equivalent (two expectations sharing a scenario):</p>
-<pre class="prettyprint lang-java code"><code class="code">// Turn 1: tool call
-{
-    "httpRequest": { "method": "POST", "path": "/v1/messages" },
-    "httpLlmResponse": {
-        "provider": "ANTHROPIC",
-        "model": "claude-sonnet-4",
-        "completion": {
-            "toolCalls": [{ "name": "search", "arguments": "{\"query\":\"weather\"}" }],
-            "stopReason": "tool_use"
-        },
-        "conversationPredicates": { "turnIndex": 0 }
-    },
-    "scenarioName": "__llm_conv_example",
-    "scenarioState": "Started",
-    "newScenarioState": "turn_1"
-}
-
-// Turn 2: final answer after tool result
-{
-    "httpRequest": { "method": "POST", "path": "/v1/messages" },
-    "httpLlmResponse": {
-        "provider": "ANTHROPIC",
-        "model": "claude-sonnet-4",
-        "completion": {
-            "text": "Based on the search results, it will be sunny.",
-            "stopReason": "end_turn"
-        },
-        "conversationPredicates": { "containsToolResultFor": "search" }
-    },
-    "scenarioName": "__llm_conv_example",
-    "scenarioState": "turn_1",
-    "newScenarioState": "__done"
-}</code></pre>
-
-<p>Scenarios are independent of each other — different scenario names maintain separate state. All scenario states are reset when MockServer is <a href="/mock_server/clearing_and_resetting.html">reset</a>.</p>
-
-<a id="timed_scenario_flows" class="anchor" href="#timed_scenario_flows">&nbsp;</a>
-
-<h4>Timed and Triggered Scenario Flows</h4>
-
-<p>Beyond expectation-driven state transitions, MockServer supports <strong>timed auto-transitions</strong> and <strong>external triggers</strong> via REST endpoints. These let you model scenarios where state changes happen after a time delay (e.g. a background process completing) or are driven externally by a test harness.</p>
-
-<p><strong>Get current state:</strong></p>
-<pre class="prettyprint lang-bash code"><code class="code"># Returns {"scenarioName": "DeployFlow", "currentState": "Started"}
-curl -X GET http://localhost:1080/mockserver/scenario/DeployFlow</code></pre>
-
-<p><strong>Set state immediately:</strong></p>
-<pre class="prettyprint lang-bash code"><code class="code"># Set the scenario to "Deploying" state
-curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
-  -H "Content-Type: application/json" \
-  -d '{"state": "Deploying"}'</code></pre>
-
-<p><strong>Set state with timed auto-transition:</strong> The scenario enters "Deploying" immediately, then automatically transitions to "Deployed" after 5 seconds (if still in "Deploying").</p>
-<pre class="prettyprint lang-bash code"><code class="code">curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
-  -H "Content-Type: application/json" \
-  -d '{"state": "Deploying", "transitionAfterMs": 5000, "nextState": "Deployed"}'</code></pre>
-
-<p><strong>External trigger:</strong> Advance the scenario to a specific state from your test harness or CI pipeline.</p>
-<pre class="prettyprint lang-bash code"><code class="code"># Jump directly to "Failed" state
-curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow/trigger \
-  -H "Content-Type: application/json" \
-  -d '{"newState": "Failed"}'</code></pre>
-
-<p><strong>Example - Deployment Pipeline Flow:</strong> Combine expectation-based matching with timed transitions to model a deployment that takes time to complete.</p>
-<pre class="prettyprint lang-java code"><code class="code">// Step 1: Register expectations for each state
-// When Deploying, GET /status returns "in progress"
-{
-    "httpRequest": { "method": "GET", "path": "/status" },
-    "httpResponse": { "statusCode": 200, "body": "{\"status\": \"deploying\"}" },
-    "scenarioName": "DeployFlow",
-    "scenarioState": "Deploying"
-}
-
-// When Deployed, GET /status returns "complete"
-{
-    "httpRequest": { "method": "GET", "path": "/status" },
-    "httpResponse": { "statusCode": 200, "body": "{\"status\": \"complete\"}" },
-    "scenarioName": "DeployFlow",
-    "scenarioState": "Deployed"
-}
-
-// Step 2: Start the flow with a timed transition
-// PUT /mockserver/scenario/DeployFlow
-// Body: {"state": "Deploying", "transitionAfterMs": 3000, "nextState": "Deployed"}
-//
-// Now: GET /status returns "deploying"
-// After 3 seconds: GET /status returns "complete"</code></pre>
-
-<p>Timed transitions are guarded: the transition only fires if the scenario is still in the expected <span class="inline_code">currentState</span> when the timer expires. If the scenario has already moved to a different state (e.g. via an external trigger or expectation match), the timed transition becomes a no-op. Scheduling a new transition for the same scenario cancels any pending one.</p>
-
-<a id="cross_protocol_scenario_correlation" class="anchor" href="#cross_protocol_scenario_correlation">&nbsp;</a>
-
-<h4>Cross-Protocol Scenario Correlation</h4>
-
-<p>Scenario state transitions are not limited to HTTP request matches. A DNS query, WebSocket connection, gRPC request, or HTTP request can drive a scenario forward via a <strong>cross-protocol trigger</strong>. This lets you model multi-protocol test flows — for example: "when a WebSocket connects, advance scenario X so the next HTTP expectation for that state becomes active."</p>
-
-<p>Add a <span class="inline_code">crossProtocolScenarios</span> array to an expectation. Each entry specifies:</p>
-<ul>
-    <li><strong>trigger</strong> — the protocol event that fires the transition: <span class="inline_code">DNS_QUERY</span>, <span class="inline_code">WEBSOCKET_CONNECT</span>, <span class="inline_code">GRPC_REQUEST</span>, or <span class="inline_code">HTTP_REQUEST</span></li>
-    <li><strong>matchPattern</strong> — optional substring filter on the event identifier (DNS query name, gRPC service name, HTTP path, or WebSocket URL); if omitted, all events of that type match</li>
-    <li><strong>scenarioName</strong> — the name of the scenario to advance</li>
-    <li><strong>targetState</strong> — the state to transition the scenario to</li>
-</ul>
-
-<p><strong>Example — WebSocket connect advances an HTTP scenario:</strong> When any WebSocket connection is established, the "ConnectionFlow" scenario transitions to "WsConnected", activating the HTTP expectation that requires that state.</p>
-
-<pre class="prettyprint lang-java code"><code class="code">// Expectation 1: dummy WebSocket endpoint that fires the cross-protocol transition
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/ws/events"
-    },
-    "httpResponse": {
-        "statusCode": 101
-    },
-    "crossProtocolScenarios": [
-        {
-            "trigger": "WEBSOCKET_CONNECT",
-            "scenarioName": "ConnectionFlow",
-            "targetState": "WsConnected"
-        }
-    ]
-}
-
-// Expectation 2: only active after the WebSocket has connected
-{
-    "httpRequest": {
-        "method": "GET",
-        "path": "/api/status"
-    },
-    "httpResponse": {
-        "statusCode": 200,
-        "body": "{\"status\": \"connected\"}"
-    },
-    "scenarioName": "ConnectionFlow",
-    "scenarioState": "WsConnected"
-}</code></pre>
-
-<p><strong>Example — DNS query activates a downstream-failure scenario:</strong> When a DNS query for <span class="inline_code">payments.svc</span> is observed, advance the scenario to "DnsObserved" so a chaos-injecting HTTP expectation becomes active.</p>
-
-<pre class="prettyprint lang-java code"><code class="code">{
-    "httpRequest": { "method": "GET", "path": "/_internal/dns-trigger" },
-    "httpResponse": { "statusCode": 200 },
-    "crossProtocolScenarios": [
-        {
-            "trigger": "DNS_QUERY",
-            "matchPattern": "payments.svc",
-            "scenarioName": "PaymentsFlow",
-            "targetState": "DnsObserved"
-        }
-    ]
-}</code></pre>
-
-<p>The <span class="inline_code">matchPattern</span> is a substring match against the event identifier. For <span class="inline_code">DNS_QUERY</span> it is the query name; for <span class="inline_code">GRPC_REQUEST</span> it is the gRPC service name; for <span class="inline_code">HTTP_REQUEST</span> it is the request path; for <span class="inline_code">WEBSOCKET_CONNECT</span> it is the WebSocket URL. When <span class="inline_code">matchPattern</span> is omitted, all events of that trigger type match. Multiple entries in <span class="inline_code">crossProtocolScenarios</span> are evaluated independently — a single event can advance several scenarios in one fire.</p>
-
-<a id="sequential_responses" class="anchor" href="#sequential_responses">&nbsp;</a>
-
-<h4>Sequential / Cycling Responses</h4>
-
-<p>A single expectation can return <strong>multiple different responses</strong> by providing an array of responses in the <span class="inline_code">httpResponses</span> field. Each time the expectation matches, the next response in the list is returned. After the last response, it cycles back to the first.</p>
-
-<p>The <span class="inline_code">responseMode</span> field controls how responses are selected:</p>
-<ul>
-    <li><strong>SEQUENTIAL</strong> (default) - responses are returned in order, cycling back to the first after the last</li>
-    <li><strong>RANDOM</strong> - a random response is selected from the list for each request</li>
-</ul>
-
-<p><strong>Note:</strong> Use <span class="inline_code">httpResponses</span> instead of <span class="inline_code">httpResponse</span> (singular) when you want multiple responses. If both are set, <span class="inline_code">httpResponses</span> takes priority.</p>
-
-<p><strong>Example - Sequential Responses:</strong> Cycle through different status codes.</p>
-<pre class="prettyprint lang-java code"><code class="code">{
-    "httpRequest": {
-        "path": "/api/status"
-    },
-    "httpResponses": [
-        { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
-        { "statusCode": 503, "body": "{\"status\": \"degraded\"}" },
-        { "statusCode": 200, "body": "{\"status\": \"ok\"}" }
-    ]
-}</code></pre>
-<p>The first request returns 200, the second returns 503, the third returns 200, then it cycles back to the first response.</p>
-
-<p><strong>Example - Random Responses:</strong> Simulate unpredictable service behavior.</p>
-<pre class="prettyprint lang-java code"><code class="code">{
-    "httpRequest": {
-        "path": "/api/unstable"
-    },
-    "httpResponses": [
-        { "statusCode": 200, "body": "{\"result\": \"success\"}" },
-        { "statusCode": 500, "body": "{\"error\": \"Internal Server Error\"}" },
-        { "statusCode": 429, "body": "{\"error\": \"Too Many Requests\"}" }
-    ],
-    "responseMode": "RANDOM"
-}</code></pre>
-
-<p><strong>Example - Java Client:</strong></p>
-<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.HttpRequest.request;
-import static org.mockserver.model.HttpResponse.response;
-
-new MockServerClient("localhost", 1080)
-    .when(request().withPath("/api/status"))
-    .respond(
-        java.util.Arrays.asList(
-            response().withStatusCode(200).withBody("{\"status\": \"ok\"}"),
-            response().withStatusCode(503).withBody("{\"status\": \"degraded\"}")
-        )
-    );</code></pre>
+<p style="font-size: 1.1em;"><strong><a href="/mock_server/stateful_scenarios.html">&rarr; Stateful Scenarios</a></strong></p>
 
 <a id="updating_expectations" class="anchor" href="#updating_expectations">&nbsp;</a>
 
@@ -732,8 +406,10 @@ new MockServerClient("localhost", 1080)
     <li><strong><a href="#button_match_request_by_body_with_xml_schema">XML Schema</a></strong> - see <a target="_blank" href="https://www.w3.org/standards/xml/schema.html" rel="noopener noreferrer">XML Schema documentation</a></li>
     <li><strong><a href="#button_match_request_by_body_with_xpath">XPath</a></strong> - matches if at least one value returned by expression, see <a target="_blank" href="https://www.w3.org/TR/2017/REC-xpath-31-20170321/" rel="noopener noreferrer">XPath specification</a></li>
     <li><strong><a href="#button_match_request_by_form_submission_body">form fields</a></strong> (i.e. body parameters)</li>
+    <li><strong><a href="#button_match_request_by_multipart_body">multipart/form-data</a></strong> &mdash; match file uploads and mixed field/file requests by field value, filename, or part content-type</li>
     <li><strong><a href="#button_match_request_by_binary_body">binary</a></strong></li>
     <li><strong><a href="#graphql_body_matching">GraphQL</a></strong> - whitespace-insensitive matching of GraphQL queries, mutations, and subscriptions</li>
+    <li><strong><a href="#fuzzy_body_matching">fuzzy / similarity</a></strong> - deterministic Jaro-Winkler similarity match at or above a configurable threshold</li>
     <li><strong><a href="#button_match_request_by_not_matching_body_with_xpath">negated matcher</a></strong></li>
 </ul>
 
@@ -756,6 +432,7 @@ new MockServerClient("localhost", 1080)
         </ul>
     </li>
     <li><strong>fields</strong> (optional) - explicit list of top-level field names to match in AST modes. If not specified, fields are extracted from the <span class="inline_code">query</span> string</li>
+    <li><strong>schema</strong> (optional) - a GraphQL schema (SDL text or an introspection JSON result) used to <a href="#graphql_schema_responses">synthesize a schema-valid response</a> for the matched query without hand-authoring the response JSON</li>
 </ul>
 
 <p><strong>Example - match a GraphQL query:</strong></p>
@@ -844,6 +521,39 @@ new MockServerClient("localhost", 1080)
     }
 }</code></pre>
 
+<a id="graphql_schema_responses" class="anchor" href="#graphql_schema_responses">&nbsp;</a>
+
+<h4>GraphQL Schema-Based Response Synthesis</h4>
+
+<p>Instead of hand-authoring the response JSON for every GraphQL query, you can register a GraphQL <strong>schema</strong> on the expectation and let MockServer build a schema-valid response automatically. Provide the schema as either <a target="_blank" href="https://graphql.org/learn/schema/" rel="noopener noreferrer">SDL</a> text (e.g. <span class="inline_code">type Query { hello: String }</span>) or an <a target="_blank" href="https://graphql.org/learn/introspection/" rel="noopener noreferrer">introspection</a> JSON result.</p>
+
+<p>When a request matches an expectation whose GraphQL body carries a <span class="inline_code">schema</span>, MockServer reads the query's selection set and returns a <span class="inline_code">{"data": {...}}</span> response that respects the schema's types:</p>
+<ul>
+    <li>only the fields the client asked for appear in the response (selection-set subsets are honoured)</li>
+    <li>scalars get sensible deterministic placeholders — <span class="inline_code">String</span>, <span class="inline_code">Int</span>, <span class="inline_code">Float</span>, <span class="inline_code">Boolean</span>, <span class="inline_code">ID</span>, plus common custom scalars such as <span class="inline_code">DateTime</span> and <span class="inline_code">JSON</span></li>
+    <li>enum fields return their first declared value</li>
+    <li>list fields return a single-element array; nested object fields recurse into their sub-selection</li>
+    <li>non-null wrappers are unwrapped; field aliases, <span class="inline_code">__typename</span>, inline fragments, and named fragment spreads are all supported</li>
+</ul>
+
+<p>This is useful for quickly standing up a realistic GraphQL mock from an existing schema — no example payloads required. To return a specific, hand-crafted payload instead, simply provide an <span class="inline_code">httpResponse</span> body as in the matching examples above.</p>
+
+<p><strong>Example - synthesize a response from an SDL schema:</strong></p>
+<pre class="prettyprint lang-java code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/graphql",
+        "body": {
+            "type": "GRAPHQL",
+            "query": "{ user { name email } }",
+            "schema": "type Query { user: User } type User { id: ID name: String email: String age: Int }"
+        }
+    }
+}</code></pre>
+
+<p>A request with the query <span class="inline_code">{ user { name email } }</span> yields a schema-valid response containing only the requested fields, for example:</p>
+<pre class="prettyprint code"><code class="code">{ "data": { "user": { "name": "string", "email": "string" } } }</code></pre>
+
 <a id="graphql_subscriptions" class="anchor" href="#graphql_subscriptions">&nbsp;</a>
 
 <h4>GraphQL Subscriptions over WebSocket</h4>
@@ -914,6 +624,120 @@ new MockServerClient("localhost", 1080)
 // {"id": "1", "type": "complete"}</code></pre>
 
 <p><strong>Note:</strong> The legacy <span class="inline_code">graphql-ws</span> subprotocol (used by the older <a target="_blank" href="https://github.com/apollographql/subscriptions-transport-ws" rel="noopener noreferrer">subscriptions-transport-ws</a> library) is also accepted. Both use the same message format in MockServer's implementation.</p>
+
+<a id="fuzzy_body_matching" class="anchor" href="#fuzzy_body_matching">&nbsp;</a>
+
+<h4>Fuzzy / Similarity Body Matching</h4>
+
+<p>The <strong>FUZZY</strong> body matcher matches when the request body is similar enough to an expected string, using a deterministic normalised Jaro-Winkler similarity ratio with a configurable threshold. Unlike LLM-based semantic matching, it is fully deterministic — the same inputs always produce the same result and it requires no external service.</p>
+
+<p>JSON format:</p>
+<pre class="prettyprint code"><code class="code">{
+    "httpRequest": {
+        "method": "POST",
+        "path": "/api/search",
+        "body": {
+            "type": "FUZZY",
+            "fuzzy": "find orders for user",
+            "threshold": 0.8,
+            "ignoreCase": false
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"results\": []}"
+    }
+}</code></pre>
+
+<p>Fields:</p>
+<ul>
+    <li><strong>fuzzy</strong> — the expected string to compare against</li>
+    <li><strong>threshold</strong> (optional, default <code>0.8</code>) — required similarity ratio between <code>0.0</code> and <code>1.0</code>. A value of <code>1.0</code> requires an exact match; <code>0.0</code> matches anything.</li>
+    <li><strong>ignoreCase</strong> (optional, default <code>false</code>) — when <code>true</code>, both strings are trimmed and lower-cased before comparison</li>
+</ul>
+
+<p>Java DSL:</p>
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.FuzzyBody.fuzzy;
+
+new MockServerClient("localhost", 1080)
+    .when(
+        request()
+            .withMethod("POST")
+            .withPath("/api/search")
+            .withBody(fuzzy("find orders for user", 0.8, false))
+    )
+    .respond(
+        response().withStatusCode(200).withBody("{\"results\": []}")
+    );</code></pre>
+
+<a id="conditional_request_matcher" class="anchor" href="#conditional_request_matcher">&nbsp;</a>
+
+<h4>Conditional (if/then/else) Request Matcher</h4>
+
+<p>A <strong>conditionalRequestDefinition</strong> lets you combine request matchers with if/then/else logic. If the <code>if</code> guard matches the incoming request, the <code>then</code> branch must also match; otherwise the <code>else</code> branch must match (when absent, the expectation matches whenever the guard is false). Each branch can be any request definition — an <code>httpRequest</code>, an OpenAPI definition, or even a nested <code>conditionalRequestDefinition</code>.</p>
+
+<pre class="prettyprint code"><code class="code">{
+    "conditionalRequestDefinition": {
+        "if": {
+            "method": "POST",
+            "headers": { "content-type": ["application/json"] }
+        },
+        "then": {
+            "body": {
+                "type": "JSON_SCHEMA",
+                "jsonSchema": "{\"type\": \"object\", \"required\": [\"orderId\"]}"
+            }
+        },
+        "else": {
+            "method": "GET"
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200
+    }
+}</code></pre>
+
+<p>This expectation matches either a JSON POST whose body contains an <code>orderId</code> field, or a GET request. Existing AND-only expectations are unchanged — this construct is entirely opt-in.</p>
+
+<p>Java DSL:</p>
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.ConditionalRequestDefinition.requestIf;
+
+new MockServerClient("localhost", 1080)
+    .when(
+        requestIf(
+            request().withMethod("POST").withHeader("content-type", "application/json"),
+            request().withBody(json("{\"orderId\": \"${json-unit.any-string}\"}")),
+            request().withMethod("GET")
+        )
+    )
+    .respond(response().withStatusCode(200));</code></pre>
+
+<a id="accept_header_matching" class="anchor" href="#accept_header_matching">&nbsp;</a>
+
+<h4>Accept-Header Content-Negotiation Matching</h4>
+
+<p>A header matcher value may use an opt-in <code>accept:&lt;media-type&gt;</code> directive to match when the request's <code>Accept</code> header finds the media type acceptable per <a target="_blank" href="https://datatracker.ietf.org/doc/html/rfc7231#section-5.3.2" rel="noopener noreferrer">RFC 7231 §5.3.2</a>. This honours q-weights (<code>q=0</code> excludes a type), <code>type/*</code> and <code>*/*</code> wildcards, and specificity/preference ordering.</p>
+
+<p>Use this form as a header <em>value</em> matcher in the <code>Accept</code> header entry:</p>
+
+<pre class="prettyprint code"><code class="code">{
+    "httpRequest": {
+        "method": "GET",
+        "path": "/api/resource",
+        "headers": {
+            "Accept": ["accept:application/json"]
+        }
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "headers": { "Content-Type": ["application/json"] },
+        "body": "{\"result\": \"json response\"}"
+    }
+}</code></pre>
+
+<p>This expectation matches requests whose <code>Accept</code> header finds <code>application/json</code> acceptable — for example <code>Accept: application/json</code>, <code>Accept: */*</code>, or <code>Accept: application/json;q=0.9, text/html;q=0.5</code>. A request sending <code>Accept: text/html</code> or <code>Accept: application/json;q=0</code> would not match.</p>
+
+<p>Existing exact/regex header matching is unchanged when the <code>accept:</code> prefix is absent.</p>
 
 <button id="button_request" class="accordion title"><strong>Request Properties Matcher Code Examples</strong></button>
 <div class="panel title">
@@ -1245,6 +1069,8 @@ llmMock("/v1/embeddings")
 
 <p>Attach an <span class="inline_code">outputSchema</span> (a JSON Schema) to a completion and MockServer validates the response <span class="inline_code">text</span> against it as the response is encoded. Validation is <strong>fail-soft</strong>: a mismatch never changes the response body &mdash; it adds an <span class="inline_code">x-mockserver-structured-output-invalid</span> response header and logs a warning, so a malformed structured-output fixture is surfaced without breaking the test (a blank or invalid schema, or a missing <span class="inline_code">text</span>, is a no-op). To assert schema conformance over already-recorded traffic instead, use the <a href="/mock_server/ai_mcp_tools.html#verify_structured_output"><span class="inline_code">verify_structured_output</span></a> tool.</p>
 
+<p>For a stricter check, set <span class="inline_code">enforceOutputSchema</span> to <span class="inline_code">true</span> alongside the schema. This switches MockServer from fail-soft to <strong>strict enforcement</strong>: when the configured response does not conform to the schema, the mock <strong>fails loudly</strong> with a provider-correct error (HTTP <span class="inline_code">502</span>) instead of returning the non-conforming body. This models a real provider's strict <span class="inline_code">response_format: json_schema</span> mode, where the provider <em>guarantees</em> schema-valid output &mdash; so a non-conforming strict fixture is treated as a configuration error rather than passed silently. Enforcement is <strong>opt-in</strong>; the default (unset, or <span class="inline_code">false</span>) keeps the fail-soft validate-and-log behaviour, and it has no effect without an <span class="inline_code">outputSchema</span>.</p>
+
 <pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.client.LlmMockBuilder.llmMock;
 import static org.mockserver.model.Completion.completion;
 import static org.mockserver.model.Provider.ANTHROPIC;
@@ -1282,7 +1108,7 @@ llmMock("/v1/messages")
     }
 }</code></pre>
 
-<p>For multi-turn LLM conversations with stateful scenario progression, see the <a href="#llm_conversation_example">LLM Conversation</a> example in the <a href="#stateful_scenarios">Stateful Scenarios</a> section.</p>
+<p>For multi-turn LLM conversations with stateful scenario progression, see the <a href="/mock_server/stateful_scenarios.html#llm_multi_turn">multi-turn LLM conversations</a> section of <a href="/mock_server/stateful_scenarios.html">Stateful Scenarios</a>.</p>
 
 <a id="websocket_response_action" class="anchor" href="#websocket_response_action">&nbsp;</a>
 

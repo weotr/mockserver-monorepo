@@ -47,6 +47,36 @@ public class BodyWithContentTypeDTODeserializerTest {
     }
 
     @Test
+    public void shouldParseFileBodyWithTemplateType() throws IOException {
+        // given
+        String json = ("{\"httpResponse\":{\"body\":{\"type\":\"FILE\",\"filePath\":\"some/path.json\",\"templateType\":\"MUSTACHE\",\"contentType\":\"application/json\"}}}");
+
+        // when
+        ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
+
+        // then
+        assertThat(expectationDTO, is(new ExpectationDTO()
+            .setHttpResponse(
+                new HttpResponseDTO().setBody(new FileBodyDTO(new FileBody("some/path.json", MediaType.parse("application/json"), HttpTemplate.TemplateType.MUSTACHE)))
+            )));
+    }
+
+    @Test
+    public void shouldParseFileBodyWithoutTemplateType() throws IOException {
+        // given
+        String json = ("{\"httpResponse\":{\"body\":{\"type\":\"FILE\",\"filePath\":\"some/path.json\"}}}");
+
+        // when
+        ExpectationDTO expectationDTO = ObjectMapperFactory.createObjectMapper().readValue(json, ExpectationDTO.class);
+
+        // then
+        assertThat(expectationDTO, is(new ExpectationDTO()
+            .setHttpResponse(
+                new HttpResponseDTO().setBody(new FileBodyDTO(new FileBody("some/path.json")))
+            )));
+    }
+
+    @Test
     public void shouldParseJsonWithMissingValueFromBody() throws IOException {
         // given
         String json = ("{" + NEW_LINE +

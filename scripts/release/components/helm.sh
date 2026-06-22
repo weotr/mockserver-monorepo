@@ -107,7 +107,11 @@ else
     # cosign key in cosign-key.$$, cosign password in cosign-pw.$$. The
     # container reads them from /build/.tmp/ (the repo mount). No `-e` for
     # secrets.
-    in_docker "$HELM_IMAGE" --entrypoint sh -w /build \
+    # HARD with retry: all secrets (cosign-key, ghcr-token) exist, so signing is
+    # expected to work. A transient blip (registry 5xx, cosign download hiccup)
+    # is retried; a real signing failure sets rc=1 and is propagated so the
+    # caller aborts the release rather than publishing an unsigned chart.
+    retry 3 5 -- in_docker "$HELM_IMAGE" --entrypoint sh -w /build \
       -- -ec '
         set +x
         GHCR_USERNAME=$(head -1 /build/.tmp/ghcr-creds.'$$')
@@ -125,10 +129,15 @@ else
   if aws secretsmanager describe-secret --region "$REGION" \
        --secret-id mockserver-release/cosign-key >/dev/null 2>&1; then
     log_info "Cosign-signing the OCI chart (mockserver-release/cosign-key found)"
+    # HARD-fail: the presence-gate above decides WHETHER to sign; once the key
+    # exists, a signing failure (after retries inside cosign_sign_chart) is a
+    # real error and must abort the release rather than publishing an unsigned
+    # chart.
     if cosign_sign_chart; then
       log_info "Chart signed with cosign"
     else
-      log_info ":warning: cosign signing failed (non-fatal) — chart published but unsigned"
+      log_error "cosign signing failed — chart could not be signed"
+      exit 1
     fi
   else
     log_info "cosign key not configured (mockserver-release/cosign-key) — skipping chart signing; see docs/infrastructure/helm.md"

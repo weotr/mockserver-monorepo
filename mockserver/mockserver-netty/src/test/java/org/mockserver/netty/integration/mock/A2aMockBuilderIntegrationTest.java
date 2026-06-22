@@ -231,4 +231,103 @@ public class A2aMockBuilderIntegrationTest {
         assertThat(response, containsString("$100 off #sale"));
         assertJsonRpcId(response, 30);
     }
+
+    @Test
+    public void shouldAdvertiseStreamingAndPushInAgentCard() throws Exception {
+        a2aMock()
+            .withStreaming()
+            .withPushNotifications("http://localhost:" + mockServerPort + "/a2a/push-callback")
+            .applyTo(mockServerClient);
+
+        String response = sendRequest("GET", "/.well-known/agent.json", null);
+
+        assertThat(response, containsString("HTTP/1.1 200"));
+        assertThat(response, containsString("\"streaming\": true"));
+        assertThat(response, containsString("\"pushNotifications\": true"));
+    }
+
+    @Test
+    public void shouldStreamTaskStatusAndArtifactUpdates() throws Exception {
+        a2aMock()
+            .withStreaming()
+            .withDefaultTaskResponse("Streamed answer")
+            .applyTo(mockServerClient);
+
+        String params = "{\"message\": {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"text\": \"go\"}]}}";
+        String body = "{\"jsonrpc\": \"2.0\", \"method\": \"message/stream\", \"params\": " + params + ", \"id\": 7}";
+        String response = sendRequest("POST", "/a2a", body);
+
+        assertThat(response, containsString("HTTP/1.1 200"));
+        assertThat(response, containsString("text/event-stream"));
+        assertThat(response, containsString("status-update"));
+        assertThat(response, containsString("artifact-update"));
+        assertThat(response, containsString("\"state\": \"working\""));
+        assertThat(response, containsString("\"state\": \"completed\""));
+        assertThat(response, containsString("\"final\": true"));
+        assertThat(response, containsString("Streamed answer"));
+    }
+
+    @Test
+    public void shouldDeliverPushNotificationToWebhook() throws Exception {
+        // The webhook target is this same MockServer; a separate expectation captures the POST.
+        mockServerClient
+            .when(org.mockserver.model.HttpRequest.request().withMethod("POST").withPath("/a2a/push-callback"))
+            .respond(org.mockserver.model.HttpResponse.response().withStatusCode(202).withBody("ack"));
+
+        a2aMock()
+            .withPushNotifications("http://localhost:" + mockServerPort + "/a2a/push-callback")
+            .withDefaultTaskResponse("Pushed task result")
+            .applyTo(mockServerClient);
+
+        String params = "{\"message\": {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"text\": \"Hello\"}]}}";
+        String response = sendJsonRpcRequest("tasks/send", params, 55);
+
+        // caller still receives the JSON-RPC task response, with the request id echoed back
+        assertThat(response, containsString("HTTP/1.1 200"));
+        assertThat(response, containsString("Pushed task result"));
+        assertThat(response, containsString("completed"));
+        assertJsonRpcId(response, 55);
+
+        // and the webhook received the push-notification POST
+        mockServerClient.verify(
+            org.mockserver.model.HttpRequest.request()
+                .withMethod("POST")
+                .withPath("/a2a/push-callback")
+                .withBody(containsStringJson("Pushed task result"))
+        );
+    }
+
+    @Test
+    public void shouldPreserveVelocityMetacharactersOnPushDeliveryPath() throws Exception {
+        mockServerClient
+            .when(org.mockserver.model.HttpRequest.request().withMethod("POST").withPath("/a2a/push-callback"))
+            .respond(org.mockserver.model.HttpResponse.response().withStatusCode(202).withBody("ack"));
+
+        a2aMock()
+            .withPushNotifications("http://localhost:" + mockServerPort + "/a2a/push-callback")
+            .withDefaultTaskResponse("$100 off #sale")
+            .applyTo(mockServerClient);
+
+        String params = "{\"message\": {\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"text\": \"Hello\"}]}}";
+        String response = sendJsonRpcRequest("tasks/send", params, 56);
+
+        // caller response (Velocity-templated) renders the metacharacters literally
+        assertThat(response, containsString("HTTP/1.1 200"));
+        assertThat(response, containsString("$100 off #sale"));
+        assertThat(response, not(containsString("esc.d")));
+        assertThat(response, not(containsString("esc.h")));
+        assertJsonRpcId(response, 56);
+
+        // the literal webhook POST body also carries the metacharacters un-corrupted
+        mockServerClient.verify(
+            org.mockserver.model.HttpRequest.request()
+                .withMethod("POST")
+                .withPath("/a2a/push-callback")
+                .withBody(containsStringJson("$100 off #sale"))
+        );
+    }
+
+    private static org.mockserver.model.StringBody containsStringJson(String substring) {
+        return org.mockserver.model.StringBody.subString(substring);
+    }
 }

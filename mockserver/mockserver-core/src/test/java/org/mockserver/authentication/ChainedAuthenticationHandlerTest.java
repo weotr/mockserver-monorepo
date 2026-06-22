@@ -29,6 +29,59 @@ public class ChainedAuthenticationHandlerTest {
 
     private static final MockServerLogger mockServerLogger = new MockServerLogger();
 
+    private static AuthenticationHandler stub(AuthenticationResult result) {
+        return new AuthenticationHandler() {
+            @Override
+            public boolean controlPlaneRequestAuthenticated(HttpRequest request) {
+                return result.isAuthenticated();
+            }
+
+            @Override
+            public AuthenticationResult authenticate(HttpRequest request) {
+                return result;
+            }
+        };
+    }
+
+    @Test
+    public void authenticateSelectsFirstVerifiedPrincipalAndUnionsScopes() {
+        // mTLS-style handler: authenticated but no principal
+        AuthenticationHandler mtlsStyle = stub(AuthenticationResult.authenticated(null, "verified-mtls", java.util.Map.of(), java.util.Set.of("mesh")));
+        // OIDC-style handler: authenticated with a verified principal
+        AuthenticationHandler oidcStyle = stub(AuthenticationResult.authenticated("alice", "verified-oidc", java.util.Map.of("sub", "alice"), java.util.Set.of("read", "write")));
+
+        AuthenticationHandler chained = new ChainedAuthenticationHandler(mtlsStyle, oidcStyle);
+        AuthenticationResult result = chained.authenticate(request());
+
+        assertThat(result.isAuthenticated(), equalTo(true));
+        assertThat(result.getPrincipal(), equalTo("alice"));
+        assertThat(result.getPrincipalSource(), equalTo("verified-oidc"));
+        assertThat(result.getScopes(), org.hamcrest.Matchers.containsInAnyOrder("mesh", "read", "write"));
+    }
+
+    @Test
+    public void authenticateFailsWhenAnyDelegateUnauthenticated() {
+        AuthenticationHandler ok = stub(AuthenticationResult.authenticated("alice", "verified-oidc", java.util.Map.of(), java.util.Set.of("read")));
+        AuthenticationHandler no = stub(AuthenticationResult.unauthenticated());
+
+        AuthenticationHandler chained = new ChainedAuthenticationHandler(ok, no);
+        AuthenticationResult result = chained.authenticate(request());
+
+        assertThat(result.isAuthenticated(), equalTo(false));
+        assertThat(result.getPrincipal(), org.hamcrest.Matchers.nullValue());
+    }
+
+    @Test
+    public void authenticateWithNoPrincipalsIsAnonymousButAuthenticated() {
+        AuthenticationHandler a = stub(AuthenticationResult.authenticated(null, "verified-mtls", java.util.Map.of(), java.util.Set.of("x")));
+        AuthenticationHandler b = stub(AuthenticationResult.authenticated(null, "none", java.util.Map.of(), java.util.Set.of("y")));
+
+        AuthenticationResult result = new ChainedAuthenticationHandler(a, b).authenticate(request());
+        assertThat(result.isAuthenticated(), equalTo(true));
+        assertThat(result.getPrincipal(), org.hamcrest.Matchers.nullValue());
+        assertThat(result.getScopes(), org.hamcrest.Matchers.containsInAnyOrder("x", "y"));
+    }
+
     @Test
     public void shouldValidateMTLSAndJWTWithMTLSFirst() {
         // given certificate

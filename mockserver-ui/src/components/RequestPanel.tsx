@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Tooltip from '@mui/material/Tooltip';
@@ -6,16 +6,16 @@ import Typography from '@mui/material/Typography';
 import type { JsonListItem } from '../types';
 import Panel from './Panel';
 import JsonListItemComponent from './JsonListItem';
+import ProgressiveList from './ProgressiveList';
+import { useExpansion } from '../hooks/useExpansion';
+import { matchesItemSearch } from '../lib/searchMatcher';
+import { monospaceFontFamily } from '../theme';
 
 interface RequestPanelProps {
   title: string;
   items: JsonListItem[];
   searchValue: string;
   onSearchChange: (value: string) => void;
-}
-
-function matchesSearch(item: JsonListItem, term: string): boolean {
-  return JSON.stringify(item).toLowerCase().includes(term.toLowerCase());
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ function TraceparentPill({ info }: { info: TraceparentInfo }) {
 
   return (
     <Tooltip
-      title={<Box component="pre" sx={{ m: 0, fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre-wrap' }}>{tooltipText}</Box>}
+      title={<Box component="pre" sx={{ m: 0, fontFamily: monospaceFontFamily, typography: 'caption', whiteSpace: 'pre-wrap' }}>{tooltipText}</Box>}
     >
       <Chip
         label={`[T] ${abbrev}`}
@@ -102,7 +102,7 @@ function TraceparentPill({ info }: { info: TraceparentInfo }) {
         sx={{
           height: 18,
           fontSize: '0.6rem',
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           '& .MuiChip-label': { px: 0.5 },
         }}
       />
@@ -112,6 +112,35 @@ function TraceparentPill({ info }: { info: TraceparentInfo }) {
 
 // ---------------------------------------------------------------------------
 
+// One row of the request list. Memoized so unchanged rows skip re-rendering on
+// the once-per-second WebSocket push (the store preserves `item` references for
+// unchanged entries). traceparent extraction is done here via useMemo keyed on
+// the stable `item`, rather than in the parent's `.map()` where it re-ran for
+// every item on every parent render.
+const RequestRow = memo(function RequestRow({
+  item,
+  index,
+  expanded,
+  onToggleExpand,
+}: {
+  item: JsonListItem;
+  index: number;
+  expanded: boolean;
+  onToggleExpand: (key: string) => void;
+}) {
+  const tp = useMemo(() => extractTraceparentFromItem(item), [item]);
+  return (
+    <Box>
+      <JsonListItemComponent item={item} index={index} expanded={expanded} onToggleExpand={onToggleExpand} />
+      {tp && (
+        <Box sx={{ pl: 6, pb: 0.5 }}>
+          <TraceparentPill info={tp} />
+        </Box>
+      )}
+    </Box>
+  );
+});
+
 export default function RequestPanel({
   title,
   items,
@@ -119,14 +148,17 @@ export default function RequestPanel({
   onSearchChange,
 }: RequestPanelProps) {
   const filtered = useMemo(
-    () => (searchValue ? items.filter((e) => matchesSearch(e, searchValue)) : items),
+    () => (searchValue ? items.filter((e) => matchesItemSearch(e.value, searchValue)) : items),
     [items, searchValue],
   );
+
+  const expansion = useExpansion();
 
   return (
     <Panel
       title={title}
       count={items.length}
+      filteredCount={searchValue ? filtered.length : undefined}
       searchValue={searchValue}
       onSearchChange={onSearchChange}
     >
@@ -135,19 +167,18 @@ export default function RequestPanel({
           {items.length === 0 ? 'No requests yet — recorded requests appear here as traffic reaches the server.' : 'No matching requests'}
         </Typography>
       ) : (
-        filtered.map((item, index) => {
-          const tp = extractTraceparentFromItem(item);
-          return (
-            <Box key={item.key}>
-              <JsonListItemComponent item={item} index={items.length - index} />
-              {tp && (
-                <Box sx={{ pl: 6, pb: 0.5 }}>
-                  <TraceparentPill info={tp} />
-                </Box>
-              )}
-            </Box>
-          );
-        })
+        <ProgressiveList
+          count={filtered.length}
+          getKey={(i) => filtered[i]!.key}
+          renderRow={(i) => (
+            <RequestRow
+              item={filtered[i]!}
+              index={filtered.length - i}
+              expanded={expansion.isExpanded(filtered[i]!.key)}
+              onToggleExpand={expansion.toggle}
+            />
+          )}
+        />
       )}
     </Panel>
   );

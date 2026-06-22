@@ -100,7 +100,11 @@ function escapeMermaid(label: string): string {
 export function toMermaid(graph: CallGraph): string {
   const lines: string[] = ['flowchart TD'];
   for (const node of graph.nodes) {
-    const shape = node.kind === TOOL_CALL ? ['([', '])'] : ['["', '"]'];
+    // Both shapes use a QUOTED label so special characters in the text (e.g. a
+    // tool name like `search(location)`, or message text with brackets/parens)
+    // can't break Mermaid's parser. Stadium `(["..."])` for tool calls, rounded
+    // rect `["..."]` for messages.
+    const shape = node.kind === TOOL_CALL ? ['(["', '"])'] : ['["', '"]'];
     lines.push(`  ${node.id}${shape[0]}${node.kind === TOOL_CALL ? escapeMermaid(node.label) : escapeMermaid(node.kind + ': ' + node.label)}${shape[1]}`);
   }
   for (const edge of graph.edges) {

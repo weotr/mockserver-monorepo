@@ -11,6 +11,130 @@ sitemap:
   lastmod: 2019-11-10T08:00:00+01:00
 ---
 
+<a id="common_configurations" class="anchor" href="#common_configurations">&nbsp;</a>
+
+<h2>Common configurations</h2>
+
+<p>Copy-paste one of these blocks as a starting point. All values can be overridden by system properties or environment variables at runtime.</p>
+
+<h3>Local development</h3>
+
+<p>Low memory footprint, verbose logs, CORS enabled for browser-based testing:</p>
+
+<pre class="prettyprint code"><code class="code"># mockserver.properties — local dev
+mockserver.devMode=true
+mockserver.logLevel=DEBUG
+mockserver.enableCORSForAPI=true
+mockserver.enableCORSForAllResponses=true</code></pre>
+
+<p>Or with Docker:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -d --rm -p 1080:1080 \
+  -e MOCKSERVER_DEV_MODE=true \
+  -e MOCKSERVER_LOG_LEVEL=DEBUG \
+  -e MOCKSERVER_ENABLE_CORS_FOR_API=true \
+  -e MOCKSERVER_ENABLE_CORS_FOR_ALL_RESPONSES=true \
+  mockserver/mockserver</code></pre>
+
+<h3>CI (shared, parallel test runs)</h3>
+
+<p>Cap memory so multiple MockServer instances can run on the same CI node, load expectations from a JSON file, and reduce log noise:</p>
+
+<pre class="prettyprint code"><code class="code"># mockserver.properties — CI
+mockserver.logLevel=WARN
+mockserver.maxExpectations=1024
+mockserver.maxLogEntries=4096
+mockserver.initializationJsonPath=/ci/expectations.json</code></pre>
+
+<h3>Production / shared team instance</h3>
+
+<p>Higher limits, metrics enabled, CORS off, TLS enforced (supply your own certificates):</p>
+
+<pre class="prettyprint code"><code class="code"># mockserver.properties — production
+mockserver.logLevel=INFO
+mockserver.maxExpectations=16384
+mockserver.maxLogEntries=65536
+mockserver.metricsEnabled=true
+mockserver.enableCORSForAPI=false
+mockserver.enableCORSForAllResponses=false</code></pre>
+
+<a id="top10_properties" class="anchor" href="#top10_properties">&nbsp;</a>
+
+<h2>Top 10 most-changed properties</h2>
+
+<table class="comparison_table">
+    <thead>
+        <tr>
+            <th>Property</th>
+            <th>Env variable</th>
+            <th>Default</th>
+            <th>Why you'd change it</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">devMode</span></td>
+            <td><span class="inline_code">MOCKSERVER_DEV_MODE</span></td>
+            <td><span class="this_value">false</span></td>
+            <td>Enable on your laptop to cap memory (1k expectations / 1k log entries) and avoid wasted heap</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">logLevel</span></td>
+            <td><span class="inline_code">MOCKSERVER_LOG_LEVEL</span></td>
+            <td><span class="this_value">INFO</span></td>
+            <td>Set to <span class="inline_code">DEBUG</span> while debugging a mismatch; set to <span class="inline_code">WARN</span> in CI to reduce noise</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">maxExpectations</span></td>
+            <td><span class="inline_code">MOCKSERVER_MAX_EXPECTATIONS</span></td>
+            <td><span class="this_value">heap-based (up to 15,000)</span></td>
+            <td>Lower to reduce memory on constrained hosts; use a power-of-2 to avoid wasted ring-buffer slots</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">maxLogEntries</span></td>
+            <td><span class="inline_code">MOCKSERVER_MAX_LOG_ENTRIES</span></td>
+            <td><span class="this_value">heap-based (up to 100,000)</span></td>
+            <td>Lower for high-throughput or large-body workloads; each HTTP request generates 2–3 log entries</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">maxSocketTimeout</span></td>
+            <td><span class="inline_code">MOCKSERVER_MAX_SOCKET_TIMEOUT</span></td>
+            <td><span class="this_value">20,000 ms</span></td>
+            <td>Increase when your system-under-test is slow; decrease to fail fast in unit tests</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">enableCORSForAPI</span></td>
+            <td><span class="inline_code">MOCKSERVER_ENABLE_CORS_FOR_API</span></td>
+            <td><span class="this_value">false</span></td>
+            <td>Enable when calling the MockServer REST API from a browser-based test</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">enableCORSForAllResponses</span></td>
+            <td><span class="inline_code">MOCKSERVER_ENABLE_CORS_FOR_ALL_RESPONSES</span></td>
+            <td><span class="this_value">false</span></td>
+            <td>Enable to allow browsers to receive mock responses from a different origin</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">initializationJsonPath</span></td>
+            <td><span class="inline_code">MOCKSERVER_INITIALIZATION_JSON_PATH</span></td>
+            <td><span class="this_value">(none)</span></td>
+            <td>Load a set of expectations from a JSON file when MockServer starts — useful for shared or CI setups</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">metricsEnabled</span></td>
+            <td><span class="inline_code">MOCKSERVER_METRICS_ENABLED</span></td>
+            <td><span class="this_value">false</span></td>
+            <td>Enable to expose Prometheus metrics at <span class="inline_code">/mockserver/metrics</span></td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">proxyRemotePort</span> + <span class="inline_code">proxyRemoteHost</span></td>
+            <td><span class="inline_code">MOCKSERVER_PROXY_REMOTE_PORT</span></td>
+            <td><span class="this_value">(none)</span></td>
+            <td>Forward unmatched requests to a real upstream server, turning MockServer into a selective proxy</td>
+        </tr>
+    </tbody>
+</table>
+
 <h2>Settings Properties</h2>
 
 <p><strong>Note:</strong> configuration properties loaded from property files and environment variables are read once at startup and cached. Changes to property files or environment variables after MockServer has started will not take effect. To change configuration at runtime, use the REST API (<span class="inline_code">PUT /mockserver/configuration</span>) or programmatic <span class="inline_code">ConfigurationProperties</span> method calls. System property changes via <span class="inline_code">ConfigurationProperties</span> static methods are read dynamically for properties that support runtime changes (e.g., <span class="inline_code">logLevel</span>).</p>
@@ -25,10 +149,10 @@ sitemap:
     <li>property file</li>
     <li>environment variable (lowest precedence)</li>
 </ol>
-<p>The order of precedence means that properties set by java code overrides those set by <code>@MockServerTest</code> which overrides system properties which overrides property file properties which overrides environment variables.</p>
+<p>Each level overrides the levels below it. For example, a system property overrides the same key in a property file, which in turn overrides an environment variable.</p>
 <p>When using <code>@MockServerTest</code>, properties prefixed with <code>mockserver.</code> (e.g. <code>mockserver.initializationClass=...</code>) are applied to the per-instance <code>Configuration</code> object, not to global system properties. This makes them safe for parallel test execution.</p>
-<p>Some properties need to be set before MockServer starts because they are only read at start-up, for example, <a href="#button_configuration_nio_event_loop_thread_count">nioEventLoopThreadCount</a>.</p>
-<p>Other values are read continuously and so can be changed at any time, for example, <a href="#button_configuration_log_level">logLevel</a>.</p>
+<p>Some properties need to be set before MockServer starts because they are only read at start-up, for example, <code>nioEventLoopThreadCount</code>.</p>
+<p>Other values are read continuously and so can be changed at any time, for example, <code>logLevel</code>.</p>
 
 <a id="programmatic_properties" class="anchor" href="#programmatic_properties">&nbsp;</a>
 
@@ -87,7 +211,7 @@ mockserver.sslSubjectAlternativeNameDomains=www.example.com,www.another.com
 # comma separated list of ip addresses for Subject Alternative Name ips (default empty list)
 mockserver.sslSubjectAlternativeNameIps=127.0.0.1
 
-# CORS
+# CORS (both default to false; set to true to enable)
 
 # enable CORS for MockServer REST API
 mockserver.enableCORSForAPI=true
@@ -114,6 +238,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
   "enableCORSForAPI": true,
   "enableCORSForAllResponses": true
 }</code></pre>
+<p><strong>Note:</strong> <span class="inline_code">enableCORSForAPI</span> and <span class="inline_code">enableCORSForAllResponses</span> both default to <span class="this_value">false</span>. The examples above set them to <span class="inline_code">true</span> to illustrate enabling CORS.</p>
 
 <p>The JSON property names are the camelCase equivalents of the <span class="inline_code">mockserver.*</span> property names listed below, with the <span class="inline_code">mockserver.</span> prefix removed. For example, <span class="inline_code">mockserver.maxExpectations</span> becomes <span class="inline_code">maxExpectations</span> in JSON. The complete list of supported JSON keys can be obtained by calling <span class="inline_code"><strong>GET /mockserver/configuration</strong></span>, which returns all properties with their current values. This output can be saved as a JSON configuration file and reloaded at startup.</p>
 
@@ -172,7 +297,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 
 <button id="button_configuration_request_log_size" class="accordion title"><strong>Maximum Log Entries To Hold In Memory</strong></button>
 <div class="panel title">
-    <p>Maximum number of log entries to hold in memory, this includes recorded requests, expectation match failures and other log entries. Log entries are stored in a circular queue so once this limit is reached the oldest entries are overwritten. The lower the <a href="#button_configuration_log_level">log level</a> the more log entries will be captured, particularly at TRACE level logging.</p>
+    <p>Maximum number of log entries to hold in memory, this includes recorded requests, expectation match failures and other log entries. Log entries are stored in a circular queue so once this limit is reached the oldest entries are overwritten. The lower the log level the more log entries will be captured, particularly at TRACE level logging.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">minimum of (free heap space in KB / 8) and 100000</span></p>
     <p>The default is calculated automatically based on available JVM heap memory. Each log entry typically uses 4-10 KB of heap for small request/response bodies, but log entries for large responses are proportionally larger (e.g., a 100 KB response body produces log entries of ~100+ KB each). Each HTTP request generates 2-3 log entries (request recording, expectation match, and response) that are always stored regardless of log level. With a 256 MB heap the default of approximately 20,000 entries covers around 7,000-10,000 HTTP requests before the oldest entries are evicted. For high-throughput use cases or large response bodies, reduce this value to limit memory usage and GC pressure. See <a href="/mock_server/performance.html#troubleshooting_performance">troubleshooting performance</a> for detailed guidance.</p>
     <p><strong>Power-of-2 sizing:</strong> the log ring buffer is implemented on top of the LMAX Disruptor, which rounds the configured size up to the next power of 2. Setting <span class="inline_code">maxLogEntries=10000</span> allocates 16,384 slots; setting <span class="inline_code">maxLogEntries=20000</span> allocates 32,768 slots. To minimise wasted heap, pick a power-of-2 value yourself: 4,096 (~32&nbsp;MB) / 16,384 (~131&nbsp;MB) / 65,536 (~524&nbsp;MB) are good starting points.</p>
@@ -438,7 +563,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 <button id="button_configuration_local_bound_ip" class="accordion title"><strong>Local Bound IP For Accepting Socket Connection</strong></button>
 <div class="panel title">
     <p>The local IP address to bind to for accepting new socket connections</p>
-    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">0.0.0.0</span></p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (empty string; binds to all interfaces, equivalent to 0.0.0.0)</p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.localBoundIP(String localBoundIP)</code></pre>
     <p>System Property:</p>
@@ -454,6 +579,24 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 <a id="http_request_size_configuration" class="anchor" href="#http_request_size_configuration">&nbsp;</a>
 
 <h2>Http Request Parsing Configuration:</h2>
+
+<button id="button_configuration_match_exact_case" class="accordion title"><strong>Match Exact Case</strong></button>
+<div class="panel title">
+    <p>By default MockServer matches the request method, path and regex body case-insensitively, so an expectation for path <span class="inline_code">/Path</span> also matches a request to <span class="inline_code">/path</span>. Enable this setting to make matching of those fields case-sensitive (exact case), so <span class="inline_code">/Path</span> only matches <span class="inline_code">/Path</span>. (Exact string bodies are already matched case-sensitively, so they are unaffected by this setting.)</p>
+    <p>This also affects <strong>response verification</strong>: when enabled, the response reason-phrase matcher in a verification (<code>httpResponse.reasonPhrase</code>) is also compared case-sensitively.</p>
+    <p>This only affects the request method, path, string/regex body, and response reason-phrase. Header names and values, cookie names and values, and query string parameters are always matched case-insensitively regardless of this setting (HTTP header names in particular are case-insensitive by specification, and some web containers normalise their case).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.matchExactCase(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.matchExactCase=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_MATCH_EXACT_CASE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.matchExactCase=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.matchExactCase="true"</code></pre>
+</div>
 
 <button id="button_configuration_max_initial_line_length" class="accordion title"><strong>Maximum HTTP Request Initial Line Length</strong></button>
 <div class="panel title">
@@ -601,6 +744,18 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.customJsonUnitMatchersClass="com.example.MyJsonUnitMatchers"</code></pre>
 </div>
 
+<button id="button_configuration_json_schema_allow_remote_refs" class="accordion title"><strong>JSON Schema Remote $ref Resolution</strong></button>
+<div class="panel title">
+    <p>Controls whether JSON Schema body matchers are permitted to fetch remote <span class="inline_code">$ref</span> URIs (http, https, file, jar). By default MockServer blocks remote resolution to prevent <strong>server-side request forgery (SSRF)</strong>: a schema body that contains <span class="inline_code">"$ref": "https://attacker.example/evil.json"</span> would otherwise cause MockServer to make an outbound HTTP request when matching any incoming request against that expectation. Schemas that use only inline definitions or internal anchors (<span class="inline_code">#/...</span>) are unaffected by this setting.</p>
+    <p>Set to <span class="inline_code">true</span> only when you control all schema <span class="inline_code">$ref</span> URIs and genuinely need cross-document resolution.</p>
+    <p>Note: this property is read from the JVM system property at schema-build time via <span class="inline_code">System.getProperty</span>; it is not available as an environment variable or in a properties file.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.jsonSchemaAllowRemoteRefs=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.jsonSchemaAllowRemoteRefs="true"</code></pre>
+</div>
+
 <button id="button_configuration_attach_mismatch_diagnostic_to_response" class="accordion title"><strong>Attach Mismatch Diagnostic To Unmatched Response</strong></button>
 <div class="panel title">
     <p>When enabled, if no expectation matches an incoming request the 404 response carries the closest-match diagnostic: an <span class="inline_code">x-mockserver-closest-match</span> header plus a JSON body describing which expectation came closest to matching and which fields differed. This lets you see why a mock did not match directly from the response, without checking the MockServer logs or dashboard.</p>
@@ -637,7 +792,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 
 <button id="button_configuration_tls_allow_insecure_protocols" class="accordion title"><strong>Allow Insecure TLS Protocols</strong></button>
 <div class="panel title">
-    <p>Whether to honour TLSv1 and TLSv1.1 in <a href="#button_configuration_tls_protocols">tlsProtocols</a>. Both protocols are deprecated by RFC 8996 and vulnerable to BEAST and POODLE.</p>
+    <p>Whether to honour TLSv1 and TLSv1.1 in <code>tlsProtocols</code>. Both protocols are deprecated by RFC 8996 and vulnerable to BEAST and POODLE.</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
     <p>The default is <span class="inline_code">true</span> for backwards compatibility &mdash; MockServer's <span class="inline_code">tlsProtocols</span> default still includes TLSv1 and TLSv1.1. Set this to <span class="inline_code">false</span> to opt into a hardened profile: any <span class="inline_code">TLSv1</span> or <span class="inline_code">TLSv1.1</span> entries in <span class="inline_code">tlsProtocols</span> are filtered out before the SSL context is built. A future major release is expected to flip this default to <span class="inline_code">false</span>.</p>
     <p>Java Code:</p>
@@ -719,6 +874,28 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 
 {% include_subpage _includes/cors_configuration.html %}
 
+<a id="default_response_headers_configuration" class="anchor" href="#default_response_headers_configuration">&nbsp;</a>
+
+<h2>Default Response Headers Configuration:</h2>
+
+<button id="button_configuration_default_response_headers" class="accordion title"><strong>Default Response Headers</strong></button>
+<div class="panel title">
+    <p>Headers that MockServer stamps onto every response it returns &mdash; mock responses, the control&#8209;plane / dashboard responses, and forwarded / proxied responses. Use this to add organisation&#8209;wide headers (for example a <span class="constant">Server</span> header, a build or trace id, or custom org headers) without repeating them on every individual expectation.</p>
+    <p><strong>Add&#8209;if&#8209;absent:</strong> a default header is only added when the response does not already contain a header with that name (matched case&#8209;insensitively), so a header explicitly set on the matched expectation / response always wins.</p>
+    <p><strong>Format:</strong> a pipe (<span class="this_value">|</span>) separated list of <span class="this_value">name=value</span> pairs, for example <span class="this_value">Server=MockServer|X-Trace-Id=abc123</span>. A header value may itself contain commas (for example <span class="this_value">Cache-Control=no-cache, no-store</span>) &mdash; only <span class="this_value">|</span> separates headers and only the first <span class="this_value">=</span> in each pair separates the name from the value. Leading / trailing whitespace around each name and value is trimmed.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (no default response headers are added, so behaviour is unchanged)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.defaultResponseHeaders(String defaultResponseHeaders)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.defaultResponseHeaders=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DEFAULT_RESPONSE_HEADERS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.defaultResponseHeaders=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.defaultResponseHeaders="Server=MockServer|X-Trace-Id=abc123"</code></pre>
+</div>
+
 {% include_subpage _includes/template_restriction_configuration.html %}
 
 {% include_subpage _includes/initializer_persistence_configuration.html %}
@@ -762,6 +939,138 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardBinaryRequestsWithoutWaitingForResponse=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardBinaryRequestsWithoutWaitingForResponse="true"</code></pre>
+</div>
+
+<button id="button_configuration_forward_connection_pool_enabled" class="accordion title"><strong>Reuse Upstream Connections (Connection Pooling)</strong></button>
+<div class="panel title">
+    <p>By default (<span class="inline_code">true</span>) MockServer pools idle keep-alive HTTP/1.1 upstream connections (keyed by host, port and scheme) and reuses them for subsequent requests to the same upstream. Reusing the upstream's keep-alive connections eliminates repeated TCP and TLS handshakes, significantly improves throughput for proxy-heavy workloads that repeatedly call the same upstream, and avoids ephemeral-port exhaustion under sustained forward load (where opening a fresh connection per request can exhaust the operating system's available local ports and cause request failures). Set this to <span class="inline_code">false</span> to open a fresh upstream connection per request that is closed once the response is received (the historical behaviour) — useful only for unusual upstreams.</p>
+    <p>Pooling is safe to leave on: a connection is only returned to the pool when it is genuinely clean — its HTTP client codec must have no leftover undecoded bytes after the response, and any uncertainty closes the connection instead of pooling it. MockServer's <span class="inline_code">error()</span> action (which deliberately returns raw, non-HTTP bytes and/or drops the connection) — or any malformed upstream reply — is therefore never pooled, so a later request can never reuse a corrupted connection.</p>
+    <p>Only plain HTTP/1.1 keep-alive connections are pooled. HTTP/2, HTTP/3, binary forwarding, streaming (Server-Sent Events) responses, and proxy-tunnelled connections are never pooled. A connection the upstream closed, that returned <span class="inline_code">Connection: close</span>, or that returned a reply which did not parse as valid HTTP is never reused and falls back to a fresh connection.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardConnectionPoolEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardConnectionPoolEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolEnabled="false"</code></pre>
+</div>
+
+<button id="button_configuration_forward_connection_pool_max_idle_per_key" class="accordion title"><strong>Maximum Idle Pooled Connections Per Upstream</strong></button>
+<div class="panel title">
+    <p>The maximum number of idle keep-alive upstream connections retained per upstream (host, port and scheme) when connection pooling is enabled. When this limit is reached, surplus connections are closed rather than pooled, so the pool degrades gracefully under load and never blocks. Values below 1 are treated as 1. Only relevant when <span class="inline_code">forwardConnectionPoolEnabled</span> is true.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">8</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey(int maxIdlePerKey)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolMaxIdlePerKey=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardConnectionPoolMaxIdlePerKey=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolMaxIdlePerKey="16"</code></pre>
+</div>
+
+<button id="button_configuration_forward_connection_pool_idle_timeout_millis" class="accordion title"><strong>Idle Pooled Connection Timeout In Millis</strong></button>
+<div class="panel title">
+    <p>How long in milliseconds an idle pooled upstream connection is retained before it is closed and evicted when connection pooling is enabled. Set to 0 to disable idle eviction (connections are still discarded when the upstream closes them). Only relevant when <span class="inline_code">forwardConnectionPoolEnabled</span> is true.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">30000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis(long idleTimeoutMillis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolIdleTimeoutMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardConnectionPoolIdleTimeoutMillis=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolIdleTimeoutMillis="60000"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_retry_count" class="accordion title"><strong>Retry Forwarded Requests On Transient Failure</strong></button>
+<div class="panel title">
+    <p>The maximum number of times MockServer retries a forwarded or proxied request to an upstream after a transient failure — a connection error (refused/reset), a timeout, or an upstream response of 502, 503 or 504. Retries reduce flakiness when the real upstream is briefly unavailable.</p>
+    <p>To avoid executing a request twice, only requests using an <span class="inline_code">idempotent</span> HTTP method (GET, HEAD, OPTIONS, PUT, DELETE, TRACE) are retried; non-idempotent methods (POST, PATCH) are never retried. The default (0) forwards each request exactly once, unchanged from previous behaviour.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">0</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyRetryCount(int retryCount)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyRetryCount=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_RETRY_COUNT=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyRetryCount=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyRetryCount="3"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_retry_backoff_millis" class="accordion title"><strong>Retry Back-Off In Millis</strong></button>
+<div class="panel title">
+    <p>The base back-off in milliseconds applied between forward/proxy retry attempts. The delay grows linearly with the attempt number (the first retry waits one base delay, the second waits two, and so on) so a flaky upstream is not hammered. Set to 0 to retry immediately. Only relevant when <span class="inline_code">forwardProxyRetryCount</span> is greater than 0.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">100</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyRetryBackoffMillis(long backoffMillis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyRetryBackoffMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyRetryBackoffMillis=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyRetryBackoffMillis="250"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_circuit_breaker_enabled" class="accordion title"><strong>Upstream Circuit Breaker</strong></button>
+<div class="panel title">
+    <p>By default every forwarded or proxied request is attempted against its upstream, however many previous requests failed. Enable this setting to add a per-upstream circuit breaker (keyed by host and port): after <span class="inline_code">forwardProxyCircuitBreakerFailureThreshold</span> consecutive failures to one upstream the breaker trips <strong>open</strong> and subsequent requests fail fast with a 503 for <span class="inline_code">forwardProxyCircuitBreakerWindowMillis</span> milliseconds, instead of waiting on a dead upstream. After the window a single trial request is allowed through (half-open); a success closes the breaker, a failure re-opens it for another window.</p>
+    <p>When metrics are enabled the number of currently-open upstreams is exported as the <span class="inline_code">mock_server_upstream_circuit_open</span> Prometheus gauge. The default (off) is unchanged from previous behaviour.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyCircuitBreakerEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyCircuitBreakerEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyCircuitBreakerEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyCircuitBreakerEnabled="true"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_circuit_breaker_failure_threshold" class="accordion title"><strong>Circuit Breaker Failure Threshold</strong></button>
+<div class="panel title">
+    <p>The number of consecutive failures to a single upstream (host and port) that trips the forward/proxy circuit breaker open. Only relevant when <span class="inline_code">forwardProxyCircuitBreakerEnabled</span> is true. Values below 1 are treated as 1.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">5</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold(int failureThreshold)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyCircuitBreakerFailureThreshold=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyCircuitBreakerFailureThreshold=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyCircuitBreakerFailureThreshold="10"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_circuit_breaker_window_millis" class="accordion title"><strong>Circuit Breaker Open Window In Millis</strong></button>
+<div class="panel title">
+    <p>How long in milliseconds the forward/proxy circuit breaker stays open (failing requests fast with a 503) for an upstream before it transitions to half-open and lets a single trial request through. Only relevant when <span class="inline_code">forwardProxyCircuitBreakerEnabled</span> is true. Values below 1 are treated as 1.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">30000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis(long windowMillis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyCircuitBreakerWindowMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyCircuitBreakerWindowMillis=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyCircuitBreakerWindowMillis="45000"</code></pre>
 </div>
 
 <button id="button_configuration_http_proxy" class="accordion title"><strong>HTTP Proxy For Forwarded Requests</strong></button>
@@ -1088,6 +1397,9 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p><strong>Exploratory semantic matching</strong> &mdash; opt in to the fuzzy, LLM-judged <code>semanticMatch</code> conversation predicate. Off by default and ignored unless a backend (above) also resolves. It calls a live model to judge intent, so it is <strong>non-deterministic and must never gate a CI assertion</strong> &mdash; use it for exploration only. Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.llmSemanticMatchingEnabled(boolean enabled)</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmSemanticMatchingEnabled=... &nbsp; MOCKSERVER_LLM_SEMANTIC_MATCHING_ENABLED=...</code></pre>
+    <p><strong>Approximate usage inference</strong> &mdash; when <code>true</code>, a mocked LLM completion that does not specify <code>usage</code> has <strong>approximate</strong> <code>prompt_tokens</code> / <code>completion_tokens</code> filled in (estimated from the request and response text). The counts are an <strong>estimate</strong> using a simple character/word heuristic, <strong>not</strong> a provider's exact token billing. Off by default so responses are unchanged unless you opt in; a completion that already specifies <code>usage</code> is never altered. Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.llmInferUsageEnabled(boolean enabled)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmInferUsageEnabled=... &nbsp; MOCKSERVER_LLM_INFER_USAGE_ENABLED=...</code></pre>
 </div>
 
 <button id="button_configuration_llm_vcr" class="accordion title"><strong>LLM Fixture (VCR) Recording &amp; Replay</strong></button>
@@ -1113,6 +1425,16 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_LLM_VCR_STRICT=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmVcrStrict="true"</code></pre>
+    <p><strong>Optimisation report size limit</strong> &mdash; the maximum number of captured LLM calls included in an optimisation report or brief (the <code>GET /mockserver/llm/optimisationReport</code> endpoint and the <code>export_optimisation_report</code> MCP tool). Bounds the report size for very long sessions; the most recent calls are kept. Default <code>200</code>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">200</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.llmOptimisationMaxCalls(int maxCalls)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmOptimisationMaxCalls=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_LLM_OPTIMISATION_MAX_CALLS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmOptimisationMaxCalls="500"</code></pre>
 </div>
 
 <button id="button_configuration_drift" class="accordion title"><strong>Drift Detection</strong></button>
@@ -1138,34 +1460,181 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftResponseTimeThresholdMs="500"</code></pre>
+    <p><strong>Drift alert webhook</strong> &mdash; when <code>true</code> and a URL is set, MockServer sends a fire-and-forget HTTP <code>POST</code> to that URL every time a drift of sufficient severity is detected, carrying the drift record as JSON. This lets a CI job, chat-ops bot, or alerting pipeline react immediately instead of polling <code>GET /mockserver/drift</code>. Off by default. The webhook is best-effort: a failed, slow, or unreachable endpoint never affects drift detection or the response returned to the client.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.driftAlertWebhookEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertWebhookEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_ALERT_WEBHOOK_ENABLED=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertWebhookEnabled="true"</code></pre>
+    <p><strong>Drift alert webhook URL</strong> &mdash; the URL the drift-alert webhook POSTs to. Empty by default; leaving it empty keeps the webhook off even when enabled. The POST body is a JSON envelope <code>{"event":"mockserver.drift.alert","epochTimeMs":...,"severity":...,"drift":{...}}</code>.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (empty)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.driftAlertWebhookUrl(String url)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertWebhookUrl=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_ALERT_WEBHOOK_URL=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertWebhookUrl="https://hooks.example.com/mockserver-drift"</code></pre>
+    <p><strong>Drift alert severity threshold</strong> &mdash; the minimum severity at which a drift fires the webhook: <code>BREAKING</code>, <code>WARNING</code>, or <code>INFORMATIONAL</code>. <code>BREAKING</code> is the most severe and fires least often; <code>INFORMATIONAL</code> fires on every drift. When semantic drift analysis is off, severity is inferred structurally from the drift type (status-code and removed/changed-schema drifts are BREAKING, header changes are WARNING, additive changes are INFORMATIONAL).</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">BREAKING</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.driftAlertSeverityThreshold(String severity)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertSeverityThreshold=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_ALERT_SEVERITY_THRESHOLD=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertSeverityThreshold="WARNING"</code></pre>
+    <p><strong>Drift alert cooldown</strong> &mdash; de-duplication window in milliseconds. The same drift (same expectation, drift type, and field) fires the webhook at most once per window, so a drift that recurs on every request does not flood the endpoint. Default 60000 (60 seconds).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">60000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.driftAlertCooldownMillis(long cooldownMillis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertCooldownMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_ALERT_COOLDOWN_MILLIS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftAlertCooldownMillis="30000"</code></pre>
+</div>
+
+<button id="button_configuration_control_plane_audit" class="accordion title"><strong>Control-Plane Audit Log</strong></button>
+<div class="panel title">
+    <p>An append-only, bounded, in-memory log of control-plane <em>changes</em> (such as registering or clearing expectations) so a shared MockServer can record who changed mock state, when, and from where. It is off by default, is not request/response traffic logging, and never stores request headers or bodies &mdash; only structural metadata with secrets redacted. Retrieve it with <code>GET /mockserver/audit</code> (optionally <code>?limit=&lt;n&gt;</code>, default 200, capped at 1000).</p>
+    <p><strong>Enabled</strong> &mdash; when <code>true</code>, each authorised control-plane change is recorded. When <code>false</code> (the default) nothing is recorded and control-plane behaviour is unchanged.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneAuditEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditEnabled="true"</code></pre>
+    <p><strong>Max entries</strong> &mdash; how many recent audit entries to keep; the oldest is dropped once the limit is reached. This value is read once when MockServer starts.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">1000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneAuditMaxEntries(int maxEntries)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditMaxEntries=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_AUDIT_MAX_ENTRIES=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditMaxEntries="5000"</code></pre>
+    <p><strong>Audit reads</strong> &mdash; when <code>true</code>, read-only control-plane requests (such as <code>GET</code> calls and <code>/retrieve</code> or <code>/verify</code>) are also recorded. By default only changes are recorded. Has no effect unless the audit log is enabled.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneAuditReads(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditReads=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_AUDIT_READS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditReads="true"</code></pre>
+</div>
+
+<button id="button_configuration_control_plane_oidc" class="accordion title"><strong>Control-Plane OIDC Authentication</strong></button>
+<div class="panel title">
+    <p>Require control-plane (admin) requests &mdash; such as registering, retrieving, or clearing expectations &mdash; to carry a valid OIDC Bearer JWT, verified against an external identity provider's published keys. This protects a shared MockServer so that only callers holding a token from your identity provider can change or read mock state. It is off by default, and applies only to the control-plane API, never to the mocked traffic MockServer serves on behalf of your application.</p>
+    <p>When enabled, each control-plane request must include an <code>Authorization: Bearer &lt;jwt&gt;</code> header. MockServer verifies the token's signature against the provider's JWKS, checks the issuer and/or audience, and (optionally) checks for required scopes. The verified subject (<code>sub</code>) is recorded as the principal in the <a href="#button_configuration_control_plane_audit">control-plane audit log</a>. At least one of issuer or audience must be configured.</p>
+    <p><strong>Authentication required</strong> &mdash; when <code>true</code>, control-plane requests must carry a valid OIDC Bearer JWT verified against the provider's JWKS. When <code>false</code> (the default) no token is required and control-plane behaviour is unchanged.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcAuthenticationRequired(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcAuthenticationRequired=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_OIDC_AUTHENTICATION_REQUIRED=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcAuthenticationRequired="true"</code></pre>
+    <p><strong>Issuer</strong> &mdash; the expected token issuer (the <code>iss</code> claim). It is used to assert the issuer on incoming tokens and, if no JWKS URI is set, to discover the JWKS from the issuer's <code>/.well-known/openid-configuration</code> document.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcIssuer(String issuer)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcIssuer=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_OIDC_ISSUER=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcIssuer="https://login.example.com/"</code></pre>
+    <p><strong>JWKS URI</strong> &mdash; the JWKS endpoint used to fetch the public keys that verify control-plane token signatures. If left blank it is discovered from the issuer's OpenID configuration. For a remote host this must be an <code>https</code> URL.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcJwksUri(String jwksUri)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcJwksUri=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_OIDC_JWKS_URI=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcJwksUri="https://login.example.com/.well-known/jwks.json"</code></pre>
+    <p><strong>Audience</strong> &mdash; the expected token audience (the <code>aud</code> claim). At least one of issuer or audience must be configured for OIDC authentication to be valid.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcAudience(String audience)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcAudience=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_OIDC_AUDIENCE=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcAudience="mockserver-control-plane"</code></pre>
+    <p><strong>Required scopes</strong> &mdash; a comma- or space-separated list of scopes the token must contain to be accepted. When empty (the default) any validly-signed, in-audience token is accepted.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcRequiredScopes(String requiredScopes)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcRequiredScopes=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_OIDC_REQUIRED_SCOPES=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcRequiredScopes="mockserver.write,mockserver.read"</code></pre>
+    <p><strong>Scope claim</strong> &mdash; the JWT claim that carries the token's scopes (for example <code>scope</code> or <code>roles</code>), used when checking required scopes.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">scope</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcScopeClaim(String scopeClaim)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcScopeClaim=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_OIDC_SCOPE_CLAIM=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcScopeClaim="roles"</code></pre>
+</div>
+
+<button id="button_configuration_control_plane_authorization" class="accordion title"><strong>Control-Plane Authorization</strong></button>
+<div class="panel title">
+    <p>Authorize control-plane operations against a scope-to-operation mapping, so fine-grained token scopes can gate individual admin actions (for example, allowing some callers to read mock state but not change it). This builds on <a href="#button_configuration_control_plane_oidc">Control-Plane OIDC Authentication</a> &mdash; a verified principal is required &mdash; and is off by default.</p>
+    <p><strong>Authorization enabled</strong> &mdash; when <code>true</code>, control-plane operations are authorized against the scope-to-operation mapping below. When <code>false</code> (the default) no per-operation authorization is applied.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneAuthorizationEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuthorizationEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_AUTHORIZATION_ENABLED=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuthorizationEnabled="true"</code></pre>
+    <p><strong>Scope mapping</strong> &mdash; maps required scopes (or groups) to control-plane operations such as read and write, letting fine-grained scopes gate which admin actions a caller may perform. Has effect only when control-plane authorization is enabled.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneScopeMapping(String scopeMapping)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneScopeMapping=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_SCOPE_MAPPING=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneScopeMapping="platform-admins=admin,qa-team=mutate,viewers=read"</code></pre>
 </div>
 
 <button id="button_configuration_breakpoints" class="accordion title"><strong>Interactive Breakpoints</strong></button>
 <div class="panel title">
-    <p>Interactive breakpoints let you pause proxied or forwarded exchanges at two independent phases:</p>
-    <ul>
-        <li><strong>Request breakpoints</strong> &mdash; hold the outbound request before it reaches the upstream server</li>
-        <li><strong>Response breakpoints</strong> &mdash; hold the upstream response before it is written back to the client (non-streaming responses only)</li>
-    </ul>
-    <p>At either phase you can inspect, modify, continue, or abort the exchange via the control-plane REST API. This is useful for debugging, manual testing, and step-through inspection of live traffic.</p>
+    <p>Interactive breakpoints let you pause proxied or forwarded exchanges at four phases: request (before forwarding), response (after receiving from upstream), stream frame (each frame of a streaming response), and inbound frame (each client-to-server frame on a bidirectional connection). You can inspect, modify, continue, or abort the exchange via the callback WebSocket (or the dashboard Breakpoints panel). This is useful for debugging, manual testing, and step-through inspection of live traffic.</p>
+    <p>Breakpoints are activated by registering a request matcher via <code>PUT /mockserver/breakpoint/matcher</code> &mdash; there are no global on/off flags. An exchange pauses only when its request matches a registered breakpoint matcher for that phase. When no matchers are registered, breakpoints have zero overhead.</p>
     <p>When a breakpoint-paused exchange is not resolved within the timeout, it is automatically continued. The <code>breakpointMaxHeld</code> cap prevents resource exhaustion &mdash; when the cap is reached, new exchanges bypass the breakpoint and proceed normally. The implementation is fully non-blocking: paused exchanges do not consume scheduler threads or event-loop threads while waiting for resolution.</p>
-    <p><strong>Enable request breakpoints</strong> &mdash; holds outbound requests before forwarding. Default is <code>false</code> (off, zero overhead).</p>
-    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
-    <p>Java Code:</p>
-    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointEnabled(boolean enable)</code></pre>
-    <p>System Property:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointEnabled=...</code></pre>
-    <p>Environment Variable:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_ENABLED=...</code></pre>
-    <p><strong>Enable response breakpoints</strong> &mdash; holds upstream responses before writing to the client. Independent of request breakpoints. Default is <code>false</code> (off, zero overhead).</p>
-    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
-    <p>Java Code:</p>
-    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointResponseEnabled(boolean enable)</code></pre>
-    <p>System Property:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointResponseEnabled=...</code></pre>
-    <p>Environment Variable:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_RESPONSE_ENABLED=...</code></pre>
-    <p><strong>Timeout</strong> &mdash; maximum time in milliseconds an exchange may be held at a breakpoint before it is automatically continued. Shared by both request and response breakpoints. Default is <code>30000</code> (30 seconds).</p>
+    <p>See <a href="/mock_server/interactive_breakpoints.html">Interactive Breakpoints</a> for the full matcher registration API and usage guide.</p>
+    <p><strong>Timeout</strong> &mdash; maximum time in milliseconds an exchange or frame may be held at a breakpoint before it is automatically continued. Shared by request, response, stream frame, and inbound frame breakpoints. Default is <code>30000</code> (30 seconds).</p>
     <p>Type: <span class="keyword">long</span> Default: <span class="this_value">30000</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.breakpointTimeoutMillis(long millis)</code></pre>
@@ -1181,15 +1650,15 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointMaxHeld=...</code></pre>
     <p>Environment Variable:</p>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_BREAKPOINT_MAX_HELD=...</code></pre>
-    <p>Example (enable both phases with 10-second timeout and max 20 held):</p>
-    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointEnabled="true" -Dmockserver.breakpointResponseEnabled="true" -Dmockserver.breakpointTimeoutMillis="10000" -Dmockserver.breakpointMaxHeld="20"</code></pre>
+    <p>Example (10-second timeout, max 20 held simultaneously):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.breakpointTimeoutMillis="10000" -Dmockserver.breakpointMaxHeld="20"</code></pre>
 </div>
 
 <button id="button_configuration_chaos_auto_halt" class="accordion title"><strong>Chaos Auto-Halt Circuit-Breaker</strong></button>
 <div class="panel title">
     <p>A safety circuit-breaker for service-scoped chaos experiments. When enabled, MockServer counts <strong>error-class</strong> chaos faults &mdash; synthetic 5xx errors (<code>error</code>), dropped connections (<code>drop</code>), and quota-limit responses (<code>quota</code>) &mdash; in a sliding time window. If the count exceeds the configured threshold, all active service-scoped chaos profiles are automatically disabled, preventing a chaos experiment from causing cascading failures.</p>
     <p>Benign fault types such as <code>latency</code>, <code>slow</code>, <code>truncate</code>, <code>malformed</code>, and <code>graphql</code> do <strong>not</strong> count toward the threshold. This means a latency-only chaos experiment will never auto-halt.</p>
-    <p>This provides the "steady-state guardrail" SREs expect: chaos experiments automatically stop if they produce too many destructive errors too quickly. The auto-halt state is reflected in the <code>mock_server_active_service_chaos</code> gauge (all values drop to 0) and a <code>mock_server_chaos_auto_halt</code> counter is incremented.</p>
+    <p>This provides the "steady-state guardrail" SREs expect: chaos experiments automatically stop if they produce too many destructive errors too quickly. The auto-halt state is reflected in the <code>mock_server_active_service_chaos</code> gauge (all values drop to 0) and a <code>mock_server_chaos_auto_halt_total</code> counter is incremented.</p>
     <p><strong>Enable chaos auto-halt</strong> &mdash; master switch for the circuit-breaker. Default is <code>false</code> (feature off &mdash; no overhead when disabled).</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <p>Java Code:</p>
@@ -1218,6 +1687,234 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.chaosAutoHaltEnabled="true" -Dmockserver.chaosAutoHaltErrorThreshold="20" -Dmockserver.chaosAutoHaltWindowMillis="30000"</code></pre>
 </div>
 
+<button id="button_configuration_rate_limit_max_named_quotas" class="accordion title"><strong>Rate Limit Max Named Quotas</strong></button>
+<div class="panel title">
+    <p>An expectation can carry a <code>rateLimit</code> clause that returns a deterministic <code>429 Too Many Requests</code> (with <code>Retry-After</code> and <code>X-RateLimit-*</code> headers) once the matched requests exceed a limit, instead of the normal response. Each named limit (or, when no <code>name</code> is given, each expectation) keeps its own counter. This property caps how many such counters MockServer holds in memory at once.</p>
+    <p>Once the cap is reached, a request for a brand-new counter is <strong>allowed</strong> (fails open) rather than starting to reject traffic &mdash; so a large or unbounded set of rate-limit names can never exhaust memory or surprise you with unexpected throttling. The default of <code>10000</code> is comfortably high for normal use; raise it only if you genuinely use more than 10,000 distinct rate-limit names at once.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">10000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.rateLimitMaxNamedQuotas(int maxNamedQuotas)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.rateLimitMaxNamedQuotas=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_RATE_LIMIT_MAX_NAMED_QUOTAS=...</code></pre>
+    <p>Example expectation (fixed window &mdash; at most 100 requests per minute for one account):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">{
+    "httpRequest": { "path": "/api/widgets" },
+    "httpResponse": { "statusCode": 200, "body": "ok" },
+    "rateLimit": {
+        "name": "widgets-account",
+        "algorithm": "fixed_window",
+        "limit": 100,
+        "windowMillis": 60000,
+        "retryAfter": "60"
+    }
+}</code></pre>
+    <p>Example expectation (token bucket &mdash; burst of 20, refilling 5 tokens per second):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">{
+    "httpRequest": { "path": "/api/widgets" },
+    "httpResponse": { "statusCode": 200, "body": "ok" },
+    "rateLimit": {
+        "algorithm": "token_bucket",
+        "burst": 20,
+        "refillPerSecond": 5
+    }
+}</code></pre>
+</div>
+
+<button id="button_configuration_connection_lifecycle_chaos" class="accordion title"><strong>Connection-Lifecycle Faults &amp; Preemption Simulation</strong></button>
+<div class="panel title">
+    <p>Connection-lifecycle faults let you reproduce the failure patterns that appear when a server crashes mid-response or signals a graceful shutdown: a host-scoped mid-response TCP reset (<code>resetMidResponse</code>), a slow socket close (<code>slowCloseDelay</code>), and an HTTP/2 GOAWAY (<code>http2GoAway</code>), all registered via <code>PUT /mockserver/tcpChaos</code>. The same feature powers the <strong>preemption simulation</strong> (<code>PUT /mockserver/preemption</code>), which makes the server <em>cordon</em> itself &mdash; new data-plane requests are turned away (HTTP/1.1 gets <code>503</code> + <code>Retry-After</code> + <code>Connection: close</code>; HTTP/2 clients receive a GOAWAY) while in-flight requests drain &mdash; so you can test how your clients react to a Kubernetes node drain, Spot reclamation, or pre-SIGTERM sequence. It is a simulation only and never stops the server. Control-plane requests (<code>/mockserver/...</code>) are always exempt from the cordon.</p>
+    <p><strong>Enable connection-lifecycle chaos</strong> &mdash; master switch for the mid-response RST / slow-close / HTTP/2 GOAWAY response-path faults and the preemption cordon. When <code>false</code> these faults are never applied and add no overhead. Default is <code>true</code> (the response path is byte-for-byte unchanged unless a fault is actually registered).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.connectionLifecycleChaosEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.connectionLifecycleChaosEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONNECTION_LIFECYCLE_CHAOS_ENABLED=...</code></pre>
+    <p><strong>Preemption max drain</strong> &mdash; a safety hard cap (in milliseconds) applied to both the drain window and the TTL dead-man's-switch of a preemption simulation, so a mistaken value can never cordon the server for longer than this. Default is <code>86400000</code> (24 hours).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">86400000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.preemptionSimulationMaxDrainMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.preemptionSimulationMaxDrainMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_PREEMPTION_SIMULATION_MAX_DRAIN_MILLIS=...</code></pre>
+    <p><strong>Count lifecycle RST toward auto-halt</strong> &mdash; when <code>true</code>, a mid-response TCP reset (<code>resetMidResponse</code>) is counted as a destructive fault toward the <a href="#button_configuration_chaos_auto_halt">chaos auto-halt circuit-breaker</a>, so a storm of mid-response resets can trip the breaker. The graceful signals (HTTP/2 GOAWAY and the preemption 503 cordon) are never counted. Set to <code>false</code> to exclude lifecycle resets from the breaker. Default is <code>true</code>.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.connectionLifecycleAutoHaltCountsRst(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.connectionLifecycleAutoHaltCountsRst=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONNECTION_LIFECYCLE_AUTO_HALT_COUNTS_RST=...</code></pre>
+</div>
+
+<button id="button_configuration_slo_verdicts" class="accordion title"><strong>SLO Verdicts</strong></button>
+<div class="panel title">
+    <p>Records a windowed sample (latency, error flag, scope, host) for each forwarded upstream round-trip so you can ask MockServer for a resilience verdict via <span class="inline_code">PUT /mockserver/verifySLO</span>. Post a set of objectives (for example "p95 latency &lt; 500ms" or "error rate &lt; 1%") and MockServer evaluates them against the recorded samples, returning <code>PASS</code>/<code>FAIL</code>/<code>INCONCLUSIVE</code>. This lets a test assert against observed proxy behaviour the same way it asserts against an SLO in production.</p>
+    <p>Sample tracking is <strong>off by default</strong> and is independent of <span class="inline_code">metricsEnabled</span> &mdash; you do not need Prometheus metrics to use SLO verdicts. The <span class="inline_code">verifySLO</span> endpoint returns <code>400</code> when tracking is disabled, so enable it before verifying.</p>
+    <p><strong>SLO Tracking Enabled</strong> &mdash; master switch that turns on in-process SLI sample tracking; required for <span class="inline_code">PUT /mockserver/verifySLO</span>. Default is <span class="this_value">false</span> (feature off &mdash; the forward path records nothing).</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.sloTrackingEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.sloTrackingEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_SLO_TRACKING_ENABLED=...</code></pre>
+    <p><strong>Window Retention</strong> &mdash; the maximum age in milliseconds of retained SLI samples (the upper bound of the sliding window). Samples older than this relative to the newest sample are evicted, so verdicts reflect only recent behaviour. Lower this to evaluate a shorter window; raise it to keep more history. Default is <span class="this_value">600000</span> (10 minutes).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">600000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.sloWindowRetentionMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.sloWindowRetentionMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS=...</code></pre>
+    <p><strong>Window Max Samples</strong> &mdash; the maximum number of SLI samples retained for verdict evaluation, bounding memory use. When the store is full the oldest sample is evicted. Lower this on memory-constrained deployments; raise it for high-throughput proxies where you need a larger sample set. Default is <span class="this_value">50000</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">50000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.sloWindowMaxSamples(int maxSamples)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.sloWindowMaxSamples=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_SLO_WINDOW_MAX_SAMPLES=...</code></pre>
+    <p>Example (enable SLO tracking with a 5-minute window capped at 10000 samples):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.sloTrackingEnabled="true" -Dmockserver.sloWindowRetentionMillis="300000" -Dmockserver.sloWindowMaxSamples="10000"</code></pre>
+</div>
+
+<button id="button_configuration_load_generation" class="accordion title"><strong>Load Generation</strong></button>
+<div class="panel title">
+    <p>Lets MockServer drive load at a target on demand, organised as a <strong>registry of named load scenarios</strong>. You first <strong>load</strong> (register) a scenario by name with <span class="inline_code">PUT /mockserver/loadScenario</span> &mdash; this does <em>not</em> run it &mdash; then <strong>trigger</strong> one or many by name with <span class="inline_code">PUT /mockserver/loadScenario/start</span> to run them <strong>concurrently</strong>, each with its own optional <strong>start delay</strong>. A scenario is an ordered list of request steps fired through a sequence of <strong>stages</strong> (a <em>load profile</em>): each stage holds/ramps the concurrent <strong>virtual users</strong> (<span class="inline_code">VU</span>, closed model), holds/ramps an <strong>arrival rate</strong> in iterations per second (<span class="inline_code">RATE</span>, open model), or <strong>pauses</strong>. Ramp stages use a <span class="inline_code">curve</span> of <span class="inline_code">LINEAR</span>, <span class="inline_code">QUADRATIC</span>, or <span class="inline_code">EXPONENTIAL</span>. Per-iteration data variation is supported via templates (for example <span class="inline_code">$iteration.index</span>). MockServer reports per-scenario progress via <span class="inline_code">GET /mockserver/loadScenario</span> (list) / <span class="inline_code">GET /mockserver/loadScenario/{name}</span> and stops runs on <span class="inline_code">PUT /mockserver/loadScenario/stop</span>. The generated traffic feeds the same samples used by <span class="inline_code">PUT /mockserver/verifySLO</span>. Scenarios can be <strong>preloaded at startup</strong> from a JSON file. See <a href="/mock_server/load_injection.html">Performance Testing / Load Injection</a> for the full reference.</p>
+    <p><strong>Loading is always allowed; triggering a run is off by default</strong>: <span class="inline_code">PUT /mockserver/loadScenario/start</span> returns <code>403</code> until you enable load generation, so MockServer never self-generates traffic unless asked. Even when enabled, hard caps plus a live in-flight limit and request-rate limit prevent a scenario from overloading the server.</p>
+    <p><strong>Load Generation Enabled</strong> &mdash; master switch on <em>triggering</em> runs. When <span class="this_value">false</span>, <span class="inline_code">PUT /mockserver/loadScenario/start</span> returns <code>403</code> (loading/registering is still allowed). Default is <span class="this_value">false</span>.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_LOAD_GENERATION_ENABLED=...</code></pre>
+    <p><strong>Max Virtual Users</strong> &mdash; hard cap on the concurrent virtual users a scenario may drive; a profile asking for more is rejected. Default is <span class="this_value">50</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">50</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxVirtualUsers(int maxVirtualUsers)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxVirtualUsers=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS=...</code></pre>
+    <p><strong>Max In-Flight Requests</strong> &mdash; hard cap on outstanding (not-yet-completed) requests, enforced live so a slow target cannot let the scenario queue unbounded work. Default is <span class="this_value">200</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">200</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxInFlightRequests(int maxInFlightRequests)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxInFlightRequests=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS=...</code></pre>
+    <p><strong>Max Requests Per Second</strong> &mdash; hard cap on dispatch rate, enforced live by a token bucket. Default is <span class="this_value">500</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">500</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxRequestsPerSecond(int maxRequestsPerSecond)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxRequestsPerSecond=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND=...</code></pre>
+    <p><strong>Max Duration</strong> &mdash; hard cap (milliseconds) on how long a scenario may run; a longer profile is rejected, so a forgotten scenario cannot drive traffic indefinitely. Default is <span class="this_value">3600000</span> (1 hour).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">3600000</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxDurationMillis(long millis)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxDurationMillis=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS=...</code></pre>
+    <p><strong>Max Steps</strong> &mdash; hard cap on the number of request steps a single scenario may define. Default is <span class="this_value">50</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">50</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxSteps(int maxSteps)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxSteps=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_STEPS=...</code></pre>
+    <p><strong>Max Rate</strong> &mdash; hard cap on the arrival rate (iterations per second) a <span class="inline_code">RATE</span> stage may request; a faster stage is rejected at validation. Default is <span class="this_value">5000</span>.</p>
+    <p>Type: <span class="keyword">double</span> Default: <span class="this_value">5000</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxRate(double maxRate)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxRate=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_RATE=...</code></pre>
+    <p><strong>Max Stages</strong> &mdash; hard cap on the number of stages a single load profile may define. Default is <span class="this_value">20</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">20</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxStages(int maxStages)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxStages=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_STAGES=...</code></pre>
+    <p><strong>Max Concurrent Scenarios</strong> &mdash; hard cap on how many load scenarios may be active (PENDING or RUNNING) at once; a start trigger that would exceed it is rejected. Loading/registering scenarios is not limited &mdash; only how many may run together. Default is <span class="this_value">10</span>.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">10</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxConcurrentScenarios(int maxConcurrentScenarios)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationMaxConcurrentScenarios=... &nbsp; MOCKSERVER_LOAD_GENERATION_MAX_CONCURRENT_SCENARIOS=...</code></pre>
+    <p><strong>Load Scenario Initialization JSON Path</strong> &mdash; path to a JSON file containing an array of load scenario definitions. At startup each is loaded (registered) into the registry in the <span class="inline_code">LOADED</span> state &mdash; staged and ready to be triggered by name, but not running. Empty by default (no preloading). Mirrors <span class="inline_code">initializationJsonPath</span> for expectations.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (empty)</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadScenarioInitializationJsonPath(String path)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadScenarioInitializationJsonPath=... &nbsp; MOCKSERVER_LOAD_SCENARIO_INITIALIZATION_JSON_PATH=...</code></pre>
+    <p>Example (enable load generation with a lower concurrency ceiling):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationEnabled="true" -Dmockserver.loadGenerationMaxVirtualUsers="20" -Dmockserver.loadGenerationMaxRequestsPerSecond="200"</code></pre>
+</div>
+
+<button id="button_configuration_llm_metrics" class="accordion title"><strong>LLM Token &amp; Cost Metrics</strong></button>
+<div class="panel title">
+    <p>When enabled (alongside <span class="inline_code">metricsEnabled</span>), MockServer parses forwarded LLM responses to extract token usage and estimated cost, incrementing Prometheus counters labeled by provider and model. The parse is the same one used for GenAI span export; enabling this property activates the forward-path response parse even when OTLP tracing is off.</p>
+    <p>Three new Prometheus counters are registered: <span class="inline_code">mock_server_llm_input_tokens</span>, <span class="inline_code">mock_server_llm_output_tokens</span>, and <span class="inline_code">mock_server_llm_cost_usd</span>, each labeled by <span class="inline_code">provider</span> and <span class="inline_code">model</span>. The cost counter uses <a href="https://www.anthropic.com/pricing">estimated provider pricing</a>; treat the total as an estimate, not an invoice.</p>
+    <p><strong>LLM Metrics Enabled</strong> &mdash; enable LLM token and cost metrics collection. Default is <span class="this_value">false</span> to avoid parsing forwarded response bodies unless asked.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.llmMetricsEnabled(boolean enabled)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmMetricsEnabled=... &nbsp; MOCKSERVER_LLM_METRICS_ENABLED=...</code></pre>
+    <p><strong>LLM Cost Budget</strong> &mdash; set a cumulative LLM cost budget in USD. When the cumulative cost of all LLM completions (mocked and forwarded) exceeds this budget, further LLM forwarding on all paths (matched forward expectations, breakpoint continuations, unmatched proxy-pass, and proxyPassMappings reverse-proxy routes) is blocked with a 429 response. Non-LLM forwards are unaffected. The budget is fail-open: negative, unset, or malformed values never block traffic. Trip events are visible in the dashboard Circuit Breakers section and the <code>mock_server_llm_cost_budget_tripped</code> Prometheus counter. Reset on server reset.</p>
+    <p>Type: <span class="keyword">double</span> Default: <span class="this_value">-1.0</span> (disabled)</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.llmCostBudgetUsd(double budgetUsd)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.llmCostBudgetUsd=... &nbsp; MOCKSERVER_LLM_COST_BUDGET_USD=...</code></pre>
+    <p>Example (enable metrics and set a $10 cost budget):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsEnabled="true" -Dmockserver.llmMetricsEnabled="true" -Dmockserver.llmCostBudgetUsd="10.0"</code></pre>
+</div>
+
+<button id="button_configuration_per_expectation_metrics" class="accordion title"><strong>Per-Expectation Match Counters</strong></button>
+<div class="panel title">
+    <p>When enabled (alongside <span class="inline_code">metricsEnabled</span>), MockServer registers a Prometheus counter <span class="inline_code">mock_server_expectation_matched</span> with an <span class="inline_code">expectation_id</span> label and increments it each time an expectation is matched and a response is served. This lets you track which expectations are hot and which are never hit.</p>
+    <p>This is <strong>off by default</strong> because each active expectation adds one Prometheus label value, so cardinality grows with the number of registered expectations. In long-running deployments with many expectations, enable only when you need per-expectation visibility. In CI or short-lived test runs with a bounded, small number of expectations, cardinality is not a concern.</p>
+    <p>The counter appears in the scrape output as <span class="inline_code">mock_server_expectation_matched_total{expectation_id="..."}</span>.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.perExpectationMetricsEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.perExpectationMetrics=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_PER_EXPECTATION_METRICS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsEnabled="true" -Dmockserver.perExpectationMetrics="true"</code></pre>
+</div>
+
+<button id="button_configuration_redact_secrets_in_recorded_expectations" class="accordion title"><strong>Redact Secrets In Recorded Expectations</strong></button>
+<div class="panel title">
+    <p>When MockServer records traffic as a proxy, the recorded expectations contain the exact headers that were sent &mdash; including credentials such as <span class="inline_code">Authorization</span> (bearer / token values), <span class="inline_code">Cookie</span>, <span class="inline_code">Set-Cookie</span>, <span class="inline_code">x-api-key</span> and <span class="inline_code">api-key</span>. When this setting is enabled, MockServer masks those header values with <span class="inline_code">***REDACTED***</span> before the recorded expectations are returned. Because this applies on the recorded-expectation retrieval path, it covers retrieving recordings as JSON, generating client code from recordings, and persisting recordings to disk &mdash; so proxied secrets do not leak into shared recordings, generated code, or saved files.</p>
+    <p>This is <strong>off by default</strong>. Enabling it has a trade-off: a recorded expectation whose credential has been masked can no longer be replayed against an upstream that requires that credential. Enable it when you want to share or store recordings safely; leave it off when you need recordings to replay against a protected upstream unchanged.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.redactSecretsInRecordedExpectations(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.redactSecretsInRecordedExpectations=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_REDACT_SECRETS_IN_RECORDED_EXPECTATIONS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.redactSecretsInRecordedExpectations="true"</code></pre>
+</div>
+
+<button id="button_configuration_templatize_recorded_values" class="accordion title"><strong>Templatize Recorded Values</strong></button>
+<div class="panel title">
+    <p>When MockServer records traffic as a proxy, the recorded expectations match the exact values that were captured. A recording pinned to a specific request id, session token or timestamp will not match the next request, making recordings brittle and over-specific. By default the recorded-expectation post-processor (enabled with <span class="inline_code">deduplicateRecordedExpectations</span>) only generalizes id-like <strong>path segments</strong> (e.g. <span class="inline_code">/users/1</span> &rarr; <span class="inline_code">/users/{id}</span>).</p>
+    <p>When this setting is enabled <strong>in addition to</strong> <span class="inline_code">deduplicateRecordedExpectations</span>, the post-processor also generalizes volatile-looking <strong>query parameter</strong>, <strong>header</strong> and <strong>JSON body</strong> values into matchers: UUIDs, long numeric ids, ISO-8601 dates / date-times, epoch-millisecond timestamps, JWTs and long opaque tokens (base64 / hex) are replaced with a regex matcher (<span class="inline_code">.+</span> for query/header values, a <span class="inline_code">${json-unit.regex}</span> placeholder for JSON body leaves). Known-credential header names (<span class="inline_code">Authorization</span>, <span class="inline_code">Cookie</span>, <span class="inline_code">x-api-key</span>, correlation-id headers, &hellip;) are always generalized when present.</p>
+    <p>It is deliberately <strong>conservative</strong>: stable values &mdash; short strings, words, booleans, small numbers such as a page size or status code, common content-types &mdash; are kept verbatim, so a recording is generalized only where it would otherwise be too specific to replay.</p>
+    <p>This is <strong>off by default</strong> and has no effect unless <span class="inline_code">deduplicateRecordedExpectations</span> is also enabled. Enable it when you want recordings that replay against future traffic; leave it off when you need recordings to match the exact captured values.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.templatizeRecordedValues(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.templatizeRecordedValues=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_TEMPLATIZE_RECORDED_VALUES=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.deduplicateRecordedExpectations="true" -Dmockserver.templatizeRecordedValues="true"</code></pre>
+</div>
+
+<button id="button_configuration_redact_secrets_in_log" class="accordion title"><strong>Redact Secrets In Event Log &amp; Dashboard</strong></button>
+<div class="panel title">
+    <p>The live event log &mdash; the entries returned by <span class="inline_code">retrieveLogMessages</span> / <span class="inline_code">retrieveRecordedRequests</span> and the request / response panes shown in the dashboard &mdash; normally includes the exact headers seen for each request and response, including credentials such as <span class="inline_code">Authorization</span> (bearer / token values), <span class="inline_code">Proxy-Authorization</span>, <span class="inline_code">Cookie</span>, <span class="inline_code">Set-Cookie</span>, <span class="inline_code">x-api-key</span> and <span class="inline_code">api-key</span>. When this setting is enabled, MockServer masks those header values with <span class="inline_code">***REDACTED***</span> wherever the log is displayed or retrieved, so secrets do not leak into a shared dashboard or an exported log. JSON body fields you list in <span class="inline_code">fixtureBodyRedactFields</span> are masked in the log too.</p>
+    <p>Redaction is applied only to the copies shown / returned &mdash; request matching and verification still see the original, unmasked values, so turning this on does <strong>not</strong> change which expectations match or how verification behaves.</p>
+    <p>This is <strong>off by default</strong> so the event log is unchanged. It complements <span class="inline_code">redactSecretsInRecordedExpectations</span> (which masks secrets on the recorded-expectation export path); enable both when you want secrets masked everywhere they could be observed.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.redactSecretsInLog(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.redactSecretsInLog=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_REDACT_SECRETS_IN_LOG=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.redactSecretsInLog="true"</code></pre>
+</div>
+
 <button id="button_configuration_otel" class="accordion title"><strong>OpenTelemetry (Metrics, GenAI Spans &amp; Trace Context)</strong></button>
 <div class="panel title">
     <p>MockServer can export to an OpenTelemetry (OTLP) collector, in two independent parts that are each <strong>off by default</strong> and <strong>fail-soft</strong> (a startup error logs one line and never stops the server or affects a response). Both use the OTLP HTTP/protobuf exporter with the JDK HTTP client (no gRPC/OkHttp) and share the same endpoint.</p>
@@ -1227,7 +1924,7 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelMetricsEnabled=... &nbsp; MOCKSERVER_OTEL_METRICS_ENABLED=...</code></pre>
     <p>Export interval (seconds), default <span class="this_value">60</span>:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelMetricsExportIntervalSeconds=... &nbsp; MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS=...</code></pre>
-    <p><strong>2. GenAI span export</strong> &mdash; emit one OpenTelemetry GenAI semantic-convention span per LLM completion MockServer serves, carrying provider (<span class="inline_code">gen_ai.system</span>), model, token usage and finish reason. These are spans MockServer codes deliberately &mdash; <strong>no</strong> auto-instrumentation is added.</p>
+    <p><strong>2. GenAI span export</strong> &mdash; emit one OpenTelemetry GenAI semantic-convention span per LLM completion MockServer serves <strong>or forwards/proxies</strong>, carrying provider (<span class="inline_code">gen_ai.system</span>), model, token usage and finish reason. When MockServer forwards traffic to an upstream LLM provider (matched-expectation forward or unmatched proxy-pass), it detects the provider from the target host and emits a GenAI span for the upstream response. These are spans MockServer codes deliberately &mdash; <strong>no</strong> auto-instrumentation is added.</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.otelTracesEnabled(boolean enabled)</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelTracesEnabled=... &nbsp; MOCKSERVER_OTEL_TRACES_ENABLED=...</code></pre>
@@ -1282,6 +1979,20 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.globalResponseDelayMillis="200"</code></pre>
 </div>
 
+<button id="button_configuration_stop_drain_millis" class="accordion title"><strong>Graceful Shutdown Connection Drain</strong></button>
+<div class="panel title">
+    <p>On shutdown (via <span class="inline_code">PUT /mockserver/stop</span> or <span class="inline_code">ClientAndServer.stop()</span>), MockServer stops accepting new connections and then waits up to this many milliseconds for in-flight requests that are already being processed to complete before tearing down the Netty event loops. If the timeout elapses before all in-flight requests finish, a <span class="inline_code">WARN</span> log entry is written with the number of requests still in progress, and shutdown proceeds anyway. Set to <span class="inline_code">0</span> to disable draining and stop immediately (the pre-7.2 behaviour).</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">15000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.stopDrainMillis(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.stopDrainMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_STOP_DRAIN_MILLIS=...</code></pre>
+    <p>Example (disable drain — stop immediately):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.stopDrainMillis="0"</code></pre>
+</div>
+
 <a id="liveness_configuration" class="anchor" href="#liveness_configuration">&nbsp;</a>
 
 <h2>Liveness Configuration:</h2>
@@ -1302,6 +2013,29 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.livenessHttpGetPath=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.livenessHttpGetPath="/liveness/probe"</code></pre>
+</div>
+
+<a id="multi_tenancy_configuration" class="anchor" href="#multi_tenancy_configuration">&nbsp;</a>
+
+<h2>Multi-Tenancy (Namespacing) Configuration:</h2>
+
+<button id="button_configuration_match_namespace_header" class="accordion title"><strong>Request header that scopes matching to a namespace (tenant)</strong></button>
+<div class="panel title">
+    <p>Lets multiple teams or test-suites share a single MockServer instance without their expectations colliding, by partitioning expectations into named namespaces (tenants).</p>
+    <p>Give an expectation an optional <span class="inline_code">namespace</span> field. A request then chooses its namespace by sending this header. A request in namespace <span class="inline_code">T</span> matches expectations whose <span class="inline_code">namespace</span> is <span class="inline_code">T</span> <strong>plus</strong> all global (no-namespace) expectations &mdash; and never another team's. A request with no namespace header matches only global expectations, so isolation is the safe default.</p>
+    <p>You can also clear or retrieve just one tenant's expectations: <span class="inline_code">PUT /mockserver/clear?type=expectations&amp;namespace=T</span> removes only namespace <span class="inline_code">T</span>'s expectations (leaving others intact), and <span class="inline_code">PUT /mockserver/retrieve?type=active_expectations&amp;namespace=T</span> returns only that tenant's expectations plus global ones. Both also accept the namespace as the header instead of the query parameter.</p>
+    <p>This feature is fully backward compatible: if you never set a <span class="inline_code">namespace</span> on any expectation, matching behaves exactly as before.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"X-MockServer-Namespace"</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.matchNamespaceHeader(String matchNamespaceHeader)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.matchNamespaceHeader=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_MATCH_NAMESPACE_HEADER=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.matchNamespaceHeader=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.matchNamespaceHeader="X-Tenant"</code></pre>
 </div>
 
 <a id="openapi_configuration" class="anchor" href="#openapi_configuration">&nbsp;</a>
@@ -1338,6 +2072,38 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.openAPIResponseValidation=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.openAPIResponseValidation="true"</code></pre>
+</div>
+
+<button id="button_configuration_enforce_response_validation_for_mocks" class="accordion title"><strong>Enforce Response Validation For Mocks</strong></button>
+<div class="panel title">
+    <p>By default, OpenAPI response validation of mock responses is advisory only - violations are recorded as <span class="inline_code">OPENAPI_RESPONSE_VALIDATION_FAILED</span> log events but the response is still returned to the client. When this is enabled, a mock response that fails OpenAPI response validation is replaced with a <span class="inline_code">502</span> error describing the violations, matching the enforcement available on the validation-proxy path via <span class="inline_code">validateProxyEnforce</span>. This only has any effect when <span class="inline_code">openAPIResponseValidation</span> is also enabled.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.enforceResponseValidationForMocks(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.enforceResponseValidationForMocks=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_ENFORCE_RESPONSE_VALIDATION_FOR_MOCKS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.enforceResponseValidationForMocks=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.enforceResponseValidationForMocks="true"</code></pre>
+</div>
+
+<button id="button_configuration_validate_requests_against_openapi_spec" class="accordion title"><strong>Validate Requests Against OpenAPI Spec</strong></button>
+<div class="panel title">
+    <p>By default a request matched by a mock expectation created from an OpenAPI spec is not re-validated against that spec. When this is enabled, an incoming request matched by an OpenAPI-backed expectation is validated against the spec before the mock response is returned. A request that violates the spec (for example a malformed or missing request body) is rejected with a <span class="inline_code">400</span> describing the violations and recorded as an <span class="inline_code">OPENAPI_REQUEST_VALIDATION_FAILED</span> log event, instead of returning the mock response. This only affects expectations created from an OpenAPI spec; expectations defined with an explicit request matcher are unaffected.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.validateRequestsAgainstOpenApiSpec(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateRequestsAgainstOpenApiSpec=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_VALIDATE_REQUESTS_AGAINST_OPENAPI_SPEC=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.validateRequestsAgainstOpenApiSpec=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.validateRequestsAgainstOpenApiSpec="true"</code></pre>
 </div>
 
 <button id="button_configuration_validate_proxy_openapi_spec" class="accordion title"><strong>Validation Proxy OpenAPI Spec</strong></button>
@@ -1424,6 +2190,22 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.asyncMqttBrokerUrl=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.asyncMqttBrokerUrl="tcp://localhost:1883"</code></pre>
+</div>
+
+<button id="button_configuration_async_amqp_uri" class="accordion title"><strong>Default AMQP (RabbitMQ) URI</strong></button>
+<div class="panel title">
+    <p>Default AMQP (RabbitMQ) connection URI used when a <span class="inline_code">PUT /mockserver/asyncapi</span> request body does not include <span class="inline_code">brokerConfig.amqpUri</span>. When unset (empty string), the broker must be specified per-request. The exchange and routing key for each channel are derived from the channel's <span class="inline_code">bindings.amqp</span> definition.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (unset)</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.asyncAmqpUri(String uri)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.asyncAmqpUri=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_ASYNC_AMQP_URI=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.asyncAmqpUri=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.asyncAmqpUri="amqp://guest:guest@localhost:5672/"</code></pre>
 </div>
 
 <button id="button_configuration_async_recorded_message_max_entries" class="accordion title"><strong>Maximum Recorded Messages Per Channel</strong></button>
@@ -1513,6 +2295,20 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLUSTER_TRANSPORT_CONFIG="/etc/mockserver/jgroups-tcp.xml"</code></pre>
     <p>Property File:</p>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterTransportConfig=/etc/mockserver/jgroups-tcp.xml</code></pre>
+</div>
+
+<button id="button_configuration_cluster_shared_times_enabled" class="accordion title"><strong>Cluster Shared Times Enabled</strong></button>
+<div class="panel title">
+    <p>Controls how limited-use expectations (those created with <span class="inline_code">Times.exactly(n)</span>) count their remaining uses across a cluster. When <span class="keyword">true</span> (the default), the remaining count is shared across all nodes using an atomic compare-and-set on the replicated store, so an expectation set to respond N times responds exactly N times across the whole cluster. This costs a synchronous replicated write on the request-handling thread each time such an expectation matches. Set to <span class="keyword">false</span> to skip the shared counter and use a faster node-local count instead — each node then serves up to its own N, so the fleet-wide total becomes approximate. Only affects clustered deployments with limited-use expectations; single-node and unlimited-use matching are unaffected.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.clusterSharedTimesEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.clusterSharedTimesEnabled=false</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED=false</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterSharedTimesEnabled=false</code></pre>
 </div>
 
 <h2>Cloud Blob Store Configuration:</h2>

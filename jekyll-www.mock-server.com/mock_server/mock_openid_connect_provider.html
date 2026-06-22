@@ -1,0 +1,231 @@
+---
+title: Mock an OIDC / OAuth2 Provider
+description: Mock a complete OpenID Connect / OAuth2 identity provider in a single call — discovery, JWKS, token, authorize, userinfo, introspection, revocation, and logout — with tokens that verify against the published JWKS.
+shortTitle: Mock OIDC Provider
+layout: page
+pageOrder: 5
+section: 'Protocols & Advanced'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-20T00:00:00+00:00
+keywords: mock oidc provider, mock identity provider, openid connect mock, oauth2 mock, jwks, discovery document, authorization code pkce, id_token, nonce, spring security issuer-uri
+---
+
+<h2>Mock an OIDC / OAuth2 provider in one call</h2>
+
+<p>A single request to <code>PUT /mockserver/oidc</code> generates a complete mock OpenID Connect / OAuth2
+    identity provider. MockServer creates expectations for every standard endpoint and signs all tokens with a
+    key pair whose public key is published at the JWKS endpoint, so the tokens your application receives
+    <strong>verify end-to-end</strong> against the discovery document — no real identity provider required.</p>
+
+<p>This is ideal for:</p>
+
+<ul>
+    <li><strong>Integration tests</strong> for OAuth2/OIDC-secured applications and resource servers</li>
+    <li><strong>Offline development</strong> against a realistic IdP with no network dependency</li>
+    <li><strong>Edge-case testing</strong> — expired tokens, wrong issuer, tampered signatures</li>
+</ul>
+
+<a id="endpoints" class="anchor" href="#endpoints">&nbsp;</a>
+
+<h2>Generated endpoints</h2>
+
+<p>A single call generates the following expectations (paths are configurable):</p>
+
+<table>
+    <thead>
+    <tr><th>Endpoint</th><th>Default path</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+    <tr><td>Discovery</td><td><code>/.well-known/openid-configuration</code></td><td>OIDC discovery document</td></tr>
+    <tr><td>JWKS</td><td><code>/.well-known/jwks.json</code></td><td>Public signing key(s)</td></tr>
+    <tr><td>Token</td><td><code>/token</code></td><td>Issues tokens for all supported grants</td></tr>
+    <tr><td>Authorize</td><td><code>/authorize</code></td><td>Authorization-code grant (issues a code, supports PKCE + nonce)</td></tr>
+    <tr><td>Userinfo</td><td><code>/userinfo</code></td><td>Returns the subject and additional claims</td></tr>
+    <tr><td>Introspection</td><td><code>/introspect</code></td><td>RFC 7662 token introspection</td></tr>
+    <tr><td>Revocation</td><td><code>/revoke</code></td><td>RFC 7009 token revocation</td></tr>
+    <tr><td>End-session (logout)</td><td><code>/logout</code></td><td>RP-initiated logout (302 to <code>post_logout_redirect_uri</code> or 200)</td></tr>
+    <tr><td>Device authorization</td><td><code>/device_authorization</code></td><td>RFC 8628 device-code grant (issues a <code>device_code</code> + <code>user_code</code>)</td></tr>
+    </tbody>
+</table>
+
+<a id="rest_api" class="anchor" href="#rest_api">&nbsp;</a>
+
+<h2>Create it with the REST API</h2>
+
+<p>Use defaults (issuer <code>http://localhost:1080</code>, RS256 signing) with an empty body:</p>
+
+<pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/oidc" -d '{}'</code></pre>
+
+<p>Or supply configuration:</p>
+
+<pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/oidc" -d '{
+    "issuer": "http://localhost:1080",
+    "clientId": "my-app",
+    "audience": "my-api",
+    "scopes": [ "openid", "profile", "email" ],
+    "signingAlgorithm": "RS256",
+    "tokenExpirySeconds": 3600,
+    "additionalClaims": {
+        "name": "Test User",
+        "email": "user@example.com",
+        "email_verified": true
+    }
+}'</code></pre>
+
+<a id="java_client" class="anchor" href="#java_client">&nbsp;</a>
+
+<h2>Create it with the Java client</h2>
+
+<p>The Java client exposes a typed one-call method:</p>
+
+<pre class="prettyprint code"><code class="code">// defaults
+new MockServerClient("localhost", 1080).mockOpenIdProvider();
+
+// or with configuration
+new MockServerClient("localhost", 1080).mockOpenIdProvider(
+    new OidcProviderConfiguration()
+        .setIssuer("http://localhost:1080")
+        .setClientId("my-app")
+        .setAudience("my-api")
+        .setSigningAlgorithm("RS256")
+);</code></pre>
+
+<a id="tokens" class="anchor" href="#tokens">&nbsp;</a>
+
+<h2>Token shapes</h2>
+
+<p>Tokens are minted at request time, so the <code>nonce</code> from an <code>/authorize</code> request is
+    echoed into the <code>id_token</code>. The two tokens are kept distinct, per the OIDC core spec:</p>
+
+<ul>
+    <li><strong><code>id_token</code></strong> — <code>iss</code>, <code>sub</code>, <code>aud = clientId</code>,
+        <code>exp</code>, <code>iat</code>, <code>nbf</code>, <code>nonce</code> (when supplied),
+        <code>at_hash</code>, profile/email claims for the requested scopes, plus any
+        <code>additionalClaims</code>. Issued only when the <code>openid</code> scope is requested.</li>
+    <li><strong><code>access_token</code></strong> — <code>iss</code>, <code>sub</code>,
+        <code>aud = audience</code>, <code>exp</code>, <code>iat</code>, <code>nbf</code>, <code>scope</code>,
+        <code>client_id</code>, plus any <code>additionalClaims</code>.</li>
+</ul>
+
+<p>The <code>token</code> endpoint returns a <code>refresh_token</code> for the <code>authorization_code</code>,
+    <code>refresh_token</code>, and device-code grants. The discovery document advertises the implemented grants
+    (<code>authorization_code</code>, <code>client_credentials</code>, <code>refresh_token</code>,
+    <code>urn:ietf:params:oauth:grant-type:device_code</code>), the PKCE methods (<code>S256</code>,
+    <code>plain</code>), the token-endpoint auth methods, the <code>end_session_endpoint</code>, and the
+    <code>device_authorization_endpoint</code>.</p>
+
+<a id="device_flow" class="anchor" href="#device_flow">&nbsp;</a>
+
+<h2>Device authorization grant (RFC 8628)</h2>
+
+<p>The device flow lets input-constrained devices (TVs, CLIs) obtain tokens. Start it at the
+    <code>/device_authorization</code> endpoint, then poll <code>/token</code>:</p>
+
+<pre class="prettyprint code"><code class="code"># 1. start the device flow
+curl -s -X POST "http://localhost:1080/device_authorization" -d 'scope=openid profile'
+# => { "device_code": "...", "user_code": "BCDF-GHJK",
+#      "verification_uri": "http://localhost:1080/device",
+#      "verification_uri_complete": "http://localhost:1080/device?user_code=BCDF-GHJK",
+#      "expires_in": 300, "interval": 5 }
+
+# 2. poll the token endpoint with the device_code
+curl -s -X POST "http://localhost:1080/token" \
+  -d 'grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=...'
+# => {"error":"authorization_pending"}  (HTTP 400) for the first deviceCodePendingPolls polls
+# => { "access_token": "...", "id_token": "...", "refresh_token": "..." }  once approved</code></pre>
+
+<p>The mock has no device login screen, so approval is simulated by the <code>deviceCodePendingPolls</code>
+    setting: the first N polls return RFC 8628 <code>authorization_pending</code> (HTTP 400), then tokens are
+    minted. The default <code>0</code> approves immediately on the first poll. A device code is single-use once
+    approved and expires after <code>expires_in</code> seconds; an unknown, already-redeemed, or expired
+    <code>device_code</code> returns <code>expired_token</code>.</p>
+
+<a id="client_authentication" class="anchor" href="#client_authentication">&nbsp;</a>
+
+<h2>Token-endpoint client authentication</h2>
+
+<p>By default the mock <code>/token</code> endpoint accepts any caller (so tests stay simple). Set
+    <code>enforceClientAuthentication</code> to <code>true</code> to require the client to authenticate with the
+    configured <code>clientId</code> / <code>clientSecret</code>, using either standard method:</p>
+
+<ul>
+    <li><strong><code>client_secret_basic</code></strong> — <code>Authorization: Basic base64(clientId:clientSecret)</code></li>
+    <li><strong><code>client_secret_post</code></strong> — <code>client_id</code> and <code>client_secret</code> form parameters</li>
+</ul>
+
+<p>Missing or wrong credentials return RFC 6749 §5.2 <code>{"error":"invalid_client"}</code> with HTTP
+    <code>401</code> and a <code>WWW-Authenticate: Basic</code> header. With the flag off (the default), no client
+    authentication is performed.</p>
+
+<a id="opaque_tokens" class="anchor" href="#opaque_tokens">&nbsp;</a>
+
+<h2>Opaque access tokens</h2>
+
+<p>Many real IdPs issue <em>opaque</em> access tokens — random reference strings that are not JWTs — whose only
+    validation path is the introspection endpoint. Set <code>opaqueAccessToken</code> to <code>true</code> to
+    mock this: the <code>access_token</code> becomes a random opaque string while the <code>id_token</code>
+    stays a signed JWT that still verifies against the JWKS.</p>
+
+<p>Validate an opaque token by introspecting it (RFC 7662): a known, unexpired token returns
+    <code>{"active":true, ...claims}</code> and an unknown or expired token returns <code>{"active":false}</code>.</p>
+
+<pre class="prettyprint code"><code class="code">curl -s -X POST "http://localhost:1080/introspect" -d 'token=&lt;opaque-access-token&gt;'
+# => { "active": true, "sub": "mock-user", "scope": "openid profile email", ... }</code></pre>
+
+<a id="configuration" class="anchor" href="#configuration">&nbsp;</a>
+
+<h2>Configuration</h2>
+
+<table>
+    <thead>
+    <tr><th>Field</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+    <tr><td><code>issuer</code></td><td><code>http://localhost:1080</code></td><td>Issuer URL; used to build every endpoint URL in the discovery document</td></tr>
+    <tr><td><code>jwksPath</code> / <code>tokenPath</code> / <code>authorizePath</code> / <code>userinfoPath</code> / <code>introspectPath</code> / <code>revokePath</code> / <code>deviceAuthorizationPath</code></td><td>standard paths</td><td>Override individual endpoint paths</td></tr>
+    <tr><td><code>subject</code></td><td><code>mock-user</code></td><td><code>sub</code> claim in tokens and userinfo</td></tr>
+    <tr><td><code>clientId</code></td><td><code>mock-client</code></td><td>Audience of the <code>id_token</code> and <code>client_id</code> in the <code>access_token</code></td></tr>
+    <tr><td><code>clientSecret</code></td><td><code>mock-client-secret</code></td><td>Expected client secret when <code>enforceClientAuthentication</code> is on</td></tr>
+    <tr><td><code>audience</code></td><td><code>mock-audience</code></td><td>Audience of the <code>access_token</code></td></tr>
+    <tr><td><code>scopes</code></td><td><code>["openid","profile","email"]</code></td><td>Default scopes; an <code>id_token</code> is issued only when <code>openid</code> is present</td></tr>
+    <tr><td><code>tokenExpirySeconds</code></td><td><code>3600</code></td><td>Token lifetime (<code>expires_in</code> / <code>exp</code>)</td></tr>
+    <tr><td><code>additionalClaims</code></td><td><code>{}</code></td><td>Extra claims merged into the issued tokens and userinfo</td></tr>
+    <tr><td><code>signingAlgorithm</code></td><td><code>RS256</code></td><td><code>RS256</code>, <code>RS384</code>, <code>RS512</code>, <code>ES256</code>, <code>ES384</code>, <code>ES512</code></td></tr>
+    <tr><td><code>privateKeyPem</code> + <code>certificatePem</code></td><td><em>generated</em></td><td>Supply your own signing key (PEM). The public key is published at the JWKS endpoint</td></tr>
+    <tr><td><code>jwkJson</code></td><td><em>generated</em></td><td>Alternatively, supply the signing key as a private JWK</td></tr>
+    <tr><td><code>keyId</code></td><td><em>random</em></td><td>Stable <code>kid</code> so JWKS-caching clients keep working across restarts</td></tr>
+    <tr><td><code>deviceCodePendingPolls</code></td><td><code>0</code></td><td>Device flow: number of <code>/token</code> polls that return <code>authorization_pending</code> before approval (<code>0</code> = approve immediately)</td></tr>
+    <tr><td><code>enforceClientAuthentication</code></td><td><code>false</code></td><td>Require <code>client_secret_basic</code> / <code>client_secret_post</code> at the token endpoint</td></tr>
+    <tr><td><code>opaqueAccessToken</code></td><td><code>false</code></td><td>Issue an opaque (non-JWT) <code>access_token</code> validated via introspection; <code>id_token</code> stays a signed JWT</td></tr>
+    <tr><td><code>issueExpiredToken</code></td><td><code>false</code></td><td>Negative test: issue tokens whose <code>exp</code> is in the past</td></tr>
+    <tr><td><code>wrongIssuer</code></td><td><code>false</code></td><td>Negative test: sign tokens with an <code>iss</code> that does not match the discovery document</td></tr>
+    <tr><td><code>tamperedSignature</code></td><td><code>false</code></td><td>Negative test: corrupt the signature so verification fails</td></tr>
+    </tbody>
+</table>
+
+<p class="note">When the default (generated) key is used, the key pair is fresh per call, so a client that has
+    cached the JWKS before re-generating the provider will see a new <code>kid</code>. Supply a fixed
+    <code>keyId</code> (and key material) for a stable JWKS across restarts.</p>
+
+<a id="spring_security" class="anchor" href="#spring_security">&nbsp;</a>
+
+<h2>Spring Security example</h2>
+
+<p>Point a Spring Security resource server (or OAuth2 login client) at the mock provider's issuer; Spring
+    discovers the endpoints and JWKS automatically:</p>
+
+<pre class="prettyprint code"><code class="code"># application.yml
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:1080</code></pre>
+
+<p>Because the issued tokens verify against the published JWKS, Spring Security validates them with no further
+    configuration. For the OAuth2 login (authorization-code) flow, the mock <code>/authorize</code> endpoint
+    issues a code (echoing <code>state</code> and recording any PKCE challenge and <code>nonce</code>), and the
+    <code>/token</code> endpoint exchanges it for tokens carrying the <code>nonce</code>.</p>

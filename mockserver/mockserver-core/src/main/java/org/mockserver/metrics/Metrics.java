@@ -10,6 +10,7 @@ import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.action.http.ChaosAutoHaltMonitor;
+import org.mockserver.mock.action.http.ForwardCircuitBreaker;
 import org.mockserver.mock.action.http.ServiceChaosRegistry;
 import org.mockserver.model.Action;
 
@@ -27,6 +28,11 @@ import static org.mockserver.log.model.LogEntry.LogMessageType.EXCEPTION;
 public class Metrics {
 
     private static final AtomicReference<Boolean> additionalMetricsRegistered = new AtomicReference<>(false);
+    // Guards the registration block in the constructor and resetAdditionalMetricsForTesting()
+    // so they cannot interleave. Without this, concurrent test classes that reset-then-register
+    // race on PrometheusRegistry.defaultRegistry — one thread's clear() can land in the middle
+    // of another thread's registration, causing "duplicate metric name" errors.
+    private static final Object registrationLock = new Object();
     private static final Map<Name, Gauge> metrics = new ConcurrentHashMap<>();
     // Request-latency histogram. Null until metrics are enabled, so
     // observeRequestDurationSeconds() is a no-op when metrics are off (the
@@ -36,6 +42,16 @@ public class Metrics {
     private static volatile Histogram requestDurationByMethodSeconds;
     // Counter for slow forwarded requests. Null until metrics are enabled.
     private static volatile Counter slowRequestTotal;
+    // Counter for log events dropped because the event-log disruptor ring buffer was full.
+    // Null until metrics are enabled. Makes the (previously silent for INFO/DEBUG) ring-buffer
+    // saturation cliff observable under load.
+    private static volatile Counter droppedLogEventsTotal;
+    // Per-upstream forwarded-request observability. Histogram of forward/proxy
+    // latency labeled by upstream host, plus a count labeled by host + status
+    // class. Both null until metrics are enabled. Cardinality is bounded by the
+    // number of distinct upstream hosts forwarded to (NOT the full URL/path).
+    private static volatile Histogram forwardRequestDurationSeconds;
+    private static volatile Counter forwardRequestsTotal;
     // Counter for HTTP chaos faults injected (error or latency). Null until metrics are enabled.
     private static volatile Counter httpChaosInjectedTotal;
     // Counter for chaos auto-halt events. Null until metrics are enabled.
@@ -47,87 +63,288 @@ public class Metrics {
     // mockserver-async module (publish path + subscriber record path).
     private static volatile Counter asyncMessagesPublishedTotal;
     private static volatile Counter asyncMessagesConsumedTotal;
+    // LLM token and cost counters, labeled by provider and model.
+    // Null until metrics are enabled AND llmMetricsEnabled is true.
+    private static volatile Counter llmInputTokensTotal;
+    private static volatile Counter llmOutputTokensTotal;
+    private static volatile Counter llmCostUsdTotal;
+    // Counter for LLM cost-budget circuit-breaker trips. Null until metrics are enabled.
+    private static volatile Counter llmCostBudgetTrippedTotal;
+    // Opt-in per-expectation match counter, labeled by the stable expectation id.
+    // Null unless metrics are enabled AND configuration.perExpectationMetricsEnabled()
+    // is true. OFF by default because per-expectation labels can explode
+    // Prometheus cardinality: one time series per distinct expectation id. Using the
+    // stable expectation id (not the request path) bounds cardinality to the number of
+    // expectations, but operators with very large or churning expectation sets should
+    // leave this off. See docs/code/metrics.md.
+    private static volatile Counter expectationMatchedTotal;
     // Supplier of active expectations, set by HttpState at startup so the
     // expectations-by-type GaugeWithCallback can read live state at scrape time
     // without a core->netty dependency.
     private static final AtomicReference<Supplier<List<Expectation>>> activeExpectationsSupplier = new AtomicReference<>();
+    // Supplier of the current cluster member count, set by HttpState at startup
+    // so the cluster_members GaugeWithCallback can read live membership at scrape
+    // time from the StateBackend without Metrics depending on the state package.
+    // Defaults to 1 (single local node) until a supplier is registered.
+    private static final AtomicReference<Supplier<Integer>> clusterMemberCountSupplier = new AtomicReference<>();
     // OTel histogram for OTLP export. Set by OtelMetricsExporter when enabled; null otherwise.
     private static volatile io.opentelemetry.api.metrics.DoubleHistogram otelRequestDurationHistogram;
+
+    // --- Load-injection (load scenario) metric family. ADDITIVE to the forward family: the
+    // mock_server_load_* metrics give load runs their own scenario/run/step/route dimension so a
+    // load injector can be charted next to its system-under-test. All null until metrics are
+    // enabled (registered once in the constructor), so a load run with metrics off pays nothing.
+    // The classic histogram bucket scheme is reused from the forward histogram. Custom label
+    // allowlist (loadGenerationMetricLabels) is captured at registration because Prometheus needs a
+    // fixed label-name set; OTEL carries arbitrary custom labels via attributes (see OtelMetricsExporter).
+    private static final double[] LOAD_DURATION_BUCKETS = {0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10};
+    /** Fixed structured Prometheus label names for the per-request load metrics, in order. */
+    static final String[] LOAD_FIXED_LABELS = {"scenario", "run_id", "step", "route", "method", "status_class"};
+    /** Allowlisted custom label names appended (in order) after the fixed labels; empty by default. */
+    private static volatile String[] loadCustomLabelNames = new String[0];
+    private static volatile Histogram loadRequestDurationSeconds;
+    private static volatile Counter loadRequestsTotal;
+    private static volatile Counter loadRequestBytesTotal;
+    private static volatile Counter loadResponseBytesTotal;
+    private static volatile Counter loadIterationsTotal;     // labels: scenario, run_id
+    private static volatile Counter loadThrottledTotal;      // labels: scenario, run_id, reason
+    private static volatile Counter loadErrorsTotal;         // labels: scenario, run_id, kind
+    // GaugeWithCallback live readers, installed by the orchestrator while a run is active.
+    private static final AtomicReference<Supplier<Map<LoadGaugeKey, Integer>>> loadActiveVusReader = new AtomicReference<>();
+    private static final AtomicReference<Supplier<Map<LoadGaugeKey, Integer>>> loadInflightReader = new AtomicReference<>();
+    // OTEL load instruments, set by OtelMetricsExporter when enabled; null otherwise.
+    private static volatile io.opentelemetry.api.metrics.DoubleHistogram otelLoadRequestDuration;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadRequests;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadRequestBytes;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadResponseBytes;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadIterations;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadThrottled;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadErrors;
 
     private final Boolean metricsEnabled;
 
     public Metrics(Configuration configuration) {
         metricsEnabled = configuration.metricsEnabled();
-        if (metricsEnabled && additionalMetricsRegistered.compareAndSet(false, true)) {
-            PrometheusRegistry.defaultRegistry.register(new BuildInfoCollector());
-            PrometheusRegistry.defaultRegistry.register(new JvmMetricsCollector());
-            Arrays.stream(Name.values()).forEach(Metrics::getOrCreate);
-            requestDurationSeconds = Histogram.builder()
-                .name("mock_server_request_duration_seconds")
-                .help("MockServer request handling duration in seconds")
-                .classicOnly()
-                .classicUpperBounds(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
-                .register();
-            slowRequestTotal = Counter.builder()
-                .name("mock_server_slow_requests")
-                .help("Total number of forwarded requests that exceeded the slow request threshold")
-                .register();
-            httpChaosInjectedTotal = Counter.builder()
-                .name("mock_server_http_chaos_injected")
-                .help("Total HTTP chaos faults injected by type")
-                .labelNames("fault_type")
-                .register();
-            chaosAutoHaltTotal = Counter.builder()
-                .name("mock_server_chaos_auto_halt")
-                .help("Total number of times the chaos auto-halt circuit-breaker triggered")
-                .register();
-            mcpToolCallsTotal = Counter.builder()
-                .name("mock_server_mcp_tool_calls")
-                .help("Total MCP tool calls by tool name")
-                .labelNames("tool")
-                .register();
-            asyncMessagesPublishedTotal = Counter.builder()
-                .name("mock_server_async_messages_published")
-                .help("Total async/broker messages published by channel")
-                .labelNames("channel")
-                .register();
-            asyncMessagesConsumedTotal = Counter.builder()
-                .name("mock_server_async_messages_consumed")
-                .help("Total async/broker messages consumed/recorded by channel")
-                .labelNames("channel")
-                .register();
-            // Callback gauge, labeled by action_type: read active expectations at
-            // scrape time and group by action type, so no imperative tracking is needed.
-            GaugeWithCallback.builder()
-                .name("mock_server_expectations_by_type")
-                .help("Number of active expectations grouped by action type")
-                .labelNames("action_type")
-                .callback(callback ->
-                    getActiveExpectationCountByType().forEach((actionType, count) ->
-                        callback.call(count, actionType)))
-                .register();
-            // Callback gauge, labeled by fault_type: read the live registry at scrape
-            // time rather than tracking it imperatively, so TTL auto-revert (which
-            // removes a profile without a put/remove call) is reflected without any
-            // extra plumbing. One series per fault type so it can be charted by type.
-            GaugeWithCallback.builder()
-                .name("mock_server_active_service_chaos")
-                .help("Number of active service-scoped chaos profiles configured with each fault type")
-                .labelNames("fault_type")
-                .callback(callback ->
-                    getActiveServiceChaosCountByFaultType().forEach((faultType, count) ->
-                        callback.call(count, faultType)))
-                .register();
-            if (Boolean.TRUE.equals(configuration.metricsRequestDurationRouteLabels())) {
-                requestDurationByMethodSeconds = Histogram.builder()
-                    .name("mock_server_request_duration_by_method_seconds")
-                    .help("MockServer request handling duration in seconds, labeled by HTTP method")
-                    .labelNames("method")
-                    .classicOnly()
-                    .classicUpperBounds(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
-                    .register();
+        if (metricsEnabled) {
+            synchronized (registrationLock) {
+                if (additionalMetricsRegistered.compareAndSet(false, true)) {
+                    PrometheusRegistry.defaultRegistry.register(new BuildInfoCollector());
+                    PrometheusRegistry.defaultRegistry.register(new JvmMetricsCollector());
+                    Arrays.stream(Name.values()).forEach(Metrics::getOrCreate);
+                    requestDurationSeconds = Histogram.builder()
+                        .name("mock_server_request_duration_seconds")
+                        .help("MockServer request handling duration in seconds")
+                        .classicOnly()
+                        .classicUpperBounds(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
+                        .register();
+                    slowRequestTotal = Counter.builder()
+                        .name("mock_server_slow_requests")
+                        .help("Total number of forwarded requests that exceeded the slow request threshold")
+                        .register();
+                    droppedLogEventsTotal = Counter.builder()
+                        .name("mock_server_dropped_log_events")
+                        .help("Total number of log events dropped because the event-log ring buffer was full")
+                        .register();
+                    forwardRequestDurationSeconds = Histogram.builder()
+                        .name("mock_server_forward_request_duration_seconds")
+                        .help("Latency of forwarded/proxied requests in seconds, labeled by upstream host")
+                        .labelNames("upstream_host")
+                        .classicOnly()
+                        .classicUpperBounds(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
+                        .register();
+                    forwardRequestsTotal = Counter.builder()
+                        .name("mock_server_forward_requests")
+                        .help("Total forwarded/proxied requests by upstream host and response status class")
+                        .labelNames("upstream_host", "status_class")
+                        .register();
+                    httpChaosInjectedTotal = Counter.builder()
+                        .name("mock_server_http_chaos_injected")
+                        .help("Total HTTP chaos faults injected by type")
+                        .labelNames("fault_type")
+                        .register();
+                    chaosAutoHaltTotal = Counter.builder()
+                        .name("mock_server_chaos_auto_halt")
+                        .help("Total number of times the chaos auto-halt circuit-breaker triggered")
+                        .register();
+                    mcpToolCallsTotal = Counter.builder()
+                        .name("mock_server_mcp_tool_calls")
+                        .help("Total MCP tool calls by tool name")
+                        .labelNames("tool")
+                        .register();
+                    asyncMessagesPublishedTotal = Counter.builder()
+                        .name("mock_server_async_messages_published")
+                        .help("Total async/broker messages published by channel")
+                        .labelNames("channel")
+                        .register();
+                    asyncMessagesConsumedTotal = Counter.builder()
+                        .name("mock_server_async_messages_consumed")
+                        .help("Total async/broker messages consumed/recorded by channel")
+                        .labelNames("channel")
+                        .register();
+                    if (Boolean.TRUE.equals(configuration.llmMetricsEnabled())) {
+                        llmInputTokensTotal = Counter.builder()
+                            .name("mock_server_llm_input_tokens")
+                            .help("Total LLM input tokens by provider and model")
+                            .labelNames("provider", "model")
+                            .register();
+                        llmOutputTokensTotal = Counter.builder()
+                            .name("mock_server_llm_output_tokens")
+                            .help("Total LLM output tokens by provider and model")
+                            .labelNames("provider", "model")
+                            .register();
+                        llmCostUsdTotal = Counter.builder()
+                            .name("mock_server_llm_cost_usd")
+                            .help("Cumulative estimated LLM cost in USD by provider and model")
+                            .labelNames("provider", "model")
+                            .register();
+                    }
+                    llmCostBudgetTrippedTotal = Counter.builder()
+                        .name("mock_server_llm_cost_budget_tripped")
+                        .help("Total number of times the LLM cost-budget circuit-breaker tripped")
+                        .register();
+                    if (Boolean.TRUE.equals(configuration.perExpectationMetricsEnabled())) {
+                        // Opt-in: registered only when perExpectationMetricsEnabled is true so
+                        // the default scrape is byte-for-byte identical to today (no new series).
+                        expectationMatchedTotal = Counter.builder()
+                            .name("mock_server_expectation_matched")
+                            .help("Total expectation matches (matched and responded) labeled by stable expectation id")
+                            .labelNames("expectation_id")
+                            .register();
+                    }
+                    // Callback gauge, labeled by action_type: read active expectations at
+                    // scrape time and group by action type, so no imperative tracking is needed.
+                    GaugeWithCallback.builder()
+                        .name("mock_server_expectations_by_type")
+                        .help("Number of active expectations grouped by action type")
+                        .labelNames("action_type")
+                        .callback(callback ->
+                            getActiveExpectationCountByType().forEach((actionType, count) ->
+                                callback.call(count, actionType)))
+                        .register();
+                    // Callback gauge, labeled by fault_type: read the live registry at scrape
+                    // time rather than tracking it imperatively, so TTL auto-revert (which
+                    // removes a profile without a put/remove call) is reflected without any
+                    // extra plumbing. One series per fault type so it can be charted by type.
+                    GaugeWithCallback.builder()
+                        .name("mock_server_active_service_chaos")
+                        .help("Number of active service-scoped chaos profiles configured with each fault type")
+                        .labelNames("fault_type")
+                        .callback(callback ->
+                            getActiveServiceChaosCountByFaultType().forEach((faultType, count) ->
+                                callback.call(count, faultType)))
+                        .register();
+                    // Callback gauge: report the live cluster member count at scrape
+                    // time. For a single-node / in-memory deployment this is 1; for a
+                    // clustered backend it reflects the current fleet size read from
+                    // the StateBackend via the registered supplier.
+                    GaugeWithCallback.builder()
+                        .name("mock_server_cluster_members")
+                        .help("Number of members in the MockServer cluster (1 for a single-node deployment)")
+                        .callback(callback -> callback.call(getClusterMemberCount()))
+                        .register();
+                    // Callback gauge: number of upstreams whose forward/proxy circuit breaker is
+                    // currently open. Read live at scrape time so half-open recovery is reflected
+                    // without imperative plumbing. Always 0 when the breaker is disabled.
+                    GaugeWithCallback.builder()
+                        .name("mock_server_upstream_circuit_open")
+                        .help("Number of upstreams whose forward/proxy circuit breaker is currently open")
+                        .callback(callback -> callback.call(getOpenUpstreamCircuitCount()))
+                        .register();
+                    if (Boolean.TRUE.equals(configuration.metricsRequestDurationRouteLabels())) {
+                        requestDurationByMethodSeconds = Histogram.builder()
+                            .name("mock_server_request_duration_by_method_seconds")
+                            .help("MockServer request handling duration in seconds, labeled by HTTP method")
+                            .labelNames("method")
+                            .classicOnly()
+                            .classicUpperBounds(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
+                            .register();
+                    }
+                    registerLoadMetrics(configuration);
+                }
             }
         }
+    }
+
+    /**
+     * Register the {@code mock_server_load_*} family. The custom-label allowlist
+     * ({@code loadGenerationMetricLabels}) is captured here because Prometheus requires a fixed
+     * label-name set per metric; the per-request metrics carry the six fixed structured labels plus
+     * the allowlisted custom labels (in that order). The two live gauges read the orchestrator via a
+     * registered supplier at scrape time (mirrors {@code mock_server_active_service_chaos}), so a run
+     * that has ended reports nothing without imperative cleanup.
+     */
+    private static void registerLoadMetrics(Configuration configuration) {
+        java.util.List<String> allowlist = configuration.loadGenerationMetricLabels();
+        loadCustomLabelNames = allowlist != null ? allowlist.toArray(new String[0]) : new String[0];
+        String[] perRequestLabels = concat(LOAD_FIXED_LABELS, loadCustomLabelNames);
+
+        loadRequestDurationSeconds = Histogram.builder()
+            .name("mock_server_load_request_duration_seconds")
+            .help("Load-scenario request duration in seconds, labeled by scenario/run/step/route/method/status class")
+            .labelNames(perRequestLabels)
+            .classicOnly()
+            .classicUpperBounds(LOAD_DURATION_BUCKETS)
+            .withExemplars()
+            .register();
+        loadRequestsTotal = Counter.builder()
+            .name("mock_server_load_requests")
+            .help("Total load-scenario requests by scenario/run/step/route/method/status class")
+            .labelNames(perRequestLabels)
+            .register();
+        loadRequestBytesTotal = Counter.builder()
+            .name("mock_server_load_request_bytes")
+            .help("Total load-scenario request body bytes by scenario/run/step/route/method/status class")
+            .labelNames(perRequestLabels)
+            .register();
+        loadResponseBytesTotal = Counter.builder()
+            .name("mock_server_load_response_bytes")
+            .help("Total load-scenario response body bytes by scenario/run/step/route/method/status class")
+            .labelNames(perRequestLabels)
+            .register();
+        loadIterationsTotal = Counter.builder()
+            .name("mock_server_load_iterations")
+            .help("Total completed load-scenario iterations by scenario and run")
+            .labelNames("scenario", "run_id")
+            .register();
+        loadThrottledTotal = Counter.builder()
+            .name("mock_server_load_throttled")
+            .help("Total load-scenario dispatches throttled by the self-load guard, by reason (inflight_cap, rate_limit)")
+            .labelNames("scenario", "run_id", "reason")
+            .register();
+        loadErrorsTotal = Counter.builder()
+            .name("mock_server_load_errors")
+            .help("Total load-scenario request errors by kind (timeout, connection, render, http_5xx, null_response)")
+            .labelNames("scenario", "run_id", "kind")
+            .register();
+        GaugeWithCallback.builder()
+            .name("mock_server_load_active_vus")
+            .help("Number of active virtual users in the running load scenario, by scenario and run")
+            .labelNames("scenario", "run_id")
+            .callback(callback -> {
+                Supplier<Map<LoadGaugeKey, Integer>> reader = loadActiveVusReader.get();
+                if (reader != null) {
+                    reader.get().forEach((key, count) -> callback.call(count, key.scenario, key.runId));
+                }
+            })
+            .register();
+        GaugeWithCallback.builder()
+            .name("mock_server_load_inflight_requests")
+            .help("Number of in-flight (dispatched, not-yet-completed) load-scenario requests, by scenario and run")
+            .labelNames("scenario", "run_id")
+            .callback(callback -> {
+                Supplier<Map<LoadGaugeKey, Integer>> reader = loadInflightReader.get();
+                if (reader != null) {
+                    reader.get().forEach((key, count) -> callback.call(count, key.scenario, key.runId));
+                }
+            })
+            .register();
+    }
+
+    private static String[] concat(String[] a, String[] b) {
+        String[] result = new String[a.length + b.length];
+        System.arraycopy(a, 0, result, 0, a.length);
+        System.arraycopy(b, 0, result, a.length, b.length);
+        return result;
     }
 
     private static Gauge getOrCreate(Name name) {
@@ -163,19 +380,47 @@ public class Metrics {
      * intended for test use only to guarantee deterministic test ordering.
      */
     public static void resetAdditionalMetricsForTesting() {
-        additionalMetricsRegistered.set(false);
-        requestDurationSeconds = null;
-        requestDurationByMethodSeconds = null;
-        slowRequestTotal = null;
-        httpChaosInjectedTotal = null;
-        chaosAutoHaltTotal = null;
-        mcpToolCallsTotal = null;
-        asyncMessagesPublishedTotal = null;
-        asyncMessagesConsumedTotal = null;
-        otelRequestDurationHistogram = null;
-        activeExpectationsSupplier.set(null);
-        metrics.clear();
-        PrometheusRegistry.defaultRegistry.clear();
+        synchronized (registrationLock) {
+            additionalMetricsRegistered.set(false);
+            requestDurationSeconds = null;
+            requestDurationByMethodSeconds = null;
+            slowRequestTotal = null;
+            droppedLogEventsTotal = null;
+            forwardRequestDurationSeconds = null;
+            forwardRequestsTotal = null;
+            httpChaosInjectedTotal = null;
+            chaosAutoHaltTotal = null;
+            mcpToolCallsTotal = null;
+            asyncMessagesPublishedTotal = null;
+            asyncMessagesConsumedTotal = null;
+            llmInputTokensTotal = null;
+            llmOutputTokensTotal = null;
+            llmCostUsdTotal = null;
+            llmCostBudgetTrippedTotal = null;
+            expectationMatchedTotal = null;
+            otelRequestDurationHistogram = null;
+            loadRequestDurationSeconds = null;
+            loadRequestsTotal = null;
+            loadRequestBytesTotal = null;
+            loadResponseBytesTotal = null;
+            loadIterationsTotal = null;
+            loadThrottledTotal = null;
+            loadErrorsTotal = null;
+            loadCustomLabelNames = new String[0];
+            otelLoadRequestDuration = null;
+            otelLoadRequests = null;
+            otelLoadRequestBytes = null;
+            otelLoadResponseBytes = null;
+            otelLoadIterations = null;
+            otelLoadThrottled = null;
+            otelLoadErrors = null;
+            loadActiveVusReader.set(null);
+            loadInflightReader.set(null);
+            activeExpectationsSupplier.set(null);
+            clusterMemberCountSupplier.set(null);
+            metrics.clear();
+            PrometheusRegistry.defaultRegistry.clear();
+        }
     }
 
     public static void clear() {
@@ -254,6 +499,90 @@ public class Metrics {
     }
 
     /**
+     * Increment the dropped-log-events counter (event-log ring buffer full).
+     * No-op unless metrics are enabled (the counter is null otherwise). The
+     * authoritative, always-available count is maintained on
+     * {@link org.mockserver.log.MockServerEventLog#getDroppedLogEventCount()};
+     * this mirrors it to Prometheus when metrics are on.
+     */
+    public static void incrementDroppedLogEvents() {
+        Counter counter = droppedLogEventsTotal;
+        if (counter != null) {
+            counter.inc();
+        }
+    }
+
+    /**
+     * Return the current dropped-log-events count, or 0 if metrics are disabled.
+     */
+    public static long getDroppedLogEventCount() {
+        Counter counter = droppedLogEventsTotal;
+        return counter != null ? (long) counter.get() : 0L;
+    }
+
+    /**
+     * Record observability for a single forwarded/proxied request: its latency
+     * (seconds) in the per-upstream histogram and a count in the per-upstream,
+     * per-status-class counter. No-op unless metrics are enabled (both metrics
+     * are null until then), so the forward path pays nothing when metrics are off.
+     * <p>
+     * Cardinality is bounded by the number of distinct upstream hosts (the
+     * {@code upstream_host} label is the host only — never the full URL/path) and
+     * the five status classes ({@code 1xx}..{@code 5xx}). A null/blank host is
+     * recorded as {@code "unknown"}.
+     *
+     * @param upstreamHost the resolved upstream host (no port, no path)
+     * @param statusCode   the upstream response status code, or null if unknown
+     * @param latencySeconds the forward latency in seconds (negative values are clamped to 0)
+     */
+    public static void observeForwardRequest(String upstreamHost, Integer statusCode, double latencySeconds) {
+        String hostLabel = upstreamHost != null && !upstreamHost.isEmpty() ? upstreamHost : "unknown";
+        Histogram histogram = forwardRequestDurationSeconds;
+        if (histogram != null) {
+            histogram.labelValues(hostLabel).observe(latencySeconds > 0 ? latencySeconds : 0);
+        }
+        Counter counter = forwardRequestsTotal;
+        if (counter != null) {
+            counter.labelValues(hostLabel, statusClass(statusCode)).inc();
+        }
+    }
+
+    /**
+     * Map an HTTP status code to its status class label ({@code "1xx"}..{@code "5xx"}).
+     * Unknown/out-of-range codes are recorded as {@code "unknown"} so the
+     * {@code status_class} label has a small, bounded value set.
+     */
+    private static String statusClass(Integer statusCode) {
+        if (statusCode == null || statusCode < 100 || statusCode >= 600) {
+            return "unknown";
+        }
+        return (statusCode / 100) + "xx";
+    }
+
+    /**
+     * Return the current forward-request count for the given upstream host and
+     * status class, or 0 if metrics are disabled.
+     */
+    public static long getForwardRequestCount(String upstreamHost, String statusClass) {
+        Counter counter = forwardRequestsTotal;
+        if (counter == null || upstreamHost == null || statusClass == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(upstreamHost, statusClass).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Return true if the per-upstream forward metrics are registered (i.e. metrics are enabled).
+     */
+    public static boolean isForwardMetricsActive() {
+        return forwardRequestsTotal != null;
+    }
+
+    /**
      * Return the current chaos-injected count for the given fault type, or 0 if
      * metrics are disabled. Used by {@link OtelMetricsExporter} to mirror the
      * Prometheus counter via OTLP.
@@ -274,7 +603,7 @@ public class Metrics {
      * Increment the HTTP chaos injected counter for the given fault type.
      * No-op when metrics are disabled (counter not registered) or faultType is null.
      *
-     * @param faultType one of "drop", "error", "latency", "truncate", "malformed", "slow", "quota", or "graphql"
+     * @param faultType one of "drop", "error", "latency", "truncate", "malformed", "slow", "quota", "graphql", or "rateLimit"
      */
     public static void incrementHttpChaosInjected(String faultType) {
         Counter counter = httpChaosInjectedTotal;
@@ -398,6 +727,170 @@ public class Metrics {
     }
 
     /**
+     * Increment the LLM token and cost counters for a served or forwarded completion.
+     * No-op when LLM metrics are not registered (llmMetricsEnabled is false or metrics are disabled).
+     * Fail-soft: a null or unresolvable provider/model is recorded as "unknown".
+     *
+     * @param provider     the LLM provider name (e.g. "ANTHROPIC", "OPENAI")
+     * @param model        the model name (e.g. "claude-opus-4")
+     * @param inputTokens  number of input tokens (may be 0)
+     * @param outputTokens number of output tokens (may be 0)
+     * @param costUsd      estimated cost in USD (may be 0.0; null means unknown and is skipped)
+     */
+    public static void incrementLlmTokens(String provider, String model, long inputTokens, long outputTokens, Double costUsd) {
+        String providerLabel = provider != null && !provider.isEmpty() ? provider.toLowerCase() : "unknown";
+        String modelLabel = model != null && !model.isEmpty() ? model : "unknown";
+        Counter inputCounter = llmInputTokensTotal;
+        if (inputCounter != null && inputTokens > 0) {
+            inputCounter.labelValues(providerLabel, modelLabel).inc(inputTokens);
+        }
+        Counter outputCounter = llmOutputTokensTotal;
+        if (outputCounter != null && outputTokens > 0) {
+            outputCounter.labelValues(providerLabel, modelLabel).inc(outputTokens);
+        }
+        Counter costCounter = llmCostUsdTotal;
+        if (costCounter != null && costUsd != null && costUsd > 0.0) {
+            costCounter.labelValues(providerLabel, modelLabel).inc(costUsd);
+        }
+    }
+
+    /**
+     * Return the current LLM input token count for the given provider and model, or 0 if
+     * LLM metrics are disabled.
+     */
+    public static long getLlmInputTokens(String provider, String model) {
+        Counter counter = llmInputTokensTotal;
+        if (counter == null || provider == null || model == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(provider.toLowerCase(), model).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Return the current LLM output token count for the given provider and model, or 0 if
+     * LLM metrics are disabled.
+     */
+    public static long getLlmOutputTokens(String provider, String model) {
+        Counter counter = llmOutputTokensTotal;
+        if (counter == null || provider == null || model == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(provider.toLowerCase(), model).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Return the current cumulative LLM cost in USD for the given provider and model, or 0.0 if
+     * LLM metrics are disabled.
+     */
+    public static double getLlmCostUsd(String provider, String model) {
+        Counter counter = llmCostUsdTotal;
+        if (counter == null || provider == null || model == null) {
+            return 0.0;
+        }
+        try {
+            return counter.labelValues(provider.toLowerCase(), model).get();
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+
+    /**
+     * Return the aggregate cumulative LLM cost in USD across all providers and models.
+     * Used by the cost-budget circuit-breaker. Returns 0.0 if LLM metrics are disabled.
+     */
+    public static double getLlmCostUsdTotal() {
+        Counter counter = llmCostUsdTotal;
+        if (counter == null) {
+            return 0.0;
+        }
+        try {
+            // Sum across all label combinations by iterating the data points
+            final double[] total = {0.0};
+            counter.collect().getDataPoints().forEach(dp -> total[0] += dp.getValue());
+            return total[0];
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+
+    /**
+     * Return true if LLM token/cost counters are registered (i.e. both metricsEnabled
+     * and llmMetricsEnabled are true).
+     */
+    public static boolean isLlmMetricsActive() {
+        return llmInputTokensTotal != null;
+    }
+
+    /**
+     * Increment the LLM cost-budget circuit-breaker tripped counter.
+     * No-op when metrics are disabled (counter not registered).
+     */
+    public static void incrementLlmCostBudgetTripped() {
+        Counter counter = llmCostBudgetTrippedTotal;
+        if (counter != null) {
+            counter.inc();
+        }
+    }
+
+    /**
+     * Return the current LLM cost-budget tripped count, or 0 if metrics are disabled.
+     */
+    public static long getLlmCostBudgetTrippedCount() {
+        Counter counter = llmCostBudgetTrippedTotal;
+        return counter != null ? (long) counter.get() : 0L;
+    }
+
+    /**
+     * Increment the per-expectation match counter for the given stable expectation id.
+     * <p>
+     * No-op unless per-expectation metrics are enabled
+     * ({@link Configuration#perExpectationMetricsEnabled()}) AND metrics are enabled
+     * (the counter is null otherwise), or when
+     * {@code expectationId} is null. Labeled by the stable expectation id (not the
+     * request path) so cardinality is bounded by the number of distinct expectations.
+     *
+     * @param expectationId the stable id of the matched expectation
+     */
+    public static void incrementExpectationMatched(String expectationId) {
+        Counter counter = expectationMatchedTotal;
+        if (counter != null && expectationId != null) {
+            counter.labelValues(expectationId).inc();
+        }
+    }
+
+    /**
+     * Return the current per-expectation match count for the given expectation id,
+     * or 0 if the per-expectation counter is not registered.
+     */
+    public static long getExpectationMatchedCount(String expectationId) {
+        Counter counter = expectationMatchedTotal;
+        if (counter == null || expectationId == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(expectationId).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Return true if the per-expectation match counter is registered (i.e. both
+     * metricsEnabled and perExpectationMetricsEnabled are on).
+     */
+    public static boolean isPerExpectationMetricsActive() {
+        return expectationMatchedTotal != null;
+    }
+
+    /**
      * Set the supplier of active expectations. Called by HttpState at startup
      * so the expectations-by-type GaugeWithCallback can read live state at
      * scrape time without a core-to-netty dependency.
@@ -443,6 +936,463 @@ public class Metrics {
      */
     public static Map<String, Integer> getActiveServiceChaosCountByFaultType() {
         return ServiceChaosRegistry.getInstance().activeCountByFaultType();
+    }
+
+    /**
+     * Set the supplier of the current cluster member count. Called by HttpState
+     * at startup so the {@code mock_server_cluster_members} GaugeWithCallback can
+     * read live membership from the StateBackend at scrape time without Metrics
+     * depending on the state package.
+     *
+     * @param supplier returns the current number of cluster members
+     */
+    public static void setClusterMemberCountSupplier(Supplier<Integer> supplier) {
+        clusterMemberCountSupplier.set(supplier);
+    }
+
+    /**
+     * Current cluster member count, backing the {@code mock_server_cluster_members}
+     * gauge. Returns 1 (single local node) when no supplier is registered or the
+     * supplier fails/returns a non-positive value.
+     */
+    public static int getClusterMemberCount() {
+        Supplier<Integer> supplier = clusterMemberCountSupplier.get();
+        if (supplier != null) {
+            try {
+                Integer count = supplier.get();
+                if (count != null && count > 0) {
+                    return count;
+                }
+            } catch (Exception ignored) {
+                // fail-soft: fall through to the single-node default
+            }
+        }
+        return 1;
+    }
+
+    /**
+     * Number of upstreams whose forward/proxy circuit breaker is currently open, backing the
+     * {@code mock_server_upstream_circuit_open} gauge. Reads the live {@link ForwardCircuitBreaker}
+     * registry at scrape time; returns 0 when the breaker is disabled or no upstream is open.
+     */
+    public static int getOpenUpstreamCircuitCount() {
+        try {
+            return ForwardCircuitBreaker.getInstance().openCircuitCount();
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Load-injection (load scenario) metric family.
+    // ----------------------------------------------------------------------------------------
+
+    /** Composite key (scenario + run_id) for the load gauge readers. */
+    public static final class LoadGaugeKey {
+        public final String scenario;
+        public final String runId;
+
+        public LoadGaugeKey(String scenario, String runId) {
+            this.scenario = scenario != null ? scenario : "unknown";
+            this.runId = runId != null ? runId : "unknown";
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof LoadGaugeKey)) {
+                return false;
+            }
+            LoadGaugeKey that = (LoadGaugeKey) o;
+            return scenario.equals(that.scenario) && runId.equals(that.runId);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * scenario.hashCode() + runId.hashCode();
+        }
+    }
+
+    /** True if the load metric family is registered (i.e. metrics are enabled). */
+    public static boolean isLoadMetricsActive() {
+        return loadRequestsTotal != null;
+    }
+
+    /**
+     * Evict every durable {@code mock_server_load_*} series whose {@code run_id} label equals the
+     * given run id, bounding accumulation of completed-run series. Each load run uses a fresh UUID
+     * {@code run_id} label; without eviction the Prometheus client retains those datapoints in the
+     * registry forever (memory growth, slower scrapes and {@code loadLatencyPercentileMillis}). The
+     * orchestrator calls this for the <em>previous</em> run when a new run starts, so the most-recent
+     * completed run stays scrapeable while accumulation is bounded to at most one completed run.
+     * <p>
+     * The Prometheus client 1.8.0 exposes {@code removeIf(Function<List<String>, Boolean>)} on stateful
+     * metrics, keyed by label <em>values</em> in registration order. {@code run_id} is index 1 in every
+     * load metric's label schema (the fixed structured labels begin {@code scenario, run_id, …} and the
+     * scalar counters are {@code scenario, run_id, …}). The gauges are deliberately untouched — they
+     * self-clear via the orchestrator's empty-callback readers. No-op when metrics are disabled (the
+     * metrics are null) or {@code runId} is null.
+     */
+    public static void evictLoadRun(String runId) {
+        if (runId == null) {
+            return;
+        }
+        java.util.function.Function<java.util.List<String>, Boolean> matchesRun =
+            labelValues -> labelValues.size() > 1 && runId.equals(labelValues.get(1));
+        evictLoadSeries(loadRequestDurationSeconds, matchesRun);
+        evictLoadSeries(loadRequestsTotal, matchesRun);
+        evictLoadSeries(loadRequestBytesTotal, matchesRun);
+        evictLoadSeries(loadResponseBytesTotal, matchesRun);
+        evictLoadSeries(loadIterationsTotal, matchesRun);
+        evictLoadSeries(loadThrottledTotal, matchesRun);
+        evictLoadSeries(loadErrorsTotal, matchesRun);
+    }
+
+    private static void evictLoadSeries(Histogram metric, java.util.function.Function<java.util.List<String>, Boolean> matches) {
+        if (metric != null) {
+            try {
+                metric.removeIf(matches);
+            } catch (Exception ignored) {
+                // fail-soft: eviction is best-effort and must never break a load run
+            }
+        }
+    }
+
+    private static void evictLoadSeries(Counter metric, java.util.function.Function<java.util.List<String>, Boolean> matches) {
+        if (metric != null) {
+            try {
+                metric.removeIf(matches);
+            } catch (Exception ignored) {
+                // fail-soft: eviction is best-effort and must never break a load run
+            }
+        }
+    }
+
+    /**
+     * Return the allowlisted custom Prometheus label names captured at registration. The
+     * orchestrator builds the per-request label-value array in this exact order. Visible for the
+     * orchestrator (same package) and tests.
+     */
+    static String[] loadCustomLabelNames() {
+        return loadCustomLabelNames;
+    }
+
+    /**
+     * Build the fixed structured Prometheus label values, then append the allowlisted custom label
+     * values (looked up from {@code customLabels} by the registered allowlist names; missing keys
+     * become {@code ""}). The returned array length always matches the registered label-name set.
+     */
+    private static String[] loadLabelValues(String scenario, String runId, String step, String route,
+                                            String method, String statusClass, Map<String, String> customLabels) {
+        String[] custom = loadCustomLabelNames;
+        String[] values = new String[LOAD_FIXED_LABELS.length + custom.length];
+        values[0] = nonNull(scenario, "unknown");
+        values[1] = nonNull(runId, "unknown");
+        values[2] = nonNull(step, "unknown");
+        values[3] = nonNull(route, "/");
+        values[4] = nonNull(method, "unknown");
+        values[5] = nonNull(statusClass, "unknown");
+        for (int i = 0; i < custom.length; i++) {
+            String v = customLabels != null ? customLabels.get(custom[i]) : null;
+            values[LOAD_FIXED_LABELS.length + i] = v != null ? v : "";
+        }
+        return values;
+    }
+
+    private static String nonNull(String value, String fallback) {
+        return value != null && !value.isEmpty() ? value : fallback;
+    }
+
+    /**
+     * Record one completed load-scenario request: its duration in the histogram (with an optional
+     * trace_id exemplar), the request/response body byte counts, and a request count — all labeled
+     * by the fixed structured labels plus the allowlisted custom labels. The full custom-label map
+     * is mirrored to OTLP as attributes (arbitrary keys). No-op when load metrics are off.
+     *
+     * @param scenario        the scenario name
+     * @param runId           the stable per-run id
+     * @param step            the step label (step name or index)
+     * @param route           the low-cardinality templatised route label
+     * @param method          the HTTP method
+     * @param statusCode      the upstream response status code, or null
+     * @param latencySeconds  the request latency in seconds (negative clamped to 0)
+     * @param requestBytes    request body byte count
+     * @param responseBytes   response body byte count
+     * @param traceId         the request's trace id for the histogram exemplar, or null
+     * @param customLabels    merged scenario+step custom labels (may be null/empty)
+     */
+    public static void observeLoadRequest(String scenario, String runId, String step, String route,
+                                          String method, Integer statusCode, double latencySeconds,
+                                          long requestBytes, long responseBytes, String traceId,
+                                          Map<String, String> customLabels) {
+        String statusClass = statusClass(statusCode);
+        double latency = latencySeconds > 0 ? latencySeconds : 0;
+        Histogram histogram = loadRequestDurationSeconds;
+        if (histogram != null) {
+            String[] values = loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels);
+            if (traceId != null && !traceId.isEmpty()) {
+                try {
+                    histogram.labelValues(values).observeWithExemplar(latency,
+                        io.prometheus.metrics.model.snapshots.Labels.of("trace_id", traceId));
+                } catch (Exception e) {
+                    histogram.labelValues(values).observe(latency);
+                }
+            } else {
+                histogram.labelValues(values).observe(latency);
+            }
+        }
+        Counter requests = loadRequestsTotal;
+        if (requests != null) {
+            requests.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels)).inc();
+        }
+        Counter reqBytes = loadRequestBytesTotal;
+        if (reqBytes != null && requestBytes > 0) {
+            reqBytes.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels)).inc(requestBytes);
+        }
+        Counter respBytes = loadResponseBytesTotal;
+        if (respBytes != null && responseBytes > 0) {
+            respBytes.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels)).inc(responseBytes);
+        }
+        // OTLP mirror: structured labels + all custom labels as attributes (arbitrary keys).
+        io.opentelemetry.api.common.Attributes otelAttrs =
+            loadOtelAttributes(scenario, runId, step, route, method, statusClass, customLabels);
+        io.opentelemetry.api.metrics.DoubleHistogram otelHist = otelLoadRequestDuration;
+        if (otelHist != null) {
+            otelHist.record(latency, otelAttrs);
+        }
+        io.opentelemetry.api.metrics.LongCounter otelReq = otelLoadRequests;
+        if (otelReq != null) {
+            otelReq.add(1, otelAttrs);
+        }
+        io.opentelemetry.api.metrics.LongCounter otelReqBytes = otelLoadRequestBytes;
+        if (otelReqBytes != null && requestBytes > 0) {
+            otelReqBytes.add(requestBytes, otelAttrs);
+        }
+        io.opentelemetry.api.metrics.LongCounter otelRespBytes = otelLoadResponseBytes;
+        if (otelRespBytes != null && responseBytes > 0) {
+            otelRespBytes.add(responseBytes, otelAttrs);
+        }
+    }
+
+    private static io.opentelemetry.api.common.Attributes loadOtelAttributes(
+        String scenario, String runId, String step, String route, String method, String statusClass,
+        Map<String, String> customLabels) {
+        io.opentelemetry.api.common.AttributesBuilder builder = io.opentelemetry.api.common.Attributes.builder()
+            .put("scenario", nonNull(scenario, "unknown"))
+            .put("run_id", nonNull(runId, "unknown"))
+            .put("step", nonNull(step, "unknown"))
+            .put("route", nonNull(route, "/"))
+            .put("method", nonNull(method, "unknown"))
+            .put("status_class", nonNull(statusClass, "unknown"));
+        if (customLabels != null) {
+            customLabels.forEach((k, v) -> {
+                if (k != null && v != null) {
+                    builder.put(k, v);
+                }
+            });
+        }
+        return builder.build();
+    }
+
+    /** Increment the completed-iteration counter (labels scenario, run_id). No-op when off. */
+    public static void incrementLoadIteration(String scenario, String runId) {
+        Counter counter = loadIterationsTotal;
+        if (counter != null) {
+            counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown")).inc();
+        }
+        io.opentelemetry.api.metrics.LongCounter otel = otelLoadIterations;
+        if (otel != null) {
+            otel.add(1, io.opentelemetry.api.common.Attributes.of(
+                io.opentelemetry.api.common.AttributeKey.stringKey("scenario"), nonNull(scenario, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("run_id"), nonNull(runId, "unknown")));
+        }
+    }
+
+    /**
+     * Increment the throttled-dispatch counter for the given reason.
+     *
+     * @param reason one of "inflight_cap" or "rate_limit"
+     */
+    public static void incrementLoadThrottled(String scenario, String runId, String reason) {
+        Counter counter = loadThrottledTotal;
+        if (counter != null) {
+            counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"), nonNull(reason, "unknown")).inc();
+        }
+        io.opentelemetry.api.metrics.LongCounter otel = otelLoadThrottled;
+        if (otel != null) {
+            otel.add(1, io.opentelemetry.api.common.Attributes.of(
+                io.opentelemetry.api.common.AttributeKey.stringKey("scenario"), nonNull(scenario, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("run_id"), nonNull(runId, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("reason"), nonNull(reason, "unknown")));
+        }
+    }
+
+    /**
+     * Increment the error counter for the given kind.
+     *
+     * @param kind one of "timeout", "connection", "render", "http_5xx", "null_response"
+     */
+    public static void incrementLoadError(String scenario, String runId, String kind) {
+        Counter counter = loadErrorsTotal;
+        if (counter != null) {
+            counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"), nonNull(kind, "unknown")).inc();
+        }
+        io.opentelemetry.api.metrics.LongCounter otel = otelLoadErrors;
+        if (otel != null) {
+            otel.add(1, io.opentelemetry.api.common.Attributes.of(
+                io.opentelemetry.api.common.AttributeKey.stringKey("scenario"), nonNull(scenario, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("run_id"), nonNull(runId, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("kind"), nonNull(kind, "unknown")));
+        }
+    }
+
+    /**
+     * Register the live readers for the active-VU and in-flight load gauges. Called by the
+     * orchestrator on start (and cleared with null on stop), so the gauges read the running scenario
+     * at scrape time. Mirrors the chaos GaugeWithCallback pattern.
+     */
+    public static void setLoadGaugeReaders(Supplier<Map<LoadGaugeKey, Integer>> activeVusReader,
+                                           Supplier<Map<LoadGaugeKey, Integer>> inflightReader) {
+        loadActiveVusReader.set(activeVusReader);
+        loadInflightReader.set(inflightReader);
+    }
+
+    /**
+     * Install the OTel load instruments. Called by {@link OtelMetricsExporter} when OTLP export is
+     * enabled; passing null on stop clears them so the load path stops mirroring to OTLP.
+     */
+    public static void registerOtelLoadInstruments(io.opentelemetry.api.metrics.DoubleHistogram duration,
+                                                   io.opentelemetry.api.metrics.LongCounter requests,
+                                                   io.opentelemetry.api.metrics.LongCounter requestBytes,
+                                                   io.opentelemetry.api.metrics.LongCounter responseBytes,
+                                                   io.opentelemetry.api.metrics.LongCounter iterations,
+                                                   io.opentelemetry.api.metrics.LongCounter throttled,
+                                                   io.opentelemetry.api.metrics.LongCounter errors) {
+        otelLoadRequestDuration = duration;
+        otelLoadRequests = requests;
+        otelLoadRequestBytes = requestBytes;
+        otelLoadResponseBytes = responseBytes;
+        otelLoadIterations = iterations;
+        otelLoadThrottled = throttled;
+        otelLoadErrors = errors;
+    }
+
+    /** Live readers for the OTEL load observable gauges (active VUs / in-flight). */
+    public static Map<LoadGaugeKey, Integer> getLoadActiveVus() {
+        Supplier<Map<LoadGaugeKey, Integer>> reader = loadActiveVusReader.get();
+        return reader != null ? reader.get() : java.util.Collections.emptyMap();
+    }
+
+    public static Map<LoadGaugeKey, Integer> getLoadInflightRequests() {
+        Supplier<Map<LoadGaugeKey, Integer>> reader = loadInflightReader.get();
+        return reader != null ? reader.get() : java.util.Collections.emptyMap();
+    }
+
+    /** Read a per-request load counter value for a fixed-label combination (custom labels empty). Test helper. */
+    public static long getLoadRequestCount(String scenario, String runId, String step, String route, String method, String statusClass) {
+        Counter counter = loadRequestsTotal;
+        if (counter == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, null)).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    public static long getLoadThrottledCount(String scenario, String runId, String reason) {
+        Counter counter = loadThrottledTotal;
+        if (counter == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"), nonNull(reason, "unknown")).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    public static long getLoadErrorCount(String scenario, String runId, String kind) {
+        Counter counter = loadErrorsTotal;
+        if (counter == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"), nonNull(kind, "unknown")).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    public static long getLoadIterationCount(String scenario, String runId) {
+        Counter counter = loadIterationsTotal;
+        if (counter == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown")).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    /**
+     * Derive a latency percentile (millis) for the given fixed-label combination from the load
+     * histogram's classic buckets — bounded memory, no reservoir. Returns the upper bound of the
+     * bucket in which the requested rank falls (the standard histogram-quantile interpolation point
+     * for classic buckets), or 0 when there are no observations. Any percentile is also directly
+     * queryable from the histogram in Prometheus via {@code histogram_quantile}.
+     *
+     * @param pct percentile in 0..100
+     */
+    public static long loadLatencyPercentileMillis(String scenario, String runId, int pct) {
+        Histogram histogram = loadRequestDurationSeconds;
+        if (histogram == null) {
+            return 0L;
+        }
+        try {
+            io.prometheus.metrics.model.snapshots.HistogramSnapshot snapshot =
+                (io.prometheus.metrics.model.snapshots.HistogramSnapshot) histogram.collect();
+            // Aggregate buckets across every label combination matching this scenario+run.
+            java.util.TreeMap<Double, Long> cumulative = new java.util.TreeMap<>();
+            long total = 0;
+            String scenarioLabel = nonNull(scenario, "unknown");
+            String runLabel = nonNull(runId, "unknown");
+            for (io.prometheus.metrics.model.snapshots.HistogramSnapshot.HistogramDataPointSnapshot dp : snapshot.getDataPoints()) {
+                if (!scenarioLabel.equals(dp.getLabels().get("scenario")) || !runLabel.equals(dp.getLabels().get("run_id"))) {
+                    continue;
+                }
+                for (io.prometheus.metrics.model.snapshots.ClassicHistogramBucket bucket : dp.getClassicBuckets()) {
+                    // ClassicHistogramBucket counts are per-bucket (de-cumulated) in this snapshot model.
+                    long bucketCount = bucket.getCount();
+                    cumulative.merge(bucket.getUpperBound(), bucketCount, Long::sum);
+                    total += bucketCount;
+                }
+            }
+            if (total == 0) {
+                return 0L;
+            }
+            long rank = (long) Math.ceil((pct / 100.0) * total);
+            long running = 0;
+            for (Map.Entry<Double, Long> entry : cumulative.entrySet()) {
+                running += entry.getValue();
+                if (running >= rank) {
+                    double upperBound = entry.getKey();
+                    if (Double.isInfinite(upperBound)) {
+                        // +Inf bucket: fall back to the largest finite bucket bound.
+                        Double lower = cumulative.lowerKey(Double.POSITIVE_INFINITY);
+                        upperBound = lower != null ? lower : 0;
+                    }
+                    return (long) (upperBound * 1000.0);
+                }
+            }
+            return 0L;
+        } catch (Exception e) {
+            return 0L;
+        }
     }
 
     public void increment(Name name) {

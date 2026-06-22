@@ -404,7 +404,13 @@ public class BCKeyAndCertificateFactory implements KeyAndCertificateFactory {
             }
             result.addAll(chain);
         }
-        result.add(certificateAuthorityX509Certificate());
+        // append the CA only when the supplied chain does not already end with it
+        // (a full leaf+CA PEM would otherwise yield [leaf, CA, CA], which JDK 17's
+        // PKCS12 setKeyEntry rejects as an invalid chain)
+        X509Certificate ca = certificateAuthorityX509Certificate();
+        if (ca != null && !result.contains(ca)) {
+            result.add(ca);
+        }
         return result;
     }
 }

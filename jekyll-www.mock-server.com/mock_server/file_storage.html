@@ -105,9 +105,12 @@ Content-Type: application/json
 
 <p>Response (200 OK):</p>
 
-<pre class="prettyprint lang-java code"><code class="code">["response-body.json","logo.png"]</code></pre>
+<pre class="prettyprint lang-java code"><code class="code">[
+  "response-body.json",
+  "logo.png"
+]</code></pre>
 
-<p>The order of file names in the response is <strong>not guaranteed</strong> &mdash; it does not necessarily reflect the order in which files were stored. If you need a stable order, sort the returned array client-side.</p>
+<p>The response body is pretty-printed JSON (one file name per line). The order of file names is <strong>not guaranteed</strong> &mdash; it does not necessarily reflect the order in which files were stored. If you need a stable order, sort the returned array client-side.</p>
 
 <a id="delete_a_file" class="anchor" href="#delete_a_file">&nbsp;</a>
 

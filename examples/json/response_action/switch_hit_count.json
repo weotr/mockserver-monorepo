@@ -1,0 +1,17 @@
+{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponses": [
+    {
+      "statusCode": 200,
+      "body": "healthy"
+    },
+    {
+      "statusCode": 503,
+      "body": "unavailable"
+    }
+  ],
+  "responseMode": "SWITCH",
+  "switchAfter": 3
+}

@@ -14,6 +14,7 @@ public class JsonSchemaRequestDefinitionValidator extends JsonSchemaValidator {
             RequestDefinition.class,
             "org/mockserver/model/schema/",
             "requestDefinition",
+            "conditionalRequestDefinition",
             "httpRequest",
             "stringOrJsonSchema",
             "openAPIDefinition",
@@ -24,7 +25,6 @@ public class JsonSchemaRequestDefinitionValidator extends JsonSchemaValidator {
             "keyToValue",
             "socketAddress",
             "protocol",
-            "openAPIDefinition",
             "draft-07"
         );
     }

@@ -5,6 +5,24 @@ package org.mockserver.model;
  */
 public enum Format {
     JAVA,
+    // Expectation builder code for the Node.js (JavaScript/TypeScript) and
+    // Python clients. Unlike JAVA (which needs a typed builder DSL), these
+    // clients accept the expectation as a JSON/dict object directly, so the
+    // generated code embeds the expectation's existing JSON serialization in a
+    // client call. Applicable to RECORDED_EXPECTATIONS and ACTIVE_EXPECTATIONS.
+    JAVASCRIPT,
+    PYTHON,
+    // Additional client languages following the same JSON-wrap pattern as
+    // JAVASCRIPT/PYTHON: the generated code embeds the expectation's existing
+    // JSON serialization inside the real client's upsert call plus the import/
+    // instantiation preamble for that language. Applicable to
+    // RECORDED_EXPECTATIONS and ACTIVE_EXPECTATIONS (rejected for REQUESTS and
+    // REQUEST_RESPONSES like the other code formats).
+    GO,
+    CSHARP,
+    RUBY,
+    RUST,
+    PHP,
     JSON,
     LOG_ENTRIES,
     HAR,

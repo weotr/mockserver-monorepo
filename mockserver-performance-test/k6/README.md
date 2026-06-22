@@ -11,6 +11,7 @@ regression gates), and Grafana-native dashboards.
 |--------|---------|-------|
 | `smoke.js` | Wiring sanity — exercises every action once (match, create, forward, large-body, regex). Fast. | Correctness only (status codes + zero transport errors). No latency gate. |
 | `load.js` | Primary load test. Closed-loop arrival-rate: `match` (GET /simple) ramps to peak while `create` (PUT expectation) churns the control plane. | p95/p99 latency + error-rate + check-rate (CI pass/fail). |
+| `forward.js` | Forward-path regression guard. Drives the OUTBOUND/FORWARD path (`GET /forward` → upstream `/simple`) at a sustained high rate (ramp to ~1500 rps). Guards the `mockserver.forwardConnectionPoolEnabled` default: without pooling, every forwarded request opens a fresh upstream socket and at peak rate exhausts ephemeral ports → BindException → failures. | **error-rate** (the pool-regression signal) + forward-path p95/p99 + check-rate. |
 | `stress.js` | Ramp the match path past the load peak to find the breaking point. | Aborts only if error rate exceeds the ceiling (latency intentionally ungated). |
 | `soak.js` | Sustained moderate load over a long duration to surface memory/GC/connection leaks. Pair with the Grafana stack to watch JVM heap. | p99 drift + error-rate. |
 | `regression.js` | Daily regression harness. Four `constant-arrival-rate` scenarios (`match`, `forward`, `template`, `large`) each tagged `op:<name>`. A warmup scenario runs first. Run twice per CI job — once `BASE_URL=http://...` and once `BASE_URL=https://... PROTO=https_h2` (HTTPS negotiates HTTP/2 via ALPN). Writes per-behaviour `{p50_ms, p95_ms, p99_ms, throughput_rps, error_rate}` keyed `<op>_<proto>` to `K6_RESULT_PATH`. | Notify-only (no k6 thresholds gate the CI build). |
@@ -44,6 +45,58 @@ k6 run -e K6_FORWARD_SELF=true -e BASE_URL=http://localhost:1080 \
 k6 run -e BASE_URL=http://localhost:1080 mockserver-performance-test/k6/growth.js
 ```
 
+### Forward-path regression guard (`forward.js`)
+
+Guards the upstream connection-pool default (`mockserver.forwardConnectionPoolEnabled`,
+default **true**). It hammers the forward path at a high sustained rate; with
+pooling on the error rate stays ~0, and if pooling regresses to per-request
+connections the host exhausts ephemeral ports (`BindException`) and the
+error-rate threshold trips.
+
+**Topology** — the SUT forwards to a *separate* loopback upstream MockServer so
+the SUT does real outbound connections (the thing being pooled):
+
+```mermaid
+flowchart LR
+  k6["k6 forward.js"] -->|"GET /forward"| sut["SUT MockServer :1080\nforwardConnectionPoolEnabled default"]
+  sut -->|"forward to /simple"| upstream["upstream MockServer :1090\nanswers /simple -> 200"]
+```
+
+```bash
+# 1. upstream MockServer on :1090 answering /simple -> 200
+java -jar mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar \
+     -serverPort 1090 >/tmp/upstream.log 2>&1 &
+curl -s -XPUT 'http://localhost:1090/mockserver/expectation' -d \
+  '[{"httpRequest":{"path":"/simple"},"httpResponse":{"statusCode":200,"body":"some simple response"},"times":{"unlimited":true}}]'
+
+# 2. SUT MockServer on :1080 (pool default = ON — the guarded path)
+java -jar mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar \
+     -serverPort 1080 >/tmp/sut.log 2>&1 &
+
+# 3. run the guard — SUT forwards to the upstream on :1090
+k6 run -e FORWARD_UPSTREAM_HOST=127.0.0.1:1090 \
+       mockserver-performance-test/k6/forward.js
+
+# demonstrate the guard catches a regression: force pooling OFF on the SUT,
+# re-run — the error-rate gate trips at peak (BindException-driven failures)
+java -Dmockserver.forwardConnectionPoolEnabled=false -jar \
+     mockserver/mockserver-netty/target/mockserver-netty-*-jar-with-dependencies.jar \
+     -serverPort 1080 ...
+
+# single-container quick smoke (NOT the real guard): SUT forwards to itself
+k6 run -e K6_FORWARD_SELF=true mockserver-performance-test/k6/forward.js
+```
+
+**What each threshold guards** (`forward.js`):
+
+- `http_req_failed{op:forward}` / `http_req_failed` — **the regression guard.**
+  Pooled ≈ 0; a per-request-connection regression spikes this at peak (ephemeral
+  port exhaustion → BindException). Reuses `K6_MAX_ERROR_RATE` (default `0.01`).
+- `http_req_duration{op:forward}` p95/p99 — forward-path latency bounds (looser
+  than the match path because of the upstream hop). Override with
+  `K6_FWD_P95_MS` / `K6_FWD_P99_MS`.
+- `checks` — every forward returns a 200 from the upstream.
+
 ## Environment variables
 
 All tunables are env-driven (see `lib/config.js`). Connection target resolves as
@@ -63,6 +116,17 @@ All tunables are env-driven (see `lib/config.js`). Connection target resolves as
 | `K6_P95_MS` / `K6_P99_MS` | `25` / `100` | latency thresholds (ms) |
 | `K6_MAX_ERROR_RATE` / `K6_MIN_CHECK_RATE` | `0.01` / `0.99` | error/check-rate thresholds |
 | `K6_PRE_VUS` / `K6_MAX_VUS` | `50` / `600` | VU pool for the arrival-rate executors |
+
+**forward.js additional variables** (defined in `lib/config.js` `FORWARD_LOAD` block):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `K6_FWD_START_RATE` / `K6_FWD_PEAK_RATE` | `100` / `1500` | forward.js ramping-arrival-rate (req/s); peak is the rate that broke the old per-request default |
+| `K6_FWD_RAMP_UP` / `K6_FWD_HOLD` / `K6_FWD_RAMP_DOWN` | `30s` / `1m` / `15s` | forward.js stage durations |
+| `K6_FWD_PRE_VUS` / `K6_FWD_MAX_VUS` | `200` / `2000` | VU pool for the forward arrival-rate executor |
+| `K6_FWD_P95_MS` / `K6_FWD_P99_MS` | `50` / `200` | forward-path latency thresholds (ms); looser than the match path due to the upstream hop |
+| `FORWARD_UPSTREAM_HOST` | `mockserver-upstream:1080` | host:port of the upstream MockServer the SUT forwards to (set to `127.0.0.1:1090` for the local two-instance topology) |
+| `K6_FORWARD_SELF` | – | `true` loops `/forward` back to the SUT's own `/simple` (single-container smoke only) |
 
 **regression.js / growth.js additional variables** (defined in `lib/config.js` `REGRESSION` and `GROWTH` blocks):
 

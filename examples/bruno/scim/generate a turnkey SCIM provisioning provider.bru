@@ -1,0 +1,30 @@
+meta {
+  name: generate a turnkey SCIM provisioning provider
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/scim
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "basePath": "/scim/v2",
+    "requireBearerToken": true
+  }
+}
+
+docs {
+  Generates a set of expectations that emulate a SCIM 2.0 provisioning provider (Users, Groups and ServiceProviderConfig endpoints) and adds them. An empty body uses the default provider configuration.
+  
+  SCIM provider configuration
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -38,6 +38,7 @@ public class MetricsTest {
     public void clearServiceChaos() {
         ServiceChaosRegistry.getInstance().reset();
         Metrics.setActiveExpectationsSupplier(null);
+        Metrics.setClusterMemberCountSupplier(null);
     }
 
     @Test
@@ -147,6 +148,103 @@ public class MetricsTest {
     public void getActiveServiceChaosCountByFaultTypeDoesNotThrowWhenDisabled() {
         // safe to call regardless of whether metrics are enabled (reads the registry directly)
         assertThat(Metrics.getActiveServiceChaosCountByFaultType().get("error"), is(0));
+    }
+
+    // --- per-upstream forward observability tests ---
+
+    @Test
+    public void registersForwardObservabilityMetrics() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.observeForwardRequest("api.example.com", 200, 0.05);
+
+        assertThat(scrapeContains("mock_server_forward_request_duration_seconds"), is(true));
+        assertThat(scrapeContains("mock_server_forward_requests"), is(true));
+    }
+
+    @Test
+    public void forwardRequestsCounterLabelsByHostAndStatusClass() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.observeForwardRequest("api.example.com", 200, 0.01);
+        Metrics.observeForwardRequest("api.example.com", 204, 0.02);
+        Metrics.observeForwardRequest("api.example.com", 502, 0.03);
+        Metrics.observeForwardRequest("other.example.com", 200, 0.04);
+
+        assertThat(scrapeForwardCount("api.example.com", "2xx"), is(2.0));
+        assertThat(scrapeForwardCount("api.example.com", "5xx"), is(1.0));
+        assertThat(scrapeForwardCount("other.example.com", "2xx"), is(1.0));
+    }
+
+    @Test
+    public void forwardObservabilityRecordsLatencyHistogram() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.observeForwardRequest("api.example.com", 200, 0.05);
+
+        // _count series of the histogram should reflect one observation
+        assertThat(scrapeForwardDurationCount("api.example.com"), is(1.0));
+    }
+
+    @Test
+    public void getForwardRequestCountReturnsPerHostStatusClassCount() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.observeForwardRequest("api.example.com", 200, 0.01);
+        Metrics.observeForwardRequest("api.example.com", 201, 0.01);
+
+        assertThat(Metrics.getForwardRequestCount("api.example.com", "2xx"), is(2L));
+        assertThat(Metrics.getForwardRequestCount("api.example.com", "5xx"), is(0L));
+        assertThat(Metrics.getForwardRequestCount("nonexistent", "2xx"), is(0L));
+    }
+
+    @Test
+    public void forwardObservabilityNullHostRecordedAsUnknown() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.observeForwardRequest(null, 200, 0.01);
+
+        assertThat(Metrics.getForwardRequestCount("unknown", "2xx"), is(1L));
+    }
+
+    @Test
+    public void forwardObservabilityNullStatusRecordedAsUnknownClass() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.observeForwardRequest("api.example.com", null, 0.01);
+
+        assertThat(Metrics.getForwardRequestCount("api.example.com", "unknown"), is(1L));
+    }
+
+    @Test
+    public void observeForwardRequestDoesNotThrowWhenDisabled() {
+        // safe to call when metrics not registered (no-op)
+        Metrics.observeForwardRequest("api.example.com", 200, 0.05);
+        assertThat(Metrics.isForwardMetricsActive(), is(false));
+    }
+
+    private static double scrapeForwardCount(String host, String statusClass) {
+        MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
+        for (MetricSnapshot snapshot : snapshots) {
+            if (snapshot.getMetadata().getName().equals("mock_server_forward_requests") && snapshot instanceof CounterSnapshot counterSnapshot) {
+                for (CounterSnapshot.CounterDataPointSnapshot dataPoint : counterSnapshot.getDataPoints()) {
+                    if (host.equals(dataPoint.getLabels().get("upstream_host"))
+                        && statusClass.equals(dataPoint.getLabels().get("status_class"))) {
+                        return dataPoint.getValue();
+                    }
+                }
+            }
+        }
+        return 0.0;
+    }
+
+    private static double scrapeForwardDurationCount(String host) {
+        MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
+        for (MetricSnapshot snapshot : snapshots) {
+            if (snapshot.getMetadata().getName().equals("mock_server_forward_request_duration_seconds")
+                && snapshot instanceof io.prometheus.metrics.model.snapshots.HistogramSnapshot histogramSnapshot) {
+                for (io.prometheus.metrics.model.snapshots.HistogramSnapshot.HistogramDataPointSnapshot dataPoint : histogramSnapshot.getDataPoints()) {
+                    if (host.equals(dataPoint.getLabels().get("upstream_host"))) {
+                        return dataPoint.getCount();
+                    }
+                }
+            }
+        }
+        return 0.0;
     }
 
     // --- MCP tool call counter tests ---
@@ -310,6 +408,62 @@ public class MetricsTest {
         // safe to call regardless of whether supplier is set
         Map<String, Integer> counts = Metrics.getActiveExpectationCountByType();
         assertThat("empty map when no supplier", counts.isEmpty(), is(true));
+    }
+
+    // --- cluster members gauge tests ---
+
+    @Test
+    public void registersClusterMembersGauge() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        assertThat(scrapeContains("mock_server_cluster_members"), is(true));
+    }
+
+    @Test
+    public void clusterMembersGaugeDefaultsToOneWhenNoSupplier() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        // single-node default: exactly one member when no supplier is registered
+        assertThat(scrapeGaugeValue("mock_server_cluster_members"), is(1.0));
+        assertThat(Metrics.getClusterMemberCount(), is(1));
+    }
+
+    @Test
+    public void clusterMembersGaugeReflectsSupplierValue() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        Metrics.setClusterMemberCountSupplier(() -> 3);
+        assertThat(scrapeGaugeValue("mock_server_cluster_members"), is(3.0));
+
+        // follows updates (e.g. a node leaves the cluster)
+        Metrics.setClusterMemberCountSupplier(() -> 2);
+        assertThat(scrapeGaugeValue("mock_server_cluster_members"), is(2.0));
+    }
+
+    @Test
+    public void clusterMembersGaugeFailsSoftToOne() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        // a throwing or non-positive supplier degrades to the single-node default
+        Metrics.setClusterMemberCountSupplier(() -> {
+            throw new RuntimeException("backend unavailable");
+        });
+        assertThat(scrapeGaugeValue("mock_server_cluster_members"), is(1.0));
+
+        Metrics.setClusterMemberCountSupplier(() -> 0);
+        assertThat(scrapeGaugeValue("mock_server_cluster_members"), is(1.0));
+    }
+
+    private static double scrapeGaugeValue(String name) {
+        MetricSnapshots snapshots = PrometheusRegistry.defaultRegistry.scrape();
+        for (MetricSnapshot snapshot : snapshots) {
+            if (snapshot.getMetadata().getName().equals(name) && snapshot instanceof GaugeSnapshot gaugeSnapshot) {
+                for (GaugeSnapshot.GaugeDataPointSnapshot dataPoint : gaugeSnapshot.getDataPoints()) {
+                    return dataPoint.getValue();
+                }
+            }
+        }
+        return 0.0;
     }
 
     private static boolean scrapeContains(String name) {

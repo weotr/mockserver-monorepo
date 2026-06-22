@@ -21,6 +21,7 @@ the release-queue IAM policy access.
 | `mockserver-release/vsce` | `token` | `vscode.sh` | VS Code Marketplace |
 | `mockserver-release/ovsx` | `token` | `vscode.sh` | Open VSX Registry |
 | `mockserver-release/jetbrains` | `token` | `jetbrains.sh` | JetBrains Marketplace |
+| `mockserver-build/postman-api-key` | `api_key` | `postman-collection.sh` | Postman API Network |
 
 ## 1. NuGet (mockserver-release/nuget)
 
@@ -31,10 +32,16 @@ the release-queue IAM policy access.
 3. Click **Create** and configure:
    - **Key name:** `mockserver-release`
    - **Expiration:** 365 days (the maximum; set a calendar reminder to rotate)
-   - **Package owner:** select the account/org that owns `MockServer.Client`
-   - **Glob pattern:** `MockServer.*` (covers both `MockServer.Client` and
-     `Testcontainers.MockServer`)
-   - **Scopes:** Push (push new packages and package versions)
+   - **Package owner:** select the account/org that owns `MockServerClient`
+   - **Glob pattern:** `*` (or scope to the two specific package IDs
+     `MockServerClient` and `MockServer.Testcontainers`). The Testcontainers
+     module publishes as `MockServer.Testcontainers`, NOT `Testcontainers.MockServer`:
+     the `Testcontainers.*` ID prefix is NuGet-reserved by the Testcontainers org,
+     so a push under it 403s regardless of the key (build #53). A `MockServer.*`
+     glob matches `MockServer.Testcontainers` but NOT `MockServerClient` (no dot),
+     so scope must list both ids (or use `*`).
+   - **Scopes:** Push (push new packages and package versions). "Push new
+     packages" is required the first time `MockServer.Testcontainers` is published.
 4. Click **Create** and copy the API key immediately (it is shown only once).
 
 ### Store the secret
@@ -43,7 +50,7 @@ the release-queue IAM policy access.
 aws secretsmanager create-secret \
   --region eu-west-2 \
   --name mockserver-release/nuget \
-  --description "NuGet.org API key for publishing MockServer.Client and Testcontainers.MockServer" \
+  --description "NuGet.org API key for publishing MockServerClient and MockServer.Testcontainers" \
   --secret-string '{"api_key":"<PASTE_NUGET_API_KEY>"}'
 ```
 
@@ -53,10 +60,10 @@ aws secretsmanager create-secret \
 
 ```
 .NET Client (soft):
-  https://api.nuget.org/v3-flatcontainer/mockserver.client/<VERSION>/mockserver.client.<VERSION>.nupkg
+  https://api.nuget.org/v3-flatcontainer/mockserverclient/<VERSION>/mockserverclient.<VERSION>.nupkg
 
-Testcontainers.MockServer (NuGet, soft):
-  https://api.nuget.org/v3-flatcontainer/testcontainers.mockserver/<VERSION>/testcontainers.mockserver.<VERSION>.nupkg
+MockServer.Testcontainers (NuGet, soft):
+  https://api.nuget.org/v3-flatcontainer/mockserver.testcontainers/<VERSION>/mockserver.testcontainers.<VERSION>.nupkg
 ```
 
 Both should return HTTP 200 after NuGet indexing completes (typically < 15 min).
@@ -121,8 +128,8 @@ Both should return HTTP 200 (crates.io indexes within seconds).
 4. Click **Create** and copy the token.
 5. If a publisher identity does not exist yet, create one:
    ```bash
-   npx vsce create-publisher mock-server
-   npx vsce login mock-server
+   npx vsce create-publisher mockserver
+   npx vsce login mockserver
    ```
 
 ### Store the secret
@@ -141,7 +148,7 @@ aws secretsmanager create-secret \
 
 ```
 VS Code extension (soft):
-  https://marketplace.visualstudio.com/items?itemName=mock-server.mockserver
+  https://marketplace.visualstudio.com/items?itemName=mockserver.mockserver
 ```
 
 The page should exist and return HTTP 200. The specific version is not checked
@@ -162,7 +169,7 @@ visually confirm the listed version matches the release.
 4. Copy the token.
 5. If a namespace has not been claimed yet, create one:
    ```bash
-   npx ovsx create-namespace mock-server -p <TOKEN>
+   npx ovsx create-namespace mockserver -p <TOKEN>
    ```
 
 ### Store the secret
@@ -180,7 +187,7 @@ aws secretsmanager create-secret \
 There is no separate `verify.sh` check for Open VSX. Manually confirm at:
 
 ```
-https://open-vsx.org/extension/mock-server/mockserver
+https://open-vsx.org/extension/mockserver/mockserver
 ```
 
 The extension page should show the released version.
@@ -231,9 +238,40 @@ release.
 
 ---
 
+## 6. Postman (mockserver-build/postman-api-key)
+
+Drives `scripts/release/components/postman-collection.sh`, which republishes the
+generated control-plane collection to the public Postman workspace each release.
+Note the **`mockserver-build/` prefix** (not `mockserver-release/`) — the key is a
+build/publishing credential reused across releases.
+
+### Obtain the token
+
+Log in to [postman.com](https://www.postman.com) with the maintainer account →
+**Settings → API keys → Generate API Key**. A default full-access key is sufficient
+(it needs to create/update collections in the `MockServer` public workspace).
+
+### Store the secret
+
+```bash
+aws secretsmanager create-secret \
+  --region eu-west-2 \
+  --name mockserver-build/postman-api-key \
+  --description "Postman API key for publishing the MockServer public collection" \
+  --secret-string '{"api_key":"PMAK-..."}'
+```
+
+### Post-release verification
+
+`verify.sh` runs a soft reachability check against the public "Run in Postman"
+endpoint for the collection. The collection should report all control-plane
+endpoints; confirm the request count in the workspace matches the spec.
+
+---
+
 ## Rotation
 
-All five tokens should be rotated annually. When rotating:
+All six tokens should be rotated annually. When rotating:
 
 1. Generate a new token from the registry.
 2. Update the secret value:

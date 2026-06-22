@@ -38,12 +38,34 @@ public abstract class LifeCycle implements Stoppable {
     protected final MockServerLogger mockServerLogger;
     protected final EventLoopGroup bossGroup;
     protected final EventLoopGroup workerGroup;
+    // Dedicated event-loop group for the outbound forward/proxy (loopback) HTTP client. It is kept
+    // DISJOINT from the server worker group so that a pooled keep-alive channel reused inside a
+    // synchronous local object-callback (which runs ON a server worker thread and makes a blocking
+    // loopback call back to this server) is never pinned to the very worker thread that is blocked
+    // in the callback — which would self-deadlock the event loop. This disjoint group is what makes
+    // forwardConnectionPoolEnabled safe to default on. Sized by clientNioEventLoopThreadCount.
+    //
+    // VERIFICATION GUARD: this self-deadlock only surfaces in the FAILSAFE integration phase (e.g.
+    // WebsocketCallbackRegistryIntegrationTest, ExtendedNettyMockingIntegrationTest, the proxy
+    // integration tests), NOT in a targeted `-Dtest` unit run — this area has regressed TWICE because
+    // per-unit verification skipped that phase. Any change to this group, its wiring into the forward
+    // HttpActionHandler (MockServer.java getForwardClientEventLoopGroup()), or HttpClientHandler's
+    // pool-return gate MUST be verified by running those failsafe integration classes with pooling on
+    // (the default), not just targeted unit tests. The surefire-phase guards
+    // ForwardClientEventLoopIsolationTest / ForwardConnectionPoolLoopbackCallbackTest (mockserver-netty)
+    // and NettyHttpClientConnectionPoolTest (mockserver-core) lock the invariant, but the failsafe
+    // phase remains the backstop. See docs/operations/performance-tuning.md.
+    protected final EventLoopGroup forwardClientGroup;
     protected final HttpState httpState;
     private final Configuration configuration;
     protected ServerBootstrap serverServerBootstrap;
     private final List<Future<Channel>> serverChannelFutures = new ArrayList<>();
     private final CompletableFuture<String> stopFuture = new CompletableFuture<>();
     private final AtomicBoolean stopping = new AtomicBoolean(false);
+    // Number of data-plane HTTP requests currently being processed (incremented when a request
+    // starts processing, decremented when its response has been written). Used by stopAsync() to
+    // drain in-flight requests before shutting down the event loops (WS7.2 graceful shutdown).
+    private final java.util.concurrent.atomic.AtomicInteger requestsInFlight = new java.util.concurrent.atomic.AtomicInteger(0);
     private final Scheduler scheduler;
     // optional OTel exporters — null unless the corresponding config is enabled
     private final org.mockserver.metrics.OtelMetricsExporter otelMetricsExporter;
@@ -58,6 +80,9 @@ public abstract class LifeCycle implements Stoppable {
         boolean nativeTransport = this.configuration.useNativeTransport();
         this.bossGroup = NettyTransport.newEventLoopGroup(5, new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-bossEventLoop"), nativeTransport);
         this.workerGroup = NettyTransport.newEventLoopGroup(this.configuration.nioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-workerEventLoop"), nativeTransport);
+        // Outbound forward/proxy (loopback) HTTP client gets its OWN event-loop group, disjoint from
+        // the server worker group above (see field javadoc). Sized by clientNioEventLoopThreadCount.
+        this.forwardClientGroup = NettyTransport.newEventLoopGroup(this.configuration.clientNioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-forwardClientEventLoop"), nativeTransport);
         this.scheduler = new Scheduler(this.configuration, this.mockServerLogger);
         this.httpState = new HttpState(this.configuration, this.mockServerLogger, this.scheduler);
         this.otelMetricsExporter = org.mockserver.metrics.OtelMetricsExporter.startIfEnabled();
@@ -66,6 +91,7 @@ public abstract class LifeCycle implements Stoppable {
         installLlmCompletionServiceIfAvailable(this.workerGroup);
         installSemanticDriftIfEnabled(this.workerGroup);
         installPerformanceDriftThreshold();
+        installDriftAlertWebhook();
     }
 
     /**
@@ -170,6 +196,118 @@ public abstract class LifeCycle implements Stoppable {
         }
     }
 
+    /**
+     * Apply the configured drift-alert webhook. Off by default; only configures the
+     * {@link org.mockserver.mock.drift.DriftAlertNotifier} when enabled and the URL is non-blank.
+     * Fail-soft: a blank or malformed severity threshold logs a warning and the webhook stays off.
+     */
+    private void installDriftAlertWebhook() {
+        try {
+            if (!configuration.driftAlertWebhookEnabled()) {
+                return;
+            }
+            String url = configuration.driftAlertWebhookUrl();
+            if (url == null || url.isBlank()) {
+                org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                    .warn("drift alert webhook enabled but no URL configured; feature disabled");
+                return;
+            }
+            org.mockserver.mock.drift.SemanticSeverity threshold;
+            try {
+                threshold = org.mockserver.mock.drift.SemanticSeverity.valueOf(
+                    configuration.driftAlertSeverityThreshold().trim().toUpperCase());
+            } catch (Exception e) {
+                org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                    .warn("drift alert webhook severity threshold '{}' is invalid; feature disabled",
+                        configuration.driftAlertSeverityThreshold());
+                return;
+            }
+            long cooldownMillis = configuration.driftAlertCooldownMillis();
+            org.mockserver.mock.drift.DriftAlertNotifier.getInstance().configure(true, url, threshold, cooldownMillis);
+            // INFO logs only scheme+host: the configured webhook URL often embeds a secret token
+            // (e.g. a Slack incoming-webhook path), so the full URL must never be written at INFO.
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .info("drift alert webhook enabled (endpoint: {}, severity>={}, cooldown: {} ms)", redactWebhookUrl(url), threshold, cooldownMillis);
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .debug("drift alert webhook full url: {}", url);
+        } catch (Exception e) {
+            // fail-soft — drift alert webhook stays off
+            org.slf4j.LoggerFactory.getLogger(LifeCycle.class)
+                .warn("failed to enable drift alert webhook ({}); continuing without it", e.getMessage());
+        }
+    }
+
+    /**
+     * Reduces a webhook URL to a token-free {@code scheme://host[:port]} form for INFO logging. The
+     * path/query are dropped because they commonly carry a secret (e.g. a Slack incoming-webhook
+     * token). Falls back to {@code <redacted url>} if the URL cannot be parsed.
+     */
+    private static String redactWebhookUrl(String url) {
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            if (uri.getScheme() != null && uri.getHost() != null) {
+                return uri.getScheme() + "://" + uri.getHost() + (uri.getPort() == -1 ? "" : ":" + uri.getPort());
+            }
+        } catch (Exception ignore) {
+            // fall through to a fully-redacted placeholder
+        }
+        return "<redacted url>";
+    }
+
+    /**
+     * Mark that a data-plane request has started processing. Must be paired with exactly one
+     * {@link #requestProcessingComplete()} call when the response has been written.
+     */
+    public void requestProcessingStarted() {
+        requestsInFlight.incrementAndGet();
+    }
+
+    /**
+     * Mark that a data-plane request has finished (its response has been written or the connection
+     * has otherwise completed). Callers must guard against double-invocation; the counter is never
+     * allowed to go negative.
+     */
+    public void requestProcessingComplete() {
+        requestsInFlight.updateAndGet(current -> current > 0 ? current - 1 : 0);
+    }
+
+    /**
+     * @return the number of data-plane requests currently being processed
+     */
+    public int getRequestsInFlight() {
+        return requestsInFlight.get();
+    }
+
+    /**
+     * Wait up to {@code stopDrainMillis} for in-flight requests to complete. When the timeout is 0
+     * draining is disabled and this returns immediately (pre-7.2 behaviour). If the timeout elapses
+     * with requests still in flight a warning is logged and shutdown proceeds anyway.
+     */
+    private void drainInFlightRequests() {
+        long drainMillis = org.mockserver.configuration.ConfigurationProperties.stopDrainMillis();
+        if (drainMillis <= 0 || requestsInFlight.get() <= 0) {
+            return;
+        }
+        long deadline = System.currentTimeMillis() + drainMillis;
+        while (requestsInFlight.get() > 0 && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        int remaining = requestsInFlight.get();
+        if (remaining > 0 && mockServerLogger != null && mockServerLogger.isEnabledForInstance(WARN)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(SERVER_CONFIGURATION)
+                    .setLogLevel(WARN)
+                    .setMessageFormat("graceful shutdown drain timeout of " + drainMillis + "ms elapsed with " + remaining + " request(s) still in flight, proceeding with shutdown")
+            );
+        }
+    }
+
     public CompletableFuture<String> stopAsync() {
         if (!stopFuture.isDone() && stopping.compareAndSet(false, true)) {
             final String message = "stopped for port" + (getLocalPorts().size() == 1 ? ": " + getLocalPorts().get(0) : "s: " + getLocalPorts());
@@ -188,8 +326,16 @@ public abstract class LifeCycle implements Stoppable {
                         try {
                             return Stream.of(channelFuture.get());
                         } catch (Throwable throwable) {
-                            // ignore
-                            throwable.printStackTrace();
+                            // best-effort cleanup during shutdown - log and continue
+                            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setType(SERVER_CONFIGURATION)
+                                        .setLogLevel(DEBUG)
+                                        .setMessageFormat("exception while resolving server channel during shutdown - " + throwable.getMessage())
+                                        .setThrowable(throwable)
+                                );
+                            }
                             return Stream.empty();
                         }
                     })
@@ -200,9 +346,22 @@ public abstract class LifeCycle implements Stoppable {
                         channelFuture.get();
                     }
                 } catch (Throwable throwable) {
-                    // ignore
-                    throwable.printStackTrace();
+                    // best-effort cleanup during shutdown - log and continue
+                    if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setType(SERVER_CONFIGURATION)
+                                .setLogLevel(DEBUG)
+                                .setMessageFormat("exception while disconnecting server channel during shutdown - " + throwable.getMessage())
+                                .setThrowable(throwable)
+                        );
+                    }
                 }
+
+                // Server channels are now disconnected so no new requests are accepted; wait for any
+                // requests still being processed to complete before tearing down the event loops
+                // (WS7.2 graceful shutdown connection drain). Bounded by stopDrainMillis.
+                drainInFlightRequests();
 
                 httpState.stop();
                 scheduler.shutdown();
@@ -217,10 +376,12 @@ public abstract class LifeCycle implements Stoppable {
                 // Shut down all event loops to terminate all threads.
                 bossGroup.shutdownGracefully(5, 5, MILLISECONDS);
                 workerGroup.shutdownGracefully(5, 5, MILLISECONDS);
+                forwardClientGroup.shutdownGracefully(5, 5, MILLISECONDS);
 
                 // Wait until all threads are terminated.
                 bossGroup.terminationFuture().syncUninterruptibly();
                 workerGroup.terminationFuture().syncUninterruptibly();
+                forwardClientGroup.terminationFuture().syncUninterruptibly();
 
                 stopFuture.complete(message);
             }).start();
@@ -230,7 +391,12 @@ public abstract class LifeCycle implements Stoppable {
 
     public void stop() {
         try {
-            stopAsync().get(10, SECONDS);
+            // The wait must never be shorter than the graceful-shutdown drain can legitimately take,
+            // otherwise stop() returns to the caller before the server has actually shut down. The
+            // drain can block up to stopDrainMillis (WS7.2), so allow that plus a buffer for the
+            // event-loop teardown that follows. Falls back to a 30s floor when draining is disabled.
+            long stopTimeoutMillis = Math.max(30_000L, org.mockserver.configuration.ConfigurationProperties.stopDrainMillis() + 10_000L);
+            stopAsync().get(stopTimeoutMillis, MILLISECONDS);
         } catch (Throwable throwable) {
             if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
                 mockServerLogger.logEvent(
@@ -250,6 +416,15 @@ public abstract class LifeCycle implements Stoppable {
 
     protected EventLoopGroup getEventLoopGroup() {
         return workerGroup;
+    }
+
+    /**
+     * @return the dedicated event-loop group for the outbound forward/proxy (loopback) HTTP client,
+     * kept disjoint from the server worker group so a pooled channel reused inside a synchronous
+     * local callback is never pinned to a blocked server worker thread (see field javadoc).
+     */
+    protected EventLoopGroup getForwardClientEventLoopGroup() {
+        return forwardClientGroup;
     }
 
     public Scheduler getScheduler() {

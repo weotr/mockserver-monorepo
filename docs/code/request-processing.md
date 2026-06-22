@@ -93,6 +93,8 @@ required?"}
 | `PUT /mockserver/files/delete` | Delete a stored file by name |
 | `PUT /mockserver/debugMismatch` | Compare a request against all active expectations and return per-field diffs |
 | `PUT /mockserver/explainUnmatched` | Retrieve recent unmatched requests with ranked closest-expectation diagnostics and remediation hints |
+| `PUT /mockserver/replay` | Re-issue a recorded request to its target and return the upstream response (see [Request Replay](#request-replay)) |
+| `PUT/GET/DELETE /mockserver/chaosExperiment` | Start, query, or stop a scheduled multi-stage chaos experiment (see [docs/code/chaos.md](chaos.md)) |
 
 All control-plane requests go through `controlPlaneRequestAuthenticated()` which enforces mTLS and/or JWT authentication if configured.
 
@@ -159,7 +161,7 @@ Before a request reaches `HttpRequestHandler`, the Netty pipeline may intercept 
 
 | Route | Handler | Description |
 |-------|---------|-------------|
-| `/mockserver/mcp` | `McpStreamableHttpHandler` | MCP (Model Context Protocol) server endpoint (Streamable HTTP transport with JSON-RPC 2.0). Intercepted in the pipeline before `MockServerHttpServerCodec`. Only active when `mcpEnabled=true`. |
+| `/mockserver/mcp` | `McpStreamableHttpHandler` | MCP (Model Context Protocol) server endpoint (Streamable HTTP transport with JSON-RPC 2.0). Intercepted in the pipeline before `MockServerHttpServerCodec`. Only active when `mcpEnabled=true`. Methods dispatched by `McpRequestProcessor`: `initialize`, `ping`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get` (built-in prompts from `McpPromptRegistry`, `{{argument}}` substitution) and `sampling/createMessage` (returns a mocked completion: `role`/`content`/`model`/`stopReason`). The `prompts` and `sampling` capabilities are advertised in the `initialize` result. |
 | `/_mockserver_callback_websocket` | `CallbackWebSocketServerHandler` | WebSocket upgrade for object/closure callbacks |
 
 ### gRPC Built-in Services (in GrpcToHttpRequestHandler)
@@ -201,6 +203,44 @@ When no expectation matches, the method logs a **closest match summary** identif
 
 A `MatchDifference` context is always created for each comparison (regardless of log level), so detailed field-level difference information is always available in the `EXPECTATION_NOT_MATCHED` log entries. The `MatchFailureHints` utility adds actionable suggestions for common mistakes (trailing slashes, Content-Type charset mismatches, unescaped regex metacharacters).
 
+### Expectation Namespacing (Multi-Tenancy)
+
+**Outcome:** multiple teams or test-suites can share one MockServer instance without their expectations colliding, by partitioning expectations into named namespaces (tenants). The feature is **additive and backward-compatible** — with no namespace ever set, behaviour is exactly as before.
+
+An expectation carries an optional `namespace` (a.k.a. tenant) string (`Expectation.withNamespace(...)`, `null` = the global namespace). A request declares its namespace via a configurable request header (`matchNamespaceHeader`, default `X-MockServer-Namespace`; env `MOCKSERVER_MATCH_NAMESPACE_HEADER`).
+
+**Matching rule** (`RequestMatchers.matchesNamespace`, applied as a pre-filter in `firstMatchingExpectation` / `firstMatchingEarlyExpectation` before each candidate is matched):
+
+| Request namespace `T` (from header) | Expectation namespace | Eligible to match? |
+|-------------------------------------|-----------------------|--------------------|
+| any (incl. absent) | `null` (global) | yes |
+| `T` | `T` | yes |
+| `T` | other (`≠ T`) | no |
+| absent | non-null | **no** |
+
+**No-header default decision — Option A (true isolation):** a request with no namespace header sees only global (null-namespace) expectations, never any tenant's. This is the least-surprising, safest default: isolation holds by construction, so a client that forgets the header (or a stray request) can never accidentally hit another tenant's mocks; shared infrastructure stubs are explicitly placed in the global namespace. (Option B — no-header sees everything — was rejected: it makes isolation opt-out and lets a forgotten header silently leak cross-tenant matches.)
+
+The namespace header does **not** participate in normal header matching: matching is unchanged except for the extra pre-filter skip. Existing expectations only match headers they explicitly declare, and the MockServer-specific namespace header is not one of them, so a request carrying it still matches a global expectation exactly as before. The header is not stripped.
+
+```mermaid
+flowchart TD
+    REQ([Incoming request]) --> NS["Extract request namespace\nfrom matchNamespaceHeader"]
+    NS --> LOOP{"For each expectation\nin priority order"}
+    LOOP --> GATE{"namespace gate:\nexpectation global OR\nexpectation.namespace == request.namespace?"}
+    GATE -->|no| LOOP
+    GATE -->|yes| MATCH["normal field matching\n(method, path, headers, body, ...)"]
+    MATCH -->|match| DONE([serve])
+    MATCH -->|no match| LOOP
+```
+
+**Scoped control-plane operations** (`HttpState.resolveNamespaceFilter` reads the `?namespace=T` query parameter, falling back to the `matchNamespaceHeader` header on the control-plane request):
+
+- `PUT /mockserver/clear?type=expectations&namespace=T` (and `?type=all&namespace=T`) removes **only** namespace `T`'s expectations via `RequestMatchers.clearByNamespace(...)`, leaving other tenants' and global expectations intact. A blank namespace is a no-op (it never clears global expectations). Because the event log is not namespaced, a namespace-scoped `all` clear deliberately leaves the request log untouched.
+- `PUT /mockserver/retrieve?type=active_expectations&namespace=T` returns only namespace `T`'s expectations plus global ones (other tenants hidden).
+- `PUT /mockserver/reset` with no namespace stays a full reset (unchanged semantics).
+
+All of the matching/clearing logic lives in `mockserver-core` (`Expectation`, `ExpectationDTO`, `RequestMatchers`, `HttpState`, `Configuration`/`ConfigurationProperties`); the Netty layer needs no change because it already passes all request headers through. The `namespace` field round-trips through `ExpectationDTO`, the expectation JSON Schema (`expectation.json`), the embedded OpenAPI model, and the Java-code serializer.
+
 ### Debug Mismatch Endpoint
 
 The `PUT /mockserver/debugMismatch` endpoint (implemented in `HttpState.debugMismatch()`) provides programmatic access to match analysis. It accepts a `RequestDefinition` body and returns structured JSON showing per-expectation, per-field match results ranked by closeness (fewest differing fields first), with the closest match highlighted and actionable `remediation` hints for each mismatched field. The MCP `debug_request_mismatch` tool delegates to this same implementation and adds ranking/remediation post-processing. The Java client exposes this via `MockServerClient.debugMismatch(RequestDefinition)`.
@@ -208,6 +248,28 @@ The `PUT /mockserver/debugMismatch` endpoint (implemented in `HttpState.debugMis
 ### Explain Unmatched Endpoint
 
 The `PUT /mockserver/explainUnmatched` endpoint (implemented in `HttpState.explainUnmatched()`) provides a post-hoc diagnostic for requests that have already been received and returned 404. It retrieves recent `NO_MATCH_RESPONSE` log entries from `MockServerEventLog.retrieveUnmatchedRequests()`, and for each, computes ranked closest-expectation diagnostics using `MatchDifference` with `MismatchRemediation` hints. The optional request body accepts `{"limit": N}` (default 10, max 100). The MCP `explain_unmatched_requests` tool and `mockserver://unmatched` resource both delegate to this implementation.
+
+### Request Replay
+
+`PUT /mockserver/replay` re-issues a previously recorded or proxied request to its upstream target and returns the upstream response through the control plane. The primary use case is the Traffic-view **Replay** button in the dashboard, which lets a developer resend a captured request to see whether the real service has changed behaviour. The Java client exposes this as `MockServerClient.replay(HttpRequest)`.
+
+**Architecture:** The feature is split across two modules to avoid a circular dependency. `HttpState` (in `mockserver-core`) defines the endpoint and holds a `Function<HttpRequest, CompletableFuture<HttpResponse>> replayHandler` field. `HttpRequestHandler` (in `mockserver-netty`) wires the handler at startup: `httpState.setReplayHandler(req -> httpActionHandler.getHttpClient().sendRequest(req))`. The WAR deployment does not wire this handler; calling the endpoint from a WAR returns 501.
+
+**Target resolution:** The host is resolved from `socketAddress.host` (if set in the JSON) or the `Host` header, mirroring the normal forward path.
+
+**Safety hardening:**
+
+| Check | Behaviour on failure |
+|-------|---------------------|
+| Body too large (request > 10 MB) | 413 Payload Too Large |
+| Upstream response too large (> 10 MB) | 502 with error message |
+| Target host blocked by SSRF policy (`InetAddressValidator.validateForwardTarget`) | 403 Forbidden |
+| No handler wired (WAR deployment) | 501 Not Implemented |
+| Upstream connection error / timeout | 502 Bad Gateway |
+
+The 10 MB cap (`REPLAY_MAX_BODY_SIZE`) is applied to both the outbound request body and the returned upstream response body to prevent OOM from materializing and JSON-serializing an unbounded body.
+
+The endpoint goes through `controlPlaneRequestAuthenticated()` — mTLS / JWT restrictions apply.
 
 ### Record-to-Expectations (MCP)
 
@@ -297,6 +359,31 @@ sequenceDiagram
     RM-->>AH: null (no match)
 ```
 
+### Protocol Matching and Verification
+
+`HttpRequestPropertiesMatcher` matches on the **negotiated protocol** a request arrived over, exposed
+as the `org.mockserver.model.Protocol` enum (`HTTP_1_1`, `HTTP_2`, `HTTP_3` — `HTTP_3` is experimental).
+An expectation built with `request().withProtocol(Protocol.HTTP_2)` only matches requests negotiated
+over HTTP/2; the same field on a `verify(...)` request asserts how a recorded request arrived. Protocol
+is **optional**: a `null` expectation protocol matches a request regardless of the request's protocol
+(`protocolMatcher` is built from `null` and the `ExactStringMatcher` treats that as match-any), so
+existing expectations that do not specify a protocol are unaffected.
+
+How the request's protocol is tagged (server-trusted, not client-supplied):
+
+| Arrival path | Tagged as | Where |
+|--------------|-----------|-------|
+| HTTP/1.1 (TCP) | `HTTP_1_1` (or `null` for mocking) | `FullHttpRequestToMockServerHttpRequest` |
+| HTTP/2 via ALPN (`h2`) | `HTTP_2` | ALPN negotiation in `PortUnificationHandler` |
+| HTTP/2 cleartext (`h2c`) | `HTTP_2` | `PortUnificationHandler` sets a trusted negotiated-protocol channel attribute (the `Upgrade` header alone is not trusted) |
+| HTTP/3 over QUIC (`h3`) | `HTTP_3` | `Http3RequestBridge.toHttpRequest` — the `h3` ALPN identifier is always trusted, so there is no header-spoofing concern |
+
+The `protocol` field round-trips through `HttpRequestDTO`, the request serializers
+(`HttpRequestSerializer` / `HttpRequestDTOSerializer`), `RequestDefinitionDTODeserializer`, the request
+JSON Schema (`protocol.json`), and the embedded OpenAPI model — and through the **pretty-printed
+retrieval DTO** (`HttpRequestPrettyPrintedDTO`), so a request retrieved via
+`retrieveRecordedRequests(...)` carries the protocol it arrived over for HTTP/2 and HTTP/3 alike.
+
 ### Post-Processing
 
 After a match, `postProcess()`:
@@ -313,8 +400,8 @@ Each `Expectation` binds a request matcher to exactly one action. There are 19 a
 
 | Type | Handler | Description |
 |------|---------|-------------|
-| `RESPONSE` | `HttpResponseActionHandler` | Returns a static `HttpResponse` |
-| `RESPONSE_TEMPLATE` | `HttpResponseTemplateActionHandler` | Evaluates a template (Velocity/Mustache/JavaScript) to generate the response |
+| `RESPONSE` | `HttpResponseActionHandler` | Returns a static `HttpResponse`. When the response body is a `FileBody` carrying a `templateType` (`VELOCITY`/`MUSTACHE`), the file contents are rendered as a template against the request before being returned |
+| `RESPONSE_TEMPLATE` | `HttpResponseTemplateActionHandler` | Evaluates a template (Velocity/Mustache/JavaScript) to generate the response. The template text may be supplied inline (`template`) or loaded from a file (`templateFile`); inline takes precedence — see `HttpTemplate.getTemplateContent()` |
 | `RESPONSE_CLASS_CALLBACK` | `HttpResponseClassCallbackActionHandler` | Loads a Java class implementing `ExpectationResponseCallback`, invokes `handle(request)` |
 | `RESPONSE_OBJECT_CALLBACK` | `HttpResponseObjectCallbackActionHandler` | Sends request to a WebSocket-connected client, awaits response callback |
 | `SSE_RESPONSE` | `HttpSseResponseActionHandler` | Streams Server-Sent Events with per-event delays, optional `closeConnection` flag |
@@ -350,6 +437,27 @@ Configuration via `HttpForwardWithFallback`:
 - `fallbackResponse` -- the mock response to return when fallback triggers
 - `fallbackOnStatusCodes` -- list of status codes that trigger fallback (default: 500-599)
 - `fallbackOnTimeout` -- whether to fall back on connection errors/timeouts (default: true)
+
+### Forward Retry & Per-Upstream Circuit Breaker
+
+All matched FORWARD-class actions (`FORWARD`, `FORWARD_TEMPLATE`, `FORWARD_CLASS_CALLBACK`, `FORWARD_REPLACE`, `FORWARD_VALIDATE`, `FORWARD_WITH_FALLBACK`, `FORWARD_OBJECT_CALLBACK`) funnel through `HttpForwardAction.sendRequest(...)`, the single place that calls `NettyHttpClient`. Two **opt-in, default-off** resilience controls wrap that call so existing behaviour (forward exactly once, always attempt) is byte-for-byte unchanged unless configured.
+
+```mermaid
+flowchart TD
+    REQ([FORWARD-class action]) --> CB{"Circuit breaker open\nfor host:port?"}
+    CB -->|Yes enabled and open| FAST[503 fail fast]
+    CB -->|No or disabled| ATTEMPT[Attempt forward via NettyHttpClient]
+    ATTEMPT --> RES{"Transient failure?\nconn error / 502 / 503 / 504"}
+    RES -->|No| OK[Return response, record success]
+    RES -->|Yes, idempotent and retries left| BACKOFF[Linear back-off, retry]
+    BACKOFF --> ATTEMPT
+    RES -->|Yes, out of retries or non-idempotent| FAIL[Return failure, record failure]
+```
+
+- **Retry** (`ForwardRetryPolicy`, config `forwardProxyRetryCount` / `forwardProxyRetryBackoffMillis`): re-issues the upstream call up to *N* times when an attempt is a transient failure — a connection-level exception or an upstream **502/503/504**. Only **idempotent** methods (GET, HEAD, OPTIONS, PUT, DELETE, TRACE) are retried; POST/PATCH are never retried so a request is never executed twice. Retries are chained asynchronously off the response future (never blocking the event loop) with a linear back-off (`backoff × attemptNumber`). Default `forwardProxyRetryCount=0` = forward exactly once.
+- **Circuit breaker** (`ForwardCircuitBreaker`, config `forwardProxyCircuitBreakerEnabled` + threshold/window): a process-wide singleton keyed by upstream `host:port`. After `forwardProxyCircuitBreakerFailureThreshold` consecutive failures the breaker trips **open** and `sendRequest` fails fast with a 503 (no upstream attempt) for `forwardProxyCircuitBreakerWindowMillis`; then **half-open** admits a single trial request — a success closes it, a failure re-opens it. The retry policy and breaker compose: a request's final outcome (after any retries) feeds `recordSuccess`/`recordFailure`. The open-upstream count is exported as the `mock_server_upstream_circuit_open` gauge (see [metrics.md](metrics.md)) and reset on `HttpState.reset()`.
+
+The unmatched speculative-proxy path (`HttpActionHandler`, which calls `NettyHttpClient` directly) is intentionally **not** wrapped by these controls; they apply to matched forward expectations. Self-loopback relay and the HTTP/2/HTTP/3 forward paths are unaffected (the breaker only keys on a resolvable host, and retry only engages for idempotent methods when explicitly configured).
 
 ### Host Header Auto-Adjustment
 
@@ -407,9 +515,32 @@ See [LLM Mocking](llm-mocking.md) for the full architecture.
 When an expectation is configured with `httpResponses` (a list of `HttpResponse` objects) instead of a single `httpResponse`, each match returns the next response in the list. The selection is controlled by `responseMode`:
 
 - **`SEQUENTIAL`** (default): Returns responses in order, cycling back to the first after the last. Uses `(matchCount - 1) % size` because `matchCount` is incremented in `consumeMatch()` before `getPrimaryAction()` is called.
-- **`RANDOM`**: Returns a random response from the list on each match.
+- **`RANDOM`**: Returns a random response from the list on each match (uniform probability).
+- **`WEIGHTED`**: Returns a response chosen probabilistically by relative weight. Weights are supplied via the index-aligned `responseWeights` list on the expectation (e.g. `[90, 10]` selects the first response ~90% of the time and the second ~10%). A missing or non-positive weight defaults to `1`; if the total effective weight is non-positive, selection falls back to uniform random. Implemented as cumulative-weight selection in `Expectation.selectWeightedResponse()`.
+- **`SWITCH`** (lightweight per-expectation hit-count branching): Serves the first response for the first `switchAfter` matches, then advances one index in `httpResponses` for every further block of `switchAfter` matches, clamping at the last response. The common two-response case serves the first response for `switchAfter` calls and the second for every call after — "respond differently after the Nth call" for a single expectation without a full scenario. The `switchAfter` integer is a serialized field (defaults to `1` when unset, i.e. advance on each call); it is ignored outside `SWITCH` mode. Implemented as `index = min((matchCount - 1) / switchAfter, size - 1)` in `Expectation.selectSwitchedResponse(...)`. For complex multi-endpoint flows a full scenario (`scenarioName`/`scenarioState`) remains the right tool; `SWITCH` is the minimal single-expectation option.
 
-The cycling logic is in `Expectation.getPrimaryAction()`. The `matchCount` is tracked per-expectation via an `AtomicInteger` and is runtime-only state (`@JsonIgnore`).
+The cycling/selection logic is in `Expectation.getPrimaryAction()` -> `selectFromResponses()`. The `matchCount` is tracked per-expectation via an `AtomicInteger` and is runtime-only state (`@JsonIgnore`). `responseWeights` and `switchAfter` are serialized fields that round-trip in expectation JSON; weights are ignored unless `responseMode` is `WEIGHTED`, and `switchAfter` is ignored unless `responseMode` is `SWITCH`.
+
+### Rate Limiting (`rateLimit` clause)
+
+An expectation may carry a declarative, protocol-agnostic `rateLimit` clause (a sibling of `chaos` — see [docs/code/domain-model.md](domain-model.md)). When a matched expectation is over-limit for the current window, MockServer returns a deterministic `errorStatus` (default `429`) response — carrying `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining` (`0`), and `X-RateLimit-Reset` (unix seconds) — **instead of** the normal response; within the limit the normal response is returned unchanged. An expectation without a `rateLimit` clause behaves and serializes byte-for-byte identically to before.
+
+`dispatchPrimaryAction()` reads `expectation.getRateLimit()` once per matched request and threads it into the single write path (`writeResponseActionResponse` for `RESPONSE` / `RESPONSE_TEMPLATE` / `RESPONSE_CLASS_CALLBACK`, and `writeForwardActionResponse` for the `FORWARD` family). The check `rateLimitResponseOrNull(rateLimit, expectationId)` calls `RateLimitRegistry.getInstance().tryAcquire(...)` — which **mutates** registry state — so it runs **exactly once** per matched request, in the write path only. Deferred in v1 (these thread `null` and so are NOT rate-limited): the matched-expectation `LLM_RESPONSE`, `SSE_RESPONSE`, gRPC, and WebSocket response actions, along with the object-callback and anonymous/unmatched proxy-pass paths.
+
+Precedence inside the write path (highest first): connection-drop chaos → **`rateLimit` (429)** → chaos `quota` (`HttpQuotaRegistry`) → probabilistic chaos `error` → real-response chaos (truncate/malformed/slow). The rate-limit gate is checked before the chaos quota and before the probabilistic chaos error, so a configured `rateLimit` deterministically wins.
+
+The counter is keyed by `rateLimit.name` (or, when `name` is omitted, the expectation id), so expectations sharing a `name` share one counter. Two algorithms are supported: `FIXED_WINDOW` (`limit` per `windowMillis`) and `TOKEN_BUCKET` (`burst` capacity refilling at `refillPerSecond`). State lives in the node-local `RateLimitRegistry` (`org.mockserver.ratelimit`), is cleared on `HttpState.reset()`, and is bounded by `rateLimitMaxNamedQuotas` (fail-open on a new key once the cap is reached). v1 is node-local; see [docs/code/clustered-state.md](clustered-state.md) for the clustering trade-off.
+
+### RecoverAfter Selection (Fail-Then-Succeed)
+
+When a matched RESPONSE action carries a `recoverAfter` clause (`HttpResponse.getRecoverAfter()`, see [domain-model.md](domain-model.md#recoverafter-retrybackoff-recovery)), the dispatcher chooses between the failure response and the configured success response *before* the response is materialised. The helper is `HttpActionHandler.selectRecoveryResponse(action, expectation, request, capturedMatchCount)`:
+
+- It is applied in the `dispatchPrimaryAction` RESPONSE case (the selected response replaces `(HttpResponse) action` in the `getHttpResponseActionHandler().handle(...)` call) **and** in the early-action RESPONSE path of `processEarlyAction` (respond-before-body), so both dispatch routes behave identically.
+- Selection is a pure function of the 1-based attempt `n`: by default `n = capturedMatchCount` (already in scope, captured before scheduling to avoid races). When `recoverAfter.idempotencyHeader` is set and present on the request, `n = RecoveryAttemptRegistry.getInstance().nextAttempt(expectation.getId(), headerValue)`; when the header is configured but absent, it falls back to `capturedMatchCount`. The keyed registry is incremented **only** on the keyed path, so the default path adds no new state or overhead.
+- When `n <= failTimes` the failure response is served — the configured `failResponse`, or a default `503 Service Unavailable` when none is configured. Otherwise the configured response is returned unchanged (identity). A `null`/`<= 0` `failTimes`, or a `null` `recoverAfter`, returns the action unchanged, so a response without the clause is byte-for-byte unaffected.
+- Selection is independent of `Times` (a failing attempt does not consume an extra `Times` use) and runs before the chaos/breakpoint pipeline inside `dispatchMockResponseWithBreakpoint` / `writeResponseActionResponse`, so it composes with chaos faults applied to whichever response was selected.
+
+`RecoveryAttemptRegistry` is a node-local singleton keyed `expectationId + NUL + keyValue` (a NUL separator avoids collisions because the client-settable expectation id can contain a space). It is a **bounded** registry — a synchronized access-ordered `LinkedHashMap<String, AtomicInteger>` that evicts the least-recently-used key once 10,000 keys are held (mirroring `DnsIntentRegistry`), so client-supplied idempotency-key values (typically fresh UUIDs) cannot exhaust the heap; an evicted key restarts its failure window at attempt 1, matching `reset()` semantics. It is cleared in `HttpState.reset()` alongside the other action-state registries.
 
 ### Before & After Actions
 
@@ -457,6 +588,18 @@ All engines receive built-in dynamic variables from `TemplateFunctions.BUILT_IN_
 | `MathTemplateHelper` | `calc` | Math operations: `randomInt(min,max)`, `randomDouble()`, `abs`, `min`, `max`, `round(value,scale)`, `format(value,pattern)`, `ceil`, `floor` |
 
 Helper objects are registered as template context variables, so methods are called directly (e.g., Velocity: `$strings.uppercase($!request.method)`, JavaScript: `dates.plusHours(1)`, Mustache: `{{ jwt }}`).
+
+#### Templates loaded from a file
+
+The template text for `RESPONSE_TEMPLATE` and `FORWARD_TEMPLATE` can be stored in an external file instead of being embedded inline in the expectation. Set `templateFile` (a classpath-or-filesystem path resolved by `FileReader.readFileFromClassPathOrPath`) on the `httpResponseTemplate` / `httpForwardTemplate`. `HttpTemplate.getTemplateContent()` returns the inline `template` when present, otherwise reads `templateFile`; the action handlers and `HttpOverrideForwardedRequestActionHandler` all call `getTemplateContent()`. This keeps the full template machinery (rendering an `HttpResponseDTO`/`HttpRequestDTO`) while letting large templates live outside the expectation JSON.
+
+#### Templated response body files (`FileBody` + `templateType`)
+
+A static `RESPONSE` whose body is a `FileBody` can mark the file as a template by setting `templateType` to `VELOCITY` or `MUSTACHE`. `HttpResponseActionHandler.handle(httpResponse, httpRequest)` reads the file, renders it through `TemplateEngine.renderTemplate(...)` (raw text render — no `HttpResponseDTO` deserialization), and replaces the body with the rendered string (preserving the declared content type). This differs from `RESPONSE_TEMPLATE`: the file is just the **body** payload (rendered as-is), while the surrounding status code, headers, etc. come from the static response. `JAVASCRIPT` is intentionally **not** supported for body files (JS templates return structured objects, not text) — use `RESPONSE_TEMPLATE` with a JavaScript template for that. The request is only available on the primary/secondary `RESPONSE` dispatch paths, so the no-request `handle(httpResponse)` overload returns the `FileBody` verbatim.
+
+### Generating a response body from an inline JSON Schema
+
+A static `RESPONSE` with **no explicit body** can set `generateFromSchema` to a plain (inline) JSON Schema. When `HttpResponseActionHandler.handle(...)` sees an unset body and a non-blank `generateFromSchema`, it delegates to `JsonSchemaResponseSynthesizer`, which wraps the inline schema in a minimal OpenAPI document, parses it with the same `OpenAPIParser` used for full specs (so typed swagger `Schema` subclasses, `$ref`, `allOf` and OpenAPI 3.1 type arrays are produced), and runs the existing `ExampleBuilder`/`SampleDataGenerator` engine — no example-generation logic is reimplemented. The generated body is set as a JSON `StringBody`. An explicit body always wins (the schema path only fills an unset body), and this synthesis does not depend on the request, so it also runs on the no-request `handle(httpResponse)` overload (unlike GraphQL synthesis below, which requires the request query). A schema that cannot be parsed (`JsonSchemaResponseSynthesisException`) is logged at WARN and leaves the body unset rather than failing the request.
 
 ## WebSocket Object Callbacks
 
@@ -607,6 +750,27 @@ flowchart TD
 |----------------------|------|---------|-------------|
 | `validateProxyOpenAPISpec` | String | `""` (disabled) | OpenAPI spec URL, file path, or inline payload to validate forwarded traffic against |
 | `validateProxyEnforce` | Boolean | `false` | When true, block non-conformant traffic (400 for bad requests, 502 for bad non-streaming responses). Streaming responses are validated report-only. |
+
+### OpenAPI Request Validation on the Mock Path
+
+The validation proxy above only validates **forwarded** traffic. By default a request matched by an
+OpenAPI-backed **mock** expectation (`Expectation.when(specUrlOrPayload, operationId)` / `openAPI(...)`) is
+**not** revalidated against the spec — the expectation matcher already screens the request, but it matches the
+request body loosely (a `jsonSchema` body matcher built with `withOptional`), so a malformed request that still
+matches the operation is served the mock response.
+
+When `validateRequestsAgainstOpenApiSpec` is set to `true`, MockServer additionally validates each matched
+request against the spec the matched expectation was built from, **after the match but before the action is
+dispatched** (in `HttpActionHandler.dispatchPrimaryAction`). A request that violates the spec is rejected with a
+**400** describing the violations and logged as `OPENAPI_REQUEST_VALIDATION_FAILED`, instead of serving the mock
+response. The check only applies when the matched expectation's request definition is an `OpenAPIDefinition`
+carrying a `specUrlOrPayload`; for plain `HttpRequest`-backed expectations it is a no-op. Validation uses
+`OpenAPIRequestValidator` and runs off the Netty event loop (inside `scheduler.submit`), mirroring the
+validation-proxy request path. The flag is **off by default and fully back-compatible**.
+
+| Configuration Property | Type | Default | Description |
+|----------------------|------|---------|-------------|
+| `validateRequestsAgainstOpenApiSpec` | Boolean | `false` | When true, requests matched by an OpenAPI-backed mock that violate the spec are rejected with a 400 instead of serving the mock response. OpenAPI-backed expectations only. |
 
 ### Loop Prevention
 

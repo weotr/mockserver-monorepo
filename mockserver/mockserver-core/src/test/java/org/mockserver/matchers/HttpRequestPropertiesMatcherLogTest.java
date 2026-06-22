@@ -75,6 +75,62 @@ public class HttpRequestPropertiesMatcherLogTest {
         return httpRequestPropertiesMatcher.matches(new MatchDifference(configuration.detailedMatchFailures(), matched), matched);
     }
 
+    private boolean matchSuppressed(HttpRequest matcher, HttpRequest matched) {
+        HttpRequestPropertiesMatcher httpRequestPropertiesMatcher = new HttpRequestPropertiesMatcher(configuration, mockServerLogger);
+        httpRequestPropertiesMatcher.update(matcher);
+        return httpRequestPropertiesMatcher.withControlPlaneMatcher(false)
+            .matches(new MatchDifference(configuration.detailedMatchFailures(), matched).suppressMatchResultLogging(), matched);
+    }
+
+    @Test
+    public void doesNotLogNotMatchedWhenMatchResultLoggingSuppressed() {
+        // given - a non-matching data-plane match evaluated with match-result logging suppressed
+        //         (as explainUnmatched / debugMismatch do when computing field-level diffs)
+        assertThat(matchSuppressed(request().withMethod("HEAD"), request().withMethod("GET")), is(false));
+
+        // then - no EXPECTATION_NOT_MATCHED entry is written to the event log
+        HttpResponse response = httpStateHandler
+            .retrieve(request().withQueryStringParameter("type", "logs"));
+        assertThat(response.getBodyAsString(), is(""));
+    }
+
+    @Test
+    public void doesNotLogMatchedWhenMatchResultLoggingSuppressed() {
+        // given - a matching data-plane match evaluated with match-result logging suppressed
+        assertThat(matchSuppressed(request().withMethod("HEAD"), request().withMethod("HEAD")), is(true));
+
+        // then - no EXPECTATION_MATCHED entry is written to the event log either
+        HttpResponse response = httpStateHandler
+            .retrieve(request().withQueryStringParameter("type", "logs"));
+        assertThat(response.getBodyAsString(), is(""));
+    }
+
+    @Test
+    public void doesNotLogNotMatchedFromOpenAPIMatcherWhenMatchResultLoggingSuppressed() {
+        // given - an OpenAPI-backed expectation matcher (HttpRequestsPropertiesMatcher delegates to an
+        //         inner HttpRequestPropertiesMatcher; the suppression flag must propagate through it)
+        HttpRequestsPropertiesMatcher openApiMatcher = new HttpRequestsPropertiesMatcher(configuration, mockServerLogger);
+        openApiMatcher.update(new Expectation(
+            new OpenAPIDefinition().withSpecUrlOrPayload("---" + NEW_LINE +
+                "openapi: 3.0.0" + NEW_LINE +
+                "paths:" + NEW_LINE +
+                "  \"/somePath\":" + NEW_LINE +
+                "    get:" + NEW_LINE +
+                "      operationId: someOperation" + NEW_LINE)
+        ));
+
+        // when - a non-matching request is evaluated with match-result logging suppressed (POST != GET)
+        HttpRequest nonMatching = request().withMethod("POST").withPath("/somePath");
+        assertThat(openApiMatcher
+            .matches(new MatchDifference(configuration.detailedMatchFailures(), nonMatching).suppressMatchResultLogging(), nonMatching), is(false));
+
+        // then - the delegated inner matcher wrote no EXPECTATION_NOT_MATCHED entry (would fail if the
+        //        flag were not propagated in HttpRequestsPropertiesMatcher.matches())
+        HttpResponse response = httpStateHandler
+            .retrieve(request().withQueryStringParameter("type", "logs"));
+        assertThat(response.getBodyAsString(), is(""));
+    }
+
     @Test
     public void matchesMatchingMethod() {
         // given

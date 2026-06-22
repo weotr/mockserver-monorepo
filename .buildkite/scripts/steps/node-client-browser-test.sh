@@ -58,8 +58,16 @@ fi
 # Run browser tests inside a Playwright Docker image (includes Chromium).
 # The Playwright container needs access to the MockServer container, so join
 # the same Docker network.  MOCKSERVER_HOST points at the container name.
+#
+# Derive the image tag from the @playwright/test version in the lockfile so the
+# bundled Chromium always matches the installed Playwright. A hardcoded tag drifts
+# the moment Dependabot bumps @playwright/test (a v1.60.0 image lacks the Chromium
+# build a 1.61 client needs -> "browserType.launch: Executable doesn't exist",
+# which reddened every mockserver-node build until this fix).
+PW_VERSION=$(python3 -c "import json;print(json.load(open('mockserver-client-node/package-lock.json'))['packages']['node_modules/@playwright/test']['version'])")
+echo "--- Using Playwright image v${PW_VERSION}-noble (from package-lock.json)"
 "$SCRIPT_DIR/../run-in-docker.sh" \
-  -i mcr.microsoft.com/playwright:v1.60.0-noble \
+  -i "mcr.microsoft.com/playwright:v${PW_VERSION}-noble" \
   -w /build/mockserver-client-node \
   --cache npm \
   -e "MOCKSERVER_HOST=$MOCKSERVER_NAME" \

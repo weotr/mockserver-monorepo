@@ -2,48 +2,67 @@ import { useRef, useMemo } from 'react';
 import Typography from '@mui/material/Typography';
 import { useDashboardStore } from '../store';
 import { isLogGroup } from '../types';
-import type { LogMessage } from '../types';
 import Panel from './Panel';
 import LogEntry from './LogEntry';
 import LogGroup from './LogGroup';
-
-function matchesSearch(message: LogMessage, term: string): boolean {
-  const lower = term.toLowerCase();
-  const json = JSON.stringify(message).toLowerCase();
-  return json.includes(lower);
-}
+import ProgressiveList from './ProgressiveList';
+import { useExpansion } from '../hooks/useExpansion';
+import { matchesLogSearch, isForwardedLogEntry } from '../lib/searchMatcher';
 
 export default function LogPanel() {
   const logMessages = useDashboardStore((s) => s.logMessages);
   const search = useDashboardStore((s) => s.logSearch);
   const setSearch = useDashboardStore((s) => s.setLogSearch);
+  const showForwarded = useDashboardStore((s) => s.logShowForwarded);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const filtered = useMemo(
-    () => (search ? logMessages.filter((m) => matchesSearch(m, search)) : logMessages),
-    [logMessages, search],
-  );
+  const filtered = useMemo(() => {
+    let rows = logMessages;
+    if (!showForwarded) rows = rows.filter((m) => !isForwardedLogEntry(m));
+    if (search) rows = rows.filter((m) => matchesLogSearch(m, search));
+    return rows;
+  }, [logMessages, search, showForwarded]);
+
+  const expansion = useExpansion();
 
   return (
     <Panel
       title="Log Messages"
       count={logMessages.length}
+      filteredCount={(search || !showForwarded) ? filtered.length : undefined}
       searchValue={search}
       onSearchChange={setSearch}
       searchInputRef={searchRef}
+      liveRegion
     >
       {filtered.length === 0 ? (
         <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
           {logMessages.length === 0 ? 'No log messages yet — server activity appears here as requests are handled.' : 'No matching log messages'}
         </Typography>
       ) : (
-        filtered.map((message) =>
-          isLogGroup(message) ? (
-            <LogGroup key={message.key} group={message} />
-          ) : (
-            <LogEntry key={message.key} entry={message.value} divider collapsible />
-          ),
-        )
+        <ProgressiveList
+          count={filtered.length}
+          getKey={(i) => filtered[i]!.key}
+          renderRow={(i) => {
+            const message = filtered[i]!;
+            return isLogGroup(message) ? (
+              <LogGroup
+                group={message}
+                open={expansion.isExpanded(message.key)}
+                onToggleOpen={expansion.toggle}
+              />
+            ) : (
+              <LogEntry
+                entry={message.value}
+                entryKey={message.key}
+                expanded={expansion.isExpanded(message.key)}
+                onToggleExpand={expansion.toggle}
+                divider
+                collapsible
+              />
+            );
+          }}
+        />
       )}
     </Panel>
   );

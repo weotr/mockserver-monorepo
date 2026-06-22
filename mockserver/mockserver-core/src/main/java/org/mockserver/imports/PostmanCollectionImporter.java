@@ -35,13 +35,32 @@ public class PostmanCollectionImporter {
 
     /**
      * Parses a Postman Collection v2.x JSON string and returns one expectation per
-     * saved example response.
+     * saved example response, with sensitive headers and body fields redacted (see
+     * {@link ImportRedaction}). Postman requests/examples often carry real
+     * {@code Authorization}/API-key headers and secret body fields, so redaction is
+     * on by default.
      *
      * @param collectionJson the Postman collection as a JSON string
      * @return the generated expectations (may be empty if no examples are present)
      * @throws IllegalArgumentException if the JSON is null, blank, or not a valid Postman collection
      */
     public List<Expectation> importExpectations(String collectionJson) {
+        return importExpectations(collectionJson, ImportRedaction.Options.enabled());
+    }
+
+    /**
+     * Parses a Postman Collection v2.x JSON string and returns one expectation per
+     * saved example response, applying the supplied redaction options before the
+     * expectations are returned.
+     *
+     * @param collectionJson   the Postman collection as a JSON string
+     * @param redactionOptions controls whether/how sensitive data is masked; pass
+     *                         {@link ImportRedaction.Options#disabled()} to keep
+     *                         imported values verbatim
+     * @return the generated expectations (may be empty if no examples are present)
+     * @throws IllegalArgumentException if the JSON is null, blank, or not a valid Postman collection
+     */
+    public List<Expectation> importExpectations(String collectionJson, ImportRedaction.Options redactionOptions) {
         if (collectionJson == null || collectionJson.trim().isEmpty()) {
             throw new IllegalArgumentException("Postman collection JSON body is required");
         }
@@ -72,7 +91,7 @@ public class PostmanCollectionImporter {
             LOG.info("skipped {} Postman request(s) without saved example responses", skippedCount.get());
         }
 
-        return expectations;
+        return ImportRedaction.redact(expectations, redactionOptions);
     }
 
     private void walkItems(JsonNode items, List<Expectation> expectations,

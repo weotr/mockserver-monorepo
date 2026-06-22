@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import mermaidLib from 'mermaid';
 import { parseCallGraph, buildRenderModel, toMermaid, type CallGraph } from '../lib/callGraph';
 
 // graph shaped like explain_agent_run's callGraph for a tool-using turn
@@ -62,9 +63,31 @@ describe('toMermaid', () => {
   it('emits a flowchart with nodes and labelled edges', () => {
     const mermaid = toMermaid(parseCallGraph(RAW) as CallGraph);
     expect(mermaid.startsWith('flowchart TD')).toBe(true);
-    expect(mermaid).toContain('m1_tc0([get_weather])');
+    // tool-call labels are QUOTED inside the stadium shape so special characters
+    // in the label can't break Mermaid's parser.
+    expect(mermaid).toContain('m1_tc0(["get_weather"])');
     expect(mermaid).toContain('m1_tc0 -->|RESULT| m2');
     // no HTML tags (GitHub mermaid renderer rejects them)
     expect(mermaid.includes('<br')).toBe(false);
+  });
+
+  it('produces source Mermaid can parse even with special characters in labels', async () => {
+    // Regression: an unquoted tool-call stadium `([search(location)])` made
+    // Mermaid throw a parse error, so the Sessions graph fell back to source.
+    mermaidLib.initialize({ startOnLoad: false, securityLevel: 'strict' });
+    const adversarial: CallGraph = {
+      nodes: [
+        { id: 'm0', kind: 'USER', label: 'What is the weather in Paris (today)?' },
+        { id: 'm1', kind: 'ASSISTANT', label: 'It is 18°C — sunny [confirmed]' },
+        { id: 'm1_tc0', kind: 'TOOL_CALL', label: 'search(location, units="metric")' },
+        { id: 'm2', kind: 'TOOL', label: 'result: {"temp": 18}' },
+      ],
+      edges: [
+        { from: 'm0', to: 'm1', kind: 'NEXT' },
+        { from: 'm1', to: 'm1_tc0', kind: 'INVOKES' },
+        { from: 'm1_tc0', to: 'm2', kind: 'RESULT' },
+      ],
+    };
+    await expect(mermaidLib.parse(toMermaid(adversarial))).resolves.toBeTruthy();
   });
 });

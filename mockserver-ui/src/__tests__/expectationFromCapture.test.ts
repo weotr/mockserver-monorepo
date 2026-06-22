@@ -7,6 +7,7 @@ import {
   type LlmExpectationDraft,
   type GenericExpectationDraft,
 } from '../lib/expectationFromCapture';
+import { genericExpectationToJsonObject } from '../lib/llmExpectationCodegen';
 import type {
   AnthropicParsed,
   OpenAiParsed,
@@ -376,5 +377,80 @@ describe('extractGenericExpectationFromCapture', () => {
     const draft = extractGenericExpectationFromCapture(itemValue);
     expect(draft.body).toBe(xmlContent);
     expect(draft.responseBody).toBe('<response>ok</response>');
+  });
+});
+
+describe('standard HTTP capture → expectation JSON (WS5.2)', () => {
+  // A representative standard (non-LLM) recorded request/response pair as it
+  // appears in a MockServer traffic log entry.
+  const standardHttpItem = {
+    httpRequest: {
+      method: 'POST',
+      path: '/api/orders',
+      queryStringParameters: [{ name: 'dry', values: ['true'] }],
+      headers: [
+        { name: 'Content-Type', values: ['application/json'] },
+        { name: 'Host', values: ['shop.example.com'] },
+      ],
+      body: { type: 'JSON', json: '{"sku":"A1","qty":2}' },
+    },
+    httpResponse: {
+      statusCode: 201,
+      headers: [{ name: 'Content-Type', values: ['application/json'] }],
+      body: { type: 'JSON', json: '{"id":7,"status":"created"}' },
+    },
+  };
+
+  it('builds a generic draft with the right method/path/status/body by default (moderate)', () => {
+    const parsed: GenericParsed = { kind: 'generic', method: 'POST', path: '/api/orders', statusCode: 201 };
+    const draft = extractExpectationFromCapture(parsed, '/api/orders', standardHttpItem) as GenericExpectationDraft;
+
+    expect(draft.kind).toBe('generic');
+    expect(draft.method).toBe('POST');
+    expect(draft.path).toBe('/api/orders');
+    expect(draft.responseStatusCode).toBe(201);
+    expect(draft.responseBody).toBe('{"id":7,"status":"created"}');
+    // Default precision binds request body but not the noisy Host header.
+    expect(draft.matcherPrecision).toBe('moderate');
+  });
+
+  it('produces a registrable expectation JSON object with httpRequest matcher + httpResponse', () => {
+    const draft = extractGenericExpectationFromCapture(standardHttpItem); // moderate default
+    const json = genericExpectationToJsonObject(draft);
+
+    const httpRequest = json['httpRequest'] as Record<string, unknown>;
+    const httpResponse = json['httpResponse'] as Record<string, unknown>;
+
+    // Request matcher: method + path always; query + body at moderate; no headers (exact-only).
+    expect(httpRequest['method']).toBe('POST');
+    expect(httpRequest['path']).toBe('/api/orders');
+    expect(httpRequest['queryStringParameters']).toEqual([{ name: 'dry', values: ['true'] }]);
+    expect(httpRequest['body']).toBe('{"sku":"A1","qty":2}');
+    expect(httpRequest['headers']).toBeUndefined();
+
+    // Response carries the recorded status, body and significant headers.
+    expect(httpResponse['statusCode']).toBe(201);
+    expect(httpResponse['body']).toBe('{"id":7,"status":"created"}');
+    expect(httpResponse['headers']).toEqual([{ name: 'Content-Type', values: ['application/json'] }]);
+  });
+
+  it('loose precision yields a minimal method+path-only matcher', () => {
+    const draft = extractGenericExpectationFromCapture(standardHttpItem, 'loose');
+    const httpRequest = genericExpectationToJsonObject(draft)['httpRequest'] as Record<string, unknown>;
+
+    expect(httpRequest['method']).toBe('POST');
+    expect(httpRequest['path']).toBe('/api/orders');
+    // Nothing else is bound at loose precision.
+    expect(httpRequest['queryStringParameters']).toBeUndefined();
+    expect(httpRequest['body']).toBeUndefined();
+    expect(httpRequest['headers']).toBeUndefined();
+  });
+
+  it('exact precision additionally binds the significant request headers', () => {
+    const draft = extractGenericExpectationFromCapture(standardHttpItem, 'exact');
+    const httpRequest = genericExpectationToJsonObject(draft)['httpRequest'] as Record<string, unknown>;
+
+    // Host is filtered as a hop-by-hop/infra header; Content-Type survives.
+    expect(httpRequest['headers']).toEqual([{ name: 'Content-Type', values: ['application/json'] }]);
   });
 });

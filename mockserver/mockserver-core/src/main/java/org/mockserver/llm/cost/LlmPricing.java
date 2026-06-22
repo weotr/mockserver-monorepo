@@ -14,13 +14,16 @@ import java.util.Map;
  * input/output rates in USD per million tokens. Returns {@code null} for an
  * unknown model so callers can distinguish "free/known-zero" from "unpriceable".
  *
- * <p><strong>Kept in sync with the dashboard pricing table</strong>
- * {@code mockserver-ui/src/lib/llmPricing.ts} — the prefixes, ordering, and
- * rates here mirror that file. When refreshing rates, update both.
+ * <p><strong>Companion dashboard pricing table</strong>
+ * {@code mockserver-ui/src/lib/llmPricing.ts} maintains a parallel (and
+ * possibly-lagging) table with the same prefix-walk semantics. There is no
+ * automated drift check between the two — keep them aligned when refreshing
+ * rates. This table currently carries newer model families that the UI table
+ * has not yet been updated with.
  *
  * <p><strong>Pricing source / freshness:</strong> rates are public provider
- * list prices captured 2025-Q4. They WILL drift — treat any total as an
- * estimate, not an invoice. There is no automated drift check. Sources:
+ * list prices captured 2026-06 (newer families) / 2025-Q4 (original entries).
+ * They WILL drift — treat any total as an estimate, not an invoice. Sources:
  * Anthropic (anthropic.com/pricing), OpenAI (openai.com/api/pricing),
  * Gemini (ai.google.dev/pricing).
  */
@@ -50,18 +53,51 @@ public final class LlmPricing {
     // MORE-SPECIFIC PREFIXES MUST COME FIRST (e.g. gpt-4o-mini before gpt-4o,
     // otherwise every gpt-4o-mini model would silently bill at gpt-4o's rate).
     private static final List<Map.Entry<String, PricingEntry>> ANTHROPIC_PRICING = Arrays.asList(
+        // Current Claude families (public list prices, anthropic.com/pricing, captured
+        // 2026-06). More-specific dotted prefixes (claude-opus-4-8) come before the
+        // generic claude-opus-4 so they win the prefix walk.
+        entry("claude-fable-5", new PricingEntry(10.0, 50.0)),
+        entry("claude-opus-4-8", new PricingEntry(5.0, 25.0)),
+        entry("claude-opus-4-7", new PricingEntry(5.0, 25.0)),
+        entry("claude-opus-4-6", new PricingEntry(5.0, 25.0)),
+        entry("claude-opus-4-5", new PricingEntry(5.0, 25.0)),
+        entry("claude-sonnet-4-6", new PricingEntry(3.0, 15.0)),
+        entry("claude-sonnet-4-5", new PricingEntry(3.0, 15.0)),
+        entry("claude-haiku-4-5", new PricingEntry(1.0, 5.0)),
+        // Original Claude 4.0/4.1 families (claude-opus-4-0/4-1, claude-sonnet-4-0).
         entry("claude-opus-4", new PricingEntry(15.0, 75.0)),
         entry("claude-sonnet-4", new PricingEntry(3.0, 15.0)),
         entry("claude-haiku-4", new PricingEntry(0.8, 4.0))
     );
 
     private static final List<Map.Entry<String, PricingEntry>> OPENAI_PRICING = Arrays.asList(
+        // gpt-4o-mini before gpt-4o (prefix walk). gpt-4.1 family: list prices
+        // captured 2026-06 (openai.com/api/pricing).
         entry("gpt-4o-mini", new PricingEntry(0.15, 0.6)),
         entry("gpt-4o", new PricingEntry(2.5, 10.0)),
-        entry("o3", new PricingEntry(15.0, 60.0))
+        entry("gpt-4.1-mini", new PricingEntry(0.4, 1.6)),
+        entry("gpt-4.1-nano", new PricingEntry(0.1, 0.4)),
+        entry("gpt-4.1", new PricingEntry(2.0, 8.0)),
+        // o-series reasoning models. o4-mini / o3-mini before o3 in the walk.
+        entry("o4-mini", new PricingEntry(1.1, 4.4)),
+        entry("o3-mini", new PricingEntry(1.1, 4.4)),
+        entry("o3", new PricingEntry(15.0, 60.0)),
+        // APPROXIMATE: gpt-5* prices are NOT verified here — mapped to the nearest
+        // known tier (gpt-4o flagship / gpt-4o-mini cheap tier) as a placeholder so a
+        // recognised model resolves to SOMETHING rather than null. Confirm against the
+        // provider price list before relying on these figures.
+        entry("gpt-5-mini", new PricingEntry(0.15, 0.6)),   // ~gpt-4o-mini tier (approx, TBC)
+        entry("gpt-5-nano", new PricingEntry(0.15, 0.6)),   // ~gpt-4o-mini tier (approx, TBC)
+        entry("gpt-5", new PricingEntry(2.5, 10.0))         // ~gpt-4o flagship tier (approx, TBC)
     );
 
     private static final List<Map.Entry<String, PricingEntry>> GEMINI_PRICING = Arrays.asList(
+        // gemini-2.5 families: list prices captured 2026-06 (ai.google.dev/pricing).
+        // More-specific 2.5-flash-lite before 2.5-flash before 2.5-pro in the walk.
+        entry("gemini-2.5-flash-lite", new PricingEntry(0.1, 0.4)),
+        entry("gemini-2.5-flash", new PricingEntry(0.3, 2.5)),
+        entry("gemini-2.5-pro", new PricingEntry(1.25, 10.0)),
+        entry("gemini-2.0-flash-lite", new PricingEntry(0.075, 0.3)),
         entry("gemini-2.0-flash", new PricingEntry(0.1, 0.4))
     );
 

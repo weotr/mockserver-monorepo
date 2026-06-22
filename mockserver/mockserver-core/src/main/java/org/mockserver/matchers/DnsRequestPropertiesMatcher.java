@@ -45,7 +45,7 @@ public class DnsRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
         if (requestDefinition instanceof DnsRequestDefinition) {
             DnsRequestDefinition request = (DnsRequestDefinition) requestDefinition;
             boolean overallMatch = matchesDns(context, request);
-            if (!controlPlaneMatcher) {
+            if (!controlPlaneMatcher && (context == null || !context.isSuppressMatchResultLogging())) {
                 if (overallMatch) {
                     if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
                         mockServerLogger.logEvent(

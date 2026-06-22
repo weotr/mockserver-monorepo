@@ -28,6 +28,8 @@ export type StandardActionType =
   | 'forward_class_callback'
   | 'grpc_stream';
 
+export type JsonMatchType = 'ONLY_MATCHING_FIELDS' | 'STRICT';
+
 export interface StandardMatcher {
   id: string;
   method: string;
@@ -40,6 +42,10 @@ export interface StandardMatcher {
   bodyBinary: boolean;
   bodyMatcherType: BodyMatcherType;
   graphqlOptions?: GraphQLMatcherOptions;
+  /** When bodyMatcherType is 'json', the JSON match semantics. ONLY_MATCHING_FIELDS (default) is omitted from the payload. */
+  jsonMatchType?: JsonMatchType;
+  /** When bodyMatcherType is 'string', whether to use subString matching. */
+  bodySubString?: boolean;
   secure: boolean;
   priority: number;
   times: number;
@@ -79,10 +85,25 @@ export interface StandardStaticState {
   statusCode: number;
   body: string;
   contentType: string;
+  /** When true the response body is served from a file (a FILE body) rather than the inline `body`. */
+  bodyFromFile?: boolean;
+  /** Path to the response body file (classpath or filesystem), used when `bodyFromFile` is true. */
+  filePath?: string;
+  /** Optional template engine applied to the body file's contents against the request.
+   *  Empty = serve the file verbatim. Only the text engines (MUSTACHE/VELOCITY) are supported. */
+  fileTemplateType?: '' | 'MUSTACHE' | 'VELOCITY';
   /** Additional response headers as "Name: value" lines, beyond Content-Type. */
   headers?: string;
   /** Connection-level response controls (keep-alive, close socket, Content-Length override, …). */
   connectionOptions?: StandardConnectionOptions;
+  /** Custom HTTP reason phrase (e.g. "Not Found"). Omitted when empty. */
+  reasonPhrase?: string;
+  /** Response cookies as "name=value" lines (one per line). Omitted when empty. */
+  cookies?: string;
+  /** Pre-response delay value. 0 = no delay (omitted). */
+  delayValue?: number;
+  /** Pre-response delay time unit. */
+  delayUnit?: 'MILLISECONDS' | 'SECONDS' | 'MINUTES';
 }
 
 /** Build the connectionOptions JSON object, or undefined when nothing is set. */
@@ -120,6 +141,9 @@ export interface StandardCallbackState {
 export interface StandardTemplateState {
   templateType: 'VELOCITY' | 'JAVASCRIPT' | 'MUSTACHE';
   template: string;
+  /** Optional path to a file holding the template (classpath or filesystem). When set and the
+   *  inline template is empty, the template is loaded from this file. Inline template wins. */
+  templateFile?: string;
 }
 
 export interface StandardErrorState {
@@ -133,6 +157,7 @@ export type SelectionSetMatchType = 'NORMALISED_STRING' | 'AST_EXACT' | 'AST_SUB
 
 export type BodyMatcherType =
   | 'string'
+  | 'json'
   | 'graphql'
   | 'binary'
   | 'json-schema'
@@ -141,7 +166,8 @@ export type BodyMatcherType =
   | 'xml-schema'
   | 'xpath'
   | 'regex'
-  | 'parameters';
+  | 'parameters'
+  | 'wasm';
 
 export interface GraphQLMatcherOptions {
   selectionSetMatchType: SelectionSetMatchType;
@@ -221,6 +247,9 @@ export interface StandardDnsState {
 export interface StandardForwardTemplateState {
   templateType: 'VELOCITY' | 'JAVASCRIPT' | 'MUSTACHE';
   template: string;
+  /** Optional path to a file holding the template (classpath or filesystem). When set and the
+   *  inline template is empty, the template is loaded from this file. Inline template wins. */
+  templateFile?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +301,50 @@ export interface StandardSideEffectAction {
   failurePolicy: SideEffectFailurePolicy;
 }
 
+// ---------------------------------------------------------------------------
+// Capture rules — extract a value from the matched request into scenario state.
+// Each rule reads one request value (via a source-specific expression) and
+// stores it under `into` so response templates can read it via the `scenario`
+// helper. The wire shape is an array under the top-level `capture` key, omitted
+// entirely when empty (backward compatible).
+// ---------------------------------------------------------------------------
+
+export type CaptureSource =
+  | 'jsonPath'
+  | 'xpath'
+  | 'header'
+  | 'queryStringParameter'
+  | 'cookie'
+  | 'pathParameter';
+
+/** Human-readable labels for capture sources. */
+export const CAPTURE_SOURCE_LABELS: Record<CaptureSource, string> = {
+  jsonPath: 'JSON path (body)',
+  xpath: 'XPath (body)',
+  header: 'Header',
+  queryStringParameter: 'Query parameter',
+  cookie: 'Cookie',
+  pathParameter: 'Path parameter',
+};
+
+/** All capture sources exposed in the UI, in display order. */
+export const CAPTURE_SOURCES: CaptureSource[] = [
+  'jsonPath',
+  'xpath',
+  'header',
+  'queryStringParameter',
+  'cookie',
+  'pathParameter',
+];
+
+export interface StandardCaptureRule {
+  source: CaptureSource;
+  /** The source-specific expression (a JSON path, XPath, header name, etc.). */
+  expression: string;
+  /** The scenario-state key the captured value is stored under. */
+  into: string;
+}
+
 /**
  * Draft state for the HTTP chaos profile panel. Maps 1:1 to the seven
  * HttpChaosProfile fields. `undefined` means "not set / omit from JSON".
@@ -285,6 +358,31 @@ export interface StandardChaosDraft {
   seed?: number;
   succeedFirst?: number;
   failRequestCount?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Standard chaos range validation — bounds verified against server source:
+//   HttpChaosProfile.java: errorStatus 100–599, errorProbability 0.0–1.0
+// ---------------------------------------------------------------------------
+
+/** Returns an error hint when errorStatus is outside the server's accepted range (100–599). */
+export function standardChaosErrorStatusError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (!Number.isInteger(v) || v < 100 || v > 599) return '100–599';
+  return undefined;
+}
+
+/** Returns an error hint when errorProbability is outside 0.0–1.0. */
+export function standardChaosErrorProbabilityError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (!Number.isFinite(v) || v < 0 || v > 1) return '0.0–1.0';
+  return undefined;
+}
+
+/** Returns true when the standard chaos draft has any range error the server would reject. */
+export function hasStandardChaosRangeErrors(chaos: StandardChaosDraft): boolean {
+  return !!standardChaosErrorStatusError(chaos.errorStatus) ||
+    !!standardChaosErrorProbabilityError(chaos.errorProbability);
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +480,9 @@ export interface StandardActionPayload {
   /** When present, the expectation uses the `steps` pipeline instead of a
    *  top-level action + before/after side-effects. */
   steps?: StandardExpectationStep[];
+  /** Capture rules — extract request values into scenario state. Omitted from
+   *  the payload when empty (backward compatible). */
+  capture?: StandardCaptureRule[];
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +509,7 @@ export function parseKeyValueLines(
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-function escapeJava(s: string): string {
+export function escapeJava(s: string): string {
   return s
     .replace(/\\/g, '\\\\')
     .replace(/"/g, '\\"')
@@ -509,6 +610,14 @@ export function buildExpectationJson(
           if (fields.length > 0) gqlBody['fields'] = fields;
         }
         httpRequest['body'] = gqlBody;
+      } else if (matcher.bodyMatcherType === 'json') {
+        // JSON body matcher — prefer parsed JSON for the json field when valid
+        const trimmed = matcher.body.trim();
+        let jsonValue: unknown;
+        try { jsonValue = JSON.parse(trimmed); } catch { jsonValue = trimmed; }
+        const jsonBody: Record<string, unknown> = { type: 'JSON', json: jsonValue };
+        if (matcher.jsonMatchType === 'STRICT') jsonBody['matchType'] = 'STRICT';
+        httpRequest['body'] = jsonBody;
       } else if (matcher.bodyMatcherType === 'json-schema') {
         httpRequest['body'] = { type: 'JSON_SCHEMA', jsonSchema: matcher.body.trim() };
       } else if (matcher.bodyMatcherType === 'json-path') {
@@ -524,8 +633,15 @@ export function buildExpectationJson(
       } else if (matcher.bodyMatcherType === 'parameters') {
         const params = parseKeyValueLines(matcher.body, '=');
         httpRequest['body'] = { type: 'PARAMETERS', parameters: params ?? {} };
+      } else if (matcher.bodyMatcherType === 'wasm') {
+        httpRequest['body'] = { type: 'WASM', moduleName: matcher.body.trim() };
       } else {
-        httpRequest['body'] = matcher.body;
+        // Default 'string' type — optionally with subString
+        if (matcher.bodySubString) {
+          httpRequest['body'] = { type: 'STRING', string: matcher.body, subString: true };
+        } else {
+          httpRequest['body'] = matcher.body;
+        }
       }
     }
     if (matcher.secure) httpRequest['secure'] = true;
@@ -537,7 +653,17 @@ export function buildExpectationJson(
     case 'static':
       if (action.static) {
         const payload: Record<string, unknown> = { statusCode: action.static.statusCode };
-        if (action.static.body) payload['body'] = action.static.body;
+        const fromFile = action.static.bodyFromFile && !!action.static.filePath?.trim();
+        if (fromFile) {
+          // Serve the body from a file. When a template engine is selected the file is rendered
+          // as a template against the request; the content type is carried on the FILE body itself.
+          const fileBody: Record<string, unknown> = { type: 'FILE', filePath: action.static.filePath!.trim() };
+          if (action.static.fileTemplateType) fileBody['templateType'] = action.static.fileTemplateType;
+          if (action.static.contentType) fileBody['contentType'] = action.static.contentType;
+          payload['body'] = fileBody;
+        } else if (action.static.body) {
+          payload['body'] = action.static.body;
+        }
         const staticHeaders: Record<string, string[]> = {};
         const extraHeaders = parseKeyValueLines(action.static.headers ?? '', ':');
         if (extraHeaders) {
@@ -548,7 +674,8 @@ export function buildExpectationJson(
             staticHeaders[k] = vs;
           }
         }
-        if (action.static.contentType) {
+        // For a FILE body the content type lives on the body object, so it is not also emitted as a header.
+        if (action.static.contentType && !fromFile) {
           staticHeaders['content-type'] = [action.static.contentType];
         }
         if (Object.keys(staticHeaders).length > 0) {
@@ -556,6 +683,26 @@ export function buildExpectationJson(
         }
         const connectionOptions = buildConnectionOptionsJson(action.static.connectionOptions);
         if (connectionOptions) payload['connectionOptions'] = connectionOptions;
+        // reasonPhrase — only emit when non-empty
+        if (action.static.reasonPhrase?.trim()) {
+          payload['reasonPhrase'] = action.static.reasonPhrase.trim();
+        }
+        // response cookies — name=value lines → { name: value, ... }
+        if (action.static.cookies?.trim()) {
+          const cookiePairs = parseKeyValueLines(action.static.cookies, '=');
+          if (cookiePairs) {
+            const flat: Record<string, string> = {};
+            for (const [k, vs] of Object.entries(cookiePairs)) flat[k] = vs[0] ?? '';
+            payload['cookies'] = flat;
+          }
+        }
+        // delay — only emit when > 0
+        if (action.static.delayValue != null && action.static.delayValue > 0 && isFinite(action.static.delayValue)) {
+          payload['delay'] = {
+            timeUnit: action.static.delayUnit ?? 'MILLISECONDS',
+            value: action.static.delayValue,
+          };
+        }
         out['httpResponse'] = payload;
       }
       break;
@@ -592,10 +739,16 @@ export function buildExpectationJson(
       break;
     case 'template':
       if (action.template) {
-        out['httpResponseTemplate'] = {
-          templateType: action.template.templateType,
-          template: action.template.template,
-        };
+        const tpl: Record<string, unknown> = { templateType: action.template.templateType };
+        const tplFile = action.template.templateFile?.trim();
+        if (tplFile) {
+          tpl['templateFile'] = tplFile;
+          // inline template still wins on the server, so only include it when the user typed one
+          if (action.template.template.trim()) tpl['template'] = action.template.template;
+        } else {
+          tpl['template'] = action.template.template;
+        }
+        out['httpResponseTemplate'] = tpl;
       }
       break;
     case 'error':
@@ -702,10 +855,15 @@ export function buildExpectationJson(
       break;
     case 'forward_template':
       if (action.forwardTemplate) {
-        out['httpForwardTemplate'] = {
-          templateType: action.forwardTemplate.templateType,
-          template: action.forwardTemplate.template,
-        };
+        const ftpl: Record<string, unknown> = { templateType: action.forwardTemplate.templateType };
+        const ftplFile = action.forwardTemplate.templateFile?.trim();
+        if (ftplFile) {
+          ftpl['templateFile'] = ftplFile;
+          if (action.forwardTemplate.template.trim()) ftpl['template'] = action.forwardTemplate.template;
+        } else {
+          ftpl['template'] = action.forwardTemplate.template;
+        }
+        out['httpForwardTemplate'] = ftpl;
       }
       break;
     case 'forward_class_callback':
@@ -777,6 +935,21 @@ export function buildExpectationJson(
     out['steps'] = action.steps.map(buildExpectationStepJson);
   }
 
+  // Capture rules — top-level sibling of httpRequest / httpResponse. Each rule
+  // needs a non-empty expression and target key to be meaningful; blank rows are
+  // dropped so the panel can keep placeholder rows without emitting them. The key
+  // is omitted entirely when nothing survives (backward compatible).
+  if (action.capture && action.capture.length > 0) {
+    const captureRules = action.capture
+      .filter((c) => c.expression.trim() && c.into.trim())
+      .map((c) => ({
+        source: c.source,
+        expression: c.expression.trim(),
+        into: c.into.trim(),
+      }));
+    if (captureRules.length > 0) out['capture'] = captureRules;
+  }
+
   if (matcher.id.trim()) out['id'] = matcher.id.trim();
   if (matcher.priority !== 0) out['priority'] = matcher.priority;
   if (matcher.times > 0) {
@@ -832,6 +1005,30 @@ export function chaosFromExpectation(value: Record<string, unknown>): StandardCh
   if (typeof c['failRequestCount'] === 'number') draft.failRequestCount = c['failRequestCount'] as number;
   // Only return if at least one field was populated
   return Object.keys(draft).length > 0 ? draft : undefined;
+}
+
+/**
+ * Round-trip: parse a top-level `capture` array from an existing expectation
+ * back into `StandardCaptureRule[]` for repopulating the composer. Returns
+ * `undefined` when there is no usable capture array, so the caller can leave the
+ * panel collapsed.
+ */
+export function captureFromExpectation(value: Record<string, unknown>): StandardCaptureRule[] | undefined {
+  const raw = value['capture'];
+  if (!Array.isArray(raw)) return undefined;
+  const validSources = new Set<string>(CAPTURE_SOURCES);
+  const result: StandardCaptureRule[] = [];
+  for (const entry of raw as unknown[]) {
+    if (!entry || typeof entry !== 'object') continue;
+    const c = entry as Record<string, unknown>;
+    const source = typeof c['source'] === 'string' && validSources.has(c['source'])
+      ? (c['source'] as CaptureSource)
+      : 'jsonPath';
+    const expression = typeof c['expression'] === 'string' ? (c['expression'] as string) : '';
+    const into = typeof c['into'] === 'string' ? (c['into'] as string) : '';
+    result.push({ source, expression, into });
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,12 +1344,38 @@ function matcherToJava(matcher: StandardMatcher): string {
           .join(', ');
         lines.push(`    .withBody(params(${paramEntries}))`);
       }
+    } else if (matcher.bodyMatcherType === 'json') {
+      if (matcher.jsonMatchType === 'STRICT') {
+        lines.push(`    .withBody(json("${escapeJava(matcher.body.trim())}", MatchType.STRICT))`);
+      } else {
+        lines.push(`    .withBody(json("${escapeJava(matcher.body.trim())}"))`);
+      }
+    } else if (matcher.bodyMatcherType === 'wasm') {
+      lines.push(`    .withBody(WasmBody.wasmBody("${escapeJava(matcher.body.trim())}"))`);
     } else {
-      lines.push(`    .withBody("${escapeJava(matcher.body)}")`);
+      // Default 'string' type — optionally with subString
+      if (matcher.bodySubString) {
+        lines.push(`    .withBody(subString("${escapeJava(matcher.body)}"))`);
+      } else {
+        lines.push(`    .withBody("${escapeJava(matcher.body)}")`);
+      }
     }
   }
   if (matcher.secure) lines.push('    .withSecure(true)');
   return lines.join('\n');
+}
+
+/** Builds the Java `template(...)` expression, appending `.withTemplateFile(...)` when a file is set.
+ *  When only a file is set the no-template builder `template(TemplateType.X)` is used. */
+function templateJavaExpr(templateType: string, template: string, templateFile?: string): string {
+  const tf = templateFile?.trim();
+  if (tf && !template.trim()) {
+    return `template(TemplateType.${templateType})\n        .withTemplateFile("${escapeJava(tf)}")`;
+  }
+  if (tf) {
+    return `template(TemplateType.${templateType}, "${escapeJava(template)}")\n        .withTemplateFile("${escapeJava(tf)}")`;
+  }
+  return `template(TemplateType.${templateType}, "${escapeJava(template)}")`;
 }
 
 function actionToJava(action: StandardActionPayload): string {
@@ -1160,10 +1383,13 @@ function actionToJava(action: StandardActionPayload): string {
     case 'static': {
       const s = action.static;
       if (!s) return '.respond(response())';
+      const fromFile = !!s.bodyFromFile && !!s.filePath?.trim();
       const lines = ['.respond('];
       lines.push('    response()');
       lines.push(`        .withStatusCode(${s.statusCode})`);
-      if (s.contentType) lines.push(`        .withHeader("Content-Type", "${escapeJava(s.contentType)}")`);
+      if (s.reasonPhrase?.trim()) lines.push(`        .withReasonPhrase("${escapeJava(s.reasonPhrase.trim())}")`);
+      // For a FILE body the content type is carried on the body itself, not emitted as a header.
+      if (s.contentType && !fromFile) lines.push(`        .withHeader("Content-Type", "${escapeJava(s.contentType)}")`);
       const staticHeaders = parseKeyValueLines(s.headers ?? '', ':');
       if (staticHeaders) {
         for (const [k, vs] of Object.entries(staticHeaders)) {
@@ -1172,7 +1398,33 @@ function actionToJava(action: StandardActionPayload): string {
           lines.push(`        .withHeader("${escapeJava(k)}", ${values})`);
         }
       }
-      if (s.body) lines.push(`        .withBody("${escapeJava(s.body)}")`);
+      // Response cookies — one .withCookie() call per name=value
+      if (s.cookies?.trim()) {
+        const cookiePairs = parseKeyValueLines(s.cookies, '=');
+        if (cookiePairs) {
+          for (const [k, vs] of Object.entries(cookiePairs)) {
+            lines.push(`        .withCookie("${escapeJava(k)}", "${escapeJava(vs[0] ?? '')}")`);
+          }
+        }
+      }
+      if (fromFile) {
+        const path = `"${escapeJava(s.filePath!.trim())}"`;
+        if (s.fileTemplateType && s.contentType) {
+          lines.push(`        .withBody(file(${path}, MediaType.parse("${escapeJava(s.contentType)}"), TemplateType.${s.fileTemplateType}))`);
+        } else if (s.fileTemplateType) {
+          lines.push(`        .withBody(file(${path}, TemplateType.${s.fileTemplateType}))`);
+        } else if (s.contentType) {
+          lines.push(`        .withBody(file(${path}, MediaType.parse("${escapeJava(s.contentType)}")))`);
+        } else {
+          lines.push(`        .withBody(file(${path}))`);
+        }
+      } else if (s.body) {
+        lines.push(`        .withBody("${escapeJava(s.body)}")`);
+      }
+      // Delay — withDelay(TimeUnit, long)
+      if (s.delayValue != null && s.delayValue > 0 && isFinite(s.delayValue)) {
+        lines.push(`        .withDelay(TimeUnit.${s.delayUnit ?? 'MILLISECONDS'}, ${s.delayValue})`);
+      }
       const co = s.connectionOptions;
       if (buildConnectionOptionsJson(co) && co) {
         const coParts: string[] = ['connectionOptions()'];
@@ -1204,29 +1456,34 @@ function actionToJava(action: StandardActionPayload): string {
     case 'forward_override': {
       const o = action.forwardOverride;
       if (!o) return '.forward(forwardOverriddenRequest(request()))';
-      const overrideLines = ['request()'];
-      if (o.overrideMethod) overrideLines.push(`        .withMethod("${escapeJava(o.overrideMethod)}")`);
-      if (o.overridePath) overrideLines.push(`        .withPath("${escapeJava(o.overridePath)}")`);
-      if (o.overrideHost) overrideLines.push(`        .withHeader("Host", "${escapeJava(o.overrideHost)}")`);
-      if (o.overrideScheme) overrideLines.push(`        .withSecure(${o.overrideScheme === 'HTTPS'})`);
+      // Collect the builder calls without indentation, then indent each line
+      // uniformly when assembling. (Pre-indenting here and joining with a second
+      // indent — as an earlier version did — double-indented every line and left
+      // the leading `request()` at column 0.)
+      const overrideCalls: string[] = [];
+      if (o.overrideMethod) overrideCalls.push(`.withMethod("${escapeJava(o.overrideMethod)}")`);
+      if (o.overridePath) overrideCalls.push(`.withPath("${escapeJava(o.overridePath)}")`);
+      if (o.overrideHost) overrideCalls.push(`.withHeader("Host", "${escapeJava(o.overrideHost)}")`);
+      if (o.overrideScheme) overrideCalls.push(`.withSecure(${o.overrideScheme === 'HTTPS'})`);
       const overrideHeaders = parseKeyValueLines(o.overrideHeaders, ':');
       if (overrideHeaders) {
         for (const [k, vs] of Object.entries(overrideHeaders)) {
-          for (const v of vs) overrideLines.push(`        .withHeader("${escapeJava(k)}", "${escapeJava(v)}")`);
+          for (const v of vs) overrideCalls.push(`.withHeader("${escapeJava(k)}", "${escapeJava(v)}")`);
         }
       }
       const overrideQuery = parseKeyValueLines(o.overrideQueryString, '=');
       if (overrideQuery) {
         for (const [k, vs] of Object.entries(overrideQuery)) {
           const values = vs.map((v) => `"${escapeJava(v)}"`).join(', ');
-          overrideLines.push(`        .withQueryStringParameter("${escapeJava(k)}", ${values})`);
+          overrideCalls.push(`.withQueryStringParameter("${escapeJava(k)}", ${values})`);
         }
       }
-      if (o.overrideBody) overrideLines.push(`        .withBody("${escapeJava(o.overrideBody)}")`);
+      if (o.overrideBody) overrideCalls.push(`.withBody("${escapeJava(o.overrideBody)}")`);
       return [
         '.forward(',
         '    forwardOverriddenRequest(',
-        overrideLines.join('\n            '),
+        '      request()',
+        ...overrideCalls.map((c) => `        ${c}`),
         '    )',
         ')',
       ].join('\n');
@@ -1246,7 +1503,7 @@ function actionToJava(action: StandardActionPayload): string {
       if (!t) return '.respond(template(TemplateType.VELOCITY, ""))';
       return [
         '.respond(',
-        `    template(TemplateType.${t.templateType}, "${escapeJava(t.template)}")`,
+        '    ' + templateJavaExpr(t.templateType, t.template, t.templateFile),
         ')',
       ].join('\n');
     }
@@ -1350,7 +1607,7 @@ function actionToJava(action: StandardActionPayload): string {
       if (!ft) return '.forward(template(TemplateType.VELOCITY, ""))';
       return [
         '.forward(',
-        `    template(TemplateType.${ft.templateType}, "${escapeJava(ft.template)}")`,
+        '    ' + templateJavaExpr(ft.templateType, ft.template, ft.templateFile),
         ')',
       ].join('\n');
     }
@@ -1383,7 +1640,16 @@ function actionToJava(action: StandardActionPayload): string {
       lines.push(')');
       return lines.join('\n');
     }
+    default:
+      // Exhaustiveness guard: if a new StandardActionType is added without a
+      // case above, `action.type` is no longer `never` here and this fails to
+      // compile — preventing a silent `undefined` from leaking into the Java.
+      return assertNever(action.type);
   }
+}
+
+function assertNever(x: never): never {
+  throw new Error(`Unhandled standard action type: ${JSON.stringify(x)}`);
 }
 
 function chaosToJava(chaos: StandardChaosDraft): string {
@@ -1449,6 +1715,15 @@ function collectJavaImports(
       } else if (matcher.bodyMatcherType === 'parameters') {
         imp.add('import static org.mockserver.model.ParameterBody.params;');
         imp.add('import static org.mockserver.model.Parameter.param;');
+      } else if (matcher.bodyMatcherType === 'json') {
+        imp.add('import static org.mockserver.model.JsonBody.json;');
+        if (matcher.jsonMatchType === 'STRICT') {
+          imp.add('import org.mockserver.matchers.MatchType;');
+        }
+      } else if (matcher.bodyMatcherType === 'wasm') {
+        imp.add('import org.mockserver.model.WasmBody;');
+      } else if (matcher.bodySubString) {
+        imp.add('import static org.mockserver.model.StringBody.subString;');
       }
     }
   }
@@ -1457,8 +1732,16 @@ function collectJavaImports(
   switch (action.type) {
     case 'static':
       imp.add('import static org.mockserver.model.HttpResponse.response;');
+      if (action.static?.bodyFromFile && action.static.filePath?.trim()) {
+        imp.add('import static org.mockserver.model.FileBody.file;');
+        if (action.static.contentType) imp.add('import org.mockserver.model.MediaType;');
+        if (action.static.fileTemplateType) imp.add('import org.mockserver.model.HttpTemplate.TemplateType;');
+      }
       if (buildConnectionOptionsJson(action.static?.connectionOptions)) {
         imp.add('import static org.mockserver.model.ConnectionOptions.connectionOptions;');
+      }
+      if (action.static?.delayValue != null && action.static.delayValue > 0) {
+        imp.add('import java.util.concurrent.TimeUnit;');
       }
       break;
     case 'forward':
@@ -1593,11 +1876,12 @@ function sideEffectToJava(se: StandardSideEffectAction): string {
   const factoryMethod = isBefore ? 'beforeAction' : 'afterAction';
   const lines: string[] = [];
   lines.push(`${factoryMethod}()`);
-  lines.push(`        .withHttpRequest(request()`);
-  if (se.method.trim()) lines.push(`            .withMethod("${escapeJava(se.method.trim())}")`);
-  lines.push(`            .withPath("${escapeJava(se.path)}")`);
-  if (se.host.trim()) lines.push(`            .withHeader("Host", "${escapeJava(se.host.trim())}")`);
-  if (se.body.trim()) lines.push(`            .withBody("${escapeJava(se.body.trim())}")`);
+  lines.push(`        .withHttpRequest(`);
+  lines.push(`            request()`);
+  if (se.method.trim()) lines.push(`                .withMethod("${escapeJava(se.method.trim())}")`);
+  lines.push(`                .withPath("${escapeJava(se.path)}")`);
+  if (se.host.trim()) lines.push(`                .withHeader("Host", "${escapeJava(se.host.trim())}")`);
+  if (se.body.trim()) lines.push(`                .withBody("${escapeJava(se.body.trim())}")`);
   lines.push('        )');
   if (se.delayValue > 0) {
     lines.push(`        .withDelay(new Delay(TimeUnit.${se.delayUnit}, ${se.delayValue}))`);
@@ -1683,8 +1967,16 @@ export function standardToJava(matcher: StandardMatcher, action: StandardActionP
     lines.push('    ' + sideEffectToJava(se).split('\n').join('\n    '));
     lines.push('  )');
   }
-  lines.push('  ' + actionToJava(action).split('\n').join('\n  '));
-  lines.push(';');
+  // Emit the terminal action. actionToJava bundles the call (.respond(/.forward(/.error(...) with
+  // its argument indented 4 spaces; dedent the inner argument lines by 2 so that, after the 2-space
+  // wrapper that nests the call under mockServerClient, the argument aligns at the same depth (4
+  // spaces) as the matcher inside .when( ... ) — keeping request() and response()/template() flush.
+  const actionLines = actionToJava(action).split('\n');
+  const alignedAction = actionLines
+    .map((ln, i) => (i === 0 || i === actionLines.length - 1 ? ln : ln.replace(/^ {2}/, '')))
+    .map((ln) => '  ' + ln)
+    .join('\n');
+  lines.push(alignedAction + ';');
   return lines.join('\n');
 }
 
@@ -1701,4 +1993,173 @@ export function standardToCurl(
   // Single-quote the JSON payload; escape any embedded single quotes for shell.
   const safe = json.replace(/'/g, `'\\''`);
   return `curl -X PUT '${baseUrl}/mockserver/expectation' \\\n  -H 'Content-Type: application/json' \\\n  -d '${safe}'`;
+}
+
+// ---------------------------------------------------------------------------
+// Client-library codegen — Node, Python, Go, C# (native client APIs)
+//
+// Every MockServer client ultimately registers the same expectation JSON that
+// the JSON tab shows. Rather than reimplement each language's fluent builder
+// matrix, these generators hydrate the expectation from that JSON via each
+// client's native facility and register it through the native client.
+//
+// Fidelity note: the Node client is JSON-native (mockAnyResponse takes the raw
+// object), so it represents EVERY field faithfully regardless of client version.
+// Python/Go/C# hydrate into typed model objects, so a field the installed client
+// version's model does not yet declare (e.g. a newly added one) is dropped on
+// hydration — the JSON tab remains the authoritative, lossless source.
+// ---------------------------------------------------------------------------
+
+export function clientHostPort(baseUrl: string): { host: string; port: number } {
+  try {
+    const u = new URL(baseUrl);
+    return {
+      host: u.hostname || 'localhost',
+      port: u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 1080),
+    };
+  } catch {
+    return { host: 'localhost', port: 1080 };
+  }
+}
+
+/** Re-indents every line of `block` after the first by `pad` spaces (the first line is already
+ *  positioned by the caller). */
+export function indentAfterFirst(block: string, pad: number): string {
+  return block.split('\n').join('\n' + ' '.repeat(pad));
+}
+
+/** Renders a JSON-compatible value as a Python literal (true/false/null → True/False/None). */
+export function toPythonLiteral(value: unknown, indent: number): string {
+  const pad = ' '.repeat(indent);
+  const pad2 = ' '.repeat(indent + 4);
+  if (value === null || value === undefined) return 'None';
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    return '[\n' + value.map((v) => pad2 + toPythonLiteral(v, indent + 4)).join(',\n') + '\n' + pad + ']';
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return '{}';
+  return '{\n' + entries.map(([k, v]) => pad2 + JSON.stringify(k) + ': ' + toPythonLiteral(v, indent + 4)).join(',\n') + '\n' + pad + '}';
+}
+
+export function standardToNode(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
+  const { host, port } = clientHostPort(baseUrl);
+  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
+  return [
+    "const { mockServerClient } = require('mockserver-client');",
+    '',
+    `mockServerClient("${host}", ${port})`,
+    `  .mockAnyResponse(${indentAfterFirst(json, 2)})`,
+    '  .then(',
+    '    () => console.log("expectation created"),',
+    '    (error) => console.error(error)',
+    '  );',
+  ].join('\n');
+}
+
+export function standardToPython(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
+  const { host, port } = clientHostPort(baseUrl);
+  const dict = toPythonLiteral(buildExpectationJson(matcher, action), 0);
+  return [
+    'from mockserver import MockServerClient, Expectation',
+    '',
+    `MockServerClient("${host}", ${port}).upsert(`,
+    `    Expectation.from_dict(${indentAfterFirst(dict, 4)})`,
+    ')',
+  ].join('\n');
+}
+
+export function standardToGo(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
+  const { host, port } = clientHostPort(baseUrl);
+  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
+  // A Go raw string literal cannot contain a backtick; if the JSON has one (e.g. a path/body
+  // value), break out of the raw string and concatenate a quoted backtick — the standard idiom.
+  const goRaw = json.replace(/`/g, '` + "`" + `');
+  return [
+    'package main',
+    '',
+    'import (',
+    '\t"encoding/json"',
+    '',
+    '\tmockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"',
+    ')',
+    '',
+    'func main() {',
+    `\tclient := mockserver.New("${host}", ${port})`,
+    '',
+    '\texpectationJSON := `' + goRaw + '`',
+    '\tvar expectation mockserver.Expectation',
+    '\tif err := json.Unmarshal([]byte(expectationJSON), &expectation); err != nil {',
+    '\t\tpanic(err)',
+    '\t}',
+    '\tif _, err := client.Upsert(expectation); err != nil {',
+    '\t\tpanic(err)',
+    '\t}',
+    '}',
+  ].join('\n');
+}
+
+export function standardToCsharp(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
+  const { host, port } = clientHostPort(baseUrl);
+  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
+  // C# verbatim string: escape embedded double quotes by doubling them.
+  const verbatim = json.replace(/"/g, '""');
+  return [
+    'using System.Text.Json;',
+    'using MockServer.Client;',
+    'using MockServer.Client.Models;',
+    '',
+    `using var client = new MockServerClient("${host}", ${port});`,
+    '',
+    `var expectation = JsonSerializer.Deserialize<Expectation>(@"${verbatim}");`,
+    'client.Upsert(expectation!);',
+  ].join('\n');
+}
+
+export function standardToRuby(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
+  const { host, port } = clientHostPort(baseUrl);
+  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
+  // Pass the JSON through JSON.parse via a non-interpolating squiggly heredoc (<<~'JSON'),
+  // which sidesteps all Ruby string-literal escaping. Indent the body so <<~ dedents it.
+  const heredoc = json.split('\n').map((l) => '  ' + l).join('\n');
+  return [
+    "require 'json'",
+    "require 'mockserver-client'",
+    '',
+    `client = MockServer::Client.new('${host}', ${port})`,
+    '',
+    "expectation = <<~'JSON'",
+    heredoc,
+    'JSON',
+    '',
+    'client.upsert(MockServer::Expectation.from_hash(JSON.parse(expectation)))',
+  ].join('\n');
+}
+
+/** Wraps `s` in a Rust raw string literal, using as many `#`s as needed so the content can't
+ *  prematurely terminate it. */
+export function rustRawString(s: string): string {
+  let hashes = '#';
+  while (s.includes('"' + hashes)) hashes += '#';
+  return `r${hashes}"${s}"${hashes}`;
+}
+
+export function standardToRust(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
+  const { host, port } = clientHostPort(baseUrl);
+  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
+  return [
+    '// Cargo.toml: mockserver-client = "7" and serde_json = "1"',
+    'use mockserver_client::{ClientBuilder, Expectation};',
+    '',
+    'fn main() -> mockserver_client::Result<()> {',
+    `    let client = ClientBuilder::new("${host}", ${port}).build()?;`,
+    '',
+    `    let expectation: Expectation = serde_json::from_str(${rustRawString(json)})?;`,
+    '    client.upsert(&[expectation])?;',
+    '    Ok(())',
+    '}',
+  ].join('\n');
 }

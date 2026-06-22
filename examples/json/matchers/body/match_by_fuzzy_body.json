@@ -1,0 +1,14 @@
+{
+  "httpRequest": {
+    "path": "/some/path",
+    "body": {
+      "type": "FUZZY",
+      "fuzzy": "the quick brown fox",
+      "threshold": 0.8,
+      "ignoreCase": true
+    }
+  },
+  "httpResponse": {
+    "body": "some_response_body"
+  }
+}

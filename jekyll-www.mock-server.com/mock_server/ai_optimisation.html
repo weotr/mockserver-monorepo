@@ -1,0 +1,465 @@
+---
+title: Optimising AI / LLM Cost
+shortTitle: LLM Cost Optimisation
+description: Proxy your AI agent's LLM calls through MockServer, then export a one-click optimisation brief (Markdown) or JSON bundle to find ways to cut inference cost — tighter prompts, prompt caching, fewer tool round-trips, and direct HTTP/MCP endpoints.
+layout: page
+pageOrder: 10
+section: 'AI Integration'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-19T12:00:00+00:00
+keywords: llm cost optimisation, ai cost reduction, prompt caching, token reduction, mockserver optimisation, llm proxy, inference cost, agent cost
+---
+
+<p>
+    After proxying your AI agent's LLM calls through MockServer, you can export a
+    structured <strong>optimisation brief</strong> — a pre-framed Markdown document
+    that you paste directly into any LLM to get concrete, costed advice on reducing
+    inference spend. No extra context needed; the brief contains everything the
+    downstream LLM requires to reason about your traffic.
+</p>
+
+<p>
+    MockServer analyses the captured traffic offline, computing six deterministic
+    optimisation signals (repeated system prompts, oversized tool results, deterministic
+    tool calls, and more) along with token counts and estimated USD costs from provider
+    pricing tables. <strong>MockServer never calls an LLM itself</strong> — every number
+    in the report is deterministic and computed locally.
+</p>
+
+<h2>How It Works</h2>
+
+<ol>
+    <li><a href="#proxy-setup">Start MockServer as a proxy and capture LLM traffic</a> — including <a href="#opencode-real-traffic">real traffic from a headless OpenCode run</a></li>
+    <li><a href="#export-brief">Export the optimisation brief</a> — via the dashboard, MCP tool, or REST endpoint</li>
+    <li><a href="#signals">Act on the detected opportunities</a> — six signal types, each mapped to a concrete lever</li>
+</ol>
+
+```mermaid
+flowchart LR
+    A["AI Agent\n(e.g. Claude Code)"] -->|"HTTPS via proxy"| B["MockServer\n(captures traffic)"]
+    B -->|"forwards to"| C["LLM API\n(OpenAI, Anthropic…)"]
+    B -->|"GET /mockserver/llm/optimisationReport"| D["Optimisation Report\n(JSON bundle + Markdown brief)"]
+    D -->|"paste into"| E["Any LLM\n(cost-reduction advice)"]
+```
+
+<a id="proxy-setup" class="anchor" href="#proxy-setup">&nbsp;</a>
+
+<h2>1. Start MockServer as a Proxy and Capture Traffic</h2>
+
+<p>
+    Any MockServer instance can act as an HTTPS proxy — no special mode is needed.
+    See <a href="/mock_server/ai_traffic_inspection.html"><strong>AI Traffic Inspection</strong></a>
+    for the full setup, including how to trust the MockServer CA certificate and configure
+    standard environment variables for Node.js, Python, and other tools.
+</p>
+
+<p>The quick-start for local use:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -d --rm -p 1080:1080 mockserver/mockserver
+
+export HTTPS_PROXY=http://localhost:1080
+export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem   # Node.js tools
+export SSL_CERT_FILE=/path/to/mockserver-ca.pem          # Python tools
+
+# Now run your agent — its LLM calls are captured automatically
+claude   # or: opencode, python my_agent.py, etc.</code></pre>
+
+<p>
+    MockServer captures every LLM request/response pair (including SSE-streamed completions)
+    in its event log, and these are the source the optimisation report is built from. Both
+    <strong>proxied/forwarded</strong> traffic (to a real provider) and <strong>mocked</strong>
+    LLM responses served by MockServer itself are analysed — so you can optimise against real
+    captured runs <em>or</em> against mocked conversations (for example, the data created by
+    <code class="code inline">npm run demo</code>). LLM traffic is recognised by request shape
+    (the provider's API path), so it works regardless of the upstream host.
+</p>
+
+<a id="opencode-real-traffic" class="anchor" href="#opencode-real-traffic">&nbsp;</a>
+
+<h3>Generate real traffic with OpenCode</h3>
+
+<p>
+    The offline <code class="code inline">npm run demo</code> dataset includes a crafted,
+    deterministic agent run that fires every optimisation signal — great for a first look.
+    To analyse <strong>your own</strong> agent's real spend instead, proxy a headless
+    <a href="https://opencode.ai" rel="noopener noreferrer" target="_blank">OpenCode</a> run
+    through MockServer and pointed at a real provider.
+</p>
+
+<p class="alert">
+    <strong>Heads-up:</strong> this generates <strong>real, non-deterministic</strong> LLM
+    traffic — it needs network access and <strong>your own provider API key</strong>, and the
+    captured run varies each time. It is <em>not</em> wired into <code class="code inline">npm run demo</code>,
+    which stays offline. Never commit or share API keys.
+</p>
+
+<p>
+    The repository ships a helper script,
+    <code class="code inline">mockserver-ui/scripts/demo-opencode-proxy.sh</code>, that starts MockServer
+    as an HTTPS proxy with a machine-local CA, extracts that CA, and prints the exact environment
+    to run OpenCode through it:
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># Start the proxy and print the run instructions
+./mockserver-ui/scripts/demo-opencode-proxy.sh
+
+# …or start the proxy AND run a one-shot OpenCode prompt through it
+./mockserver-ui/scripts/demo-opencode-proxy.sh "summarise the README and suggest one improvement"</code></pre>
+
+<p>The equivalent done by hand, so you can run OpenCode in your own shell:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># 1. Start MockServer as an HTTPS proxy with a unique, machine-local CA
+#    (the default CA private key is public — never trust it for real traffic).
+docker run -d --rm --name mockserver-proxy -p 1080:1080 mockserver/mockserver \
+  -serverPort 1080 \
+  -Dmockserver.dynamicallyCreateCertificateAuthorityCertificate=true \
+  -Dmockserver.directoryToSaveDynamicSSLCertificate=/dynamic-certs
+
+# 2. Trigger CA generation, then copy the CA out of the container
+curl -sk https://localhost:1080/ >/dev/null
+docker exec mockserver-proxy cat /dynamic-certs/CertificateAuthorityCertificate.pem > mockserver-ca.pem
+
+# 3. Route OpenCode through the proxy and trust the CA
+export HTTPS_PROXY=http://localhost:1080
+export NODE_EXTRA_CA_CERTS=$PWD/mockserver-ca.pem   # OpenCode is a Node.js tool
+export SSL_CERT_FILE=$PWD/mockserver-ca.pem          # any Python helpers
+
+# 4. Point OpenCode at a REAL provider with YOUR OWN API key, then run it headless
+export OPENAI_API_KEY=sk-...            # or ANTHROPIC_API_KEY=sk-ant-...
+opencode run "summarise the README and suggest one improvement"</code></pre>
+
+<p>
+    OpenCode's LLM calls are now captured by MockServer. Open the dashboard
+    <strong>LLM Optimise</strong> tab (immediately after <strong>Chaos</strong> in the navigation bar), or curl the report, to see signals computed from your real run:
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown"</code></pre>
+
+<a id="export-brief" class="anchor" href="#export-brief">&nbsp;</a>
+
+<h2>2. Export the Optimisation Brief</h2>
+
+<p>Three ways to export — choose whichever fits your workflow:</p>
+
+<h3>Dashboard — LLM Optimise Screen</h3>
+
+<p>Open the MockServer dashboard and click <strong>LLM Optimise</strong> in the navigation bar (it sits immediately after <strong>Chaos</strong>):</p>
+
+<pre class="prettyprint code"><code class="code">http://localhost:1080/mockserver/dashboard</code></pre>
+
+<!-- SCREENSHOT PLACEHOLDER (add before release):
+     The MockServer dashboard "LLM Optimise" screen showing the session picker,
+     hero cards (total cost / tokens / calls / avg latency), the
+     "Detected Opportunities" panel, the per-call table, and the
+     "Copy optimisation brief" / "Download bundle" buttons.
+     Suggested: <p><img src="/mock_server/images/optimise_screen.png"
+       alt="MockServer dashboard LLM Optimise screen" class="screenshot"/></p> -->
+
+<p>The LLM Optimise screen shows:</p>
+<ul>
+    <li>A session picker — pick a single upstream host, or <strong>All captured LLM traffic</strong> (the default)</li>
+    <li>Hero cards — total estimated cost, input/output tokens, call count, average latency</li>
+    <li>A <strong>Detected Opportunities</strong> panel listing each signal with severity chip and estimated saving</li>
+    <li>A per-call table</li>
+    <li><strong>Copy optimisation brief</strong> — copies the Markdown brief to the clipboard</li>
+    <li><strong>Download bundle</strong> — saves the structured JSON report</li>
+</ul>
+
+<h3>MCP Tool</h3>
+
+<p>
+    If your AI agent is connected to MockServer's MCP control plane (see
+    <a href="/mock_server/ai_mcp_setup.html">MCP Setup</a>), use the
+    <code class="code inline">export_optimisation_report</code> tool:
+</p>
+
+<button id="button_export_optimisation_mcp_markdown" class="accordion">Export Markdown brief via MCP</button>
+<div class="panel">
+<pre class="prettyprint code"><code class="code">{
+  "method": "tools/call",
+  "params": {
+    "name": "export_optimisation_report",
+    "arguments": {
+      "format": "markdown"
+    }
+  }
+}</code></pre>
+    <p>Returns the full optimisation brief as Markdown text — paste it directly into any LLM.</p>
+</div>
+
+<button id="button_export_optimisation_mcp_json" class="accordion">Export JSON bundle via MCP</button>
+<div class="panel">
+<pre class="prettyprint code"><code class="code">{
+  "method": "tools/call",
+  "params": {
+    "name": "export_optimisation_report",
+    "arguments": {
+      "format": "json",
+      "host": "api.openai.com"
+    }
+  }
+}</code></pre>
+    <p>
+        Returns the structured <code class="code inline">LlmOptimisationReport</code> JSON bundle.
+        The optional <code class="code inline">host</code> parameter filters to a single upstream host.
+    </p>
+</div>
+
+<h3>REST Endpoint</h3>
+
+<p>
+    Call <code class="code inline">GET /mockserver/llm/optimisationReport</code> directly.
+    This is a MockServer control-plane endpoint; CORS is enabled so the dashboard UI can
+    call it even when the dashboard and control plane are on different hosts or ports.
+</p>
+
+<button id="button_export_optimisation_rest_markdown" class="accordion">Markdown brief</button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code">curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown"</code></pre>
+    <p>Returns <code class="code inline">text/markdown; charset=utf-8</code> — the full optimisation brief, ready to paste into any LLM.</p>
+</div>
+
+<button id="button_export_optimisation_rest_json" class="accordion">JSON bundle</button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code">curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=json" | python3 -m json.tool</code></pre>
+    <p>Returns <code class="code inline">application/json</code> — the <code class="code inline">LlmOptimisationReport</code> bundle including session metadata, per-call breakdown, detected signals, and redaction status.</p>
+</div>
+
+<button id="button_export_optimisation_rest_filtered" class="accordion">Filtered by host or provider</button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code"># Only OpenAI traffic
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown&amp;host=api.openai.com"
+
+# Only Anthropic traffic, JSON
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=json&amp;provider=ANTHROPIC"
+
+# A specific named session
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown&amp;session=host%3Aapi.openai.com"</code></pre>
+</div>
+
+<h3>Query Parameters</h3>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Parameter</th>
+            <th>Values</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="code inline">format</code></td>
+            <td><code class="code inline">json</code> | <code class="code inline">markdown</code></td>
+            <td><code class="code inline">json</code></td>
+            <td>Output format. <code class="code inline">markdown</code> returns the pre-framed optimisation brief; <code class="code inline">json</code> returns the structured <code class="code inline">LlmOptimisationReport</code> bundle.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">session</code></td>
+            <td>grouping key string</td>
+            <td>all captured LLM traffic</td>
+            <td>
+                Filter to one session. Sessions are grouped by isolation key (when LLM conversation expectations with session isolation are active) or by upstream <code class="code inline">Host</code> header otherwise.
+                Example: <code class="code inline">host:api.openai.com</code>.
+            </td>
+        </tr>
+        <tr>
+            <td><code class="code inline">host</code></td>
+            <td>hostname string</td>
+            <td>all hosts</td>
+            <td>Filter to a single upstream host, e.g. <code class="code inline">api.openai.com</code>.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">provider</code></td>
+            <td><code class="code inline">OPENAI</code> | <code class="code inline">ANTHROPIC</code> | <code class="code inline">GEMINI</code> | <code class="code inline">BEDROCK</code> | <code class="code inline">AZURE_OPENAI</code> | <code class="code inline">OLLAMA</code></td>
+            <td>all providers</td>
+            <td>Filter to one LLM provider. Provider is auto-detected from request paths.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    If no LLM traffic has been captured yet, the endpoint returns HTTP 200 with an empty report
+    (JSON) or a brief that says "no LLM traffic captured" (Markdown).
+</p>
+
+<h3>What the Markdown Brief Looks Like</h3>
+
+<p>The brief is structured in a fixed order so the downstream LLM can reason about it efficiently:</p>
+
+<ol>
+    <li><strong>Framing preamble</strong> — tells the LLM it is a cost-optimisation expert and what to do</li>
+    <li><strong>Run summary</strong> — provider(s), model(s), call count, token totals, estimated cost, latency, tool-call count</li>
+    <li><strong>Per-call table</strong> — one row per call: model, input/output tokens, cost, latency, tools, finish reason. For proxied/forwarded traffic the per-call <code class="code inline">latencyMs</code> is the measured upstream round-trip time (full-stream duration for streaming responses). It is <code class="code inline">0</code> only when the upstream time could not be captured for that call.</li>
+    <li><strong>Detected opportunities</strong> — each detected signal as a section with title, detail, affected call indices, estimated saving, and recommendation</li>
+    <li><strong>Conversations and tool definitions (appendix)</strong> — redacted messages and tool schemas so the LLM has the raw material to propose concrete edits</li>
+</ol>
+
+<p>Once you have the brief, paste it into any LLM. No additional context is needed.</p>
+
+<a id="signals" class="anchor" href="#signals">&nbsp;</a>
+
+<h2>3. The Six Optimisation Signals</h2>
+
+<p>
+    MockServer analyses the captured calls and emits up to six deterministic signals,
+    sorted by severity (HIGH first). Each signal names the problem, quantifies it in tokens
+    and estimated USD, and recommends a concrete lever.
+</p>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Signal</th>
+            <th>Severity</th>
+            <th>What it detects</th>
+            <th>Recommended lever</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="code inline">REPEATED_SYSTEM_PROMPT</code></td>
+            <td>HIGH / MEDIUM</td>
+            <td>The same system prompt (identified by a fingerprint) is resent on two or more calls, re-paying for the same input tokens each turn. HIGH when the prompt is large (&ge;1,000 tokens) and repeated three or more times.</td>
+            <td>Enable <a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" rel="noopener noreferrer" target="_blank">provider prompt caching</a>, or move the static context into a retrieval tool so it is only fetched when needed.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">LARGE_STATIC_CONTEXT_RESENT</code></td>
+            <td>HIGH</td>
+            <td>A large context block (&ge;2,000 tokens) is resent across two or more calls instead of being cached or retrieved on demand.</td>
+            <td>Move the large static context into a retrieval tool or enable prompt caching so it is sent once, not every turn.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">DETERMINISTIC_TOOL_CALL</code></td>
+            <td>MEDIUM</td>
+            <td>The same tool is called with the same arguments on two or more separate calls, making the LLM an unnecessary intermediary for a deterministic lookup.</td>
+            <td>Replace the LLM-mediated step with a direct HTTP or MCP endpoint call and feed the result back deterministically.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">OVERSIZED_TOOL_RESULT</code></td>
+            <td>MEDIUM</td>
+            <td>A tool returned &ge;1,000 tokens, which are then re-sent as input on every subsequent turn, inflating cost.</td>
+            <td>Trim or summarise the tool output before returning it to the model so only the relevant fields are sent.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">OUTPUT_TOKEN_BLOAT</code></td>
+            <td>LOW</td>
+            <td>One or more calls produced far more output than the median (either &ge;1,500 tokens absolute, or &ge;3&times; the median output for the session).</td>
+            <td>Constrain output with <code class="code inline">max_tokens</code> or a stricter <code class="code inline">response_format</code> / JSON schema so the model returns only what is needed.</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">DUPLICATE_CONSECUTIVE_CALL</code></td>
+            <td>MEDIUM</td>
+            <td>Consecutive calls with a near-identical request shape (same path, model, message count, system prompt fingerprint, and input token count) suggest retries that re-pay for the same work.</td>
+            <td>De-duplicate or cache identical requests, and only retry on genuine transient errors with backoff.</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="redaction" class="anchor" href="#redaction">&nbsp;</a>
+
+<h2>Redaction</h2>
+
+<p>
+    The optimisation report always strips sensitive headers before including them in either
+    the JSON bundle or the Markdown brief:
+</p>
+
+<ul>
+    <li><code class="code inline">Authorization</code> (Bearer tokens, Basic auth)</li>
+    <li><code class="code inline">x-api-key</code> / <code class="code inline">api-key</code></li>
+    <li><code class="code inline">Cookie</code> / <code class="code inline">Set-Cookie</code></li>
+    <li><code class="code inline">Proxy-Authorization</code></li>
+</ul>
+
+<p>
+    Body fields are redacted according to the <code class="code inline">mockserver.fixtureBodyRedactFields</code>
+    configuration property — the same setting used by <code class="code inline">record_llm_fixtures</code>.
+    The report includes a <code class="code inline">redaction</code> object describing what was stripped,
+    so you know exactly what the downstream LLM will not see.
+</p>
+
+<p>
+    Body content is not automatically redacted beyond the configured field list. Review the
+    Markdown brief before pasting it into an external LLM if your prompts or tool results
+    contain sensitive data not covered by <code class="code inline">fixtureBodyRedactFields</code>.
+</p>
+
+<a id="configuration" class="anchor" href="#configuration">&nbsp;</a>
+
+<h2>Configuration</h2>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Property</th>
+            <th>Default</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="code inline">mockserver.llmOptimisationMaxCalls</code></td>
+            <td><code class="code inline">200</code></td>
+            <td>
+                Maximum number of captured LLM calls included in a single report. When the captured
+                session exceeds this limit, only the most recent calls are analysed. Increase this
+                for long agent runs; reduce it to keep report size manageable when pasting into an LLM
+                with a limited context window.
+            </td>
+        </tr>
+        <tr>
+            <td><code class="code inline">mockserver.fixtureBodyRedactFields</code></td>
+            <td>(empty)</td>
+            <td>
+                Comma-separated list of JSON body field names to redact in the brief (in addition to
+                the always-stripped sensitive headers). Reuses the same setting as
+                <code class="code inline">record_llm_fixtures</code>. See
+                <a href="/mock_server/configuration_properties.html">Configuration Properties</a>.
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="limitations" class="anchor" href="#limitations">&nbsp;</a>
+
+<h2>Current Limitations</h2>
+
+<ul>
+    <li>
+        <strong>Cost estimates</strong> — costs are computed from MockServer's built-in provider
+        pricing tables (<code class="code inline">LlmPricing</code>), which may lag provider price
+        changes. The <code class="code inline">costIsEstimated</code> field in the JSON bundle is
+        <code class="code inline">true</code> when the provider did not return real usage tokens and
+        MockServer estimated them from the decoded text; it is <code class="code inline">false</code>
+        when the provider returned real usage data. Treat all cost figures as directional estimates.
+    </li>
+    <li>
+        <strong>Non-LLM traffic</strong> — only traffic where MockServer can detect a supported LLM
+        provider (OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI, Ollama), by API path shape, is
+        included — whether mocked or proxied. Other traffic is ignored.
+    </li>
+    <li>
+        <strong>Session grouping</strong> — in v1, the optimisation report groups proxied LLM
+        traffic by upstream host, so the dashboard <strong>LLM Optimise</strong> session picker offers
+        host-based sessions (and "All captured LLM traffic"). The <code class="code inline">session</code>
+        REST parameter accepts either the composite <code class="code inline">host:&lt;host&gt;</code>
+        key or the bare host.
+    </li>
+</ul>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/ai_traffic_inspection.html"><strong>AI Traffic Inspection</strong></a> &mdash; proxy setup, CA trust, and how traffic is captured</li>
+    <li><a href="/mock_server/ai_mcp_setup.html"><strong>MCP Setup</strong></a> &mdash; connect your AI agent to MockServer's MCP control plane to use the <code class="code inline">export_optimisation_report</code> tool</li>
+    <li><a href="/mock_server/ai_mcp_tools.html"><strong>MCP Tools Reference</strong></a> &mdash; full parameter documentation for <code class="code inline">export_optimisation_report</code> and related tools</li>
+    <li><a href="/mock_server/llm_response_mocking.html"><strong>LLM Response Mocking</strong></a> &mdash; mock LLM API responses for deterministic, offline testing</li>
+    <li><a href="/mock_server/configuration_properties.html"><strong>Configuration Properties</strong></a> &mdash; <code class="code inline">mockserver.llmOptimisationMaxCalls</code> and <code class="code inline">mockserver.fixtureBodyRedactFields</code></li>
+</ul>
+
+{% include_subpage _includes/ai_see_also.html %}

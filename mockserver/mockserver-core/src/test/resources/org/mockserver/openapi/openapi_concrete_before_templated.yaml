@@ -1,0 +1,39 @@
+openapi: 3.0.0
+info:
+  title: concrete before templated
+  version: 1.0.0
+paths:
+  # Templated path declared FIRST so declaration-order matching would wrongly select it
+  # for "/users/me"; concrete-path precedence must override that.
+  /users/{id}:
+    get:
+      operationId: getUserById
+      responses:
+        '200':
+          description: a user by id
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - byId
+                properties:
+                  byId:
+                    type: string
+                additionalProperties: false
+  /users/me:
+    get:
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: the current user
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - me
+                properties:
+                  me:
+                    type: string
+                additionalProperties: false

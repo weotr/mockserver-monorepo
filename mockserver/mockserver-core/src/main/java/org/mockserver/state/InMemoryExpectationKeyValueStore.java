@@ -36,6 +36,15 @@ public class InMemoryExpectationKeyValueStore implements KeyValueStore<Expectati
                 : NULL,
             entry -> entry != null ? entry.getId() : ""
         );
+        // Clean up the versions entry for any expectation evicted by overflow
+        // past maxSize. Without this, overflow-evicted keys would leak their
+        // AtomicLong version entry forever (the versions map is otherwise only
+        // pruned by remove/compareAndRemove/clear, never by eviction).
+        this.queue.setEvictionListener(evicted -> {
+            if (evicted != null) {
+                versions.remove(evicted.getId());
+            }
+        });
     }
 
     /**
@@ -154,7 +163,10 @@ public class InMemoryExpectationKeyValueStore implements KeyValueStore<Expectati
 
     @Override
     public void clear() {
-        // Remove all entries from the queue
+        // Remove all entries from the queue. queue.remove() is an explicit
+        // removal, so it does NOT fire the eviction listener (which only
+        // handles overflow eviction) — versions.clear() below is the bulk
+        // cleanup that prunes every version entry in one shot.
         queue.stream().collect(java.util.stream.Collectors.toList())
             .forEach(queue::remove);
         versions.clear();

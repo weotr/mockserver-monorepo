@@ -3,6 +3,58 @@
 <p>All requests and responses can be retrieved as expectations (called recorded expectations) in Java code or JSON.  This allows an easy way to replay a recording from the proxy.</p>
 <p>Unlike conventional record-replay approaches typically provided by other proxies, MockServer allows easy editing of the recorded requests because the recording is provided as Java code or JSON.  This ensures that if minor changes are made to an API the recording can easily be modified and no re-recording required avoiding the need to update test assertions.</p>
 
+<a id="one_command_record" class="anchor" href="#one_command_record">&nbsp;</a>
+
+<h2>One-Command Record &amp; Replay</h2>
+
+<p>The fastest way to record from a real upstream is a single retrieve call with the optional <strong>forwardUnmatchedTo</strong> parameter. It arms record-and-forward in one step &mdash; any request that does not match an existing expectation is forwarded to the upstream and recorded &mdash; so you no longer need to separately configure <code class="inline code">proxyRemoteHost</code> / <code class="inline code">proxyRemotePort</code> and <code class="inline code">attemptToProxyIfNoMatchingExpectation</code> before you start:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># 1. point MockServer at the upstream (this call arms recording for the session)
+curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=RECORDED_EXPECTATIONS&format=java&forwardUnmatchedTo=https://api.example.com"
+
+# 2. run your application / tests against http://localhost:1080 so real traffic is recorded
+
+# 3. retrieve the recording as ready-to-use code (or JSON) &mdash; in any supported format
+curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=RECORDED_EXPECTATIONS&format=java"</code></pre>
+
+<p>The <strong>forwardUnmatchedTo</strong> value accepts a bare host (<code class="inline code">api.example.com</code>), a host and port (<code class="inline code">api.example.com:9090</code>), or a full URL (<code class="inline code">http://api.example.com:9090</code> / <code class="inline code">https://api.example.com</code>, which default to port 80/443). The upstream host is validated against the same private-network / cloud-metadata <a href="/mock_server/configuration_properties.html#button_configuration_forward_proxy_block_private_networks">SSRF protection</a> as the normal forward and replay paths before any connection is made &mdash; a blocked upstream returns <strong>403</strong> and a malformed value returns <strong>400</strong>, in both cases leaving the configuration untouched.</p>
+
+<p>Recording is traffic-driven: the first call only arms recording, it does not generate any traffic itself. Combine with the <code class="inline code">deduplicateRecordedExpectations</code> property to collapse structurally-identical calls (e.g. <code class="inline code">/users/1</code> and <code class="inline code">/users/2</code>) into a single templatized <code class="inline code">/users/{id}</code> expectation in the retrieved output.</p>
+
+<p>By default only id-like <em>path segments</em> are templatized. Enable the <code class="inline code">templatizeRecordedValues</code> property (in addition to <code class="inline code">deduplicateRecordedExpectations</code>) to also generalize volatile-looking <strong>query parameter</strong>, <strong>header</strong> and <strong>JSON body</strong> values &mdash; UUIDs, long ids, ISO-8601 / epoch-millis timestamps, JWTs and long opaque tokens &mdash; into regex matchers, so the recorded expectation matches future requests instead of being pinned to one captured value. It is conservative: stable values (short strings, words, booleans, small numbers such as a page size or status code) are kept verbatim. Both properties are off by default, so recorded output is unchanged unless you opt in.</p>
+
+<a id="code_export" class="anchor" href="#code_export">&nbsp;</a>
+
+<h2>Export Recorded Expectations as Client Code</h2>
+
+<p>Recorded (and active) expectations can be exported as ready-to-paste client code so you can drop a recording straight into a test. Use the retrieve API with <strong>type=RECORDED_EXPECTATIONS</strong> (or <strong>type=ACTIVE_EXPECTATIONS</strong>) and a code <strong>format</strong>:</p>
+
+<ul>
+    <li><strong>format=java</strong> &mdash; MockServer Java client builder DSL</li>
+    <li><strong>format=javascript</strong> &mdash; Node.js client calls (<code class="inline code">mockServerClient(...).mockAnyResponse(&hellip;)</code>)</li>
+    <li><strong>format=python</strong> &mdash; Python client calls (<code class="inline code">client.upsert(Expectation.from_dict(&hellip;))</code>)</li>
+    <li><strong>format=go</strong> &mdash; Go client calls (<code class="inline code">client.Upsert(&hellip;)</code>)</li>
+    <li><strong>format=csharp</strong> &mdash; C# client calls (<code class="inline code">client.Upsert(&hellip;)</code>)</li>
+    <li><strong>format=ruby</strong> &mdash; Ruby client calls (<code class="inline code">client.upsert(&hellip;)</code>)</li>
+    <li><strong>format=rust</strong> &mdash; Rust client calls (<code class="inline code">client.upsert(&hellip;)</code>)</li>
+    <li><strong>format=php</strong> &mdash; PHP client calls (<code class="inline code">$client-&gt;upsertExpectation(&hellip;)</code>)</li>
+    <li><strong>format=json</strong> &mdash; round-trippable MockServer JSON</li>
+</ul>
+
+<p>One client call is generated per expectation. For example, to export the recorded expectations as JavaScript:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=RECORDED_EXPECTATIONS&format=javascript"</code></pre>
+
+<p>or as Python:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=RECORDED_EXPECTATIONS&format=python"</code></pre>
+
+<p>or as Go, C#, Ruby, Rust or PHP &mdash; e.g. Go:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/retrieve?type=RECORDED_EXPECTATIONS&format=go"</code></pre>
+
+<p>Every language's output embeds the expectation's JSON inside a real client call, so it is correct for the published client packages (<code class="inline code">mockserver-client</code> for Node.js, <code class="inline code">mockserver</code> for Python, <code class="inline code">mockserver-client-go</code> for Go, <code class="inline code">MockServer.Client</code> for C#, the <code class="inline code">mockserver-client</code> gem for Ruby, the <code class="inline code">mockserver-client</code> crate for Rust, and <code class="inline code">mock-server/mockserver-client</code> for PHP) and round-trips back into MockServer. In the dashboard, all of these formats are available under <strong>Library &rarr; Export</strong>, each with a <strong>Copy as code</strong> button; the same Export tab can also generate <strong>verification code</strong> from the recorded requests in Java, JavaScript, Python, Go, C#, Ruby and Rust.</p>
+
 <a id="har_export" class="anchor" href="#har_export">&nbsp;</a>
 
 <h2>HAR Export</h2>

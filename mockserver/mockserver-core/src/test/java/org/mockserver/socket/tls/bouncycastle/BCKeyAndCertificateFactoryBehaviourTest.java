@@ -7,6 +7,8 @@ import org.junit.rules.TemporaryFolder;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.logging.MockServerLogger;
 
+import java.io.File;
+import java.io.FileWriter;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPrivateKey;
@@ -28,6 +30,7 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.socket.tls.PEMToFile.certToPEM;
 
 public class BCKeyAndCertificateFactoryBehaviourTest {
 
@@ -180,6 +183,41 @@ public class BCKeyAndCertificateFactoryBehaviourTest {
         assertThat(chain.get(0), equalTo(factory.x509Certificate()));
         // second is the CA cert
         assertThat(chain.get(1), equalTo(factory.certificateAuthorityX509Certificate()));
+    }
+
+    @Test
+    public void shouldNotDuplicateCAWhenCertificatePemAlreadyContainsChain() throws Exception {
+        // given - generate a real CA + leaf using the dynamic factory
+        factory.buildAndSavePrivateKeyAndX509Certificate();
+        X509Certificate leaf = factory.x509Certificate();
+        X509Certificate ca = factory.certificateAuthorityX509Certificate();
+
+        // write a combined PEM that already ends with the CA (i.e. a full leaf+CA chain)
+        File leafAndCaPem = tempFolder.newFile("leafAndCa.pem");
+        try (FileWriter writer = new FileWriter(leafAndCaPem)) {
+            writer.write(certToPEM(leaf, ca));
+        }
+
+        // configure a second factory that loads the supplied leaf+CA chain (no dynamic generation)
+        // and whose CA matches the CA already appended to that chain - the leaf+CA chain branch is
+        // only taken when both privateKeyPath and x509CertificatePath are non-blank; certificateChain()
+        // never reads the private key file, so any non-blank path satisfies that branch condition
+        Configuration suppliedChainConfiguration = configuration()
+            .dynamicallyCreateCertificateAuthorityCertificate(false)
+            .x509CertificatePath(leafAndCaPem.getAbsolutePath())
+            .privateKeyPath(leafAndCaPem.getAbsolutePath())
+            .certificateAuthorityCertificate(configuration.certificateAuthorityCertificate());
+        BCKeyAndCertificateFactory suppliedChainFactory =
+            new BCKeyAndCertificateFactory(suppliedChainConfiguration, new MockServerLogger());
+
+        // when
+        List<X509Certificate> chain = suppliedChainFactory.certificateChain();
+
+        // then - the CA must not be duplicated: exactly [leaf, CA], not [leaf, CA, CA]
+        assertThat(chain, notNullValue());
+        assertThat(chain.size(), equalTo(2));
+        assertThat(chain.get(0), equalTo(leaf));
+        assertThat(chain.get(1), equalTo(ca));
     }
 
     // --- Leaf cert signed by CA ---

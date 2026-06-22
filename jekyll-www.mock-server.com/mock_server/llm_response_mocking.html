@@ -1,0 +1,1257 @@
+---
+title: LLM Response Mocking
+shortTitle: LLM Mocking
+description: Mock LLM API responses from OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI, and Ollama using MockServer expectations with provider-correct formatting, streaming, conversations, and cost budgets.
+layout: page
+pageOrder: 8
+section: 'Creating Mocks'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-09T00:00:00+00:00
+keywords: llm mocking, openai mock, anthropic mock, gemini mock, bedrock mock, azure openai mock, ollama mock, ai testing, llm response, mock llm api, agent testing, llm streaming mock
+---
+
+<p>
+    When you test an application that calls an LLM, you face two problems: the real API is slow, costs money,
+    and returns different results every run. MockServer solves both: tell it which provider your application targets
+    and what the completion should contain, and it returns a byte-for-byte correct response &mdash; including the
+    full streaming SSE framing &mdash; without touching the network.
+</p>
+
+<p>
+    <strong>In practice:</strong> point your application at MockServer instead of <span class="inline_code">api.openai.com</span>
+    (or the equivalent endpoint for your provider), create one expectation, and your test gets a deterministic,
+    instant, free LLM response every time.
+</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># Start MockServer
+docker run -d --rm -p 1080:1080 mockserver/mockserver
+
+# Create an OpenAI-compatible completion mock
+curl -s -X PUT http://localhost:1080/mockserver/expectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "httpRequest":  { "method": "POST", "path": "/v1/chat/completions" },
+    "httpLlmResponse": {
+      "provider": "OPENAI",
+      "model": "gpt-4o",
+      "completion": {
+        "text": "MockServer is a free, open-source HTTP mock server.",
+        "stopReason": "stop",
+        "usage": { "inputTokens": 12, "outputTokens": 9 }
+      }
+    }
+  }'
+
+# Your application can now call http://localhost:1080/v1/chat/completions
+# and receive a correctly formatted OpenAI response.</code></pre>
+
+<p>
+    MockServer can mock LLM API responses from any major provider using the <span class="inline_code">httpLlmResponse</span> action.
+    You describe the completion in a provider-neutral format and MockServer encodes it into the correct wire format
+    for the target provider &mdash; headers, JSON structure, streaming framing, and all.
+    This lets you test AI-powered applications deterministically, without calling a real LLM.
+</p>
+
+<ul>
+    <li><a href="#basic_completion">Basic completion mock</a></li>
+    <li><a href="#supported_providers">Supported providers</a></li>
+    <li><a href="#streaming">Streaming responses</a></li>
+    <li><a href="#tool_calls">Tool calls</a></li>
+    <li><a href="#embeddings">Embeddings</a></li>
+    <li><a href="#rerank">Rerank</a></li>
+    <li><a href="#multimodal">Multimodal request recognition (images and audio)</a></li>
+    <li><a href="#conversations">Multi-turn conversations</a></li>
+    <li><a href="#session_isolation">Session isolation</a></li>
+    <li><a href="#cost_budget">Cost budget</a></li>
+    <li><a href="#chaos">Chaos / fault injection</a></li>
+    <li><a href="#java_client">Streaming &mdash; client examples (all languages)</a></li>
+</ul>
+
+<a id="basic_completion" class="anchor" href="#basic_completion">&nbsp;</a>
+<h2>Basic Completion Mock</h2>
+
+<p>
+    Create an expectation with an <span class="inline_code">httpLlmResponse</span> action.
+    The <span class="inline_code">provider</span> tells MockServer which wire format to produce;
+    the <span class="inline_code">completion</span> describes what to return.
+</p>
+
+<p>
+    The Java client has a typed fluent API (<span class="inline_code">LlmMockBuilder</span> + <span class="inline_code">HttpLlmResponse</span>).
+    All other clients send the expectation as raw JSON using their generic expectation method
+    (<span class="inline_code">mockAnyResponse</span> in JavaScript; a direct PUT to <span class="inline_code">/mockserver/expectation</span> in other languages).
+</p>
+
+<button class="accordion"><strong>Java Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.client.LlmMockBuilder.llmMock;
+import static org.mockserver.model.Completion.completion;
+import static org.mockserver.model.Provider.OPENAI;
+import static org.mockserver.model.Usage.usage;
+
+// OpenAI — POST /v1/chat/completions
+llmMock("/v1/chat/completions")
+    .withProvider(OPENAI)
+    .withModel("gpt-4o")
+    .respondingWith(
+        completion()
+            .withText("MockServer is an open-source HTTP mock server.")
+            .withStopReason("stop")
+            .withUsage(usage().withInputTokens(12).withOutputTokens(8))
+    )
+    .applyTo(mockServerClient);</code></pre>
+</div>
+
+<button class="accordion"><strong>JavaScript Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+
+// OpenAI — POST /v1/chat/completions
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "method": "POST",
+        "path": "/v1/chat/completions"
+    },
+    "httpLlmResponse": {
+        "provider": "OPENAI",
+        "model": "gpt-4o",
+        "completion": {
+            "text": "MockServer is an open-source HTTP mock server.",
+            "stopReason": "stop",
+            "usage": { "inputTokens": 12, "outputTokens": 8 }
+        }
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+</div>
+
+<button class="accordion"><strong>Python Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-python code"><code class="code">import requests
+
+# OpenAI — POST /v1/chat/completions
+requests.put(
+    "http://localhost:1080/mockserver/expectation",
+    json={
+        "httpRequest": {
+            "method": "POST",
+            "path": "/v1/chat/completions"
+        },
+        "httpLlmResponse": {
+            "provider": "OPENAI",
+            "model": "gpt-4o",
+            "completion": {
+                "text": "MockServer is an open-source HTTP mock server.",
+                "stopReason": "stop",
+                "usage": {"inputTokens": 12, "outputTokens": 8}
+            }
+        }
+    }
+)</code></pre>
+</div>
+
+<button class="accordion"><strong>Ruby Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+# OpenAI — POST /v1/chat/completions
+uri = URI('http://localhost:1080/mockserver/expectation')
+http = Net::HTTP.new(uri.host, uri.port)
+req = Net::HTTP::Put.new(uri.path, 'Content-Type' => 'application/json')
+req.body = JSON.generate({
+  'httpRequest' => { 'method' => 'POST', 'path' => '/v1/chat/completions' },
+  'httpLlmResponse' => {
+    'provider' => 'OPENAI',
+    'model' => 'gpt-4o',
+    'completion' => {
+      'text' => 'MockServer is an open-source HTTP mock server.',
+      'stopReason' => 'stop',
+      'usage' => { 'inputTokens' => 12, 'outputTokens' => 8 }
+    }
+  }
+})
+http.request(req)</code></pre>
+</div>
+
+<button class="accordion"><strong>Go Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+)
+
+// OpenAI — POST /v1/chat/completions
+func createLlmExpectation() {
+    body, _ := json.Marshal(map[string]interface{}{
+        "httpRequest": map[string]interface{}{
+            "method": "POST",
+            "path":   "/v1/chat/completions",
+        },
+        "httpLlmResponse": map[string]interface{}{
+            "provider": "OPENAI",
+            "model":    "gpt-4o",
+            "completion": map[string]interface{}{
+                "text":       "MockServer is an open-source HTTP mock server.",
+                "stopReason": "stop",
+                "usage":      map[string]int{"inputTokens": 12, "outputTokens": 8},
+            },
+        },
+    })
+    req, _ := http.NewRequest(http.MethodPut,
+        "http://localhost:1080/mockserver/expectation", bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+</div>
+
+<button class="accordion"><strong>.NET Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+// OpenAI — POST /v1/chat/completions
+var expectation = new
+{
+    httpRequest = new { method = "POST", path = "/v1/chat/completions" },
+    httpLlmResponse = new
+    {
+        provider = "OPENAI",
+        model = "gpt-4o",
+        completion = new
+        {
+            text = "MockServer is an open-source HTTP mock server.",
+            stopReason = "stop",
+            usage = new { inputTokens = 12, outputTokens = 8 }
+        }
+    }
+};
+using var client = new HttpClient();
+var json = JsonSerializer.Serialize(expectation);
+await client.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json"));</code></pre>
+</div>
+
+<button class="accordion"><strong>Rust Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-rust code"><code class="code">use serde_json::json;
+
+// OpenAI — POST /v1/chat/completions
+let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/expectation")
+    .json(&json!({
+        "httpRequest": {
+            "method": "POST",
+            "path": "/v1/chat/completions"
+        },
+        "httpLlmResponse": {
+            "provider": "OPENAI",
+            "model": "gpt-4o",
+            "completion": {
+                "text": "MockServer is an open-source HTTP mock server.",
+                "stopReason": "stop",
+                "usage": { "inputTokens": 12, "outputTokens": 8 }
+            }
+        }
+    }))
+    .send()
+    .unwrap();</code></pre>
+</div>
+
+<button class="accordion"><strong>PHP Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-php code"><code class="code">&lt;?php
+// OpenAI — POST /v1/chat/completions
+$expectation = [
+    'httpRequest' => ['method' => 'POST', 'path' => '/v1/chat/completions'],
+    'httpLlmResponse' => [
+        'provider' => 'OPENAI',
+        'model' => 'gpt-4o',
+        'completion' => [
+            'text' => 'MockServer is an open-source HTTP mock server.',
+            'stopReason' => 'stop',
+            'usage' => ['inputTokens' => 12, 'outputTokens' => 8],
+        ],
+    ],
+];
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($expectation));
+curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+</div>
+
+<button class="accordion"><strong>REST API / curl</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code"># OpenAI — POST /v1/chat/completions
+curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "text": "MockServer is an open-source HTTP mock server.",
+      "stopReason": "stop",
+      "usage": { "inputTokens": 12, "outputTokens": 8 }
+    }
+  }
+}'
+
+# Anthropic — POST /v1/messages
+curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "httpLlmResponse": {
+    "provider": "ANTHROPIC",
+    "model": "claude-sonnet-4-20250514",
+    "completion": {
+      "text": "MockServer is an open-source HTTP mock server.",
+      "stopReason": "end_turn",
+      "usage": { "inputTokens": 12, "outputTokens": 8 }
+    }
+  }
+}'</code></pre>
+</div>
+
+<p>
+    When a request matches <span class="inline_code">POST /v1/chat/completions</span>, MockServer returns an OpenAI-formatted
+    JSON response with the specified text, model, stop reason, and token usage &mdash; including the correct
+    <span class="inline_code">id</span>, <span class="inline_code">created</span>, and <span class="inline_code">object</span> fields
+    that the OpenAI SDK expects.
+</p>
+
+<a id="supported_providers" class="anchor" href="#supported_providers">&nbsp;</a>
+<h2>Supported Providers</h2>
+
+<p>Each provider value produces the correct API response format for that provider's SDK:</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Provider</th><th>Typical API path</th><th>Notes</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">OPENAI</span></td>
+            <td><span class="inline_code">/v1/chat/completions</span></td>
+            <td>Chat Completions API format</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">OPENAI_RESPONSES</span></td>
+            <td><span class="inline_code">/v1/responses</span></td>
+            <td>OpenAI Responses API format</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">ANTHROPIC</span></td>
+            <td><span class="inline_code">/v1/messages</span></td>
+            <td>Anthropic Messages API format</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">GEMINI</span></td>
+            <td><span class="inline_code">/v1beta/models/{model}:generateContent</span></td>
+            <td>Google Gemini format</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">BEDROCK</span></td>
+            <td><span class="inline_code">/model/{model}/converse</span></td>
+            <td>AWS Bedrock Converse API; streaming uses <span class="inline_code">application/vnd.amazon.eventstream</span> binary framing</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">AZURE_OPENAI</span></td>
+            <td><span class="inline_code">/openai/deployments/{deployment}/chat/completions</span></td>
+            <td>Azure-hosted OpenAI format (delegates to OpenAI codec)</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">OLLAMA</span></td>
+            <td><span class="inline_code">/api/chat</span></td>
+            <td>Ollama local model API format</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">COHERE</span></td>
+            <td><span class="inline_code">/v1/rerank</span></td>
+            <td>Cohere rerank API format (rerank only &mdash; see <a href="#rerank">Rerank</a>)</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">VOYAGE</span></td>
+            <td><span class="inline_code">/v1/rerank</span></td>
+            <td>Voyage AI rerank API format (rerank only &mdash; see <a href="#rerank">Rerank</a>)</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="streaming" class="anchor" href="#streaming">&nbsp;</a>
+<h2>Streaming Responses</h2>
+
+<p>
+    Set <span class="inline_code">streaming</span> to <span class="inline_code">true</span> on the completion to return
+    a stream instead of a single JSON response.
+    MockServer splits the text into token-sized chunks and sends them as streaming
+    chunks in the provider's native streaming format (SSE for most providers; NDJSON for Ollama).
+</p>
+
+<p>
+    Use <span class="inline_code">streamingPhysics</span> to control timing &mdash; useful for testing
+    loading indicators, timeouts, and backpressure handling:
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "text": "This response is streamed token by token.",
+      "streaming": true,
+      "streamingPhysics": {
+        "timeToFirstToken": {
+          "timeUnit": "MILLISECONDS",
+          "value": 200
+        },
+        "tokensPerSecond": 50,
+        "jitter": 0.1,
+        "seed": 42
+      },
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 8
+      }
+    }
+  }
+}</code></pre>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Field</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">timeToFirstToken</span></td><td>Delay before the first SSE event is sent</td></tr>
+        <tr><td><span class="inline_code">tokensPerSecond</span></td><td>Base token emission rate (1 &ndash; 10000)</td></tr>
+        <tr><td><span class="inline_code">jitter</span></td><td>Fractional uniform deviation from the base rate (0.0 &ndash; 1.0)</td></tr>
+        <tr><td><span class="inline_code">seed</span></td><td>PRNG seed for reproducible inter-token timing</td></tr>
+    </tbody>
+</table>
+
+<a id="tool_calls" class="anchor" href="#tool_calls">&nbsp;</a>
+<h2>Tool Calls</h2>
+
+<p>
+    To mock an LLM response that invokes tools (function calling), add <span class="inline_code">toolCalls</span>
+    to the completion:
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "toolCalls": [
+        {
+          "id": "call_abc123",
+          "name": "get_weather",
+          "arguments": "{\"location\": \"London\"}"
+        }
+      ],
+      "stopReason": "tool_use"
+    }
+  }
+}</code></pre>
+
+<p>
+    For OpenAI-compatible mocks you can also set <span class="inline_code">toolChoice</span> on the completion to
+    model the request's <span class="inline_code">tool_choice</span> directive. It accepts
+    <span class="inline_code">auto</span>, <span class="inline_code">none</span>,
+    <span class="inline_code">required</span>, or a named tool. When <span class="inline_code">toolChoice</span> is
+    <span class="inline_code">required</span> and a tool call is configured, the mocked response's
+    <span class="inline_code">finish_reason</span> is forced to <span class="inline_code">tool_calls</span> (for both
+    non-streaming and streaming responses), matching how OpenAI behaves when a caller forces a tool call. Omitting
+    <span class="inline_code">toolChoice</span> leaves the finish reason behaviour unchanged.
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "toolChoice": "required",
+      "toolCalls": [
+        { "name": "get_weather", "arguments": "{\"location\": \"London\"}" }
+      ]
+    }
+  }
+}</code></pre>
+
+<a id="embeddings" class="anchor" href="#embeddings">&nbsp;</a>
+<h2>Embeddings</h2>
+
+<p>
+    Mock an embeddings endpoint by setting <span class="inline_code">embedding</span> instead of
+    <span class="inline_code">completion</span>. MockServer returns a provider-correct embeddings response with a
+    vector of the requested size. Set <span class="inline_code">deterministicFromInput</span> to
+    <span class="inline_code">true</span> so the same input text always produces the same (L2-normalised) vector
+    &mdash; ideal for reproducible tests of retrieval / vector-search code.
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/embeddings"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "text-embedding-3-small",
+    "embedding": {
+      "dimensions": 1536,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}</code></pre>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Provider</th><th>Response shape</th><th>Default dimensions</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">OPENAI</span> / <span class="inline_code">AZURE_OPENAI</span></td><td><span class="inline_code">{"object":"list","data":[{"embedding":[...]}]}</span></td><td>1536</td></tr>
+        <tr><td><span class="inline_code">GEMINI</span></td><td><span class="inline_code">{"embedding":{"values":[...]}}</span></td><td>768</td></tr>
+        <tr><td><span class="inline_code">OLLAMA</span></td><td><span class="inline_code">{"embeddings":[[...]]}</span> (the <span class="inline_code">/api/embed</span> shape)</td><td>768</td></tr>
+        <tr><td><span class="inline_code">BEDROCK</span> (Titan)</td><td><span class="inline_code">{"embedding":[...],"inputTextTokenCount":N}</span></td><td>1024</td></tr>
+        <tr><td><span class="inline_code">BEDROCK</span> (Cohere)</td><td><span class="inline_code">{"embeddings":[[...]]}</span> (when <span class="inline_code">model</span> starts with <span class="inline_code">cohere</span>)</td><td>1024</td></tr>
+    </tbody>
+</table>
+
+<p>
+    <span class="inline_code">dimensions</span> overrides the vector length; <span class="inline_code">seed</span> makes the
+    deterministic vector reproducible across runs. <span class="inline_code">ANTHROPIC</span> and
+    <span class="inline_code">OPENAI_RESPONSES</span> have no embeddings endpoint and return an error if used for an
+    embedding mock.
+</p>
+
+<a id="rerank" class="anchor" href="#rerank">&nbsp;</a>
+<h2>Rerank</h2>
+
+<p>
+    Mock a rerank endpoint by setting <span class="inline_code">rerank</span> with the
+    <span class="inline_code">COHERE</span> or <span class="inline_code">VOYAGE</span> provider. MockServer reads the
+    candidate documents from the request body's <span class="inline_code">documents</span> array and returns one
+    result per document &mdash; each with its original <span class="inline_code">index</span> and a
+    <span class="inline_code">relevance_score</span> &mdash; sorted from most to least relevant. Set
+    <span class="inline_code">deterministicFromInput</span> to <span class="inline_code">true</span> so the same documents
+    always score the same way. Use <span class="inline_code">topN</span> to return only the top few results.
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/rerank"
+  },
+  "httpLlmResponse": {
+    "provider": "COHERE",
+    "rerank": {
+      "topN": 3,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}</code></pre>
+
+<p>
+    Each provider returns its own response envelope around the same per-document scores
+    (<span class="inline_code">{"index": N, "relevance_score": F}</span>), sorted by descending relevance:
+</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Provider</th><th>Response shape</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">COHERE</span></td><td><span class="inline_code">{"results": [{"index": 1, "relevance_score": 0.9123}, ...]}</span></td></tr>
+        <tr><td><span class="inline_code">VOYAGE</span></td><td><span class="inline_code">{"object": "list", "data": [{"index": 1, "relevance_score": 0.9123}, ...], "usage": {"total_tokens": 0}}</span></td></tr>
+    </tbody>
+</table>
+
+<p>
+    Documents may be plain strings or objects with a <span class="inline_code">text</span> field (Cohere's
+    structured form) &mdash; both are read from the request's <span class="inline_code">documents</span> array.
+</p>
+
+<a id="multimodal" class="anchor" href="#multimodal">&nbsp;</a>
+<h2>Multimodal Request Recognition (Images and Audio)</h2>
+
+<p>
+    When matching against requests, MockServer recognises <strong>image</strong> and <strong>audio</strong> content
+    parts in the decoded conversation, so conversation predicates can assert that a message contained an image or an
+    audio clip (and, where the provider declares it, the media type or audio format). For the OpenAI-compatible
+    format this covers <span class="inline_code">image_url</span> and <span class="inline_code">input_audio</span>
+    content parts. This is request-side recognition only &mdash; MockServer notes the presence (and how many) but does
+    not store the media bytes or generate image/audio responses.
+</p>
+
+<a id="conversations" class="anchor" href="#conversations">&nbsp;</a>
+<h2>Multi-Turn Conversations</h2>
+
+<p>
+    For agent testing, you often need to script a sequence of LLM responses that depend on what the agent sent.
+    MockServer supports this through <strong>conversation predicates</strong> combined with
+    <strong>scenario state</strong> to create multi-turn conversation flows.
+</p>
+
+<p>
+    Each turn uses <span class="inline_code">conversationPredicates</span> to match against the conversation history
+    in the request body, and scenario state to track which turn the conversation is on:
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">[
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "httpLlmResponse": {
+      "provider": "OPENAI",
+      "model": "gpt-4o",
+      "completion": {
+        "text": "I'll look up the weather for you.",
+        "toolCalls": [
+          {
+            "id": "call_1",
+            "name": "get_weather",
+            "arguments": "{\"location\": \"London\"}"
+          }
+        ],
+        "stopReason": "tool_use"
+      },
+      "conversationPredicates": {
+        "turnIndex": 0,
+        "latestMessageContains": "weather"
+      }
+    },
+    "times": { "remainingTimes": 1 }
+  },
+  {
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions"
+    },
+    "httpLlmResponse": {
+      "provider": "OPENAI",
+      "model": "gpt-4o",
+      "completion": {
+        "text": "The weather in London is 18C and sunny.",
+        "stopReason": "stop"
+      },
+      "conversationPredicates": {
+        "containsToolResultFor": "get_weather"
+      }
+    },
+    "times": { "remainingTimes": 1 }
+  }
+]</code></pre>
+
+<h3>Conversation predicates</h3>
+
+<p>Predicates match against the parsed conversation in the request body (decoded using the provider's message format):</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Predicate</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">turnIndex</span></td><td>Match when the assistant turn count equals this value (0-based)</td></tr>
+        <tr><td><span class="inline_code">latestMessageContains</span></td><td>Match when the last message contains this substring</td></tr>
+        <tr><td><span class="inline_code">latestMessageMatches</span></td><td>Match when the last message matches this regex pattern</td></tr>
+        <tr><td><span class="inline_code">latestMessageRole</span></td><td>Match when the last message has this role (e.g. <span class="inline_code">user</span>, <span class="inline_code">tool</span>)</td></tr>
+        <tr><td><span class="inline_code">containsToolResultFor</span></td><td>Match when the conversation contains a tool result for this tool name</td></tr>
+        <tr><td><span class="inline_code">semanticMatchAgainst</span></td><td>Opt-in, exploratory: the expected meaning the latest message should express, judged by a runtime LLM. Off by default &mdash; ignored unless <span class="inline_code">mockserver.llmSemanticMatchingEnabled</span> is set and a backend resolves. Non-deterministic; for exploration only, never for CI assertions.</td></tr>
+    </tbody>
+</table>
+
+<h3>Prompt normalisation</h3>
+
+<p>
+    Agent prompts are dynamically assembled, so exact-byte matching can be brittle.
+    Add a <span class="inline_code">normalization</span> object to the predicates to apply deterministic transforms
+    before matching:
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">"conversationPredicates": {
+  "latestMessageContains": "search for weather",
+  "normalization": {
+    "collapseWhitespace": true,
+    "lowercase": true,
+    "sortJsonKeys": true
+  }
+}</code></pre>
+
+<a id="session_isolation" class="anchor" href="#session_isolation">&nbsp;</a>
+<h2>Session Isolation</h2>
+
+<p>
+    When multiple agents or test threads share a MockServer instance, each conversation needs its own
+    independent state. Use an <strong>isolation source</strong> to extract a session key from each request
+    (a header, query parameter, or cookie) so conversation state is tracked per session.
+</p>
+
+<p>
+    Session isolation is configured via the Java client&rsquo;s conversation builder (<span class="inline_code">isolateBy(IsolationSource.header("x-session-id"))</span>)
+    or the <a href="/mock_server/ai_mcp_tools.html#create_llm_conversation"><span class="inline_code">create_llm_conversation</span></a> MCP tool&rsquo;s
+    <span class="inline_code">isolateBy</span> parameter. The isolation source is encoded into the
+    expectation&rsquo;s scenario name &mdash; it is not a separate field in the raw expectation JSON.
+    Common isolation sources:
+</p>
+
+<ul>
+    <li><strong>Header:</strong> extract the session key from a request header (e.g. <span class="inline_code">x-session-id</span>)</li>
+    <li><strong>Query parameter:</strong> extract from a URL query parameter</li>
+    <li><strong>Cookie:</strong> extract from a cookie value</li>
+</ul>
+
+<p>Example using the <span class="inline_code">create_llm_conversation</span> MCP tool:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "provider": "OPENAI",
+  "path": "/v1/chat/completions",
+  "isolateBy": {
+    "source": "header",
+    "name": "x-session-id"
+  },
+  "turns": [
+    {
+      "match": { "turnIndex": 0 },
+      "response": { "text": "Hello!", "stopReason": "stop" }
+    }
+  ]
+}</code></pre>
+
+<p>
+    Each unique isolation key value creates an independent conversation state machine, so multiple agents
+    can run conversations in parallel without interfering with each other.
+</p>
+
+<a id="cost_budget" class="anchor" href="#cost_budget">&nbsp;</a>
+<h2>Cost Budget</h2>
+
+<p>
+    When using MockServer as a proxy in front of a real LLM provider, the
+    <span class="inline_code">llmCostBudgetUsd</span> property sets a cumulative cost ceiling. Once the estimated
+    cost of all forwarded LLM completions exceeds the budget, further LLM forwards are blocked
+    with a <span class="inline_code">429</span> response. This is a safety net for CI pipelines or
+    development environments where runaway agents could generate unexpected charges.
+</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Property</th><th>Env var</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">mockserver.llmCostBudgetUsd</span></td>
+            <td><span class="inline_code">MOCKSERVER_LLM_COST_BUDGET_USD</span></td>
+            <td><span class="inline_code">-1.0</span> (disabled)</td>
+            <td>Cumulative cost budget in USD. Set to a positive value to enable; negative or unset means no limit.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    The budget is enforced on all forward paths (matched forward actions, proxy-pass, and reverse-proxy routes)
+    and resets on <span class="inline_code">PUT /mockserver/reset</span>.
+    Cost estimation uses an internal pricing table and is approximate &mdash; treat it as a safety guard,
+    not an invoice.
+</p>
+
+<a id="chaos" class="anchor" href="#chaos">&nbsp;</a>
+<h2>Chaos / Fault Injection</h2>
+
+<p>
+    Add a <span class="inline_code">chaos</span> object to the <span class="inline_code">httpLlmResponse</span> to test
+    how your application handles LLM failures:
+</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "text": "Normal response text",
+      "streaming": true
+    },
+    "chaos": {
+      "errorStatus": 503,
+      "errorProbability": 0.3,
+      "truncateMode": "MID_STREAM",
+      "truncateAtFraction": 0.5,
+      "malformedSse": true
+    }
+  }
+}</code></pre>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Field</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">errorStatus</span></td><td>Return this HTTP status as a provider error (e.g. 503, 429). With no <span class="inline_code">errorProbability</span>, always fires.</td></tr>
+        <tr><td><span class="inline_code">retryAfter</span></td><td>Value for the <span class="inline_code">Retry-After</span> header on an injected error (e.g. <span class="inline_code">"30"</span>). Useful alongside <span class="inline_code">errorStatus: 429</span> to test retry-after handling.</td></tr>
+        <tr><td><span class="inline_code">errorProbability</span></td><td>Probability (0.0 &ndash; 1.0) that the error fires on each request</td></tr>
+        <tr><td><span class="inline_code">truncateMode</span></td><td><span class="inline_code">NONE</span> (default) or <span class="inline_code">MID_STREAM</span>. Must be set to <span class="inline_code">MID_STREAM</span> for <span class="inline_code">truncateAtFraction</span> to take effect.</td></tr>
+        <tr><td><span class="inline_code">truncateAtFraction</span></td><td>For streaming responses, cut the stream short at this fraction of SSE events (0.0 &ndash; 1.0, default 0.5). Only applies when <span class="inline_code">truncateMode</span> is <span class="inline_code">MID_STREAM</span>.</td></tr>
+        <tr><td><span class="inline_code">malformedSse</span></td><td>Inject a deliberately broken-JSON SSE chunk</td></tr>
+        <tr><td><span class="inline_code">quotaName</span> / <span class="inline_code">quotaLimit</span> / <span class="inline_code">quotaWindowMillis</span></td><td>Deterministic fixed-window rate limit</td></tr>
+        <tr><td><span class="inline_code">quotaErrorStatus</span></td><td>HTTP status returned when the quota is exceeded (default <span class="inline_code">429</span>). Must be between 100 and 599.</td></tr>
+        <tr><td><span class="inline_code">seed</span></td><td>PRNG seed for reproducible probabilistic faults</td></tr>
+    </tbody>
+</table>
+
+<p>See <a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> for more about chaos profiles.</p>
+
+<a id="provider_correct_chaos_error_bodies" class="anchor" href="#provider_correct_chaos_error_bodies">&nbsp;</a>
+<h3>Provider-Correct Error Bodies</h3>
+
+<p>
+    LLM chaos error injection emits the body shape the real provider returns &mdash; not a generic error body.
+    This lets your client SDK's retry and backoff logic be tested against realistic error responses:
+</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Provider</th><th>HTTP Status (OVERLOAD)</th><th>Body shape</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Anthropic</td><td>529</td><td><code>{"type":"error","error":{"type":"overloaded_error","message":"..."}}</code></td></tr>
+        <tr><td>OpenAI</td><td>503</td><td><code>{"error":{"message":"...","type":"server_error","code":"server_error"}}</code></td></tr>
+        <tr><td>Gemini</td><td>503</td><td>Google API status envelope</td></tr>
+        <tr><td>Ollama</td><td>503</td><td>Plain <code>{"error":"..."}</code> message</td></tr>
+    </tbody>
+</table>
+
+<p>
+    An optional <code>errorKind</code> field (<code>OVERLOAD</code>, <code>RATE_LIMIT</code>, or <code>SERVER_ERROR</code>) on the LLM chaos profile lets you declare the error intent. MockServer emits the active provider's natural HTTP status <em>and</em> its provider-correct body without you having to pick the status manually. An explicit <code>errorStatus</code> still overrides the code while keeping the provider-correct body. A missing or unrecognised <code>errorKind</code> falls back to the generic body.
+</p>
+
+<a id="cached_reasoning_tokens" class="anchor" href="#cached_reasoning_tokens">&nbsp;</a>
+<h2>Cached and Reasoning Token Usage</h2>
+
+<p>
+    <code>org.mockserver.model.Usage</code> has three optional fields in addition to the baseline
+    <code>inputTokens</code> / <code>outputTokens</code> pair. These are <strong>back-compatible and optional</strong>:
+    omitting them leaves behaviour unchanged.
+</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Field (Java / JSON)</th><th>Description</th><th>Provider mapping</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>cachedInputTokens</code></td>
+            <td>Input tokens served from a prompt cache at a reduced rate. A <strong>subset</strong> of <code>inputTokens</code> (not additive).</td>
+            <td>OpenAI: <code>usage.prompt_tokens_details.cached_tokens</code><br/>Anthropic: <code>usage.cache_read_input_tokens</code><br/>Gemini: <code>usageMetadata.cachedContentTokenCount</code></td>
+        </tr>
+        <tr>
+            <td><code>cacheCreationTokens</code></td>
+            <td>Input tokens written to a prompt cache at a premium rate.</td>
+            <td>Anthropic: <code>usage.cache_creation_input_tokens</code></td>
+        </tr>
+        <tr>
+            <td><code>reasoningTokens</code></td>
+            <td>Reasoning/thinking tokens billed as output but not part of the visible completion. A <strong>subset</strong> of <code>outputTokens</code> (not additive).</td>
+            <td>OpenAI: <code>usage.completion_tokens_details.reasoning_tokens</code><br/>Gemini: <code>usageMetadata.thoughtsTokenCount</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<p>
+    Set these fields on the <code>usage</code> object in your expectation JSON to simulate provider responses
+    from models that use prompt caching or chain-of-thought reasoning:
+</p>
+
+<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/expectation \
+  -H "Content-Type: application/json" \
+  -d '{
+    "httpRequest":  { "method": "POST", "path": "/v1/messages" },
+    "httpLlmResponse": {
+      "provider": "ANTHROPIC",
+      "model": "claude-sonnet-4-20250514",
+      "completion": {
+        "text": "Paris is the capital of France.",
+        "stopReason": "end_turn",
+        "usage": {
+          "inputTokens": 150,
+          "outputTokens": 10,
+          "cachedInputTokens": 120,
+          "cacheCreationTokens": 0,
+          "reasoningTokens": 0
+        }
+      }
+    }
+  }'</code></pre>
+
+<p><strong>Java client example:</strong></p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.Usage.usage;
+
+llmMock("/v1/messages")
+    .withProvider(ANTHROPIC)
+    .withModel("claude-sonnet-4-20250514")
+    .respondingWith(
+        completion()
+            .withText("Paris is the capital of France.")
+            .withStopReason("end_turn")
+            .withUsage(
+                usage()
+                    .withInputTokens(150)
+                    .withOutputTokens(10)
+                    .withCachedInputTokens(120)  // subset of inputTokens
+                    .withCacheCreationTokens(0)
+                    .withReasoningTokens(0)
+            )
+    )
+    .applyTo(mockServerClient);</code></pre>
+
+<p>
+    When MockServer proxies traffic to a real LLM provider, these fields are decoded from the provider's
+    usage shape and stored. The GenAI telemetry spans report them as
+    <code>mockserver.gen_ai.usage.cached_input_tokens</code>, <code>mockserver.gen_ai.usage.cache_creation_tokens</code>,
+    and <code>mockserver.gen_ai.usage.reasoning_tokens</code>.
+</p>
+
+<a id="java_client" class="anchor" href="#java_client">&nbsp;</a>
+<h2>Streaming &mdash; Client Examples</h2>
+
+<p>
+    These examples show how to create a streaming LLM expectation with realistic timing physics.
+    The Java client uses the typed fluent API; all other clients send the expectation as raw JSON.
+</p>
+
+<button class="accordion"><strong>Java Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-java code"><code class="code">import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.mockserver.client.Llm.jitter;
+import static org.mockserver.client.Llm.timeToFirstToken;
+import static org.mockserver.client.Llm.tokensPerSecond;
+import static org.mockserver.client.LlmMockBuilder.llmMock;
+import static org.mockserver.model.Completion.completion;
+import static org.mockserver.model.Provider.OPENAI;
+
+llmMock("/v1/chat/completions")
+    .withProvider(OPENAI)
+    .withModel("gpt-4o")
+    .respondingWith(
+        completion()
+            .withText("This response is streamed token by token.")
+            .streaming()
+            .withStreamingPhysics(
+                timeToFirstToken(200, MILLISECONDS),
+                tokensPerSecond(50),
+                jitter(0.1))
+    )
+    .applyTo(mockServerClient);</code></pre>
+</div>
+
+<button class="accordion"><strong>JavaScript Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+
+mockServerClient("localhost", 1080).mockAnyResponse({
+    "httpRequest": {
+        "method": "POST",
+        "path": "/v1/chat/completions"
+    },
+    "httpLlmResponse": {
+        "provider": "OPENAI",
+        "model": "gpt-4o",
+        "completion": {
+            "text": "This response is streamed token by token.",
+            "streaming": true,
+            "streamingPhysics": {
+                "timeToFirstToken": { "timeUnit": "MILLISECONDS", "value": 200 },
+                "tokensPerSecond": 50,
+                "jitter": 0.1,
+                "seed": 42
+            }
+        }
+    }
+}).then(
+    function () { console.log("expectation created"); },
+    function (error) { console.log(error); }
+);</code></pre>
+</div>
+
+<button class="accordion"><strong>Python Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-python code"><code class="code">import requests
+
+requests.put(
+    "http://localhost:1080/mockserver/expectation",
+    json={
+        "httpRequest": {
+            "method": "POST",
+            "path": "/v1/chat/completions"
+        },
+        "httpLlmResponse": {
+            "provider": "OPENAI",
+            "model": "gpt-4o",
+            "completion": {
+                "text": "This response is streamed token by token.",
+                "streaming": True,
+                "streamingPhysics": {
+                    "timeToFirstToken": {"timeUnit": "MILLISECONDS", "value": 200},
+                    "tokensPerSecond": 50,
+                    "jitter": 0.1,
+                    "seed": 42
+                }
+            }
+        }
+    }
+)</code></pre>
+</div>
+
+<button class="accordion"><strong>Ruby Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+uri = URI('http://localhost:1080/mockserver/expectation')
+http = Net::HTTP.new(uri.host, uri.port)
+req = Net::HTTP::Put.new(uri.path, 'Content-Type' => 'application/json')
+req.body = JSON.generate({
+  'httpRequest' => { 'method' => 'POST', 'path' => '/v1/chat/completions' },
+  'httpLlmResponse' => {
+    'provider' => 'OPENAI',
+    'model' => 'gpt-4o',
+    'completion' => {
+      'text' => 'This response is streamed token by token.',
+      'streaming' => true,
+      'streamingPhysics' => {
+        'timeToFirstToken' => { 'timeUnit' => 'MILLISECONDS', 'value' => 200 },
+        'tokensPerSecond' => 50,
+        'jitter' => 0.1,
+        'seed' => 42
+      }
+    }
+  }
+})
+http.request(req)</code></pre>
+</div>
+
+<button class="accordion"><strong>Go Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+)
+
+func createStreamingLlmExpectation() {
+    body, _ := json.Marshal(map[string]interface{}{
+        "httpRequest": map[string]interface{}{
+            "method": "POST",
+            "path":   "/v1/chat/completions",
+        },
+        "httpLlmResponse": map[string]interface{}{
+            "provider": "OPENAI",
+            "model":    "gpt-4o",
+            "completion": map[string]interface{}{
+                "text":      "This response is streamed token by token.",
+                "streaming": true,
+                "streamingPhysics": map[string]interface{}{
+                    "timeToFirstToken": map[string]interface{}{
+                        "timeUnit": "MILLISECONDS", "value": 200,
+                    },
+                    "tokensPerSecond": 50,
+                    "jitter":          0.1,
+                    "seed":            42,
+                },
+            },
+        },
+    })
+    req, _ := http.NewRequest(http.MethodPut,
+        "http://localhost:1080/mockserver/expectation", bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+</div>
+
+<button class="accordion"><strong>.NET Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+var expectation = new
+{
+    httpRequest = new { method = "POST", path = "/v1/chat/completions" },
+    httpLlmResponse = new
+    {
+        provider = "OPENAI",
+        model = "gpt-4o",
+        completion = new
+        {
+            text = "This response is streamed token by token.",
+            streaming = true,
+            streamingPhysics = new
+            {
+                timeToFirstToken = new { timeUnit = "MILLISECONDS", value = 200 },
+                tokensPerSecond = 50,
+                jitter = 0.1,
+                seed = 42
+            }
+        }
+    }
+};
+using var client = new HttpClient();
+var json = JsonSerializer.Serialize(expectation);
+await client.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json"));</code></pre>
+</div>
+
+<button class="accordion"><strong>Rust Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-rust code"><code class="code">use serde_json::json;
+
+let client = reqwest::blocking::Client::new();
+client.put("http://localhost:1080/mockserver/expectation")
+    .json(&json!({
+        "httpRequest": {
+            "method": "POST",
+            "path": "/v1/chat/completions"
+        },
+        "httpLlmResponse": {
+            "provider": "OPENAI",
+            "model": "gpt-4o",
+            "completion": {
+                "text": "This response is streamed token by token.",
+                "streaming": true,
+                "streamingPhysics": {
+                    "timeToFirstToken": { "timeUnit": "MILLISECONDS", "value": 200 },
+                    "tokensPerSecond": 50,
+                    "jitter": 0.1,
+                    "seed": 42
+                }
+            }
+        }
+    }))
+    .send()
+    .unwrap();</code></pre>
+</div>
+
+<button class="accordion"><strong>PHP Code Example</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-php code"><code class="code">&lt;?php
+$expectation = [
+    'httpRequest' => ['method' => 'POST', 'path' => '/v1/chat/completions'],
+    'httpLlmResponse' => [
+        'provider' => 'OPENAI',
+        'model' => 'gpt-4o',
+        'completion' => [
+            'text' => 'This response is streamed token by token.',
+            'streaming' => true,
+            'streamingPhysics' => [
+                'timeToFirstToken' => ['timeUnit' => 'MILLISECONDS', 'value' => 200],
+                'tokensPerSecond' => 50,
+                'jitter' => 0.1,
+                'seed' => 42,
+            ],
+        ],
+    ],
+];
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($expectation));
+curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+</div>
+
+<button class="accordion"><strong>REST API / curl</strong></button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/chat/completions"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "gpt-4o",
+    "completion": {
+      "text": "This response is streamed token by token.",
+      "streaming": true,
+      "streamingPhysics": {
+        "timeToFirstToken": { "timeUnit": "MILLISECONDS", "value": 200 },
+        "tokensPerSecond": 50,
+        "jitter": 0.1,
+        "seed": 42
+      }
+    }
+  }
+}'</code></pre>
+</div>
+
+<a id="java_client_simple" class="anchor" href="#java_client_simple">&nbsp;</a>
+<h2>Java Client API (Simple Completion)</h2>
+
+<p>
+    The Java client provides a typed fluent API for creating LLM expectations without hand-assembling JSON:
+</p>
+
+<pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpLlmResponse.llmResponse;
+import static org.mockserver.model.Completion.completion;
+
+mockServerClient
+    .when(
+        request()
+            .withMethod("POST")
+            .withPath("/v1/chat/completions")
+    )
+    .respond(
+        llmResponse()
+            .withProvider(Provider.OPENAI)
+            .withModel("gpt-4o")
+            .withCompletion(
+                completion()
+                    .withText("Hello from MockServer!")
+                    .withStopReason("stop")
+            )
+    );</code></pre>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; full request matcher and action reference</li>
+    <li><a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> &mdash; HTTP and LLM chaos profiles</li>
+    <li><a href="/mock_server/ai_mcp_tools.html">MCP Tools Reference</a> &mdash; <span class="inline_code">mock_llm_completion</span> and <span class="inline_code">create_llm_conversation</span> tools for AI agents</li>
+    <li><a href="/mock_server/ai_traffic_inspection.html">Inspect AI Agent Traffic</a> &mdash; proxy and inspect real LLM API traffic</li>
+    <li><a href="/mock_server/observability.html">Observability</a> &mdash; LLM token/cost Prometheus metrics and OpenTelemetry GenAI spans</li>
+    <li><a href="/mock_server/ai_optimisation.html">LLM Cost Optimisation</a> &mdash; export a one-click optimisation brief from captured LLM traffic to find ways to cut inference cost</li>
+</ul>

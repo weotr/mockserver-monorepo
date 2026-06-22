@@ -1,0 +1,138 @@
+<h2>Mock a SCIM 2.0 Provider</h2>
+
+<p>MockServer can stand in for a <a href="https://datatracker.ietf.org/doc/html/rfc7644" target="_blank">SCIM 2.0</a>
+    identity provider, so you can test System for Cross-domain Identity Management (SCIM) clients — user
+    provisioning, deprovisioning, group membership sync — without a real IdP. A single control-plane call
+    generates a fully functional provider that serves CRUD over <span class="inline_code">Users</span> and
+    <span class="inline_code">Groups</span> plus the SCIM discovery documents, with the data held in memory.</p>
+
+<p>Resources are stored and returned in SCIM shapes: every resource carries
+    <span class="inline_code">schemas</span>, an <span class="inline_code">id</span>, and a
+    <span class="inline_code">meta</span> object; lists are wrapped in a SCIM <span class="inline_code">ListResponse</span>
+    envelope; errors use the SCIM <span class="inline_code">Error</span> envelope; and all responses use the
+    <span class="inline_code">application/scim+json</span> media type.</p>
+
+<h3>Create a SCIM Provider</h3>
+
+<p>Send an empty <span class="inline_code">PUT /mockserver/scim</span> to create a provider with the default
+    base path <span class="inline_code">/scim/v2</span>:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/scim"</code></pre>
+
+<p>Or supply a configuration body to customise the base path, seed initial data, choose the id strategy, or
+    require a bearer token:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "basePath": "/scim/v2",
+    "idStrategy": "UUID",
+    "requireBearerToken": true,
+    "expectedBearerToken": "my-test-token",
+    "enforceFilter": true,
+    "enforcePatch": true,
+    "initialUsers": [
+        { "id": "u1", "userName": "bjensen@example.com", "active": true }
+    ],
+    "initialGroups": [
+        { "id": "g1", "displayName": "Admins", "members": [] }
+    ]
+}</code></pre>
+
+<h3>Configuration Options</h3>
+
+<table>
+    <thead>
+        <tr><th>Field</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">basePath</span></td><td><span class="inline_code">/scim/v2</span></td><td>Path prefix the SCIM endpoints are served under. Must start with <span class="inline_code">/</span> and must not overlap <span class="inline_code">/mockserver</span>.</td></tr>
+        <tr><td><span class="inline_code">idStrategy</span></td><td><span class="inline_code">UUID</span></td><td>How server-assigned ids are generated: <span class="inline_code">UUID</span> or <span class="inline_code">AUTO_INCREMENT</span>.</td></tr>
+        <tr><td><span class="inline_code">initialUsers</span></td><td><span class="inline_code">[]</span></td><td>Users to seed the store with.</td></tr>
+        <tr><td><span class="inline_code">initialGroups</span></td><td><span class="inline_code">[]</span></td><td>Groups to seed the store with.</td></tr>
+        <tr><td><span class="inline_code">enforceFilter</span></td><td><span class="inline_code">true</span></td><td>When <span class="inline_code">true</span>, the <span class="inline_code">filter</span> query parameter is applied; when <span class="inline_code">false</span>, a filtered list returns <span class="inline_code">501 Not Implemented</span>.</td></tr>
+        <tr><td><span class="inline_code">enforcePatch</span></td><td><span class="inline_code">true</span></td><td>When <span class="inline_code">false</span>, <span class="inline_code">PATCH</span> returns <span class="inline_code">501 Not Implemented</span>.</td></tr>
+        <tr><td><span class="inline_code">requireBearerToken</span></td><td><span class="inline_code">false</span></td><td>When <span class="inline_code">true</span>, resource endpoints require an <span class="inline_code">Authorization: Bearer …</span> header (discovery endpoints stay open).</td></tr>
+        <tr><td><span class="inline_code">expectedBearerToken</span></td><td><span class="inline_code">null</span></td><td>The exact token required; <span class="inline_code">null</span> accepts any non-empty bearer token.</td></tr>
+    </tbody>
+</table>
+
+<h3>Generated Endpoints</h3>
+
+<table>
+    <thead>
+        <tr><th>Method &amp; Path</th><th>Behaviour</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><span class="inline_code">GET {basePath}/Users</span></td><td>List users (supports <span class="inline_code">?filter</span>, <span class="inline_code">?startIndex</span>, <span class="inline_code">?count</span>) — returns a ListResponse.</td></tr>
+        <tr><td><span class="inline_code">POST {basePath}/Users</span></td><td>Create a user (<span class="inline_code">userName</span> required) — <span class="inline_code">201</span> with a <span class="inline_code">Location</span> header.</td></tr>
+        <tr><td><span class="inline_code">GET {basePath}/Users/{id}</span></td><td>Get a user — <span class="inline_code">200</span> or <span class="inline_code">404</span> error envelope.</td></tr>
+        <tr><td><span class="inline_code">PUT {basePath}/Users/{id}</span></td><td>Replace a user (preserves <span class="inline_code">id</span> and <span class="inline_code">meta.created</span>).</td></tr>
+        <tr><td><span class="inline_code">PATCH {basePath}/Users/{id}</span></td><td>Apply a SCIM PatchOp.</td></tr>
+        <tr><td><span class="inline_code">DELETE {basePath}/Users/{id}</span></td><td>Delete a user — <span class="inline_code">204</span> or <span class="inline_code">404</span>.</td></tr>
+        <tr><td colspan="2"><em>The same six endpoints exist for <span class="inline_code">{basePath}/Groups</span> (<span class="inline_code">displayName</span> required on create).</em></td></tr>
+        <tr><td><span class="inline_code">GET {basePath}/ServiceProviderConfig</span></td><td>Discovery — advertises supported features (<span class="inline_code">patch</span>/<span class="inline_code">filter</span> reflect the config; <span class="inline_code">bulk</span>/<span class="inline_code">sort</span>/<span class="inline_code">etag</span> are <span class="inline_code">false</span>; OAuth bearer-token auth scheme).</td></tr>
+        <tr><td><span class="inline_code">GET {basePath}/ResourceTypes</span></td><td>Discovery — a ListResponse of the User and Group resource types.</td></tr>
+        <tr><td><span class="inline_code">GET {basePath}/Schemas</span></td><td>Discovery — a ListResponse of the core User and Group schema definitions.</td></tr>
+    </tbody>
+</table>
+
+<h3>Java Client</h3>
+
+<pre class="prettyprint lang-java code"><code class="code">// default provider at /scim/v2
+mockServerClient.mockScimProvider();
+
+// or with configuration
+mockServerClient.mockScimProvider(
+    new ScimProviderConfiguration()
+        .setBasePath("/scim/v2")
+        .setRequireBearerToken(true)
+        .setExpectedBearerToken("my-test-token")
+);</code></pre>
+
+<h3>ListResponse Envelope</h3>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "schemas": [ "urn:ietf:params:scim:api:messages:2.0:ListResponse" ],
+    "totalResults": 2,
+    "startIndex": 1,
+    "itemsPerPage": 2,
+    "Resources": [ /* shaped User or Group resources */ ]
+}</code></pre>
+
+<h3>Error Envelope</h3>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+    "schemas": [ "urn:ietf:params:scim:api:messages:2.0:Error" ],
+    "scimType": "invalidValue",
+    "detail": "userName is required",
+    "status": "400"
+}</code></pre>
+
+<h3>Supported Filters</h3>
+
+<p>A single <span class="inline_code">attr op "value"</span> comparison over a top-level attribute is supported:
+    <span class="inline_code">eq</span> (equals), <span class="inline_code">co</span> (contains),
+    <span class="inline_code">sw</span> (starts with), and the presence operator <span class="inline_code">pr</span>.
+    For example <span class="inline_code">?filter=userName eq "bjensen@example.com"</span>. A filter referencing an
+    unknown attribute matches nothing. Compound expressions
+    (<span class="inline_code">and</span>/<span class="inline_code">or</span>/<span class="inline_code">not</span>),
+    value-paths, and the ordered operators (<span class="inline_code">gt</span>/<span class="inline_code">ge</span>/<span class="inline_code">lt</span>/<span class="inline_code">le</span>)
+    are not yet supported.</p>
+
+<h3>Supported PATCH Operations</h3>
+
+<p>A SCIM <span class="inline_code">PatchOp</span> body
+    (<span class="inline_code">urn:ietf:params:scim:api:messages:2.0:PatchOp</span>) with an
+    <span class="inline_code">Operations</span> array is supported over a top-level attribute
+    (<span class="inline_code">emails</span>) or a one-level sub-attribute
+    (<span class="inline_code">name.familyName</span>):</p>
+
+<ul>
+    <li><span class="inline_code">replace</span> with a <span class="inline_code">path</span> — set the attribute.</li>
+    <li><span class="inline_code">replace</span> without a <span class="inline_code">path</span> — shallow-merge the value object.</li>
+    <li><span class="inline_code">add</span> with a <span class="inline_code">path</span> — set a scalar, or append to an array attribute (e.g. <span class="inline_code">emails</span>, <span class="inline_code">members</span>).</li>
+    <li><span class="inline_code">add</span> without a <span class="inline_code">path</span> — shallow-merge the value object.</li>
+    <li><span class="inline_code">remove</span> with a <span class="inline_code">path</span> — delete the attribute or sub-attribute.</li>
+</ul>
+
+<p>A malformed PatchOp returns a <span class="inline_code">400</span> error envelope with
+    <span class="inline_code">scimType: "invalidSyntax"</span>.</p>

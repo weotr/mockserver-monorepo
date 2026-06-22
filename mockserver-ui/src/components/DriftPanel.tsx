@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
 import Box from '@mui/material/Box';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
@@ -17,6 +17,9 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import ConfirmDialog from './ConfirmDialog';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
+import { humanizeError } from '../lib/errorMessage';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import {
   fetchDriftRecords,
@@ -30,6 +33,20 @@ interface DriftPanelProps {
 }
 
 const POLL_INTERVAL_MS = 5000;
+
+/**
+ * The drift endpoint returns no JSON error envelope on 404, so a missing
+ * endpoint surfaces as the status-line message ("HTTP 404 Not Found") or the
+ * humanized "isn’t available" copy. Detect both so the panel can show the
+ * "not available on an older server" branch rather than a generic error.
+ */
+function isUnavailable(message: string): boolean {
+  return (
+    message.includes('404') ||
+    message.includes('Not Found') ||
+    message.includes('isn’t available')
+  );
+}
 
 type DriftType =
   | 'STATUS'
@@ -87,39 +104,30 @@ export default function DriftPanel({ connectionParams }: DriftPanelProps) {
   const [data, setData] = useState<DriftResponse>({ count: 0, drifts: [] });
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
   const [busy, setBusy] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
-
-  // Poll drift records.
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll(): Promise<void> {
-      try {
-        const response = await fetchDriftRecords(connectionParams, undefined, 50, controller.signal);
-        if (cancelled) return;
-        setData(response);
-        setLoadError(null);
-      } catch (e) {
-        if (cancelled || controller.signal.aborted) return;
-        setLoadError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
-      }
+  // Auto-refresh the read-only drift feed. The lib throws on a non-OK response,
+  // so a 500 surfaces as a real error and a 404 routes to the "not available"
+  // branch — neither is silently swallowed as "no drift" any more.
+  const loadDrift = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const response = await fetchDriftRecords(connectionParams, undefined, 50, signal);
+      setData(response);
+      setLoadError(null);
+    } catch (e) {
+      if (signal?.aborted) return;
+      setLoadError(humanizeError(e).message);
     }
+  }, [connectionParams]);
 
-    void poll();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (timer) clearTimeout(timer);
-    };
-  }, [connectionParams, refreshTick]);
+  useAutoRefresh(loadDrift, { intervalMs: POLL_INTERVAL_MS });
+
+  // Manual force-refresh (the existing Refresh button) — same fetch, off-cycle.
+  const refresh = useCallback(() => {
+    void loadDrift();
+  }, [loadDrift]);
 
   const filteredDrifts = useMemo(() => {
     if (!filterText.trim()) return data.drifts;
@@ -132,7 +140,7 @@ export default function DriftPanel({ connectionParams }: DriftPanelProps) {
     setActionError(null);
     clearDrift(connectionParams)
       .then(() => refresh())
-      .catch((e) => setActionError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => setActionError(humanizeError(e).message))
       .finally(() => setBusy(false));
   }, [connectionParams, refresh]);
 
@@ -164,7 +172,7 @@ export default function DriftPanel({ connectionParams }: DriftPanelProps) {
               color="error"
               startIcon={<DeleteSweepIcon fontSize="small" />}
               disabled={busy || data.count === 0}
-              onClick={handleClear}
+              onClick={() => setConfirmOpen(true)}
             >
               Clear
             </Button>
@@ -182,11 +190,21 @@ export default function DriftPanel({ connectionParams }: DriftPanelProps) {
       </Typography>
 
       {loadError && (
-        <Alert severity="error" sx={{ mb: 1.5 }} action={
-          <IconButton color="inherit" size="small" onClick={refresh} aria-label="Retry"><RefreshIcon fontSize="small" /></IconButton>
-        }>
-          <AlertTitle>Could not load drift records</AlertTitle>
-          {loadError}
+        <Alert
+          severity={isUnavailable(loadError) ? 'info' : 'error'}
+          sx={{ mb: 1.5 }}
+          action={
+            <IconButton color="inherit" size="small" onClick={refresh} aria-label="Retry"><RefreshIcon fontSize="small" /></IconButton>
+          }
+        >
+          <AlertTitle>
+            {isUnavailable(loadError)
+              ? 'Drift detection not available'
+              : 'Could not load drift records'}
+          </AlertTitle>
+          {isUnavailable(loadError)
+            ? 'The connected server does not support drift detection. This feature requires a newer version of MockServer.'
+            : loadError}
         </Alert>
       )}
 
@@ -239,14 +257,18 @@ export default function DriftPanel({ connectionParams }: DriftPanelProps) {
                       </Typography>
                     </TableCell>
                     <TableCell>
-                      <Typography variant="caption" sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
-                        {drift.expectedValue ?? '-'}
-                      </Typography>
+                      <Tooltip title={drift.expectedValue ?? '-'}>
+                        <Typography variant="caption" sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap' }}>
+                          {drift.expectedValue ?? '-'}
+                        </Typography>
+                      </Tooltip>
                     </TableCell>
                     <TableCell>
-                      <Typography variant="caption" sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block' }}>
-                        {drift.actualValue ?? '-'}
-                      </Typography>
+                      <Tooltip title={drift.actualValue ?? '-'}>
+                        <Typography variant="caption" sx={{ fontFamily: 'monospace', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap' }}>
+                          {drift.actualValue ?? '-'}
+                        </Typography>
+                      </Tooltip>
                     </TableCell>
                     <TableCell align="right">
                       <Typography variant="caption">
@@ -277,6 +299,15 @@ export default function DriftPanel({ connectionParams }: DriftPanelProps) {
           </TableContainer>
         )}
       </Paper>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Clear all drift records?"
+        message={`This removes all ${data.count} detected drift record${data.count === 1 ? '' : 's'}. This cannot be undone.`}
+        confirmLabel="Clear drift records"
+        onConfirm={handleClear}
+        onClose={() => setConfirmOpen(false)}
+      />
     </Box>
   );
 }

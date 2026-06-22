@@ -6,12 +6,14 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.commons.lang3.tuple.Pair;
 import org.mockserver.client.LlmConversationBuilder;
+import org.mockserver.client.LlmFailoverBuilder;
 import org.mockserver.client.TurnBuilder;
 import org.mockserver.lifecycle.LifeCycle;
 import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.llm.IsolationSource;
 import org.mockserver.llm.ProviderCodecRegistry;
+import org.mockserver.llm.ProviderDetector;
 import org.mockserver.llm.analysis.AgentRunAnalyzer;
 import org.mockserver.llm.client.LlmBackend;
 import org.mockserver.llm.client.LlmBackendResolver;
@@ -136,10 +138,12 @@ public class McpToolRegistry {
         registerLoadExpectationsFromFile();
         registerMockLlmCompletion();
         registerCreateLlmConversation();
+        registerMockLlmFailover();
         registerVerifyToolCall();
         registerVerifyStructuredOutput();
         registerVerifyCostBudget();
         registerExplainAgentRun();
+        registerExportOptimisationReport();
         registerDetectLlmDrift();
         registerMockAdversarialLlmResponse();
         registerListMockTools();
@@ -2633,6 +2637,7 @@ public class McpToolRegistry {
         ArrayNode outputSchemaAnyOf = outputSchemaProp.putArray("anyOf");
         outputSchemaAnyOf.add(objectMapper.createObjectNode().put("type", "string"));
         outputSchemaAnyOf.add(objectMapper.createObjectNode().put("type", "object"));
+        properties.putObject("enforceOutputSchema").put("type", "boolean").put("description", "Opt-in strict structured-output enforcement (default false). When true and an 'outputSchema' is set, a non-conforming configured response fails loudly with a provider-correct error (HTTP 502) instead of the fail-soft diagnostic header — modelling a provider's strict response_format:json_schema mode that guarantees schema-valid output.");
         putChaosSchema(properties);
         ArrayNode required = schema.putArray("required");
         required.add("provider");
@@ -2743,6 +2748,12 @@ public class McpToolRegistry {
                 } else {
                     return errorResult("'outputSchema' must be a JSON Schema string or object");
                 }
+            }
+
+            // Optional strict structured-output enforcement
+            JsonNode enforceOutputSchemaNode = params.path("enforceOutputSchema");
+            if (enforceOutputSchemaNode.isBoolean() && enforceOutputSchemaNode.asBoolean()) {
+                completion.enforceOutputSchema();
             }
 
             // Model
@@ -3142,6 +3153,177 @@ public class McpToolRegistry {
         }
     }
 
+    // --- mock_llm_failover ---
+
+    private void registerMockLlmFailover() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        ObjectNode providerProp = properties.putObject("provider");
+        providerProp.put("type", "string").put("description", "LLM provider with a registered codec (ANTHROPIC, OPENAI, OPENAI_RESPONSES, GEMINI, BEDROCK, AZURE_OPENAI, OLLAMA).");
+        ArrayNode providerEnum = providerProp.putArray("enum");
+        for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
+            providerEnum.add(name);
+        }
+        properties.putObject("path").put("type", "string").put("description", "Request path to match (e.g. /v1/chat/completions)");
+        properties.putObject("model").put("type", "string").put("description", "Model name for the success response (e.g. gpt-4o, claude-sonnet-4)");
+        ObjectNode failStatusesProp = properties.putObject("failStatuses");
+        failStatusesProp.put("type", "array").put("description", "Ordered array of HTTP status codes — one per failure attempt (e.g. [503, 503, 429]). The first N requests return these statuses in order, then subsequent requests succeed.");
+        failStatusesProp.putObject("items").put("type", "integer");
+        properties.putObject("text").put("type", "string").put("description", "Success response text content");
+        ObjectNode toolCallsProp = properties.putObject("toolCalls");
+        toolCallsProp.put("type", "array").put("description", "Tool/function calls for the success response");
+        ObjectNode toolCallItems = toolCallsProp.putObject("items");
+        toolCallItems.put("type", "object");
+        ObjectNode toolCallProps = toolCallItems.putObject("properties");
+        toolCallProps.putObject("name").put("type", "string");
+        ObjectNode argsProp = toolCallProps.putObject("arguments");
+        argsProp.put("description", "Tool arguments as a JSON string or object");
+        ArrayNode argsAnyOf = argsProp.putArray("anyOf");
+        argsAnyOf.add(objectMapper.createObjectNode().put("type", "string"));
+        argsAnyOf.add(objectMapper.createObjectNode().put("type", "object"));
+        toolCallItems.putArray("required").add("name");
+        properties.putObject("stopReason").put("type", "string").put("description", "Stop reason for the success response");
+        ObjectNode usageProp = properties.putObject("usage");
+        usageProp.put("type", "object").put("description", "Token usage for the success response");
+        ObjectNode usageProps = usageProp.putObject("properties");
+        usageProps.putObject("inputTokens").put("type", "integer");
+        usageProps.putObject("outputTokens").put("type", "integer");
+        ArrayNode required = schema.putArray("required");
+        required.add("provider");
+        required.add("path");
+        required.add("failStatuses");
+
+        tools.put("mock_llm_failover", new ToolDefinition(
+            "mock_llm_failover",
+            "Creates an LLM failover/retry scenario: the first N requests fail with the specified HTTP statuses, then subsequent requests succeed with a provider-correct LLM response. Use this to test that retry/failover logic (LiteLLM, Envoy AI Gateway, SDK retries) works correctly.",
+            schema,
+            this::handleMockLlmFailover
+        ));
+    }
+
+    private JsonNode handleMockLlmFailover(JsonNode params) {
+        try {
+            // Validate provider
+            String providerStr = params.path("provider").asText(null);
+            if (providerStr == null || providerStr.trim().isEmpty()) {
+                return errorResult("'provider' is required");
+            }
+            Provider provider;
+            try {
+                provider = Provider.valueOf(providerStr.trim());
+            } catch (IllegalArgumentException e) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+
+            // Pre-validate codec availability
+            if (!ProviderCodecRegistry.getInstance().lookup(provider).isPresent()) {
+                return unsupportedLlmProviderResult(providerStr);
+            }
+
+            // Validate path
+            String path = params.path("path").asText(null);
+            if (path == null || path.trim().isEmpty()) {
+                return errorResult("'path' is required and must not be blank");
+            }
+
+            // Validate failStatuses
+            JsonNode failStatusesNode = params.path("failStatuses");
+            if (!failStatusesNode.isArray() || failStatusesNode.size() == 0) {
+                return errorResult("'failStatuses' must be a non-empty array of HTTP status codes");
+            }
+
+            // Build using LlmFailoverBuilder
+            LlmFailoverBuilder builder = LlmFailoverBuilder.llmFailover()
+                .withPath(path)
+                .withProvider(provider)
+                .withModel(params.path("model").asText(null));
+
+            // Add failures
+            for (int i = 0; i < failStatusesNode.size(); i++) {
+                JsonNode statusNode = failStatusesNode.get(i);
+                if (!statusNode.isIntegralNumber()) {
+                    return errorResult("failStatuses[" + i + "] must be an integer");
+                }
+                int status = statusNode.asInt();
+                if (status < 100 || status > 599) {
+                    return errorResult("failStatuses[" + i + "] must be between 100 and 599");
+                }
+                builder.failWith(status);
+            }
+
+            // Build success completion
+            Completion completion = Completion.completion();
+            JsonNode textNode = params.path("text");
+            if (!textNode.isMissingNode() && !textNode.isNull()) {
+                completion.withText(textNode.asText());
+            }
+            JsonNode stopReasonNode = params.path("stopReason");
+            if (!stopReasonNode.isMissingNode() && !stopReasonNode.isNull()) {
+                completion.withStopReason(stopReasonNode.asText());
+            }
+            JsonNode toolCallsNode = params.path("toolCalls");
+            if (toolCallsNode.isArray()) {
+                for (JsonNode tcNode : toolCallsNode) {
+                    String toolName = tcNode.path("name").asText(null);
+                    if (toolName == null || toolName.trim().isEmpty()) {
+                        return errorResult("each toolCalls entry must have a non-empty 'name'");
+                    }
+                    ToolUse toolUse = ToolUse.toolUse(toolName);
+                    JsonNode argsNode = tcNode.path("arguments");
+                    if (!argsNode.isMissingNode() && !argsNode.isNull()) {
+                        if (argsNode.isTextual()) {
+                            toolUse.withArguments(argsNode.asText());
+                        } else if (argsNode.isObject()) {
+                            toolUse.withArguments(objectMapper.writeValueAsString(argsNode));
+                        } else {
+                            return errorResult("toolCalls[].arguments must be a string or object");
+                        }
+                    }
+                    completion.withToolCall(toolUse);
+                }
+            }
+            JsonNode usageNode = params.path("usage");
+            if (usageNode.isObject()) {
+                Usage usage = Usage.usage();
+                JsonNode inputTokensNode = usageNode.path("inputTokens");
+                if (!inputTokensNode.isMissingNode() && !inputTokensNode.isNull() && inputTokensNode.isIntegralNumber()) {
+                    usage.withInputTokens(inputTokensNode.asInt());
+                }
+                JsonNode outputTokensNode = usageNode.path("outputTokens");
+                if (!outputTokensNode.isMissingNode() && !outputTokensNode.isNull() && outputTokensNode.isIntegralNumber()) {
+                    usage.withOutputTokens(outputTokensNode.asInt());
+                }
+                completion.withUsage(usage);
+            }
+
+            builder.thenRespondWith(completion);
+
+            // Build and register expectations
+            Expectation[] expectations = builder.build();
+            List<Expectation> allResults = new ArrayList<>();
+            for (Expectation exp : expectations) {
+                allResults.addAll(httpState.add(exp));
+            }
+
+            // Build result
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("status", "created");
+            resultNode.put("count", allResults.size());
+            resultNode.put("failureAttempts", builder.getFailureCount());
+            resultNode.put("provider", provider.name());
+            ArrayNode ids = resultNode.putArray("ids");
+            for (Expectation exp : allResults) {
+                ids.add(exp.getId());
+            }
+            return resultNode;
+        } catch (IllegalStateException e) {
+            return errorResult(e.getMessage());
+        } catch (Exception e) {
+            return errorResult("Failed to create LLM failover scenario", e);
+        }
+    }
+
     // --- verify_tool_call ---
 
     private void registerVerifyToolCall() {
@@ -3149,8 +3331,9 @@ public class McpToolRegistry {
         schema.put("type", "object");
         ObjectNode properties = schema.putObject("properties");
         ObjectNode providerProp = properties.putObject("provider");
-        providerProp.put("type", "string").put("description", "LLM provider whose recorded requests to inspect");
+        providerProp.put("type", "string").put("description", "LLM provider whose recorded requests to inspect. Use AUTO to detect the provider from the recorded request paths (useful for proxied traffic where the provider is implicit in the upstream URL).");
         ArrayNode providerEnum = providerProp.putArray("enum");
+        providerEnum.add("AUTO");
         for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
             providerEnum.add(name);
         }
@@ -3165,7 +3348,7 @@ public class McpToolRegistry {
 
         tools.put("verify_tool_call", new ToolDefinition(
             "verify_tool_call",
-            "Assert that an agent called a named tool (optionally with arguments matching a regex) a given number of times, by inspecting LLM requests recorded through MockServer.",
+            "Assert that an agent called a named tool (optionally with arguments matching a regex) a given number of times, by inspecting LLM requests recorded through MockServer. Works with both mock-backed and proxied/forwarded traffic.",
             schema,
             this::handleVerifyToolCall
         ));
@@ -3176,10 +3359,6 @@ public class McpToolRegistry {
             String providerStr = params.path("provider").asText(null);
             if (providerStr == null || providerStr.trim().isEmpty()) {
                 return errorResult("'provider' is required");
-            }
-            Provider provider = parseProviderParam(params);
-            if (provider == null) {
-                return unsupportedLlmProviderResult(providerStr);
             }
             String toolName = params.path("toolName").asText(null);
             if (toolName == null || toolName.trim().isEmpty()) {
@@ -3194,6 +3373,13 @@ public class McpToolRegistry {
             }
 
             List<HttpRequest> requests = retrieveRecordedHttpRequests(path);
+            Provider provider = resolveProviderOrAuto(params, requests);
+            if (provider == null) {
+                return "AUTO".equalsIgnoreCase(providerStr.trim())
+                    ? errorResult("could not auto-detect LLM provider from recorded request paths; specify the provider explicitly")
+                    : unsupportedLlmProviderResult(providerStr);
+            }
+
             AgentRunAnalyzer.ToolCallReport report;
             try {
                 report = new AgentRunAnalyzer().inspectToolCalls(requests, provider, toolName, argumentsRegex);
@@ -3204,6 +3390,7 @@ public class McpToolRegistry {
 
             ObjectNode resultNode = objectMapper.createObjectNode();
             resultNode.put("toolName", toolName);
+            resultNode.put("provider", provider.name());
             resultNode.put("count", report.getCount());
             resultNode.put("atLeast", atLeast);
             if (atMost != null) {
@@ -3522,18 +3709,27 @@ public class McpToolRegistry {
         schema.put("type", "object");
         ObjectNode properties = schema.putObject("properties");
         ObjectNode providerProp = properties.putObject("provider");
-        providerProp.put("type", "string").put("description", "LLM provider whose recorded requests to summarise");
+        providerProp.put("type", "string").put("description", "LLM provider whose recorded requests to summarise. Use AUTO to detect the provider from the recorded request paths (useful for proxied traffic where the provider is implicit in the upstream URL).");
         ArrayNode providerEnum = providerProp.putArray("enum");
+        providerEnum.add("AUTO");
         for (String name : ProviderCodecRegistry.getInstance().supportedProviderNames()) {
             providerEnum.add(name);
         }
         properties.putObject("path").put("type", "string").put("description", "Optional request path filter (e.g. /v1/messages)");
+        ObjectNode isolationTypeProp = properties.putObject("isolationType");
+        isolationTypeProp.put("type", "string").put("description", "Optional: scope the run to a single session by the isolation source the conversation was isolated on.");
+        ArrayNode isolationTypeEnum = isolationTypeProp.putArray("enum");
+        isolationTypeEnum.add("header");
+        isolationTypeEnum.add("query_parameter");
+        isolationTypeEnum.add("cookie");
+        properties.putObject("isolationKey").put("type", "string").put("description", "Optional: the header/query-parameter/cookie name used to isolate the session (e.g. x-agent-id).");
+        properties.putObject("isolationValue").put("type", "string").put("description", "Optional: the value identifying the session (e.g. agent-001).");
         ArrayNode required = schema.putArray("required");
         required.add("provider");
 
         tools.put("explain_agent_run", new ToolDefinition(
             "explain_agent_run",
-            "Summarise an agent run reconstructed from recorded LLM requests: message and assistant-turn counts, the ordered tool-call sequence, tool results, and the latest message role.",
+            "Summarise an agent run reconstructed from recorded LLM requests: message and assistant-turn counts, the ordered tool-call sequence, tool results, and the latest message role. Works with both mock-backed and proxied/forwarded traffic.",
             schema,
             this::handleExplainAgentRun
         ));
@@ -3545,15 +3741,22 @@ public class McpToolRegistry {
             if (providerStr == null || providerStr.trim().isEmpty()) {
                 return errorResult("'provider' is required");
             }
-            Provider provider = parseProviderParam(params);
-            if (provider == null) {
-                return unsupportedLlmProviderResult(providerStr);
-            }
             String path = emptyToNull(params.path("path").asText(null));
-            List<HttpRequest> requests = retrieveRecordedHttpRequests(path);
+            String isolationType = emptyToNull(params.path("isolationType").asText(null));
+            String isolationKey = emptyToNull(params.path("isolationKey").asText(null));
+            String isolationValue = emptyToNull(params.path("isolationValue").asText(null));
+            List<HttpRequest> requests = retrieveRecordedHttpRequests(path, isolationType, isolationKey, isolationValue);
+            Provider provider = resolveProviderOrAuto(params, requests);
+            if (provider == null) {
+                return "AUTO".equalsIgnoreCase(providerStr.trim())
+                    ? errorResult("could not auto-detect LLM provider from recorded request paths; specify the provider explicitly")
+                    : unsupportedLlmProviderResult(providerStr);
+            }
+
             Optional<AgentRunAnalyzer.RunSummary> summaryOpt = new AgentRunAnalyzer().summarise(requests, provider);
 
             ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("provider", provider.name());
             if (!summaryOpt.isPresent()) {
                 resultNode.put("message", "no decodable " + provider + " conversation found in recorded requests");
                 resultNode.put("messageCount", 0);
@@ -3588,6 +3791,69 @@ public class McpToolRegistry {
             return resultNode;
         } catch (Exception e) {
             return errorResult("Failed to explain agent run", e);
+        }
+    }
+
+    // --- export_optimisation_report ---
+
+    private void registerExportOptimisationReport() {
+        ObjectNode schema = objectMapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode properties = schema.putObject("properties");
+        ObjectNode formatProp = properties.putObject("format");
+        formatProp.put("type", "string").put("description",
+            "Output format: 'markdown' for the copy-paste optimisation brief (default), or 'json' for the structured LlmOptimisationReport bundle.");
+        ArrayNode formatEnum = formatProp.putArray("enum");
+        formatEnum.add("markdown");
+        formatEnum.add("json");
+        properties.putObject("session").put("type", "string").put("description",
+            "Optional session/grouping key filter (e.g. 'host:api.openai.com'); default is all captured LLM traffic.");
+        properties.putObject("host").put("type", "string").put("description",
+            "Optional upstream host filter (e.g. api.openai.com).");
+        properties.putObject("provider").put("type", "string").put("description",
+            "Optional LLM provider filter (e.g. OPENAI, ANTHROPIC).");
+
+        tools.put("export_optimisation_report", new ToolDefinition(
+            "export_optimisation_report",
+            "Turn captured LLM traffic (proxied through MockServer) into an optimisation export: a copy-paste Markdown "
+                + "'optimisation brief' (paste into any LLM for cost-reduction advice) or the structured JSON bundle. "
+                + "Includes deterministic optimisation signals (repeated system prompts, large static context resent, "
+                + "deterministic tool calls, oversized tool results, output bloat, duplicate retries) with token and cost "
+                + "estimates. Export-only and deterministic — MockServer never calls an LLM. Secrets are redacted.",
+            schema,
+            this::handleExportOptimisationReport
+        ));
+    }
+
+    private JsonNode handleExportOptimisationReport(JsonNode params) {
+        try {
+            String format = params.path("format").asText("markdown");
+            if (!"markdown".equalsIgnoreCase(format) && !"json".equalsIgnoreCase(format)) {
+                return errorResult("'format' must be one of: markdown, json");
+            }
+            org.mockserver.llm.analysis.LlmOptimisationReportService.Filter filter =
+                new org.mockserver.llm.analysis.LlmOptimisationReportService.Filter(
+                    emptyToNull(params.path("session").asText(null)),
+                    emptyToNull(params.path("host").asText(null)),
+                    emptyToNull(params.path("provider").asText(null)));
+
+            List<LogEventRequestAndResponse> pairs = retrieveRecordedPairs(null);
+            org.mockserver.llm.analysis.LlmOptimisationReportService service =
+                new org.mockserver.llm.analysis.LlmOptimisationReportService();
+            org.mockserver.llm.analysis.LlmOptimisationReportService.Result result = service.build(pairs, filter);
+
+            if ("json".equalsIgnoreCase(format)) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("format", "json");
+                resultNode.set("report", objectMapper.valueToTree(result.getReport()));
+                return resultNode;
+            }
+            ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("format", "markdown");
+            resultNode.put("brief", service.renderBrief(result));
+            return resultNode;
+        } catch (Exception e) {
+            return errorResult("Failed to export optimisation report", e);
         }
     }
 
@@ -3835,6 +4101,19 @@ public class McpToolRegistry {
         }
     }
 
+    /**
+     * Resolve the provider from the params, supporting {@code "AUTO"} as a
+     * special value that auto-detects the provider from the recorded requests'
+     * paths. Returns null if the provider cannot be resolved.
+     */
+    private Provider resolveProviderOrAuto(JsonNode params, List<HttpRequest> requests) {
+        String providerStr = params.path("provider").asText(null);
+        if (providerStr != null && "AUTO".equalsIgnoreCase(providerStr.trim())) {
+            return ProviderDetector.detectFromRequests(requests).orElse(null);
+        }
+        return parseProviderParam(params);
+    }
+
     private static String emptyToNull(String value) {
         return value == null || value.isEmpty() ? null : value;
     }
@@ -3975,9 +4254,31 @@ public class McpToolRegistry {
      * as concrete {@link HttpRequest}s for LLM analysis.
      */
     private List<HttpRequest> retrieveRecordedHttpRequests(String path) {
+        return retrieveRecordedHttpRequests(path, null, null, null);
+    }
+
+    private List<HttpRequest> retrieveRecordedHttpRequests(String path, String isolationType, String isolationKey, String isolationValue) {
         HttpRequest filter = request();
         if (path != null && !path.isEmpty()) {
             filter.withPath(path);
+        }
+        if (isolationKey != null && !isolationKey.trim().isEmpty()
+            && isolationValue != null && !isolationValue.trim().isEmpty()
+            && isolationType != null) {
+            switch (isolationType.trim().toLowerCase()) {
+                case "header":
+                    filter.withHeader(isolationKey, isolationValue);
+                    break;
+                case "query_parameter":
+                    filter.withQueryStringParameter(isolationKey, isolationValue);
+                    break;
+                case "cookie":
+                    filter.withCookie(isolationKey, isolationValue);
+                    break;
+                default:
+                    // unknown isolation type: no extra filter (graceful)
+                    break;
+            }
         }
         HttpRequest retrieveRequest = request()
             .withMethod("PUT")

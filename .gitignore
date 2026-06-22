@@ -157,6 +157,11 @@ terraform/**/*.tfplan
 ##############################################
 .worktrees/
 
+# operator halt sentinels (kill-switch; global + scoped) #
+##########################################################
+/AGENT_HALT
+/AGENT_HALT_*
+
 # opencode commit lock (parallel session safety) #
 ###################################################
 /.tmp/.commit-lock
@@ -179,6 +184,11 @@ build-*/
 docker_build/maven/corporate-root-ca.pem
 docker/local/ca-bundle.pem
 docker/graaljs/ca-bundle.pem
+docker/ca-bundle.pem
+docker/root/ca-bundle.pem
+docker/snapshot/ca-bundle.pem
+docker/root-snapshot/ca-bundle.pem
+docker/clustered/ca-bundle.pem
 
 # soft links #
 ##############
@@ -196,3 +206,9 @@ __pycache__/
 # MQTT broker (e.g. the demo's launch-with-demo-data.sh --with-broker mode)      #
 ##################################################################################
 mockserver-mqtt-*/
+
+# Compiled Go example binaries (examples are run via `go run`, not committed)
+examples/go/create_expectation/create_expectation
+examples/go/modify_proxied_response/modify_proxied_response
+examples/go/scenario/scenario
+examples/go/callback/callback

@@ -174,6 +174,78 @@ public class OpenApiTrafficValidatorTest {
         assertThat(results.get(0).getMatchedOperation(), containsString("/pets/{petId}"));
     }
 
+    private static final String CONCRETE_BEFORE_TEMPLATED = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_concrete_before_templated.yaml");
+
+    @Test
+    public void shouldPreferConcretePathOverTemplatedPath() {
+        // given - spec declares "/users/{id}" BEFORE concrete "/users/me"; the concrete path must win.
+        // A body valid only for the concrete "/users/me" schema proves which operation was selected.
+        HttpRequest request = request("/users/me").withMethod("GET");
+        HttpResponse response = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("{\"me\": \"value\"}");
+
+        // when
+        List<OpenApiTrafficValidator.TrafficValidationResult> results = validator.validate(
+            CONCRETE_BEFORE_TEMPLATED,
+            Collections.singletonList(Pair.of(request, response))
+        );
+
+        // then - the concrete /users/me operation is matched and the body validates cleanly
+        assertThat(results, hasSize(1));
+        assertThat(results.get(0).getMatchedOperation(), containsString("/users/me"));
+        assertThat(results.get(0).isPassed(), is(true));
+    }
+
+    @Test
+    public void shouldContinueBatchWhenOnePairThrows() {
+        // given - a first pair with a null request triggers an unexpected throwable inside validatePair;
+        // the batch must record a failed result for it and continue validating the remaining pairs
+        HttpRequest validRequest = request("/pets").withMethod("GET");
+        HttpResponse validResponse = response()
+            .withStatusCode(200)
+            .withHeader("content-type", "application/json")
+            .withBody("[{\"id\": 1, \"name\": \"Fido\"}]");
+
+        // when
+        List<OpenApiTrafficValidator.TrafficValidationResult> results = validator.validate(
+            SPEC,
+            Arrays.asList(Pair.of(null, validResponse), Pair.of(validRequest, validResponse))
+        );
+
+        // then - the throwing pair is recorded as failed, and the valid pair is still validated
+        assertThat(results, hasSize(2));
+        assertThat(results.get(0).isPassed(), is(false));
+        assertThat(results.get(0).getRequestErrors(), is(not(empty())));
+        // the error names what was being validated and the exception type, never a bare "null"
+        String error = results.get(0).getRequestErrors().get(0);
+        assertThat(error, containsString("OpenAPI traffic validation"));
+        assertThat(error, containsString("NullPointerException"));
+        // must never degrade to a bare "...: null" (the empty-message case)
+        assertThat(error, not(endsWith(": null")));
+        assertThat(results.get(1).isPassed(), is(true));
+    }
+
+    private static final String WEBHOOKS_ONLY = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_31_webhooks_only.yaml");
+
+    @Test
+    public void shouldNotNpeForWebhooksOnlySpec() {
+        // given - a valid OAS 3.1 spec with webhooks and NO paths; getPaths() returns null
+        HttpRequest request = request("/pets").withMethod("GET");
+        HttpResponse response = response().withStatusCode(200);
+
+        // when
+        List<OpenApiTrafficValidator.TrafficValidationResult> results = validator.validate(
+            WEBHOOKS_ONLY,
+            Collections.singletonList(Pair.of(request, response))
+        );
+
+        // then - no NPE; just an ordinary unmatched-operation result
+        assertThat(results, hasSize(1));
+        assertThat(results.get(0).getMatchedOperation(), is(nullValue()));
+    }
+
     @Test
     public void shouldHandleEmptyPairsList() {
         // when

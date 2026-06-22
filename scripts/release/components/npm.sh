@@ -38,6 +38,25 @@ publish_one() {
   local npm_name pkg_version
   npm_name=$(jq -r '.name' "$REPO_ROOT/$pkg/package.json")
   pkg_version=$(jq -r '.version' "$REPO_ROOT/$pkg/package.json")
+  # In dry-run, update-version-references (which bumps these manifests) is
+  # skipped, and its bump would never reach this step's fresh checkout anyway.
+  # Bump package.json in-place to RELEASE_VERSION so the dry-run validates the
+  # real release version, and back up the lockfile (npm i churns it). Restore
+  # both on return so the working tree stays clean (dry-run never commits).
+  if is_dry_run; then
+    mkdir -p "$REPO_ROOT/.tmp"
+    cp "$REPO_ROOT/$pkg/package.json"      "$REPO_ROOT/.tmp/$pkg.package.json.bak"
+    cp "$REPO_ROOT/$pkg/package-lock.json" "$REPO_ROOT/.tmp/$pkg.package-lock.json.bak"
+    # shellcheck disable=SC2064  # expand $pkg now, not at trap-fire time
+    trap "cp '$REPO_ROOT/.tmp/$pkg.package.json.bak' '$REPO_ROOT/$pkg/package.json' 2>/dev/null || true; cp '$REPO_ROOT/.tmp/$pkg.package-lock.json.bak' '$REPO_ROOT/$pkg/package-lock.json' 2>/dev/null || true" RETURN
+    if [[ "$pkg_version" != "$RELEASE_VERSION" ]]; then
+      _newpkg="$REPO_ROOT/.tmp/$pkg.package.json.new"
+      jq --arg v "$RELEASE_VERSION" '.version = $v' "$REPO_ROOT/$pkg/package.json" > "$_newpkg" \
+        && mv "$_newpkg" "$REPO_ROOT/$pkg/package.json"
+      pkg_version="$RELEASE_VERSION"
+      log_info "[$pkg] dry-run: bumped package.json version to $RELEASE_VERSION in-place (not committed)"
+    fi
+  fi
   if [[ "$pkg_version" != "$RELEASE_VERSION" ]]; then
     log_error "[$pkg] $pkg/package.json version ($pkg_version) does not match RELEASE_VERSION ($RELEASE_VERSION) — refusing to publish wrong version"
     return 1
@@ -48,15 +67,6 @@ publish_one() {
       "https://registry.npmjs.org/$npm_name/$RELEASE_VERSION" 2>/dev/null; then
     log_info "[$pkg] $npm_name@$RELEASE_VERSION already on npm - skipping"
     return 0
-  fi
-  # In dry-run we still exercise the full "rm lockfile + npm install" path
-  # so the test stays faithful to the real release, but we restore the
-  # committed package-lock.json afterwards so the working tree is clean.
-  if is_dry_run; then
-    mkdir -p "$REPO_ROOT/.tmp"
-    cp "$REPO_ROOT/$pkg/package-lock.json" "$REPO_ROOT/.tmp/$pkg.package-lock.json.bak"
-    # shellcheck disable=SC2064  # expand $pkg now, not at trap-fire time
-    trap "cp '$REPO_ROOT/.tmp/$pkg.package-lock.json.bak' '$REPO_ROOT/$pkg/package-lock.json' 2>/dev/null || true" RETURN
   fi
   log_info "[$pkg] build"
   in_docker "$NODE_IMAGE" \
@@ -134,6 +144,11 @@ NPMRC
   done
   log_info "[$pkg] $npm_name@$RELEASE_VERSION is live on npm"
 }
+
+# The in-container `npm i` in publish_one writes a root-owned node_modules into
+# each package's bind-mounted workspace dir that the next job's git checkout
+# cannot clean (see clean_workspace_node_modules). Remove both on every exit path.
+trap 'clean_workspace_node_modules mockserver-node mockserver-client-node' EXIT
 
 publish_one mockserver-node
 publish_one mockserver-client-node

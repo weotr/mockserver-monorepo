@@ -6,6 +6,7 @@ import org.junit.Test;
 import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.metrics.Metrics;
 import org.mockserver.model.HttpChaosProfile;
+import org.mockserver.model.TcpChaosProfile;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +32,7 @@ public class ChaosAutoHaltMonitorTest {
         Metrics.resetAdditionalMetricsForTesting();
         ChaosAutoHaltMonitor.getInstance().reset();
         ServiceChaosRegistry.getInstance().reset();
+        TcpChaosRegistry.getInstance().reset();
     }
 
     @After
@@ -41,6 +43,7 @@ public class ChaosAutoHaltMonitorTest {
         Metrics.resetAdditionalMetricsForTesting();
         ChaosAutoHaltMonitor.getInstance().reset();
         ServiceChaosRegistry.getInstance().reset();
+        TcpChaosRegistry.getInstance().reset();
     }
 
     @Test
@@ -477,6 +480,54 @@ public class ChaosAutoHaltMonitorTest {
     }
 
     @Test
+    public void shouldNotAccumulateTimestampsWhenThresholdIsZero() {
+        AtomicLong now = new AtomicLong(1000L);
+        ChaosAutoHaltMonitor monitor = new ChaosAutoHaltMonitor(now::get);
+
+        ConfigurationProperties.chaosAutoHaltEnabled(true);
+        ConfigurationProperties.chaosAutoHaltErrorThreshold(0);
+        ConfigurationProperties.chaosAutoHaltWindowMillis(10_000L);
+
+        ServiceChaosRegistry.getInstance().put("upstream.svc", httpChaosProfile().withErrorStatus(503));
+
+        // when - record many destructive errors with threshold <= 0
+        for (int i = 0; i < 100; i++) {
+            monitor.recordError("error");
+        }
+
+        // then - no timestamps accumulated and chaos is NOT halted
+        assertThat("window must remain empty when threshold is zero",
+            monitor.currentWindowSize(), is(0));
+        assertThat("chaos must not be halted when threshold is zero",
+            ServiceChaosRegistry.getInstance().entries().isEmpty(), is(false));
+        assertThat(monitor.getHaltCount(), is(0L));
+    }
+
+    @Test
+    public void shouldNotAccumulateTimestampsWhenThresholdIsNegative() {
+        AtomicLong now = new AtomicLong(1000L);
+        ChaosAutoHaltMonitor monitor = new ChaosAutoHaltMonitor(now::get);
+
+        ConfigurationProperties.chaosAutoHaltEnabled(true);
+        ConfigurationProperties.chaosAutoHaltErrorThreshold(-5);
+        ConfigurationProperties.chaosAutoHaltWindowMillis(10_000L);
+
+        ServiceChaosRegistry.getInstance().put("upstream.svc", httpChaosProfile().withErrorStatus(503));
+
+        // when - record many destructive errors with negative threshold
+        for (int i = 0; i < 100; i++) {
+            monitor.recordError("error");
+        }
+
+        // then - no timestamps accumulated and chaos is NOT halted
+        assertThat("window must remain empty when threshold is negative",
+            monitor.currentWindowSize(), is(0));
+        assertThat("chaos must not be halted when threshold is negative",
+            ServiceChaosRegistry.getInstance().entries().isEmpty(), is(false));
+        assertThat(monitor.getHaltCount(), is(0L));
+    }
+
+    @Test
     public void shouldFireHaltCorrectlyUnderConcurrency() throws Exception {
         // Verify the circuit breaker actually fires under concurrent load.
         // Multiple threads record errors; with a low threshold the halt must fire
@@ -518,5 +569,47 @@ public class ChaosAutoHaltMonitorTest {
             monitor.getHaltCount(), greaterThanOrEqualTo(1L));
         assertThat("chaos registry must be empty after halt",
             ServiceChaosRegistry.getInstance().entries().isEmpty(), is(true));
+    }
+
+    @Test
+    public void shouldResetTcpChaosRegistryWhenHalting() {
+        // given - the auto-halt window is configured and a connection-lifecycle (TCP-layer) profile
+        // is the ONLY active chaos (no service-scoped chaos), proving the halt clears the TCP registry.
+        AtomicLong now = new AtomicLong(1000L);
+        ChaosAutoHaltMonitor monitor = new ChaosAutoHaltMonitor(now::get);
+
+        ConfigurationProperties.chaosAutoHaltEnabled(true);
+        ConfigurationProperties.chaosAutoHaltErrorThreshold(2);
+        ConfigurationProperties.chaosAutoHaltWindowMillis(10_000L);
+
+        TcpChaosRegistry.getInstance().put("upstream.svc", TcpChaosProfile.tcpChaosProfile().withResetMidResponse(true));
+        assertThat(TcpChaosRegistry.getInstance().activeCount(), is(1));
+        assertThat(ServiceChaosRegistry.getInstance().entries().isEmpty(), is(true));
+
+        // when - a mid-response-RST "drop" storm crosses the threshold
+        monitor.recordError("drop");
+        monitor.recordError("drop");
+
+        // then - the breaker fires and clears the TCP-layer chaos so the RST storm stops
+        assertThat(monitor.getHaltCount(), is(1L));
+        assertThat("TCP chaos registry must be empty after halt",
+            TcpChaosRegistry.getInstance().activeCount(), is(0));
+    }
+
+    @Test
+    public void shouldNotHaltWhenOnlyTcpChaosWasAlreadyCleared() {
+        // given - threshold crossed but no active chaos of either kind: the breaker must not "fire"
+        AtomicLong now = new AtomicLong(1000L);
+        ChaosAutoHaltMonitor monitor = new ChaosAutoHaltMonitor(now::get);
+
+        ConfigurationProperties.chaosAutoHaltEnabled(true);
+        ConfigurationProperties.chaosAutoHaltErrorThreshold(2);
+        ConfigurationProperties.chaosAutoHaltWindowMillis(10_000L);
+
+        // no chaos registered at all
+        monitor.recordError("drop");
+        monitor.recordError("drop");
+
+        assertThat("no halt when nothing is active to halt", monitor.getHaltCount(), is(0L));
     }
 }

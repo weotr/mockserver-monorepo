@@ -97,14 +97,20 @@ spec:
               containerPort: {{ .Values.clustering.jgroupsPort | default 7800 }}
               protocol: TCP
 {{- end }}
+          # Readiness gates traffic on startup completion: /mockserver/ready returns 503 until the
+          # expectation initializers and OpenAPI seeding finish, then 200. This is distinct from the
+          # liveness path below (which is 200 the instant the port binds) so the orchestrator does
+          # not route requests before the seeded expectations exist.
           readinessProbe:
             httpGet:
-              path: /liveness/probe
+              path: /mockserver/ready
               port: serviceport
             initialDelaySeconds: 2
             periodSeconds: 2
             successThreshold: 1
             failureThreshold: 10
+          # Liveness only checks the process is alive and serving: the always-200 liveness path is
+          # correct here so a slow initializer does not get the pod killed and restarted in a loop.
           livenessProbe:
             httpGet:
               path: /liveness/probe

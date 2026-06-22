@@ -40,7 +40,9 @@ public class StringExample extends AbstractExample {
     }
 
     public String asString() {
-        return value != null ? value : "null";
+        // a null value renders as an empty string, not the literal text "null" (which would otherwise
+        // leak into an XML element/attribute value as e.g. <field>null</field>)
+        return value != null ? value : "";
     }
 
     public String getValue() {

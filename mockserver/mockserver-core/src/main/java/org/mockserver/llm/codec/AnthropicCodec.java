@@ -12,7 +12,6 @@ import org.mockserver.llm.StreamingPhysicsExpander;
 import org.mockserver.model.*;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -221,6 +220,7 @@ public class AnthropicCodec implements ProviderCodec {
                 String textContent = "";
                 List<ToolUse> toolCalls = new ArrayList<>();
                 Map<String, String> toolResults = new LinkedHashMap<>();
+                List<ParsedMessage.ImagePart> images = new ArrayList<>();
                 boolean hasToolResult = false;
 
                 if (contentNode != null) {
@@ -233,6 +233,11 @@ public class AnthropicCodec implements ProviderCodec {
                             if ("text".equals(blockType)) {
                                 String text = block.has("text") ? block.get("text").asText("") : "";
                                 textBuilder.append(text);
+                            } else if ("image".equals(blockType)) {
+                                // Anthropic image block: {"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}
+                                JsonNode source = block.path("source");
+                                String mediaType = source.has("media_type") ? source.path("media_type").asText(null) : null;
+                                images.add(new ParsedMessage.ImagePart(mediaType));
                             } else if ("tool_use".equals(blockType)) {
                                 String toolId = block.has("id") ? block.get("id").asText("") : null;
                                 String name = block.has("name") ? block.get("name").asText("") : "";
@@ -289,7 +294,8 @@ public class AnthropicCodec implements ProviderCodec {
                     role,
                     textContent,
                     toolCalls.isEmpty() ? null : toolCalls,
-                    toolResults.isEmpty() ? null : toolResults
+                    toolResults.isEmpty() ? null : toolResults,
+                    images.isEmpty() ? null : images
                 ));
             }
 

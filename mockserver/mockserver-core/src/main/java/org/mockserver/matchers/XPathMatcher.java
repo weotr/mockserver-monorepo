@@ -4,22 +4,10 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.apache.commons.lang3.StringUtils;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
-import org.mockserver.xml.StringToXmlDocumentParser;
 import org.mockserver.xml.XPathEvaluator;
-import org.xml.sax.SAXException;
 
-import java.io.IOException;
-import java.util.Iterator;
 import java.util.Map;
-import javax.xml.XMLConstants;
-import javax.xml.namespace.NamespaceContext;
-import javax.xml.namespace.QName;
-import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
-import javax.xml.xpath.XPathExpression;
-import javax.xml.xpath.XPathExpressionException;
-import javax.xml.xpath.XPathFactory;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.xml.StringToXmlDocumentParser.ErrorLevel.prettyPrint;

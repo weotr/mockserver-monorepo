@@ -479,6 +479,167 @@ public class HttpRequestHandlerTest {
     }
 
     @Test
+    public void shouldAllowOpenAPISpecForReadOnlyPrincipalWhenAuthorizationEnabled() {
+        // given - GET /openapi.yaml is a READ, so a read-only principal is allowed even
+        // with authorization enabled (the Netty-layer route now takes the shared authz gate)
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest openAPIRequest = request("/mockserver/openapi.yaml").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(openAPIRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("openapi: 3.0.0"));
+    }
+
+    @Test
+    public void shouldAllowOpenAPISpecForMutatePrincipalWhenAuthorizationEnabled() {
+        // given - a mutate-role principal may read /openapi.yaml (mutate >= read)
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("qa", java.util.Set.of("qa-team"));
+        HttpRequest openAPIRequest = request("/mockserver/openapi.yaml").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(openAPIRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("openapi: 3.0.0"));
+    }
+
+    @Test
+    public void shouldAllowOpenAPISpecForAdminPrincipalWhenAuthorizationEnabled() {
+        // given - an admin-role principal may read /openapi.yaml (admin >= read)
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("root", java.util.Set.of("platform-admins"));
+        HttpRequest openAPIRequest = request("/mockserver/openapi.yaml").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(openAPIRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("openapi: 3.0.0"));
+    }
+
+    @Test
+    public void shouldForbidOpenAPISpecForUnmappedPrincipalWhenAuthorizationEnabled() {
+        // given - a VERIFIED principal whose scopes map to NO role: even a read is denied
+        // (fail-closed) with 403 (not 401) because authentication succeeded
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("stranger", java.util.Set.of("no-mapped-group"));
+        HttpRequest openAPIRequest = request("/mockserver/openapi.yaml").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(openAPIRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(403));
+        assertThat(httpResponse.getBodyAsString(), containsString("Forbidden for control plane"));
+    }
+
+    @Test
+    public void shouldAllowOpenAPISpecForUnmappedPrincipalWhenAuthorizationDisabled() {
+        // given - authorization disabled: an authenticated principal with no mapped role
+        // still reads /openapi.yaml (authn only, no authz) — default-off behaviour unchanged
+        rebuildHttpStateWithAuthorization(false);
+        authenticateWithScopes("stranger", java.util.Set.of("no-mapped-group"));
+        HttpRequest openAPIRequest = request("/mockserver/openapi.yaml").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(openAPIRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("openapi: 3.0.0"));
+    }
+
+    @Test
+    public void shouldRejectOptimisationReportWhenAuthEnabled() {
+        // given - legacy boolean authentication handler rejects: 401
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> false);
+        HttpRequest reportRequest = request("/mockserver/llm/optimisationReport").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(reportRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(401));
+        assertThat(httpResponse.getBodyAsString(), containsString("Unauthorized for control plane"));
+    }
+
+    @Test
+    public void shouldAllowOptimisationReportForReadOnlyPrincipalWhenAuthorizationEnabled() {
+        // given - GET /llm/optimisationReport is a READ; a read-only principal is allowed
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest reportRequest = request("/mockserver/llm/optimisationReport").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(reportRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+    }
+
+    @Test
+    public void shouldAllowOptimisationReportForAdminPrincipalWhenAuthorizationEnabled() {
+        // given - an admin-role principal may read the optimisation report (admin >= read)
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("root", java.util.Set.of("platform-admins"));
+        HttpRequest reportRequest = request("/mockserver/llm/optimisationReport").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(reportRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+    }
+
+    @Test
+    public void shouldForbidOptimisationReportForUnmappedPrincipalWhenAuthorizationEnabled() {
+        // given - a VERIFIED principal whose scopes map to NO role: even this read is denied
+        // (fail-closed) with 403 + audit FORBIDDEN because authentication succeeded
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("stranger", java.util.Set.of("no-mapped-group"));
+        HttpRequest reportRequest = request("/mockserver/llm/optimisationReport").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(reportRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(403));
+        assertThat(httpResponse.getBodyAsString(), containsString("Forbidden for control plane"));
+    }
+
+    @Test
+    public void shouldAllowOptimisationReportForUnmappedPrincipalWhenAuthorizationDisabled() {
+        // given - authorization disabled: an authenticated principal with no mapped role
+        // still reads the optimisation report (authn only) — default-off behaviour unchanged
+        rebuildHttpStateWithAuthorization(false);
+        authenticateWithScopes("stranger", java.util.Set.of("no-mapped-group"));
+        HttpRequest reportRequest = request("/mockserver/llm/optimisationReport").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(reportRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+    }
+
+    @Test
     public void shouldReturnConfiguration() {
         // given
         HttpRequest configRequest = request("/mockserver/configuration").withMethod("GET");
@@ -538,6 +699,129 @@ public class HttpRequestHandlerTest {
         // then
         HttpResponse httpResponse = embeddedChannel.readOutbound();
         assertThat(httpResponse.getStatusCode(), is(401));
+    }
+
+    @Test
+    public void shouldForbidConfigurationUpdateForReadOnlyPrincipalWhenAuthorizationEnabled() {
+        // given - authorization enabled with a read-only principal; PUT /configuration mutates
+        // live config, so it must be classified MUTATE and rejected with 403 (not 401) — the
+        // Netty-layer /configuration route now takes the same authz decision as HttpState.handle
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest updateRequest = request("/mockserver/configuration")
+            .withMethod("PUT")
+            .withBody("{\"logLevel\":\"WARN\"}");
+
+        // when
+        embeddedChannel.writeInbound(updateRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(403));
+        assertThat(httpResponse.getBodyAsString(), containsString("Forbidden for control plane"));
+    }
+
+    @Test
+    public void shouldAllowConfigurationReadForReadOnlyPrincipalWhenAuthorizationEnabled() {
+        // given - GET /configuration is a READ, so a read-only principal is allowed
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest configRequest = request("/mockserver/configuration").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(configRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("\"logLevel\""));
+    }
+
+    @Test
+    public void shouldAllowConfigurationUpdateForMutatePrincipalWhenAuthorizationEnabled() {
+        // given - a mutate-role principal may PUT /configuration
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("qa", java.util.Set.of("qa-team"));
+        HttpRequest updateRequest = request("/mockserver/configuration")
+            .withMethod("PUT")
+            .withBody("{\"logLevel\":\"WARN\"}");
+
+        // when
+        embeddedChannel.writeInbound(updateRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("\"logLevel\" : \"WARN\""));
+    }
+
+    @Test
+    public void shouldAllowConfigurationUpdateForAdminPrincipalWhenAuthorizationEnabled() {
+        // given - an admin-role principal may PUT /configuration
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("root", java.util.Set.of("platform-admins"));
+        HttpRequest updateRequest = request("/mockserver/configuration")
+            .withMethod("PUT")
+            .withBody("{\"logLevel\":\"WARN\"}");
+
+        // when
+        embeddedChannel.writeInbound(updateRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("\"logLevel\" : \"WARN\""));
+    }
+
+    @Test
+    public void shouldAllowConfigurationUpdateForReadOnlyPrincipalWhenAuthorizationDisabled() {
+        // given - authorization disabled: byte-for-byte Wave-1 behaviour, an authenticated
+        // read-only principal can still PUT /configuration (authn only, no authz)
+        rebuildHttpStateWithAuthorization(false);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest updateRequest = request("/mockserver/configuration")
+            .withMethod("PUT")
+            .withBody("{\"logLevel\":\"WARN\"}");
+
+        // when
+        embeddedChannel.writeInbound(updateRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), containsString("\"logLevel\" : \"WARN\""));
+    }
+
+    /**
+     * Rebuilds {@link #httpStateHandler} (and re-wires the embedded channel handler) with a
+     * configuration that enables/disables control-plane authorization and a fixed scope
+     * mapping, so the Netty-layer /configuration route exercises the shared authz gate.
+     */
+    private void rebuildHttpStateWithAuthorization(boolean authorizationEnabled) {
+        java.util.Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> mapping = new java.util.LinkedHashMap<>();
+        mapping.put("platform-admins", org.mockserver.authentication.authorization.ControlPlaneRole.ADMIN);
+        mapping.put("qa-team", org.mockserver.authentication.authorization.ControlPlaneRole.MUTATE);
+        mapping.put("viewers", org.mockserver.authentication.authorization.ControlPlaneRole.READ);
+        org.mockserver.configuration.Configuration configuration = configuration()
+            .controlPlaneAuthorizationEnabled(authorizationEnabled)
+            .controlPlaneScopeMapping(mapping);
+        httpStateHandler = new HttpState(configuration, new MockServerLogger(), mock(Scheduler.class));
+        mockServerHandler = new HttpRequestHandler(configuration, server, httpStateHandler, null);
+        embeddedChannel = new EmbeddedChannel(mockServerHandler);
+    }
+
+    private void authenticateWithScopes(String principal, java.util.Set<String> scopes) {
+        httpStateHandler.setControlPlaneAuthenticationHandler(new org.mockserver.authentication.AuthenticationHandler() {
+            @Override
+            public boolean controlPlaneRequestAuthenticated(HttpRequest request) {
+                return true;
+            }
+
+            @Override
+            public org.mockserver.authentication.AuthenticationResult authenticate(HttpRequest request) {
+                return org.mockserver.authentication.AuthenticationResult.authenticated(principal, "verified-oidc", java.util.Map.of("sub", principal), scopes);
+            }
+        });
     }
 
     @Test

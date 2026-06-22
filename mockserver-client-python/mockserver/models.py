@@ -44,6 +44,7 @@ _FIELD_MAP = {
     "response_callback": "responseCallback",
     "drop_connection": "dropConnection",
     "response_bytes": "responseBytes",
+    "stream_error": "streamError",
     "http_request": "httpRequest",
     "http_response": "httpResponse",
     "http_response_template": "httpResponseTemplate",
@@ -56,6 +57,8 @@ _FIELD_MAP = {
     "http_override_forwarded_request": "httpOverrideForwardedRequest",
     "http_error": "httpError",
     "template_type": "templateType",
+    "template_file": "templateFile",
+    "file_path": "filePath",
     "base64_bytes": "base64Bytes",
     "not_body": "not",
     "content_type": "contentType",
@@ -81,6 +84,13 @@ _FIELD_MAP = {
     "http_class_callback": "httpClassCallback",
     "http_object_callback": "httpObjectCallback",
     "failure_policy": "failurePolicy",
+    "http_llm_response": "httpLlmResponse",
+    "response_weights": "responseWeights",
+    "switch_after": "switchAfter",
+    "cross_protocol_scenarios": "crossProtocolScenarios",
+    "match_pattern": "matchPattern",
+    "scenario_name": "scenarioName",
+    "target_state": "targetState",
 }
 
 
@@ -131,7 +141,7 @@ def _serialize_body(body: Body | str | dict | None) -> Any:
     return body
 
 
-_BODY_TYPES = {"STRING", "JSON", "REGEX", "XML", "BINARY", "JSON_SCHEMA", "JSON_PATH", "XPATH", "XML_SCHEMA", "JSON_RPC", "GRAPHQL"}
+_BODY_TYPES = {"STRING", "JSON", "REGEX", "XML", "BINARY", "JSON_SCHEMA", "JSON_PATH", "XPATH", "XML_SCHEMA", "JSON_RPC", "GRAPHQL", "FILE"}
 
 
 def _deserialize_body(data: Any) -> Body | JsonRpcBody | str | dict | None:
@@ -144,6 +154,12 @@ def _deserialize_body(data: Any) -> Body | JsonRpcBody | str | dict | None:
             return JsonRpcBody(
                 method=data.get("method", ""),
                 params_schema=data.get("paramsSchema"),
+                not_body=data.get("not", False),
+                optional=data.get("optional", False),
+            )
+        if data.get("type") == "JSON_PATH":
+            return JsonPathBody(
+                json_path=data.get("jsonPath", ""),
                 not_body=data.get("not", False),
                 optional=data.get("optional", False),
             )
@@ -184,6 +200,26 @@ def _deserialize_key_multi_values(data: list | dict | None) -> list[KeyToMultiVa
         else:
             result.append(KeyToMultiValue.from_dict(item))
     return result
+
+
+def _serialize_cookies(items: list[KeyToMultiValue] | None) -> dict | None:
+    # Unlike headers / query parameters, MockServer represents cookies as a
+    # single-value {name: value} object map, not a [{name, values}] array.
+    if items is None:
+        return None
+    return {item.name: (item.values[0] if item.values else "") for item in items}
+
+
+def _deserialize_cookies(data: dict | list | None) -> list[KeyToMultiValue] | None:
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        return [
+            KeyToMultiValue(name=k, values=v if isinstance(v, list) else [v])
+            for k, v in data.items()
+        ]
+    # tolerate the legacy array form on read
+    return _deserialize_key_multi_values(data)
 
 
 @dataclass
@@ -424,6 +460,8 @@ class Body:
     not_body: bool | None = None
     content_type: str | None = None
     charset: str | None = None
+    file_path: str | None = None
+    template_type: str | None = None
 
     def to_dict(self) -> dict:
         result = {}
@@ -441,6 +479,10 @@ class Body:
             result["contentType"] = self.content_type
         if self.charset is not None:
             result["charset"] = self.charset
+        if self.file_path is not None:
+            result["filePath"] = self.file_path
+        if self.template_type is not None:
+            result["templateType"] = self.template_type
         return result
 
     @classmethod
@@ -455,6 +497,8 @@ class Body:
             not_body=data.get("not"),
             content_type=data.get("contentType"),
             charset=data.get("charset"),
+            file_path=data.get("filePath"),
+            template_type=data.get("templateType"),
         )
 
 
@@ -473,6 +517,23 @@ class JsonRpcBody:
             result["not"] = True
         if self.optional:
             result["optional"] = True
+        return result
+
+
+@dataclass
+class JsonPathBody:
+    json_path: str = ""
+    not_body: bool = False
+    optional: bool = False
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        if self.not_body:
+            result["not"] = True
+        if self.optional:
+            result["optional"] = True
+        result["type"] = "JSON_PATH"
+        result["jsonPath"] = self.json_path
         return result
 
 
@@ -525,6 +586,10 @@ def _body_graphql(query: str, operation_name: str | None = None, variables_schem
     return GraphQLBody(query=query, operation_name=operation_name, variables_schema=variables_schema)
 
 
+def _body_file(file_path: str, content_type: str | None = None, template_type: str | None = None) -> Body:
+    return Body(type="FILE", file_path=file_path, content_type=content_type, template_type=template_type)
+
+
 Body.string = staticmethod(_body_string)
 Body.json = staticmethod(_body_json)
 Body.regex = staticmethod(_body_regex)
@@ -532,6 +597,7 @@ Body.exact = staticmethod(_body_exact)
 Body.xml = staticmethod(_body_xml)
 Body.json_rpc = staticmethod(_body_json_rpc)
 Body.graphql = staticmethod(_body_graphql)
+Body.file = staticmethod(_body_file)
 
 
 @dataclass
@@ -578,7 +644,7 @@ class HttpRequest:
             "path": self.path,
             "queryStringParameters": _serialize_key_multi_values(self.query_string_parameters),
             "headers": _serialize_key_multi_values(self.headers),
-            "cookies": _serialize_key_multi_values(self.cookies),
+            "cookies": _serialize_cookies(self.cookies),
             "body": _serialize_body(self.body),
             "secure": self.secure,
             "keepAlive": self.keep_alive,
@@ -596,7 +662,7 @@ class HttpRequest:
             path=data.get("path"),
             query_string_parameters=_deserialize_key_multi_values(data.get("queryStringParameters")),
             headers=_deserialize_key_multi_values(data.get("headers")),
-            cookies=_deserialize_key_multi_values(data.get("cookies")),
+            cookies=_deserialize_cookies(data.get("cookies")),
             body=_deserialize_body(data.get("body")),
             secure=data.get("secure"),
             keep_alive=data.get("keepAlive"),
@@ -707,7 +773,7 @@ class HttpResponse:
             "statusCode": self.status_code,
             "reasonPhrase": self.reason_phrase,
             "headers": _serialize_key_multi_values(self.headers),
-            "cookies": _serialize_key_multi_values(self.cookies),
+            "cookies": _serialize_cookies(self.cookies),
             "body": _serialize_body(self.body),
             "delay": self.delay.to_dict() if self.delay else None,
             "connectionOptions": self.connection_options.to_dict() if self.connection_options else None,
@@ -722,7 +788,7 @@ class HttpResponse:
             status_code=data.get("statusCode"),
             reason_phrase=data.get("reasonPhrase"),
             headers=_deserialize_key_multi_values(data.get("headers")),
-            cookies=_deserialize_key_multi_values(data.get("cookies")),
+            cookies=_deserialize_cookies(data.get("cookies")),
             body=_deserialize_body(data.get("body")),
             delay=Delay.from_dict(data.get("delay")),
             connection_options=ConnectionOptions.from_dict(data.get("connectionOptions")),
@@ -814,6 +880,7 @@ class HttpForward:
 class HttpTemplate:
     template_type: str = "JAVASCRIPT"
     template: str | None = None
+    template_file: str | None = None
     delay: Delay | None = None
     primary: bool | None = None
 
@@ -821,6 +888,7 @@ class HttpTemplate:
         return _strip_none({
             "templateType": self.template_type,
             "template": self.template,
+            "templateFile": self.template_file,
             "delay": self.delay.to_dict() if self.delay else None,
             "primary": self.primary,
         })
@@ -832,13 +900,14 @@ class HttpTemplate:
         return cls(
             template_type=data.get("templateType", "JAVASCRIPT"),
             template=data.get("template"),
+            template_file=data.get("templateFile"),
             delay=Delay.from_dict(data.get("delay")),
             primary=data.get("primary"),
         )
 
 
-def _http_template_factory(template_type: str, template: str | None = None) -> HttpTemplate:
-    return HttpTemplate(template_type=template_type, template=template)
+def _http_template_factory(template_type: str, template: str | None = None, template_file: str | None = None) -> HttpTemplate:
+    return HttpTemplate(template_type=template_type, template=template, template_file=template_file)
 
 
 HttpTemplate.template = staticmethod(_http_template_factory)
@@ -903,6 +972,10 @@ class HttpObjectCallback:
 class HttpError:
     drop_connection: bool | None = None
     response_bytes: str | None = None
+    # reset the matched request stream with this error code (HTTP/2 RST_STREAM / HTTP/3 RESET_STREAM)
+    # instead of returning a response; HTTP/1.1 has no stream concept so this falls back to dropping
+    # the connection. Takes precedence over drop_connection when both are set.
+    stream_error: int | None = None
     delay: Delay | None = None
     primary: bool | None = None
 
@@ -910,6 +983,7 @@ class HttpError:
         return _strip_none({
             "dropConnection": self.drop_connection,
             "responseBytes": self.response_bytes,
+            "streamError": self.stream_error,
             "delay": self.delay.to_dict() if self.delay else None,
             "primary": self.primary,
         })
@@ -921,6 +995,7 @@ class HttpError:
         return cls(
             drop_connection=data.get("dropConnection"),
             response_bytes=data.get("responseBytes"),
+            stream_error=data.get("streamError"),
             delay=Delay.from_dict(data.get("delay")),
             primary=data.get("primary"),
         )
@@ -1544,6 +1619,77 @@ class ExpectationStep:
         )
 
 
+def _deserialize_http_llm_response(data: Any) -> Any | None:
+    """Deserialize an ``httpLlmResponse`` action.
+
+    Late-imports ``mockserver.llm`` to avoid a circular import at module load
+    (``mockserver.llm`` imports ``Expectation`` from this module).
+    """
+    if data is None:
+        return None
+    from mockserver.llm import HttpLlmResponse
+
+    return HttpLlmResponse.from_dict(data)
+
+
+class ResponseMode:
+    """How the server selects a response when an expectation has multiple
+    ``http_responses``. Mirrors the core ``ResponseMode`` enum; use the string
+    constants as the ``Expectation.response_mode`` value.
+    """
+
+    SEQUENTIAL = "SEQUENTIAL"
+    RANDOM = "RANDOM"
+    WEIGHTED = "WEIGHTED"
+    SWITCH = "SWITCH"
+
+
+class CrossProtocolTrigger:
+    """The protocol event that advances a cross-protocol scenario. Mirrors the
+    core ``CrossProtocolTrigger`` enum; use the string constants as the
+    :class:`CrossProtocolScenario` ``trigger`` value.
+    """
+
+    DNS_QUERY = "DNS_QUERY"
+    WEBSOCKET_CONNECT = "WEBSOCKET_CONNECT"
+    GRPC_REQUEST = "GRPC_REQUEST"
+    HTTP_REQUEST = "HTTP_REQUEST"
+
+
+@dataclass
+class CrossProtocolScenario:
+    """Correlates a protocol event with a scenario state transition.
+
+    When an event matching ``trigger`` (and optionally ``match_pattern``, a
+    substring filter on the event identifier — omit to match all) is observed,
+    the scenario named ``scenario_name`` is advanced to ``target_state``.
+    """
+
+    trigger: str | None = None
+    scenario_name: str | None = None
+    target_state: str | None = None
+    match_pattern: str | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "trigger": self.trigger,
+            "matchPattern": self.match_pattern,
+            "scenarioName": self.scenario_name,
+            "targetState": self.target_state,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CrossProtocolScenario:
+        if data is None:
+            return None
+        return cls(
+            trigger=data.get("trigger"),
+            scenario_name=data.get("scenarioName"),
+            target_state=data.get("targetState"),
+            match_pattern=data.get("matchPattern"),
+        )
+
+
 @dataclass
 class Expectation:
     id: str | None = None
@@ -1566,6 +1712,9 @@ class Expectation:
     grpc_bidi_response: GrpcBidiResponse | None = None
     binary_response: BinaryResponse | None = None
     dns_response: DnsResponse | None = None
+    # http_llm_response is an mockserver.llm.HttpLlmResponse; typed as Any to
+    # avoid a circular import (mockserver.llm imports Expectation from here).
+    http_llm_response: Any | None = None
     times: Times | None = None
     time_to_live: TimeToLive | None = None
     chaos: HttpChaosProfile | None = None
@@ -1573,6 +1722,9 @@ class Expectation:
     after_actions: list[AfterAction] | None = None
     http_responses: list[HttpResponse] | None = None
     response_mode: str | None = None
+    response_weights: list[int] | None = None
+    switch_after: int | None = None
+    cross_protocol_scenarios: list[CrossProtocolScenario] | None = None
     steps: list[ExpectationStep] | None = None
     scenario_name: str | None = None
     scenario_state: str | None = None
@@ -1600,6 +1752,7 @@ class Expectation:
             "grpcBidiResponse": self.grpc_bidi_response.to_dict() if self.grpc_bidi_response else None,
             "binaryResponse": self.binary_response.to_dict() if self.binary_response else None,
             "dnsResponse": self.dns_response.to_dict() if self.dns_response else None,
+            "httpLlmResponse": self.http_llm_response.to_dict() if self.http_llm_response else None,
             "times": self.times.to_dict() if self.times else None,
             "timeToLive": self.time_to_live.to_dict() if self.time_to_live else None,
             "chaos": self.chaos.to_dict() if self.chaos else None,
@@ -1607,6 +1760,9 @@ class Expectation:
             "afterActions": [a.to_dict() for a in self.after_actions] if self.after_actions else None,
             "httpResponses": [r.to_dict() for r in self.http_responses] if self.http_responses else None,
             "responseMode": self.response_mode,
+            "responseWeights": self.response_weights,
+            "switchAfter": self.switch_after,
+            "crossProtocolScenarios": [c.to_dict() for c in self.cross_protocol_scenarios] if self.cross_protocol_scenarios else None,
             "steps": [s.to_dict() for s in self.steps] if self.steps else None,
             "scenarioName": self.scenario_name,
             "scenarioState": self.scenario_state,
@@ -1644,6 +1800,7 @@ class Expectation:
             grpc_bidi_response=GrpcBidiResponse.from_dict(data.get("grpcBidiResponse")),
             binary_response=BinaryResponse.from_dict(data.get("binaryResponse")),
             dns_response=DnsResponse.from_dict(data.get("dnsResponse")),
+            http_llm_response=_deserialize_http_llm_response(data.get("httpLlmResponse")),
             times=Times.from_dict(data.get("times")),
             time_to_live=TimeToLive.from_dict(data.get("timeToLive")),
             chaos=HttpChaosProfile.from_dict(data.get("chaos")),
@@ -1651,6 +1808,9 @@ class Expectation:
             after_actions=[AfterAction.from_dict(a) for a in after_actions_data] if after_actions_data else None,
             http_responses=[HttpResponse.from_dict(r) for r in data["httpResponses"]] if data.get("httpResponses") else None,
             response_mode=data.get("responseMode"),
+            response_weights=data.get("responseWeights"),
+            switch_after=data.get("switchAfter"),
+            cross_protocol_scenarios=[CrossProtocolScenario.from_dict(c) for c in data["crossProtocolScenarios"]] if data.get("crossProtocolScenarios") else None,
             steps=[ExpectationStep.from_dict(s) for s in data["steps"]] if data.get("steps") else None,
             scenario_name=data.get("scenarioName"),
             scenario_state=data.get("scenarioState"),
@@ -1751,6 +1911,7 @@ VerificationTimes.between = staticmethod(_vt_between)
 @dataclass
 class Verification:
     http_request: HttpRequest | None = None
+    http_response: HttpResponse | None = None
     expectation_id: ExpectationId | None = None
     times: VerificationTimes | None = None
     maximum_number_of_request_to_return_in_verification_failure: int | None = None
@@ -1758,6 +1919,7 @@ class Verification:
     def to_dict(self) -> dict:
         return _strip_none({
             "httpRequest": self.http_request.to_dict() if self.http_request else None,
+            "httpResponse": self.http_response.to_dict() if self.http_response else None,
             "expectationId": self.expectation_id.to_dict() if self.expectation_id else None,
             "times": self.times.to_dict() if self.times else None,
             "maximumNumberOfRequestToReturnInVerificationFailure": self.maximum_number_of_request_to_return_in_verification_failure,
@@ -1769,6 +1931,7 @@ class Verification:
             return None
         return cls(
             http_request=HttpRequest.from_dict(data.get("httpRequest")),
+            http_response=HttpResponse.from_dict(data.get("httpResponse")),
             expectation_id=ExpectationId.from_dict(data.get("expectationId")),
             times=VerificationTimes.from_dict(data.get("times")),
             maximum_number_of_request_to_return_in_verification_failure=data.get("maximumNumberOfRequestToReturnInVerificationFailure"),
@@ -1778,11 +1941,13 @@ class Verification:
 @dataclass
 class VerificationSequence:
     http_requests: list[HttpRequest] | None = None
+    http_responses: list[HttpResponse] | None = None
     expectation_ids: list[ExpectationId] | None = None
 
     def to_dict(self) -> dict:
         return _strip_none({
             "httpRequests": [r.to_dict() for r in self.http_requests] if self.http_requests else None,
+            "httpResponses": [r.to_dict() for r in self.http_responses] if self.http_responses else None,
             "expectationIds": [e.to_dict() for e in self.expectation_ids] if self.expectation_ids else None,
         })
 
@@ -1791,9 +1956,11 @@ class VerificationSequence:
         if data is None:
             return None
         http_requests_data = data.get("httpRequests")
+        http_responses_data = data.get("httpResponses")
         expectation_ids_data = data.get("expectationIds")
         return cls(
             http_requests=[HttpRequest.from_dict(r) for r in http_requests_data] if http_requests_data else None,
+            http_responses=[HttpResponse.from_dict(r) for r in http_responses_data] if http_responses_data else None,
             expectation_ids=[ExpectationId.from_dict(e) for e in expectation_ids_data] if expectation_ids_data else None,
         )
 
@@ -1836,6 +2003,223 @@ class CrudExpectationsDefinition:
             id_field=data.get("idField", "id"),
             id_strategy=data.get("idStrategy", "AUTO_INCREMENT"),
             initial_data=data.get("initialData"),
+        )
+
+
+@dataclass
+class LoadStage:
+    """One stage of a :class:`LoadProfile`, run in sequence.
+
+    Each stage holds or ramps a setpoint for ``duration_millis``:
+
+    * ``VU`` (closed model) — hold ``vus`` virtual users, or ramp from
+      ``start_vus`` to ``end_vus`` along ``curve``.
+    * ``RATE`` (open model) — hold ``rate`` iterations/second, or ramp from
+      ``start_rate`` to ``end_rate`` along ``curve``, optionally capping the
+      auto-scaling virtual-user pool at ``max_vus``.
+    * ``PAUSE`` — drive no load for ``duration_millis``.
+
+    Prefer the :meth:`vu_stage`, :meth:`rate_stage` and :meth:`pause_stage`
+    factories, which emit only the fields relevant to the stage type and mode.
+    """
+
+    type: str = "VU"
+    duration_millis: int = 0
+    curve: str | None = None
+    vus: int | None = None
+    start_vus: int | None = None
+    end_vus: int | None = None
+    rate: float | None = None
+    start_rate: float | None = None
+    end_rate: float | None = None
+    max_vus: int | None = None
+
+    @classmethod
+    def vu_stage(
+        cls,
+        duration_millis: int,
+        *,
+        vus: int | None = None,
+        start_vus: int | None = None,
+        end_vus: int | None = None,
+        curve: str | None = None,
+    ) -> LoadStage:
+        """A ``VU`` (closed-model) stage — hold ``vus`` or ramp ``start_vus``→``end_vus``."""
+        return cls(
+            type="VU",
+            duration_millis=duration_millis,
+            vus=vus,
+            start_vus=start_vus,
+            end_vus=end_vus,
+            curve=curve,
+        )
+
+    @classmethod
+    def rate_stage(
+        cls,
+        duration_millis: int,
+        *,
+        rate: float | None = None,
+        start_rate: float | None = None,
+        end_rate: float | None = None,
+        max_vus: int | None = None,
+        curve: str | None = None,
+    ) -> LoadStage:
+        """A ``RATE`` (open-model) stage — hold ``rate`` or ramp ``start_rate``→``end_rate`` (iterations/second)."""
+        return cls(
+            type="RATE",
+            duration_millis=duration_millis,
+            rate=rate,
+            start_rate=start_rate,
+            end_rate=end_rate,
+            max_vus=max_vus,
+            curve=curve,
+        )
+
+    @classmethod
+    def pause_stage(cls, duration_millis: int) -> LoadStage:
+        """A ``PAUSE`` stage — drive no load for ``duration_millis``."""
+        return cls(type="PAUSE", duration_millis=duration_millis)
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "type": self.type,
+            "durationMillis": self.duration_millis,
+            "curve": self.curve,
+            "vus": self.vus,
+            "startVus": self.start_vus,
+            "endVus": self.end_vus,
+            "rate": self.rate,
+            "startRate": self.start_rate,
+            "endRate": self.end_rate,
+            "maxVus": self.max_vus,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadStage:
+        if data is None:
+            return None
+        return cls(
+            type=data.get("type", "VU"),
+            duration_millis=data.get("durationMillis", 0),
+            curve=data.get("curve"),
+            vus=data.get("vus"),
+            start_vus=data.get("startVus"),
+            end_vus=data.get("endVus"),
+            rate=data.get("rate"),
+            start_rate=data.get("startRate"),
+            end_rate=data.get("endRate"),
+            max_vus=data.get("maxVus"),
+        )
+
+
+@dataclass
+class LoadProfile:
+    """The shape of load injected by a :class:`LoadScenario`.
+
+    A profile is an ordered list of :class:`LoadStage` objects run in sequence;
+    each stage holds or ramps a setpoint (virtual users, an arrival rate, or a
+    pause) for its duration. The total run length is the sum of stage durations.
+    """
+
+    stages: list[LoadStage] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "stages": [s.to_dict() for s in self.stages],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadProfile:
+        if data is None:
+            return None
+        stages = data.get("stages") or []
+        return cls(
+            stages=[LoadStage.from_dict(s) for s in stages],
+        )
+
+
+@dataclass
+class LoadStep:
+    """A single request issued on each iteration of a :class:`LoadScenario`.
+
+    ``think_time`` is inter-step pacing (a :class:`Delay`) applied after the
+    request before the next step. ``request`` reuses :class:`HttpRequest`; its
+    template placeholders are rendered per iteration.
+    """
+
+    request: HttpRequest | None = None
+    think_time: Delay | None = None
+    name: str | None = None
+    labels: dict | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "request": self.request.to_dict() if self.request else None,
+            "thinkTime": self.think_time.to_dict() if self.think_time else None,
+            "name": self.name,
+            "labels": self.labels,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadStep:
+        if data is None:
+            return None
+        return cls(
+            request=HttpRequest.from_dict(data.get("request")),
+            think_time=Delay.from_dict(data.get("thinkTime")),
+            name=data.get("name"),
+            labels=data.get("labels"),
+        )
+
+
+@dataclass
+class LoadScenario:
+    """A load-injection scenario registered with the server's load generator.
+
+    Registering a scenario (``load_scenario``) adds it to the server-side
+    registry in the ``LOADED`` state but does **not** start generating load —
+    registration is allowed even when ``loadGenerationEnabled`` is off. Starting
+    a registered scenario (``start_load_scenarios``) requires the server to have
+    been started with ``loadGenerationEnabled``; otherwise the start endpoint
+    responds ``403`` and the client raises an error.
+
+    ``start_delay_millis`` defers the start of load generation by the given
+    number of milliseconds after the scenario is started.
+    """
+
+    name: str | None = None
+    profile: LoadProfile | None = None
+    steps: list[LoadStep] | None = None
+    template_type: str | None = None
+    max_requests: int | None = None
+    start_delay_millis: int | None = None
+    labels: dict | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "name": self.name,
+            "profile": self.profile.to_dict() if self.profile else None,
+            "steps": [s.to_dict() for s in self.steps] if self.steps is not None else None,
+            "templateType": self.template_type,
+            "maxRequests": self.max_requests,
+            "startDelayMillis": self.start_delay_millis,
+            "labels": self.labels,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadScenario:
+        if data is None:
+            return None
+        steps = data.get("steps")
+        return cls(
+            name=data.get("name"),
+            profile=LoadProfile.from_dict(data.get("profile")),
+            steps=[LoadStep.from_dict(s) for s in steps] if steps is not None else None,
+            template_type=data.get("templateType"),
+            max_requests=data.get("maxRequests"),
+            start_delay_millis=data.get("startDelayMillis"),
+            labels=data.get("labels"),
         )
 
 

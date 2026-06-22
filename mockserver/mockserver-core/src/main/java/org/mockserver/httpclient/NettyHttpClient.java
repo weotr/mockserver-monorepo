@@ -5,6 +5,7 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
@@ -47,6 +48,13 @@ public class NettyHttpClient {
     static final AttributeKey<Boolean> ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE = AttributeKey.valueOf("ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE");
     static final AttributeKey<Boolean> DISABLE_RESPONSE_STREAMING = AttributeKey.valueOf("DISABLE_RESPONSE_STREAMING");
     static final AttributeKey<AtomicLong> FIRST_BYTE_MILLIS = TimeToFirstByteHandler.FIRST_BYTE_MILLIS;
+    /**
+     * When set on a channel, {@link HttpClientHandler} returns the channel to this pool (keyed by
+     * {@link #POOL_KEY}) after a reusable HTTP/1.1 keep-alive response instead of closing it.
+     */
+    static final AttributeKey<HttpForwardConnectionPool> CONNECTION_POOL = AttributeKey.valueOf("CONNECTION_POOL");
+    static final AttributeKey<String> POOL_KEY = AttributeKey.valueOf("POOL_KEY");
+    static final AttributeKey<io.netty.util.concurrent.ScheduledFuture<?>> POOL_IDLE_EVICTION = AttributeKey.valueOf("POOL_IDLE_EVICTION");
     private static final HopByHopHeaderFilter hopByHopHeaderFilter = new HopByHopHeaderFilter();
     private final Configuration configuration;
     private final MockServerLogger mockServerLogger;
@@ -54,6 +62,7 @@ public class NettyHttpClient {
     private final Map<ProxyConfiguration.Type, ProxyConfiguration> proxyConfigurations;
     private final boolean forwardProxyClient;
     private final NettySslContextFactory nettySslContextFactory;
+    private final HttpForwardConnectionPool connectionPool;
 
     public NettyHttpClient(Configuration configuration, MockServerLogger mockServerLogger, EventLoopGroup eventLoopGroup, List<ProxyConfiguration> proxyConfigurations, boolean forwardProxyClient) {
         this(configuration, mockServerLogger, eventLoopGroup, proxyConfigurations, forwardProxyClient, new NettySslContextFactory(configuration, mockServerLogger, false));
@@ -66,6 +75,9 @@ public class NettyHttpClient {
         this.proxyConfigurations = proxyConfigurations != null ? proxyConfigurations.stream().collect(Collectors.toMap(ProxyConfiguration::getType, proxyConfiguration -> proxyConfiguration)) : ImmutableMap.of();
         this.forwardProxyClient = forwardProxyClient;
         this.nettySslContextFactory = nettySslContextFactory;
+        this.connectionPool = Boolean.TRUE.equals(configuration.forwardConnectionPoolEnabled())
+            ? new HttpForwardConnectionPool(configuration.forwardConnectionPoolMaxIdlePerKey(), configuration.forwardConnectionPoolIdleTimeoutMillis())
+            : null;
     }
 
     public CompletableFuture<HttpResponse> sendRequest(final HttpRequest httpRequest) throws SocketConnectionException {
@@ -91,6 +103,14 @@ public class NettyHttpClient {
             } else if (remoteAddress == null) {
                 remoteAddress = httpRequest.socketAddressFromHostHeader();
             }
+            if (Protocol.HTTP_3.equals(httpRequest.getProtocol())) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setMessageFormat("HTTP3 (QUIC) cannot be forwarded over a TCP connection so protocol will be negotiated by ALPN (HTTP1 or HTTP2)")
+                );
+                httpRequest.withProtocol(null);
+            }
             if (Protocol.HTTP_2.equals(httpRequest.getProtocol()) && !Boolean.TRUE.equals(httpRequest.isSecure())) {
                 mockServerLogger.logEvent(
                     new LogEntry()
@@ -104,43 +124,49 @@ public class NettyHttpClient {
             final CompletableFuture<Message> responseFuture = new CompletableFuture<>();
             final Protocol httpProtocol = httpRequest.getProtocol() != null ? httpRequest.getProtocol() : Protocol.HTTP_1_1;
 
-            final HttpClientInitializer clientInitializer = new HttpClientInitializer(proxyConfigurations, mockServerLogger, forwardProxyClient, nettySslContextFactory, httpProtocol, configuration);
-
             final long requestStartedMillis = System.currentTimeMillis();
             final AtomicLong connectionEstablishedMillis = new AtomicLong();
             final AtomicLong firstByteMillis = new AtomicLong();
 
-            Bootstrap bootstrap = new Bootstrap()
-                .group(eventLoopGroup)
-                .channel(NettyTransport.socketChannelClassFor(eventLoopGroup))
-                .option(ChannelOption.AUTO_READ, true)
-                .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(8 * 1024, 32 * 1024))
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectionTimeoutMillis != null ? connectionTimeoutMillis.intValue() : null)
-                .attr(SECURE, httpRequest.isSecure() != null && httpRequest.isSecure())
-                .attr(REMOTE_SOCKET, remoteAddress)
-                .attr(RESPONSE_FUTURE, responseFuture)
-                .attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE, true)
-                .attr(FIRST_BYTE_MILLIS, firstByteMillis)
-                .handler(clientInitializer);
-            if (disableStreaming) {
-                bootstrap.attr(DISABLE_RESPONSE_STREAMING, true);
-            }
-            bootstrap.connect(remoteAddress)
-                .addListener((ChannelFutureListener) future -> {
-                    if (future.isSuccess()) {
-                        connectionEstablishedMillis.set(System.currentTimeMillis());
-                        clientInitializer.whenComplete((protocol, throwable) -> {
-                            if (throwable != null) {
-                                httpResponseFuture.completeExceptionally(throwable);
-                            } else {
-                                future.channel().writeAndFlush(httpRequest);
+            final boolean secure = httpRequest.isSecure() != null && httpRequest.isSecure();
+            final InetSocketAddress effectiveRemoteAddress = remoteAddress;
+            // Only plain HTTP/1.1 keep-alive connections are pooled. HTTP/2, HTTP/3 (multiplexed
+            // differently), binary forwarding, and any proxy-tunnelled connection bypass the pool
+            // and use a fresh connection. Streaming responses are excluded automatically because the
+            // streaming relay handler removes HttpClientHandler before any pooling return path runs.
+            final boolean poolable = connectionPool != null
+                && Protocol.HTTP_1_1.equals(httpProtocol)
+                && (proxyConfigurations == null || proxyConfigurations.isEmpty());
+            final String poolKey = poolable ? HttpForwardConnectionPool.keyFor(effectiveRemoteAddress, secure) : null;
+
+            Channel pooledChannel = poolKey != null ? connectionPool.acquire(poolKey) : null;
+            if (pooledChannel != null) {
+                // Reuse an idle keep-alive connection: re-arm per-request channel attributes and
+                // dispatch directly on the channel's event loop (pipeline is already configured).
+                connectionEstablishedMillis.set(requestStartedMillis);
+                final Channel reused = pooledChannel;
+                reused.attr(RESPONSE_FUTURE).set(responseFuture);
+                reused.attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE).set(true);
+                reused.attr(FIRST_BYTE_MILLIS).set(firstByteMillis);
+                reused.attr(DISABLE_RESPONSE_STREAMING).set(disableStreaming ? Boolean.TRUE : null);
+                reused.eventLoop().execute(() -> {
+                    if (reused.isActive()) {
+                        reused.writeAndFlush(httpRequest).addListener((ChannelFutureListener) writeFuture -> {
+                            if (!writeFuture.isSuccess()) {
+                                responseFuture.completeExceptionally(writeFuture.cause());
+                                reused.close();
                             }
                         });
                     } else {
-                        httpResponseFuture.completeExceptionally(future.cause());
+                        // Raced with a server-side close between acquire and dispatch — fall back to a
+                        // fresh connection. Safe to call from the event loop: bootstrap.connect() is non-blocking.
+                        reused.close();
+                        connectFresh(httpRequest, effectiveRemoteAddress, connectionTimeoutMillis, disableStreaming, secure, httpProtocol, poolKey, responseFuture, firstByteMillis, connectionEstablishedMillis, httpResponseFuture);
                     }
                 });
+            } else {
+                connectFresh(httpRequest, remoteAddress, connectionTimeoutMillis, disableStreaming, secure, httpProtocol, poolKey, responseFuture, firstByteMillis, connectionEstablishedMillis, httpResponseFuture);
+            }
 
             responseFuture
                 .whenComplete((message, throwable) -> {
@@ -192,6 +218,54 @@ public class NettyHttpClient {
         }
     }
 
+    /**
+     * Opens a fresh upstream connection and dispatches the request. When {@code poolKey} is non-null
+     * the channel is marked (via {@link #CONNECTION_POOL}/{@link #POOL_KEY}) so that, after a
+     * reusable HTTP/1.1 keep-alive response, {@link HttpClientHandler} returns it to the pool instead
+     * of closing it. This is the only connection path when pooling is disabled, so that path remains
+     * byte-identical to the historical behaviour.
+     */
+    private void connectFresh(HttpRequest httpRequest, InetSocketAddress remoteAddress, Long connectionTimeoutMillis, boolean disableStreaming, boolean secure, Protocol httpProtocol, String poolKey, CompletableFuture<Message> responseFuture, AtomicLong firstByteMillis, AtomicLong connectionEstablishedMillis, CompletableFuture<HttpResponse> httpResponseFuture) {
+        final HttpClientInitializer clientInitializer = new HttpClientInitializer(proxyConfigurations, mockServerLogger, forwardProxyClient, nettySslContextFactory, httpProtocol, configuration);
+        Bootstrap bootstrap = new Bootstrap()
+            .group(eventLoopGroup)
+            .channel(NettyTransport.socketChannelClassFor(eventLoopGroup))
+            .option(ChannelOption.AUTO_READ, true)
+            .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+            .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(8 * 1024, 32 * 1024))
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectionTimeoutMillis != null ? connectionTimeoutMillis.intValue() : null)
+            .attr(SECURE, secure)
+            .attr(REMOTE_SOCKET, remoteAddress)
+            .attr(RESPONSE_FUTURE, responseFuture)
+            .attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE, true)
+            .attr(FIRST_BYTE_MILLIS, firstByteMillis)
+            .handler(clientInitializer);
+        if (disableStreaming) {
+            bootstrap.attr(DISABLE_RESPONSE_STREAMING, true);
+        }
+        if (poolKey != null) {
+            // Mark the fresh channel so HttpClientHandler returns it to the pool after a reusable
+            // keep-alive response instead of closing it.
+            bootstrap.attr(CONNECTION_POOL, connectionPool);
+            bootstrap.attr(POOL_KEY, poolKey);
+        }
+        bootstrap.connect(remoteAddress)
+            .addListener((ChannelFutureListener) future -> {
+                if (future.isSuccess()) {
+                    connectionEstablishedMillis.set(System.currentTimeMillis());
+                    clientInitializer.whenComplete((protocol, throwable) -> {
+                        if (throwable != null) {
+                            httpResponseFuture.completeExceptionally(throwable);
+                        } else {
+                            future.channel().writeAndFlush(httpRequest);
+                        }
+                    });
+                } else {
+                    httpResponseFuture.completeExceptionally(future.cause());
+                }
+            });
+    }
+
     public CompletableFuture<BinaryMessage> sendRequest(final BinaryMessage binaryRequest, final boolean isSecure, InetSocketAddress remoteAddress, Long connectionTimeoutMillis) throws SocketConnectionException {
         if (!eventLoopGroup.isShuttingDown()) {
             if (proxyConfigurations != null && !isSecure && proxyConfigurations.containsKey(ProxyConfiguration.Type.HTTP)) {
@@ -238,7 +312,14 @@ public class NettyHttpClient {
                     if (throwable == null) {
                         binaryResponseFuture.complete((BinaryMessage) message);
                     } else {
-                        throwable.printStackTrace();
+                        if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                            mockServerLogger.logEvent(
+                                new LogEntry()
+                                    .setLogLevel(Level.WARN)
+                                    .setMessageFormat("exception while sending binary request - " + throwable.getMessage())
+                                    .setThrowable(throwable)
+                            );
+                        }
                         binaryResponseFuture.completeExceptionally(throwable);
                     }
                 });

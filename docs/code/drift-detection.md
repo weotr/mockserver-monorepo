@@ -33,6 +33,7 @@ flowchart LR
 | `SemanticSeverity` | `mock/drift/SemanticSeverity.java` | Enum: BREAKING, WARNING, INFORMATIONAL |
 | `SemanticDriftExtension` | `mock/drift/SemanticDriftExtension.java` | LLM-powered severity classification of drift records |
 | `PercentileTracker` | `mock/drift/PercentileTracker.java` | Sliding-window p50/p95 response time tracker per expectation |
+| `DriftAlertNotifier` | `mock/drift/DriftAlertNotifier.java` | Fires a fire-and-forget webhook POST when a stored drift meets the configured severity (off by default) |
 
 ### Drift Categories
 
@@ -72,6 +73,77 @@ The analysis runs on a scheduler thread and never blocks the response path.
 `DriftStore.getInstance().clear()` is called during `HttpState.reset()`, alongside all other registry resets.
 
 ## REST API
+
+### PUT /mockserver/baseline/compare
+
+Compares two sets of expectations offline and returns a structured drift report. This is the batch/CI counterpart to the runtime `GET /mockserver/drift` endpoint — it never touches live traffic and requires no proxy setup.
+
+**Request body:**
+```json
+{
+  "baseline": [ <expectations> ],
+  "current":  [ <expectations> ]
+}
+```
+
+`current` is optional. When omitted, MockServer uses `requestMatchers.retrieveActiveExpectations(null)` — the live active expectations.
+
+**Response (HTTP 200):**
+```json
+{
+  "hasDrift": true,
+  "added": [
+    { "key": "POST /api/orders", "requestDiffs": [], "responseDiffs": [] }
+  ],
+  "removed": [
+    { "key": "DELETE /api/users/{id}", "requestDiffs": [], "responseDiffs": [] }
+  ],
+  "changed": [
+    {
+      "key": "GET /api/users",
+      "requestDiffs": [],
+      "responseDiffs": [
+        {
+          "field": "response.body.role",
+          "diffType": "REMOVED",
+          "expectedValue": "string"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Error responses:** `400 Bad Request` for empty body, invalid JSON, or missing `baseline` field.
+
+#### BaselineDiffer — key components
+
+| Class | Location | Responsibility |
+|-------|----------|---------------|
+| `BaselineDiffer` | `mock/diff/BaselineDiffer.java` | Entry point; indexes interactions by request key; delegates to `TrafficDiffEngine` for request diffs and `diffResponseStructure()` for response diffs |
+| `BaselineDiffReport` | `mock/diff/BaselineDiffReport.java` | Report root: `hasDrift` flag + `added`/`removed`/`changed` lists |
+| `InteractionDiff` | `mock/diff/InteractionDiff.java` | Single entry in a report bucket; carries the matching `key` and optional `requestDiffs`/`responseDiffs` lists |
+| `FieldDiff` | `mock/diff/FieldDiff.java` | Single field-level difference: `field` path, `diffType` (`ADDED`/`REMOVED`/`CHANGED`), `expectedValue`, `actualValue` |
+| `TrafficDiffEngine` | `mock/diff/TrafficDiffEngine.java` | Request-side structural diff (method, path, headers, query, body, cookies) |
+
+#### Matching key and normalization
+
+`BaselineDiffer.requestKey(HttpRequest)` produces `METHOD normalized-path`. Method is upper-cased; a single trailing slash is stripped from the path (but `"/"` is preserved). Trailing-slash-only differences in the path are filtered out after matching to prevent false positives.
+
+#### Value-insensitive JSON response body diffing
+
+`diffBodyShape()` in `BaselineDiffer` recursively walks two JSON trees. Only the following count as drift:
+
+- A field present in one tree but absent in the other
+- A node whose JSON type changed (object, array, number, boolean, string, null)
+
+A different value at the same field with the same type is **not** drift (e.g. `"name": "Alice"` vs `"name": "Bob"`). All numeric subtypes (int, long, double) collapse to `"number"` so `1` vs `1.5` are the same shape.
+
+Non-JSON bodies fall back to exact-string comparison.
+
+#### Status code and header diffing
+
+Status code is compared as a string. Response headers are lowercased, values are comma-joined for multi-value headers, and added/removed/changed headers are each reported as separate `FieldDiff` entries under `response.header.<name>`.
 
 ### GET /mockserver/drift
 
@@ -162,6 +234,99 @@ When `mockserver.driftResponseTimeThresholdMs` is set to a positive value, MockS
 |----------|---------|-------------|
 | `mockserver.driftSemanticAnalysisEnabled` | `false` | Enable LLM-powered semantic drift classification |
 | `mockserver.driftResponseTimeThresholdMs` | `0` (disabled) | p95 response time threshold for PERFORMANCE drift |
+| `mockserver.driftAlertWebhookEnabled` | `false` | Enable the fire-and-forget drift-alert webhook (see "Drift Alerting (Push)") |
+| `mockserver.driftAlertWebhookUrl` | `""` | URL to POST drift alerts to |
+| `mockserver.driftAlertSeverityThreshold` | `BREAKING` | Minimum effective severity that fires the webhook |
+| `mockserver.driftAlertCooldownMillis` | `60000` | De-dup window in ms per drift signature |
+
+## Drift Alerting (Push)
+
+When `mockserver.driftAlertWebhookEnabled=true` and a URL is configured, every drift record that
+meets the configured severity threshold triggers a **fire-and-forget HTTP POST webhook** carrying the
+`DriftRecord` as JSON. This lets a CI job, chat-ops bot, or alerting pipeline react the moment a real
+service drifts from its stub — no polling of `GET /mockserver/drift` required. Off by default.
+
+```mermaid
+flowchart LR
+    A["DriftAnalyzer.analyse()\nstore loop"] --> B["DriftStore.add(record)"]
+    B --> C["DriftAlertNotifier.onDriftStored(record)"]
+    C --> D{"enabled && URL set\n&& severity >= threshold\n&& cooldown allows?"}
+    D -- "no" --> E["no-op"]
+    D -- "yes" --> F["injected sender\n(NettyHttpClient at runtime)"]
+    F --> G["POST webhook URL\n(fire-and-forget)"]
+```
+
+### Decoupling and fail-soft
+
+- **Injected sender** — `mockserver-core` must not depend on the Netty HTTP client, so the actual
+  request sender is injected via `DriftAlertNotifier.setSender(...)` (mirrors
+  `LoadScenarioOrchestrator.setSender` / `HttpState.setReplayHandler`). The Netty runtime wires it from
+  `HttpActionHandler.getHttpClient()` in `HttpRequestHandler`'s constructor.
+- **Fail-soft** — the whole of `onDriftStored(...)` is wrapped in a try/catch that swallows (TRACE-logs)
+  every error, and the outbound send is non-blocking (no `.get()`) with an `exceptionally` handler. A
+  webhook misconfiguration, a slow/unreachable endpoint, or a malformed URL can therefore **never** throw
+  into the drift-analysis pipeline nor affect the served response. When disabled or unwired the call is a
+  pure no-op.
+
+### Effective severity and structural fallback
+
+The webhook fires when a record's **effective severity** is at least as severe as the configured
+threshold (BREAKING is most severe; INFORMATIONAL fires on every drift). The effective severity is the
+record's LLM-assigned `semanticSeverity` when present (semantic analysis enabled), otherwise a
+deterministic structural fallback keyed on `DriftType`:
+
+| DriftType | Structural fallback severity |
+|-----------|------------------------------|
+| `STATUS`, `SCHEMA_FIELD_REMOVED`, `SCHEMA_TYPE_CHANGED` | BREAKING |
+| `HEADER_REMOVED`, `HEADER_CHANGED`, `PERFORMANCE` | WARNING |
+| `SCHEMA_FIELD_ADDED`, `HEADER_ADDED` | INFORMATIONAL |
+| (unknown / null) | WARNING |
+
+### Webhook payload
+
+`Content-Type: application/json`. The body is an envelope wrapping the full `DriftRecord`:
+
+```json
+{
+  "event": "mockserver.drift.alert",
+  "epochTimeMs": 1717145600000,
+  "severity": "BREAKING",
+  "drift": {
+    "expectationId": "abc-123",
+    "driftType": "STATUS",
+    "field": "statusCode",
+    "expectedValue": "200",
+    "actualValue": "500",
+    "confidence": 1.0,
+    "epochTimeMs": 1717145600000
+  }
+}
+```
+
+`severity` is the effective severity that triggered the alert (after structural fallback / semantic
+enrichment).
+
+### De-dup cooldown
+
+To avoid a flood when the same drift recurs on every request, the notifier de-dups by
+`expectationId|driftType|field` signature: a given signature fires at most once per
+`driftAlertCooldownMillis` window (default 60s). The cooldown map is bounded (cap 1000, with eviction of
+entries older than the cooldown on write) so a high-cardinality drift stream cannot grow it unbounded.
+
+### Reset behaviour
+
+`DriftStore.clear()` (called during `HttpState.reset()`) calls `DriftAlertNotifier.reset()`, which clears
+the de-dup cooldown map **only**. The installed sender and the webhook configuration are runtime wiring
+(like `HttpState`'s replay handler) and are deliberately left intact across a reset.
+
+### Configuration
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `mockserver.driftAlertWebhookEnabled` | `false` | Enable the drift-alert webhook |
+| `mockserver.driftAlertWebhookUrl` | `""` | URL to POST drift alerts to (empty leaves the webhook off) |
+| `mockserver.driftAlertSeverityThreshold` | `BREAKING` | Minimum effective severity that fires the webhook (`BREAKING`, `WARNING`, or `INFORMATIONAL`) |
+| `mockserver.driftAlertCooldownMillis` | `60000` | De-dup window in ms per drift signature |
 
 ## Thread Safety
 

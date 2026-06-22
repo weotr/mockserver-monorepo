@@ -31,6 +31,12 @@ updates:
       # It must be upgraded manually in lockstep with the netty.version bump (and the
       # NETTY_TCNATIVE stage in docker/*/Dockerfile), so ignore standalone bumps here.
       - dependency-name: "io.netty:netty-tcnative-boringssl-static"
+      # graphql-java 22.x-24.x ship Java 11 bytecode and run on the Java 17 floor.
+      # A future major could raise the runtime floor, so ceiling-pin below the next
+      # unreleased major (25.x): minor/patch bumps on the 22.x-24.x line auto-update,
+      # but a major must be manually verified to still build/run on Java 17 first.
+      - dependency-name: "com.graphql-java:graphql-java"
+        versions: [">=25.0.0"]
 
   - package-ecosystem: "maven"
     directory: "/mockserver/mockserver-maven-plugin"

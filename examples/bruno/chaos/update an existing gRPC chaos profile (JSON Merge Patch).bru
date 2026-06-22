@@ -1,0 +1,32 @@
+meta {
+  name: update an existing gRPC chaos profile (JSON Merge Patch)
+  type: http
+  seq: 9
+}
+
+patch {
+  url: {{baseUrl}}/mockserver/grpcChaos
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "service": "com.example.OrderService",
+    "chaos": {
+      "errorProbability": 0.8
+    }
+  }
+}
+
+docs {
+  Applies a JSON Merge Patch to an already-registered gRPC chaos profile for a service, updating only the supplied fields and leaving the rest unchanged.
+  
+  JSON Merge Patch with 'service' and the gRPC chaos fields to update
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

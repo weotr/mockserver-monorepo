@@ -23,6 +23,18 @@ export interface DriftResponse {
   drifts: DriftRecord[];
 }
 
+async function ensureOk(res: Response): Promise<void> {
+  if (res.ok) return;
+  let message = `HTTP ${res.status} ${res.statusText}`;
+  try {
+    const body = (await res.json()) as { error?: unknown };
+    if (body && typeof body.error === 'string') message = body.error;
+  } catch {
+    // non-JSON body — keep the status-line message
+  }
+  throw new Error(message);
+}
+
 /** Fetch drift records, optionally filtered by expectation id. */
 export async function fetchDriftRecords(
   params: ConnectionParams,
@@ -35,12 +47,13 @@ export async function fetchDriftRecords(
   if (expectationId) qs.set('expectationId', expectationId);
   qs.set('limit', String(limit));
   const res = await fetch(`${base}/mockserver/drift?${qs}`, { signal });
-  if (!res.ok) return { count: 0, drifts: [] };
+  await ensureOk(res);
   return res.json();
 }
 
 /** Clear all accumulated drift records. */
 export async function clearDrift(params: ConnectionParams): Promise<void> {
   const base = buildBaseUrl(params);
-  await fetch(`${base}/mockserver/drift/clear`, { method: 'PUT' });
+  const res = await fetch(`${base}/mockserver/drift/clear`, { method: 'PUT' });
+  await ensureOk(res);
 }

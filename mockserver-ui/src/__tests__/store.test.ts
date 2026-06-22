@@ -80,7 +80,7 @@ describe('DashboardStore', () => {
       expect(useDashboardStore.getState().error).toBeNull();
     });
 
-    it('auto-switches from get-started to dashboard on empty→has-data transition', () => {
+    it('stays on get-started when the first data arrives (no auto-switch)', () => {
       // Start on get-started with no data (first-run scenario)
       useDashboardStore.setState({
         view: 'get-started',
@@ -96,7 +96,8 @@ describe('DashboardStore', () => {
         proxiedRequests: [],
       });
 
-      expect(useDashboardStore.getState().view).toBe('dashboard');
+      // Landing on Get Started is sticky — the user navigates away themselves.
+      expect(useDashboardStore.getState().view).toBe('get-started');
     });
 
     it('does NOT bounce user off get-started when data already exists', () => {
@@ -117,6 +118,182 @@ describe('DashboardStore', () => {
       });
 
       expect(useDashboardStore.getState().view).toBe('get-started');
+    });
+  });
+
+  describe('reconcileByKey identity preservation', () => {
+    it('keeps the previous object reference for an unchanged item across pushes', () => {
+      // First push establishes the references.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { httpRequest: { path: '/a' } } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const first = useDashboardStore.getState().activeExpectations[0]!;
+
+      // Second push delivers a brand-new but semantically identical object.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { httpRequest: { path: '/a' } } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const second = useDashboardStore.getState().activeExpectations[0]!;
+
+      // Identity is preserved so React.memo'd rows can skip re-rendering.
+      expect(second).toBe(first);
+    });
+
+    it('preserves identity across several pushes (cached string path)', () => {
+      const push = () =>
+        useDashboardStore.getState().applyMessage({
+          logMessages: [],
+          activeExpectations: [{ key: 'e1', value: { n: 1, nested: { deep: [1, 2, 3] } } }],
+          recordedRequests: [],
+          proxiedRequests: [],
+        });
+      push();
+      const first = useDashboardStore.getState().activeExpectations[0]!;
+      push();
+      push();
+      const third = useDashboardStore.getState().activeExpectations[0]!;
+      expect(third).toBe(first);
+    });
+
+    it('replaces the reference when an item changes', () => {
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { count: 1 } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const first = useDashboardStore.getState().activeExpectations[0]!;
+
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { count: 2 } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const second = useDashboardStore.getState().activeExpectations[0]!;
+
+      expect(second).not.toBe(first);
+      expect(second.value).toEqual({ count: 2 });
+    });
+
+    it('preserves unchanged items while replacing changed ones in the same push', () => {
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [
+          { key: 'a', value: { v: 1 } },
+          { key: 'b', value: { v: 1 } },
+        ],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const before = useDashboardStore.getState().activeExpectations;
+      const aBefore = before.find((i) => i.key === 'a')!;
+      const bBefore = before.find((i) => i.key === 'b')!;
+
+      // 'a' unchanged, 'b' changed.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [
+          { key: 'a', value: { v: 1 } },
+          { key: 'b', value: { v: 2 } },
+        ],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const after = useDashboardStore.getState().activeExpectations;
+      const aAfter = after.find((i) => i.key === 'a')!;
+      const bAfter = after.find((i) => i.key === 'b')!;
+
+      expect(aAfter).toBe(aBefore);
+      expect(bAfter).not.toBe(bBefore);
+    });
+
+    it('adds new items and drops removed ones', () => {
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [
+          { key: 'a', value: { v: 1 } },
+          { key: 'b', value: { v: 1 } },
+        ],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const aBefore = useDashboardStore.getState().activeExpectations.find((i) => i.key === 'a')!;
+
+      // 'b' removed, 'c' added, 'a' unchanged.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [
+          { key: 'a', value: { v: 1 } },
+          { key: 'c', value: { v: 9 } },
+        ],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const after = useDashboardStore.getState().activeExpectations;
+
+      expect(after.map((i) => i.key)).toEqual(['a', 'c']);
+      expect(after.find((i) => i.key === 'a')!).toBe(aBefore); // identity preserved
+      expect(after.find((i) => i.key === 'c')!.value).toEqual({ v: 9 });
+    });
+
+    it('detects a change even after a direct setState bypasses the reconcile cache', () => {
+      // Seed via a normal push so the cache holds e1's string.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { v: 1 } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      // Bypass reconcile entirely — cache now points at a stale reference.
+      useDashboardStore.setState({ activeExpectations: [{ key: 'e1', value: { v: 2 } }] });
+      const direct = useDashboardStore.getState().activeExpectations[0]!;
+
+      // An identical-to-the-direct-state item must preserve the direct reference,
+      // NOT be fooled into a miss by the stale cached string from the first push.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { v: 2 } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      expect(useDashboardStore.getState().activeExpectations[0]!).toBe(direct);
+    });
+
+    it('preserves identity for nested log groups', () => {
+      useDashboardStore.getState().applyMessage({
+        logMessages: [
+          {
+            key: 'g1',
+            group: { key: 'g1', value: { messageParts: [] } },
+            value: [{ key: 'g1-1', value: { messageParts: [] } }],
+          },
+        ],
+        activeExpectations: [],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const first = useDashboardStore.getState().logMessages[0]!;
+
+      useDashboardStore.getState().applyMessage({
+        logMessages: [
+          {
+            key: 'g1',
+            group: { key: 'g1', value: { messageParts: [] } },
+            value: [{ key: 'g1-1', value: { messageParts: [] } }],
+          },
+        ],
+        activeExpectations: [],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      expect(useDashboardStore.getState().logMessages[0]!).toBe(first);
     });
   });
 

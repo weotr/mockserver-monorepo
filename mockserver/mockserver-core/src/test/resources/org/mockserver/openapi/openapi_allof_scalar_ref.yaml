@@ -1,0 +1,40 @@
+---
+openapi: 3.0.3
+info:
+  version: 1.0.0
+  title: allOf scalar $ref example generation (issue #2357)
+paths:
+  "/foo":
+    get:
+      operationId: getFoo
+      summary: Returns foo, whose baz property is allOf a single string $ref
+      responses:
+        '200':
+          description: a foo
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/foo'
+  "/baz":
+    get:
+      operationId: getBaz
+      summary: Returns a top-level allOf a single string $ref
+      responses:
+        '200':
+          description: a bare string
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/bar'
+components:
+  schemas:
+    bar:
+      type: string
+      example: "hello"
+    foo:
+      type: object
+      properties:
+        baz:
+          allOf:
+            - $ref: '#/components/schemas/bar'

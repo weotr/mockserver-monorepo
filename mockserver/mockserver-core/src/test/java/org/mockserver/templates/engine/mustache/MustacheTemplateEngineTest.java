@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -68,6 +69,29 @@ public class MustacheTemplateEngineTest {
     public void setupTestFixture() {
         openMocks(this);
         when(mockServerLogger.isEnabledForInstance(any(Level.class))).thenReturn(true);
+    }
+
+    @Test
+    public void shouldRenderLoadIterationContextVariable() {
+        // given a load-generation iteration context injected under "iteration"
+        HttpRequest request = request().withPath("/item");
+        org.mockserver.load.IterationContext iteration =
+            new org.mockserver.load.IterationContext(7, 2, 3, 1234, 42);
+
+        // when
+        String rendered = new MustacheTemplateEngine(mockServerLogger, configuration)
+            .renderTemplate("/item/{{iteration.index}}/vu/{{iteration.vuId}}/count/{{iteration.count}}", request, iteration);
+
+        // then the iteration bean getters resolve
+        assertThat(rendered, org.hamcrest.Matchers.is("/item/7/vu/2/count/42"));
+    }
+
+    @Test
+    public void shouldRenderWithoutIterationContextWhenNull() {
+        HttpRequest request = request().withPath("/item").withMethod("GET");
+        String rendered = new MustacheTemplateEngine(mockServerLogger, configuration)
+            .renderTemplate("method={{request.method}}", request, null);
+        assertThat(rendered, org.hamcrest.Matchers.is("method=GET"));
     }
 
     @Test
@@ -321,6 +345,31 @@ public class MustacheTemplateEngineTest {
                     request
                 )
         );
+    }
+
+    @Test
+    public void shouldHandleHttpRequestsWithMustacheResponseTemplateReferencingPathGroups() {
+        // given
+        String template = "{" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': \"{'whole': '{{ request.pathGroups.0 }}', 'first': '{{ request.pathGroups.1 }}', 'second': '{{ request.pathGroups.2 }}', 'named': '{{ request.namedPathGroups.userId }}'}\"" + NEW_LINE +
+            "}";
+        // path groups are populated post-match by the matcher; set them directly here to drive the template
+        HttpRequest request = request()
+            .withPath("/users/42/orders/abc")
+            .withMethod("GET")
+            .withPathGroups(java.util.Arrays.asList("/users/42/orders/abc", "42", "abc"))
+            .withNamedPathGroups(java.util.Collections.singletonMap("userId", "42"));
+
+        // when
+        HttpResponse actualHttpResponse = new MustacheTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response()
+                .withStatusCode(200)
+                .withBody("{'whole': '/users/42/orders/abc', 'first': '42', 'second': 'abc', 'named': '42'}")
+        ));
     }
 
     @Test
@@ -1061,6 +1110,117 @@ public class MustacheTemplateEngineTest {
             future.get();
         }
         newFixedThreadPool.shutdown();
+    }
+
+    // ----- parsed-template cache regression tests -----
+    // These prove a given template string is compiled once and the compiled Template is reused across
+    // renders (rather than re-compiled per render), that distinct templates are cached separately, and
+    // that the cache never changes rendered output or error handling.
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> compiledTemplateCache(MustacheTemplateEngine engine) throws Exception {
+        java.lang.reflect.Field field = MustacheTemplateEngine.class.getDeclaredField("compiledTemplates");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(engine);
+    }
+
+    @Test
+    public void shouldReuseCompiledTemplateAcrossRepeatedRenders() throws Exception {
+        // given
+        MustacheTemplateEngine engine = new MustacheTemplateEngine(mockServerLogger, configuration);
+        String template = "path={{request.path}}";
+        HttpRequest request = request().withPath("/somePath");
+        Map<String, Object> cache = compiledTemplateCache(engine);
+
+        // when - render the same template twice
+        String first = engine.renderTemplate(template, request);
+        Object compiledAfterFirst = cache.get(template);
+        String second = engine.renderTemplate(template, request);
+        Object compiledAfterSecond = cache.get(template);
+
+        // then - output is correct and stable, and the SAME compiled Template instance was reused (the
+        // template was compiled exactly once, not re-compiled on the second render)
+        assertThat(first, is("path=/somePath"));
+        assertThat(second, is(first));
+        assertThat(cache.size(), is(1));
+        assertThat(compiledAfterFirst, notNullValue());
+        assertThat(compiledAfterSecond, sameInstance(compiledAfterFirst));
+    }
+
+    @Test
+    public void shouldReuseCompiledTemplateAcrossExecuteTemplate() throws Exception {
+        // given - the executeTemplate path shares the same cache
+        MustacheTemplateEngine engine = new MustacheTemplateEngine(mockServerLogger, configuration);
+        String template = "{'statusCode': 200, 'body': '{{request.method}}'}";
+        HttpRequest request = request().withPath("/somePath").withMethod("POST");
+        Map<String, Object> cache = compiledTemplateCache(engine);
+
+        // when
+        engine.executeTemplate(template, request, HttpResponseDTO.class);
+        Object compiledAfterFirst = cache.get(template);
+        engine.executeTemplate(template, request, HttpResponseDTO.class);
+        Object compiledAfterSecond = cache.get(template);
+
+        // then - the compiled Template is cached once and reused
+        assertThat(cache.size(), is(1));
+        assertThat(compiledAfterSecond, sameInstance(compiledAfterFirst));
+    }
+
+    @Test
+    public void shouldCacheDistinctTemplatesSeparately() throws Exception {
+        // given
+        MustacheTemplateEngine engine = new MustacheTemplateEngine(mockServerLogger, configuration);
+        String templateA = "a={{request.path}}";
+        String templateB = "b={{request.path}}";
+        HttpRequest request = request().withPath("/somePath");
+        Map<String, Object> cache = compiledTemplateCache(engine);
+
+        // when - render two distinct templates
+        String renderedA = engine.renderTemplate(templateA, request);
+        String renderedB = engine.renderTemplate(templateB, request);
+
+        // then - each distinct template has its own cached compiled Template (keyed by template string)
+        assertThat(renderedA, is("a=/somePath"));
+        assertThat(renderedB, is("b=/somePath"));
+        assertThat(cache.size(), is(2));
+        assertThat(cache.get(templateA), notNullValue());
+        assertThat(cache.get(templateB), notNullValue());
+        assertThat(cache.get(templateA), not(sameInstance(cache.get(templateB))));
+    }
+
+    @Test
+    public void shouldNotCacheMalformedTemplateAndPreserveErrorHandling() throws Exception {
+        // given - a malformed template (unterminated section) that fails to compile
+        MustacheTemplateEngine engine = new MustacheTemplateEngine(mockServerLogger, configuration);
+        String malformed = "{{#request.path}}unterminated";
+        HttpRequest request = request().withPath("/somePath");
+        Map<String, Object> cache = compiledTemplateCache(engine);
+
+        // when / then - the compile failure surfaces as a RuntimeException (unchanged error handling)
+        assertThrows(RuntimeException.class, () -> engine.renderTemplate(malformed, request));
+        // and the malformed template is never cached
+        assertThat(cache.containsKey(malformed), is(false));
+    }
+
+    @Test
+    public void shouldEvictOldestWhenCacheOverflowsAndStillRenderCorrectly() throws Exception {
+        // given - render more than PARSED_TEMPLATE_CACHE_MAX distinct templates so the bounded LRU evicts
+        MustacheTemplateEngine engine = new MustacheTemplateEngine(mockServerLogger, configuration);
+        HttpRequest request = request().withPath("/somePath");
+        Map<String, Object> cache = compiledTemplateCache(engine);
+
+        String firstTemplate = "tmpl-0={{request.path}}";
+        assertThat(engine.renderTemplate(firstTemplate, request), is("tmpl-0=/somePath"));
+
+        // when - overflow the cache with distinct templates
+        int overflow = MustacheTemplateEngine.PARSED_TEMPLATE_CACHE_MAX + 50;
+        for (int i = 1; i <= overflow; i++) {
+            assertThat(engine.renderTemplate("tmpl-" + i + "={{request.path}}", request), is("tmpl-" + i + "=/somePath"));
+        }
+
+        // then - the cache is bounded and the evicted first template still re-compiles and renders correctly
+        assertThat(cache.size(), is(MustacheTemplateEngine.PARSED_TEMPLATE_CACHE_MAX));
+        assertThat(engine.renderTemplate(firstTemplate, request), is("tmpl-0=/somePath"));
     }
 
 }

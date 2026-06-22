@@ -42,6 +42,67 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
     private SocketAddress socketAddress;
     private String localAddress;
     private String remoteAddress;
+    // Per-request memoization of the expensive body conversion performed during matching
+    // (e.g. the XML DOM parse + ObjectMapper serialisation in JsonSchemaBodyDecoder.convertToJson).
+    // The conversion result is a pure function of the request body + the target content type, so it
+    // can be computed once per request and reused across the N-expectation match scan instead of
+    // being re-parsed once per candidate expectation. Excluded from equals/hashCode/clone/JSON: it
+    // is a derived, transient cache, not part of request identity. The body is immutable during a
+    // match scan (only path/query parameters are mutated, never the body), and a request is matched
+    // on a single thread, so this lazy cache is safe without synchronisation.
+    @JsonIgnore
+    private transient Map<ConvertedBodyType, String> convertedBodyCache;
+    // Regex capture groups extracted from the matched expectation's path pattern when this request
+    // matched. Populated post-match by HttpRequestPropertiesMatcher so a response/forward template can
+    // reference the captured values (e.g. $request.pathGroups[1] in Velocity, {{ request.pathGroups.1 }}
+    // in Mustache, request.pathGroups[1] in JavaScript). pathGroups is 1-based aligned with java.util.regex
+    // group numbering — index 0 is the whole match, index 1 the first capturing group — so a template can
+    // use the same indices a developer would expect from the pattern. namedPathGroups holds Java named
+    // groups (?<name>...). Both are derived, transient, request-scoped state: excluded from
+    // equals/hashCode/clone/JSON and never part of request identity.
+    @JsonIgnore
+    private transient List<String> pathGroups;
+    @JsonIgnore
+    private transient Map<String, String> namedPathGroups;
+
+    /**
+     * Identifies a memoizable body-conversion target. The conversion result depends only on the
+     * request body and this target type, so it is safe to cache per request keyed on this value.
+     */
+    public enum ConvertedBodyType {
+        XML_TO_JSON
+    }
+
+    /**
+     * The numbered regex capture groups from the matched expectation's path pattern, 1-based aligned
+     * with {@link java.util.regex.Matcher} group numbering (index 0 is the whole match). Null until a
+     * match with a regex path populates it; never part of request identity.
+     */
+    @JsonIgnore
+    public List<String> getPathGroups() {
+        return pathGroups;
+    }
+
+    @JsonIgnore
+    public HttpRequest withPathGroups(List<String> pathGroups) {
+        this.pathGroups = pathGroups;
+        return this;
+    }
+
+    /**
+     * The named regex capture groups (?&lt;name&gt;...) from the matched expectation's path pattern.
+     * Null until a match with a named-group regex path populates it; never part of request identity.
+     */
+    @JsonIgnore
+    public Map<String, String> getNamedPathGroups() {
+        return namedPathGroups;
+    }
+
+    @JsonIgnore
+    public HttpRequest withNamedPathGroups(Map<String, String> namedPathGroups) {
+        this.namedPathGroups = namedPathGroups;
+        return this;
+    }
 
     public static HttpRequest request() {
         return new HttpRequest();
@@ -753,8 +814,11 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
      * @param body the body on such as "this is an exact string body"
      */
     public HttpRequest withBody(String body) {
-        this.body = new StringBody(body);
-        this.hashCode = 0;
+        if (body != null) {
+            this.body = new StringBody(body);
+            this.hashCode = 0;
+            this.convertedBodyCache = null;
+        }
         return this;
     }
 
@@ -768,6 +832,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
         if (body != null) {
             this.body = new StringBody(body, charset);
             this.hashCode = 0;
+            this.convertedBodyCache = null;
         }
         return this;
     }
@@ -780,6 +845,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
     public HttpRequest withBody(byte[] body) {
         this.body = new BinaryBody(body);
         this.hashCode = 0;
+        this.convertedBodyCache = null;
         return this;
     }
 
@@ -859,6 +925,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
     public HttpRequest withBody(Body body) {
         this.body = body;
         this.hashCode = 0;
+        this.convertedBodyCache = null;
         return this;
     }
 
@@ -904,6 +971,37 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
         } else {
             return null;
         }
+    }
+
+    /**
+     * Returns the memoized result of an expensive body conversion for the given target type,
+     * computing and caching it on first request. Subsequent calls for the same target return the
+     * cached value without re-running the conversion. Used by {@code JsonSchemaBodyDecoder} so the
+     * incoming request body is parsed once per request rather than once per candidate expectation
+     * during the matching scan.
+     * <p>
+     * The supplier is invoked at most once per (request, target) pair. Whatever it produces —
+     * including {@code null} or a fall-back value — is cached, so the observable behaviour of a
+     * cached call is identical to recomputing it. The supplier therefore MUST itself preserve the
+     * original conversion semantics (e.g. swallow/translate exceptions exactly as before).
+     *
+     * @param type     the conversion target identifying the cache slot
+     * @param supplier computes the converted body on a cache miss
+     * @return the converted body (possibly {@code null} if that is what the supplier produced)
+     */
+    @JsonIgnore
+    public String getOrComputeConvertedBody(ConvertedBodyType type, java.util.function.Supplier<String> supplier) {
+        if (convertedBodyCache == null) {
+            convertedBodyCache = new EnumMap<>(ConvertedBodyType.class);
+        }
+        // EnumMap distinguishes an absent key from a present key whose value is null, so a cached
+        // null fall-back result is returned without re-running the supplier
+        if (convertedBodyCache.containsKey(type)) {
+            return convertedBodyCache.get(type);
+        }
+        String converted = supplier.get();
+        convertedBodyCache.put(type, converted);
+        return converted;
     }
 
     @JsonIgnore
@@ -1237,7 +1335,7 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
     }
 
     public HttpRequest shallowClone() {
-        return not(request(), not)
+        HttpRequest clone = not(request(), not)
             .withMethod(method)
             .withPath(path)
             .withPathParameters(pathParameters)
@@ -1255,11 +1353,13 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
             .withSocketAddress(socketAddress)
             .withLocalAddress(localAddress)
             .withRemoteAddress(remoteAddress);
+        clone.withReceivedTimestamp(getReceivedTimestamp());
+        return clone;
     }
 
     @SuppressWarnings("MethodDoesntCallSuperMethod")
     public HttpRequest clone() {
-        return not(request(), not)
+        HttpRequest clone = not(request(), not)
             .withMethod(method)
             .withPath(path)
             .withPathParameters(pathParameters != null ? pathParameters.clone() : null)
@@ -1277,6 +1377,8 @@ public class HttpRequest extends RequestDefinition implements HttpMessage<HttpRe
             .withSocketAddress(socketAddress)
             .withLocalAddress(localAddress)
             .withRemoteAddress(remoteAddress);
+        clone.withReceivedTimestamp(getReceivedTimestamp());
+        return clone;
     }
 
     public HttpRequest update(HttpRequest requestOverride, HttpRequestModifier requestModifier) {

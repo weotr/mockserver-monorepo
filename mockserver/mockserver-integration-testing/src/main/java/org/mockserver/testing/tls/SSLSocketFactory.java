@@ -1,7 +1,6 @@
 package org.mockserver.testing.tls;
 
 import com.google.common.annotations.VisibleForTesting;
-import org.mockserver.configuration.Configuration;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.socket.tls.KeyStoreFactory;
 

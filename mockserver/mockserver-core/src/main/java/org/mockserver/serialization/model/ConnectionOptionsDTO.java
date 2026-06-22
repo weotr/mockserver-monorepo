@@ -1,7 +1,6 @@
 package org.mockserver.serialization.model;
 
 import org.mockserver.model.ConnectionOptions;
-import org.mockserver.model.Delay;
 import org.mockserver.model.ObjectWithJsonToString;
 
 /**

@@ -42,10 +42,16 @@ public class DashboardHandler {
         MIME_MAP.put("json", "application/json; charset=UTF-8");
         MIME_MAP.put("html", "text/html; charset=utf-8");
         MIME_MAP.put("ico", "image/x-icon");
+        MIME_MAP.put("svg", "image/svg+xml");
         MIME_MAP.put("woff2", "application/font-woff2");
         MIME_MAP.put("ttf", "application/octet-stream");
         MIME_MAP.put("png", "image/png");
     }
+
+    // Fallback for any asset extension not explicitly mapped above. Returning a non-null
+    // Content-Type for every served asset is essential: a null header value would later
+    // be rejected by Netty's header encoder (NullPointerException), failing the response.
+    private static final String DEFAULT_MIME_TYPE = "application/octet-stream";
 
     public void renderDashboard(final ChannelHandlerContext ctx, final HttpRequest request) throws Exception {
         HttpResponse response = notFoundResponse();
@@ -67,18 +73,19 @@ public class DashboardHandler {
             try (InputStream contentStream = DashboardHandler.class.getResourceAsStream(normalizedPath)) {
                 if (contentStream != null) {
                     final String extension = substringAfterLast(path, ".");
+                    final String contentType = MIME_MAP.getOrDefault(extension, DEFAULT_MIME_TYPE);
                     if (IS_STRING_CONTENT.contains(extension)) {
                         final String content = new String(ByteStreams.toByteArray(contentStream), UTF_8.name());
                         response =
                             response()
-                                .withHeader(HttpHeaderNames.CONTENT_TYPE.toString(), MIME_MAP.get(extension))
-                                .withHeader(HttpHeaderNames.CONTENT_LENGTH.toString(), String.valueOf(content.getBytes().length))
+                                .withHeader(HttpHeaderNames.CONTENT_TYPE.toString(), contentType)
+                                .withHeader(HttpHeaderNames.CONTENT_LENGTH.toString(), String.valueOf(content.getBytes(UTF_8).length))
                                 .withBody(content);
                     } else {
                         final byte[] bytes = ByteStreams.toByteArray(contentStream);
                         response =
                             response()
-                                .withHeader(HttpHeaderNames.CONTENT_TYPE.toString(), MIME_MAP.get(extension))
+                                .withHeader(HttpHeaderNames.CONTENT_TYPE.toString(), contentType)
                                 .withHeader(HttpHeaderNames.CONTENT_LENGTH.toString(), String.valueOf(bytes.length))
                                 .withBody(bytes);
                     }

@@ -24,9 +24,26 @@
 #
 
 # build image — downloads netty-tcnative from Maven Central (mirrors base image pattern)
-FROM alpine:3.23 as tcnative
+FROM alpine:3.24 as tcnative
 
-RUN apk add --update ca-certificates wget
+# Optional: trust a corporate root CA before `apk add`. The build context contains
+# ca-bundle.pem (empty in CI, populated locally behind a TLS-inspecting proxy).
+COPY ca-bundle.pem /tmp/local-ca.pem
+RUN if [ -s /tmp/local-ca.pem ]; then \
+      mkdir -p /etc/ssl/certs && \
+      cp /tmp/local-ca.pem /etc/ssl/cert.pem && \
+      cp /tmp/local-ca.pem /etc/ssl/certs/ca-certificates.crt; \
+    fi && \
+    apk add --update ca-certificates wget && \
+    if [ -s /tmp/local-ca.pem ]; then \
+      mkdir -p /usr/local/share/ca-certificates && \
+      cp /tmp/local-ca.pem /usr/local/share/ca-certificates/local-ca.crt && \
+      update-ca-certificates >/dev/null 2>&1 || true; \
+    fi
+# Harden Maven Central downloads against transient DNS/connection blips (e.g. flaky
+# networks, CI). GNU wget retries host-resolution + connection-refused errors;
+# BusyBox wget ignores /etc/wgetrc, so this is a safe no-op there.
+RUN printf 'tries=5\ntimeout=60\nwaitretry=10\nretry_on_host_error=on\nretry_connrefused=on\n' >> /etc/wgetrc
 ARG TARGETARCH=amd64
 ARG NETTY_TCNATIVE=2.0.77.Final
 # Audit finding F-DKR-06: SHA256-verify tcnative download from Maven Central.

@@ -48,22 +48,32 @@ public class HttpResponseObjectCallbackActionHandler {
                     .setArguments(request)
             );
         }
-        try {
-            HttpResponse callbackResponse = LocalCallbackRegistry.retrieveResponseCallback(clientId).handle(request);
-            actionHandler.writeResponseActionResponse(callbackResponse, responseWriter, request, httpObjectCallback, synchronous, null, expectationPostProcessor);
-        } catch (Throwable throwable) {
-            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(WARN)) {
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setLogLevel(WARN)
-                        .setHttpRequest(request)
-                        .setMessageFormat("returning{}because client " + clientId + " response callback throw an exception")
-                        .setArguments(notFoundResponse())
-                        .setThrowable(throwable)
-                );
+        // ROOT FIX for the pool-on-by-default self-deadlock: a local response callback may make a
+        // BLOCKING loopback call back to this same server (e.g. registering a nested expectation via the
+        // same MockServerClient). Run it via scheduleLocalCallback so — in asynchronous (Netty) mode — it
+        // executes on the dedicated unbounded local-callback pool, NOT inline on the server worker event
+        // loop: the worker is then free to read the loopback's reply, and a recursively-nested callback
+        // always gets its own thread (no pool-exhaustion deadlock). In synchronous (WAR/servlet) mode it
+        // still runs inline, preserving blocking-model semantics. The response is written, as before,
+        // through writeResponseActionResponse with the original responseWriter, so routing is unchanged.
+        actionHandler.getScheduler().scheduleLocalCallback(() -> {
+            try {
+                HttpResponse callbackResponse = LocalCallbackRegistry.retrieveResponseCallback(clientId).handle(request);
+                actionHandler.writeResponseActionResponse(callbackResponse, responseWriter, request, httpObjectCallback, synchronous, null, expectationPostProcessor);
+            } catch (Throwable throwable) {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(WARN)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(WARN)
+                            .setHttpRequest(request)
+                            .setMessageFormat("returning{}because client " + clientId + " response callback throw an exception")
+                            .setArguments(notFoundResponse())
+                            .setThrowable(throwable)
+                    );
+                }
+                actionHandler.writeResponseActionResponse(notFoundResponse(), responseWriter, request, httpObjectCallback, synchronous, null, expectationPostProcessor);
             }
-            actionHandler.writeResponseActionResponse(notFoundResponse(), responseWriter, request, httpObjectCallback, synchronous, null, expectationPostProcessor);
-        }
+        }, synchronous);
     }
 
     private void handleViaWebSocket(HttpActionHandler actionHandler, HttpObjectCallback httpObjectCallback, HttpRequest request, ResponseWriter responseWriter, boolean synchronous, Runnable expectationPostProcessor, String clientId) {

@@ -1,0 +1,14 @@
+{
+  "name": "load_scenario_examples",
+  "version": "1.0.0",
+  "description": "Load Scenario registry examples for the MockServer Node client",
+  "main": "load_scenario.js",
+  "scripts": {
+    "start": "node load_scenario.js"
+  },
+  "author": "James D Bloom",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "mockserver-client": "file:../../../mockserver-client-node"
+  }
+}

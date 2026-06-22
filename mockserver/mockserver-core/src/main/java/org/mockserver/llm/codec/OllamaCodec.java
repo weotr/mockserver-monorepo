@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.SseEvent.sseEvent;
@@ -280,9 +279,48 @@ public class OllamaCodec implements ProviderCodec {
         }
     }
 
+    /**
+     * Encodes an Ollama embedding response. Ollama exposes two endpoints:
+     * <ul>
+     *   <li>the newer {@code POST /api/embed} returning a batch shape
+     *       ({@code {"embeddings":[[...]]}}, plus {@code model} and
+     *       {@code prompt_eval_count}), and</li>
+     *   <li>the legacy {@code POST /api/embeddings} returning a single-vector
+     *       shape ({@code {"embedding":[...]}}).</li>
+     * </ul>
+     * This codec emits the {@code /api/embed} batch shape with a single embedding
+     * (the modern, recommended endpoint), which also satisfies clients that read
+     * the {@code embeddings} array. The Ollama default dimensionality for
+     * {@code nomic-embed-text} is 768.
+     */
     @Override
     public HttpResponse encodeEmbedding(EmbeddingResponse embedding, String input) {
-        throw new UnsupportedOperationException("Ollama embeddings use /api/embeddings with a different shape not yet supported");
+        return encodeEmbedding(embedding, input, null);
+    }
+
+    @Override
+    public HttpResponse encodeEmbedding(EmbeddingResponse embedding, String input, String model) {
+        double[] vector = EmbeddingVectors.build(embedding, input, 768);
+
+        ObjectNode root = OBJECT_MAPPER.createObjectNode();
+        root.put("model", model != null ? model : "nomic-embed-text");
+        ArrayNode embeddings = root.putArray("embeddings");
+        ArrayNode first = embeddings.addArray();
+        for (double v : vector) {
+            first.add(v);
+        }
+        int approxTokens = EmbeddingVectors.approximateTokens(input);
+        root.put("prompt_eval_count", approxTokens);
+
+        try {
+            String json = OBJECT_MAPPER.writeValueAsString(root);
+            return response()
+                .withStatusCode(200)
+                .withHeader("content-type", "application/json")
+                .withBody(json);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to encode Ollama embedding response", e);
+        }
     }
 
     private static ParsedMessage.Role mapOllamaRole(String rawRole) {

@@ -12,13 +12,14 @@ This stack manages Buildkite pipelines using the [Buildkite Terraform provider](
 |----------|------|---------|---------|
 | MockServer | `.buildkite/pipeline.yml` | Push to branches, PRs | CI build and test |
 | Docker Push Maven | `.buildkite/docker-push-maven.yml` | Manual | Build and push `mockserver/mockserver:maven` CI image |
-| Docker Push Release | `.buildkite/docker-push-release.yml` | Manual | Build and push multi-arch release image |
 
 ## Prerequisites
 
-- AWS CLI with SSO profile `mockserver-build` authenticated
-- Buildkite API token stored in Secrets Manager (`mockserver-build/buildkite-api-token`) — the secret must have a value before running `terraform plan`
-- The token requires scopes: `write_pipelines`, `read_pipelines`, `graphql` (org: `mockserver`)
+- AWS CLI with SSO profile `mockserver-build` authenticated (used to read the provider token from Secrets Manager)
+- A Buildkite **classic API Access Token** stored in Secrets Manager (`mockserver-build/buildkite-tf-token`) — the secret must hold a valid token before running `terraform plan`/`apply`:
+  - Scope it to org `mockserver` with `read_pipelines`, `write_pipelines`, and GraphQL enabled (create/rotate at https://buildkite.com/user/api-access-tokens)
+  - This is **not** the `bk` CLI login (that is an OAuth token the GraphQL/Terraform API rejects)
+  - The secret is read only by a local admin running this stack — no build-agent IAM policy grants it
 - On macOS with Python 3.14+, set `export DYLD_LIBRARY_PATH="/opt/homebrew/opt/expat/lib"` before running Terraform
 
 ## Usage

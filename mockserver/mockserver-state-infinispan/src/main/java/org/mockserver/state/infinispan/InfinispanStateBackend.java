@@ -341,6 +341,48 @@ public class InfinispanStateBackend implements StateBackend {
         return cacheManager;
     }
 
+    /**
+     * Reports real cluster membership and health from the Infinispan cache
+     * manager's JGroups transport.
+     * <p>
+     * In LOCAL mode (no transport) {@link EmbeddedCacheManager#getMembers()}
+     * and {@link EmbeddedCacheManager#getAddress()} are {@code null}, so this
+     * falls back to the degenerate single-node snapshot. In CLUSTERED mode it
+     * lists every JGroups member, flags the coordinator, and marks this node's
+     * own address as {@code local}. Fail-soft: any unexpected error degrades to
+     * the single-node snapshot rather than failing the operability endpoint.
+     */
+    @Override
+    public ClusterInfo clusterInfo() {
+        try {
+            java.util.List<org.infinispan.remoting.transport.Address> members = cacheManager.getMembers();
+            org.infinispan.remoting.transport.Address localAddress = cacheManager.getAddress();
+            if (!clustered || members == null || members.isEmpty() || localAddress == null) {
+                return ClusterInfo.singleNode(nodeId);
+            }
+            org.infinispan.remoting.transport.Address coordinatorAddress = cacheManager.getCoordinator();
+            String coordinator = coordinatorAddress != null ? coordinatorAddress.toString() : null;
+            java.util.List<ClusterInfo.Member> memberList = new java.util.ArrayList<>(members.size());
+            for (org.infinispan.remoting.transport.Address address : members) {
+                memberList.add(new ClusterInfo.Member(
+                    address.toString(),
+                    address.equals(coordinatorAddress),
+                    address.equals(localAddress)
+                ));
+            }
+            return new ClusterInfo(
+                true,
+                localAddress.toString(),
+                coordinator != null ? coordinator : localAddress.toString(),
+                cacheManager.getClusterName(),
+                memberList
+            );
+        } catch (Exception e) {
+            LOG.warn("failed to read cluster membership, reporting single-node snapshot", e);
+            return ClusterInfo.singleNode(nodeId);
+        }
+    }
+
     @Override
     public void close() {
         LOG.info("stopping InfinispanStateBackend (mode={}, nodeId={})",

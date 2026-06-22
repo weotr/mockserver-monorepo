@@ -40,6 +40,9 @@ public class HttpResponseToJavaSerializer implements ToJavaSerializer<HttpRespon
                     appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withBody(\"").append(StringEscapeUtils.escapeJava(httpResponse.getBodyAsString())).append("\")");
                 }
             }
+            if (isNotBlank(httpResponse.getGenerateFromSchema())) {
+                appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withGenerateFromSchema(\"").append(StringEscapeUtils.escapeJava(httpResponse.getGenerateFromSchema())).append("\")");
+            }
             if (httpResponse.getDelay() != null) {
                 appendNewLineAndIndent((numberOfSpacesToIndent + 1) * INDENT_SIZE, output).append(".withDelay(").append(new DelayToJavaSerializer().serialize(0, httpResponse.getDelay())).append(")");
             }

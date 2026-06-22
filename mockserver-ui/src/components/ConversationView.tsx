@@ -5,7 +5,9 @@ import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import BuildIcon from '@mui/icons-material/Build';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import Tooltip from '@mui/material/Tooltip';
 import JsonViewer from './JsonViewer';
+import { monospaceFontFamily } from '../theme';
 import type {
   AnthropicParsed,
   AnthropicContentBlock,
@@ -119,7 +121,7 @@ function SystemBanner({ content }: { content: unknown }) {
         <Typography
           variant="body2"
           sx={{
-            fontFamily: 'monospace',
+            fontFamily: monospaceFontFamily,
             fontSize: MONO_FONT_SIZE,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
@@ -137,7 +139,7 @@ function SystemBanner({ content }: { content: unknown }) {
                 key={i}
                 variant="body2"
                 sx={{
-                  fontFamily: 'monospace',
+                  fontFamily: monospaceFontFamily,
                   fontSize: MONO_FONT_SIZE,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
@@ -175,7 +177,7 @@ function renderAnthropicContentBlock(
         key={index}
         variant="body2"
         sx={{
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           fontSize: MONO_FONT_SIZE,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -192,7 +194,7 @@ function renderAnthropicContentBlock(
       <Box key={index} sx={{ ...toolBubbleSx, alignSelf: side === 'left' ? 'flex-start' : 'flex-end', mt: 0.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
           <BuildIcon sx={{ fontSize: '0.85rem', color: 'secondary.main' }} />
-          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
+          <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
             {block.name ?? 'tool_use'}
           </Typography>
         </Box>
@@ -209,12 +211,12 @@ function renderAnthropicContentBlock(
       <Box key={index} sx={{ ...toolBubbleSx, alignSelf: 'flex-start', borderColor: 'info.main', mt: 0.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
           <BuildIcon sx={{ fontSize: '0.85rem', color: 'info.main' }} />
-          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'info.main' }}>
+          <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'info.main' }}>
             tool_result
           </Typography>
         </Box>
         {typeof b['content'] === 'string' ? (
-          <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          <Typography variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {b['content']}
           </Typography>
         ) : b['content'] != null ? (
@@ -226,7 +228,7 @@ function renderAnthropicContentBlock(
 
   if (block.type === 'image') {
     return (
-      <Typography key={index} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+      <Typography key={index} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
         [image]
       </Typography>
     );
@@ -234,7 +236,7 @@ function renderAnthropicContentBlock(
 
   // Unknown block type
   return (
-    <Typography key={index} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+    <Typography key={index} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
       [{block.type}]
     </Typography>
   );
@@ -250,7 +252,7 @@ function renderAnthropicMessageContent(content: unknown, side: 'left' | 'right')
       <Typography
         variant="body2"
         sx={{
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           fontSize: MONO_FONT_SIZE,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -296,7 +298,7 @@ function renderOpenAiToolCalls(toolCalls: unknown[], side: 'left' | 'right') {
       <Box key={i} sx={{ ...toolBubbleSx, alignSelf: side === 'left' ? 'flex-start' : 'flex-end', mt: 0.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
           <BuildIcon sx={{ fontSize: '0.85rem', color: 'secondary.main' }} />
-          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
+          <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
             {name}
           </Typography>
         </Box>
@@ -304,7 +306,7 @@ function renderOpenAiToolCalls(toolCalls: unknown[], side: 'left' | 'right') {
           typeof args === 'object' ? (
             <JsonViewer data={args as Record<string, unknown>} collapsed={1} />
           ) : (
-            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            <Typography variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
               {String(args)}
             </Typography>
           )
@@ -333,7 +335,11 @@ function MetadataStrip({ model, inputTokens, outputTokens, stopReason, streamed,
 
   return (
     <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1.5, justifyContent: 'center' }}>
-      {model && <Chip label={model} size="small" variant="outlined" sx={{ height: 20, fontSize: '0.65rem' }} />}
+      {model && (
+        <Tooltip title={model}>
+          <Chip label={model} size="small" variant="outlined" sx={{ height: 20, fontSize: '0.65rem', maxWidth: 200, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }} />
+        </Tooltip>
+      )}
       {inputTokens != null && <Chip label={`In: ${inputTokens}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '0.65rem' }} />}
       {outputTokens != null && <Chip label={`Out: ${outputTokens}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '0.65rem' }} />}
       {stopReason && <Chip label={`Stop: ${stopReason}`} size="small" variant="outlined" sx={{ height: 20, fontSize: '0.65rem' }} />}
@@ -455,7 +461,7 @@ export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
                   <Typography
                     variant="body2"
                     sx={{
-                      fontFamily: 'monospace',
+                      fontFamily: monospaceFontFamily,
                       fontSize: MONO_FONT_SIZE,
                       whiteSpace: 'pre-wrap',
                       wordBreak: 'break-word',
@@ -474,7 +480,7 @@ export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
                           key={j}
                           variant="body2"
                           sx={{
-                            fontFamily: 'monospace',
+                            fontFamily: monospaceFontFamily,
                             fontSize: MONO_FONT_SIZE,
                             whiteSpace: 'pre-wrap',
                             wordBreak: 'break-word',
@@ -487,13 +493,13 @@ export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
                     }
                     if (p['type'] === 'image_url') {
                       return (
-                        <Typography key={j} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+                        <Typography key={j} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
                           [image]
                         </Typography>
                       );
                     }
                     return (
-                      <Typography key={j} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+                      <Typography key={j} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
                         [{String(p['type'] ?? 'unknown')}]
                       </Typography>
                     );
@@ -524,7 +530,7 @@ export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
                 <Typography
                   variant="body2"
                   sx={{
-                    fontFamily: 'monospace',
+                    fontFamily: monospaceFontFamily,
                     fontSize: MONO_FONT_SIZE,
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
@@ -576,7 +582,7 @@ function renderGeminiParts(parts: unknown, side: 'left' | 'right') {
               key={i}
               variant="body2"
               sx={{
-                fontFamily: 'monospace',
+                fontFamily: monospaceFontFamily,
                 fontSize: MONO_FONT_SIZE,
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
@@ -593,7 +599,7 @@ function renderGeminiParts(parts: unknown, side: 'left' | 'right') {
             <Box key={i} sx={{ ...toolBubbleSx, alignSelf: side === 'left' ? 'flex-start' : 'flex-end', mt: 0.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
                 <BuildIcon sx={{ fontSize: '0.85rem', color: 'secondary.main' }} />
-                <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
+                <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
                   {String(fc['name'] ?? 'functionCall')}
                 </Typography>
               </Box>
@@ -609,7 +615,7 @@ function renderGeminiParts(parts: unknown, side: 'left' | 'right') {
             <Box key={i} sx={{ ...toolBubbleSx, alignSelf: 'flex-start', borderColor: 'info.main', mt: 0.5 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
                 <BuildIcon sx={{ fontSize: '0.85rem', color: 'info.main' }} />
-                <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'info.main' }}>
+                <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'info.main' }}>
                   {String(fr['name'] ?? 'functionResponse')}
                 </Typography>
               </Box>
@@ -621,7 +627,7 @@ function renderGeminiParts(parts: unknown, side: 'left' | 'right') {
         }
         if (part['inlineData'] && typeof part['inlineData'] === 'object') {
           return (
-            <Typography key={i} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+            <Typography key={i} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
               [inlineData]
             </Typography>
           );
@@ -717,7 +723,7 @@ function renderOllamaMessageContent(content: unknown, side: 'left' | 'right') {
       <Typography
         variant="body2"
         sx={{
-          fontFamily: 'monospace',
+          fontFamily: monospaceFontFamily,
           fontSize: MONO_FONT_SIZE,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -836,7 +842,7 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
             <Typography
               variant="body2"
               sx={{
-                fontFamily: 'monospace',
+                fontFamily: monospaceFontFamily,
                 fontSize: MONO_FONT_SIZE,
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-word',
@@ -856,7 +862,7 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
                       key={j}
                       variant="body2"
                       sx={{
-                        fontFamily: 'monospace',
+                        fontFamily: monospaceFontFamily,
                         fontSize: MONO_FONT_SIZE,
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
@@ -869,13 +875,13 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
                 }
                 if (t === 'input_image') {
                   return (
-                    <Typography key={j} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+                    <Typography key={j} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
                       [input_image]
                     </Typography>
                   );
                 }
                 return (
-                  <Typography key={j} variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
+                  <Typography key={j} variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, color: 'text.secondary' }}>
                     [{t || 'unknown'}]
                   </Typography>
                 );
@@ -900,7 +906,7 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
         <Box sx={{ ...toolBubbleSx, alignSelf: side === 'left' ? 'flex-start' : 'flex-end' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
             <BuildIcon sx={{ fontSize: '0.85rem', color: 'secondary.main' }} />
-            <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
+            <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'secondary.main' }}>
               {String(it['name'] ?? 'function_call')}
             </Typography>
           </Box>
@@ -908,7 +914,7 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
             typeof args === 'object' ? (
               <JsonViewer data={args as Record<string, unknown>} collapsed={1} />
             ) : (
-              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap' }}>
+              <Typography variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap' }}>
                 {String(args)}
               </Typography>
             )
@@ -925,12 +931,12 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
         <Box sx={{ ...toolBubbleSx, alignSelf: 'flex-start', borderColor: 'info.main' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
             <BuildIcon sx={{ fontSize: '0.85rem', color: 'info.main' }} />
-            <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'info.main' }}>
+            <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontWeight: 600, fontSize: LABEL_FONT_SIZE, color: 'info.main' }}>
               output
             </Typography>
           </Box>
           {typeof it['output'] === 'string' ? (
-            <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap' }}>
+            <Typography variant="body2" sx={{ fontFamily: monospaceFontFamily, fontSize: MONO_FONT_SIZE, whiteSpace: 'pre-wrap' }}>
               {it['output']}
             </Typography>
           ) : it['output'] != null ? (
@@ -944,7 +950,7 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
   // Unknown type — show JSON
   return (
     <Box key={index} sx={{ mt: 0.5, pl: 1, borderLeft: 2, borderColor: 'divider' }}>
-      <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: LABEL_FONT_SIZE, color: 'text.secondary' }}>
+      <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontSize: LABEL_FONT_SIZE, color: 'text.secondary' }}>
         [{type}]
       </Typography>
       <JsonViewer data={it} collapsed={1} />
@@ -1048,10 +1054,10 @@ export function ScriptedTurnsPanel({ turns }: { turns: ScriptedTurn[] }) {
 
         return (
           <Fragment key={`scripted-turn-${i}`}>
-            {conversationHeader && i > 0 && (
+            {conversationHeader && (
               <Typography
                 variant="overline"
-                sx={{ fontSize: '0.6rem', color: 'text.secondary', textAlign: 'center', mt: 1 }}
+                sx={{ fontSize: '0.6rem', color: 'text.secondary', textAlign: 'center', mt: i > 0 ? 1 : 0 }}
               >
                 {conversationHeader}
               </Typography>
@@ -1101,14 +1107,15 @@ export function ScriptedTurnsPanel({ turns }: { turns: ScriptedTurn[] }) {
                 </Typography>
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.25 }}>
                   {predicateEntries.map(([key, value]) => (
-                    <Chip
-                      key={key}
-                      label={`${key}: ${String(value)}`}
-                      size="small"
-                      variant="outlined"
-                      color="info"
-                      sx={{ height: 18, fontSize: '0.6rem' }}
-                    />
+                    <Tooltip key={key} title={`${key}: ${String(value)}`}>
+                      <Chip
+                        label={`${key}: ${String(value)}`}
+                        size="small"
+                        variant="outlined"
+                        color="info"
+                        sx={{ height: 18, fontSize: '0.6rem', maxWidth: 200, '& .MuiChip-label': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }}
+                      />
+                    </Tooltip>
                   ))}
                 </Box>
               </Box>
@@ -1128,7 +1135,7 @@ export function ScriptedTurnsPanel({ turns }: { turns: ScriptedTurn[] }) {
                 <Typography
                   variant="body2"
                   sx={{
-                    fontFamily: 'monospace',
+                    fontFamily: monospaceFontFamily,
                     fontSize: MONO_FONT_SIZE,
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
@@ -1143,11 +1150,11 @@ export function ScriptedTurnsPanel({ turns }: { turns: ScriptedTurn[] }) {
                   {turn.response.toolCalls.map((tc, j) => (
                     <Box key={j} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                       <BuildIcon sx={{ fontSize: '0.75rem', color: 'secondary.main' }} />
-                      <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.65rem', fontWeight: 600, color: 'secondary.main' }}>
+                      <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.65rem', fontWeight: 600, color: 'secondary.main' }}>
                         {tc.name}
                       </Typography>
                       {tc.arguments && (
-                        <Typography variant="caption" sx={{ fontFamily: 'monospace', fontSize: '0.6rem', color: 'text.secondary' }}>
+                        <Typography variant="caption" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.6rem', color: 'text.secondary' }}>
                           ({tc.arguments.length > 40 ? tc.arguments.substring(0, 40) + '...' : tc.arguments})
                         </Typography>
                       )}

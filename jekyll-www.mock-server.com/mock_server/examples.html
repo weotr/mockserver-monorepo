@@ -1,0 +1,349 @@
+---
+title: MockServer Examples
+description: Runnable examples for MockServer across every language and interface — curl, JSON, Java, Node, Python, Ruby, Go, .NET, Rust, PHP, Docker Compose, WASM, and chaos engineering.
+shortTitle: Examples
+layout: page
+pageOrder: 8
+section: 'Getting Started'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-21T00:00:00+00:00
+---
+
+<a id="examples_overview" class="anchor" href="#examples_overview">&nbsp;</a>
+
+<h2>Runnable Examples</h2>
+
+<p>
+    The <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples" target="_blank" rel="noopener noreferrer">examples/</a>
+    directory is a single home for self-contained, runnable MockServer examples across every language and interface.
+    Examples are grouped <strong>by language or interface</strong> at the top level, with two cross-cutting topic
+    folders (<code>chaos/</code>, <code>wasm/</code>) that apply regardless of client.
+</p>
+
+<p>Every example follows the same shape: one runnable entry point (script / program) and a short <code>README.md</code> with
+<em>What it demonstrates &middot; Prerequisites &middot; Run &middot; Expected output</em>.</p>
+
+<h3>Quick start</h3>
+
+<p>Most examples assume a running MockServer on <code>localhost:1080</code>:</p>
+
+<pre><code>docker run -d --rm -p 1080:1080 mockserver/mockserver</code></pre>
+
+<p>
+    <code>curl/</code>, <code>json/</code>, and <code>chaos/</code> scripts honour a
+    <code>MOCKSERVER_URL</code> environment variable (e.g. <code>export MOCKSERVER_URL=http://localhost:1080</code>).
+    Each language-track README explains how to install the corresponding client.
+</p>
+
+<a id="examples_by_language" class="anchor" href="#examples_by_language">&nbsp;</a>
+
+<h2>Examples by Language / Interface</h2>
+
+<table class="comparison">
+    <thead>
+        <tr>
+            <th>Language / Interface</th>
+            <th>What it covers</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl" target="_blank" rel="noopener noreferrer">curl/</a></td>
+            <td>Raw REST control-plane examples as runnable <code>curl</code> shell scripts — the most comprehensive reference, covering every API endpoint</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/json" target="_blank" rel="noopener noreferrer">json/</a></td>
+            <td>Expectation and initialiser JSON payloads, usable directly with <code>curl -d @file.json</code> or any HTTP client</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/java" target="_blank" rel="noopener noreferrer">java/</a></td>
+            <td>Java client and proxy examples — a buildable, CI-tested Maven module covering mocking scenarios and proxy usage with multiple HTTP libraries</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/node" target="_blank" rel="noopener noreferrer">node/</a></td>
+            <td>Node.js / TypeScript client examples including callbacks, LLM mocking, MCP mocking, OpenAPI expectations, and request retrieval</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/python" target="_blank" rel="noopener noreferrer">python/</a></td>
+            <td>Python client examples covering response actions, forward actions, request matchers, OpenAPI expectations, verification, and LLM/MCP mocking</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/ruby" target="_blank" rel="noopener noreferrer">ruby/</a></td>
+            <td>Ruby client examples covering response actions, forward actions, request matchers, OpenAPI expectations, verification, and proxying</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/go" target="_blank" rel="noopener noreferrer">go/</a></td>
+            <td>Go client examples including expectation creation and interactive breakpoints to modify proxied responses in-flight</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/dotnet" target="_blank" rel="noopener noreferrer">dotnet/</a></td>
+            <td>.NET / C# client examples including expectation creation and interactive breakpoints to modify proxied responses in-flight</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/rust" target="_blank" rel="noopener noreferrer">rust/</a></td>
+            <td>Rust client examples including expectation creation and interactive breakpoints to modify proxied responses in-flight</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/php" target="_blank" rel="noopener noreferrer">php/</a></td>
+            <td>PHP client examples (REST only) covering expectation creation and static forward overrides — no WebSocket breakpoints</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose" target="_blank" rel="noopener noreferrer">docker-compose/</a></td>
+            <td>Deployment scenarios including mock-from-OpenAPI, record-replay proxy, validation proxy, chaos proxy, mTLS, persistence, and expectation initialiser</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos" target="_blank" rel="noopener noreferrer">chaos/</a></td>
+            <td>Fault injection across HTTP, TCP, gRPC, and LLM layers via runnable <code>curl</code> scripts — MockServer's flagship differentiator</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/wasm" target="_blank" rel="noopener noreferrer">wasm/</a></td>
+            <td>Custom WASM body-matcher rules in Rust (prebuilt) and Go, plus the <code>mockserver-wasm-sdk</code> for typed request-envelope matching</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="examples_curl_json_categories" class="anchor" href="#examples_curl_json_categories">&nbsp;</a>
+
+<h2>Feature Categories (curl/ and json/)</h2>
+
+<p>
+    The <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl" target="_blank" rel="noopener noreferrer">curl/</a>
+    and <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/json" target="_blank" rel="noopener noreferrer">json/</a>
+    directories are the most comprehensive reference: they cover every MockServer API endpoint and are organised
+    into feature-category subdirectories. The same categories exist in both trees (shell scripts and raw JSON payloads respectively).
+    Per-language stateful scenario examples live under <code>examples/&lt;language&gt;/scenario/</code> for every client (curl, json, java, node, python, ruby, go, dotnet, rust, php).
+</p>
+
+<table class="comparison">
+    <thead>
+        <tr>
+            <th>Category</th>
+            <th>What it covers</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/create_expectation" target="_blank" rel="noopener noreferrer">create_expectation/</a></td>
+            <td>Basic expectation creation, arrays of expectations, hit-count limits, TTL expiry, and update by ID</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/matchers" target="_blank" rel="noopener noreferrer">matchers/</a></td>
+            <td>Request matching by path, method, query parameters, headers, cookies, and body (regex, XML, JSON, JSON Schema, JsonPath, XPath, fuzzy)</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/response_action" target="_blank" rel="noopener noreferrer">response_action/</a></td>
+            <td>Canned HTTP responses: status codes, headers, cookies, delays, weighted responses, switch-on-hit-count, generate from JSON Schema</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/forward_action" target="_blank" rel="noopener noreferrer">forward_action/</a></td>
+            <td>Forward requests to upstream hosts over HTTP/HTTPS with request and response overrides</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/forward_fallback" target="_blank" rel="noopener noreferrer">forward_fallback/</a></td>
+            <td>Forward with fallback response when upstream returns an error or times out</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/template_response" target="_blank" rel="noopener noreferrer">template_response/</a></td>
+            <td>Generate responses from JavaScript or Velocity templates</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/template_forward" target="_blank" rel="noopener noreferrer">template_forward/</a></td>
+            <td>Forward requests using JavaScript or Velocity templates</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/error_action" target="_blank" rel="noopener noreferrer">error_action/</a></td>
+            <td>Error actions: drop connection, return random bytes</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/callback" target="_blank" rel="noopener noreferrer">callback/</a></td>
+            <td>Java class callback actions</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/forward_class_callback" target="_blank" rel="noopener noreferrer">forward_class_callback/</a></td>
+            <td>Forward requests using a Java class callback</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/verify" target="_blank" rel="noopener noreferrer">verify/</a></td>
+            <td>Verify recorded requests by count (exact, at-least, at-most), sequence, OpenAPI operation, and response</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/retrieve" target="_blank" rel="noopener noreferrer">retrieve/</a></td>
+            <td>Retrieve recorded requests, request-response pairs, log messages, and active or recorded expectations</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/clear" target="_blank" rel="noopener noreferrer">clear/</a></td>
+            <td>Clear expectations and logs selectively by request matcher, OpenAPI operation, expectation ID, or logs only</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/reset" target="_blank" rel="noopener noreferrer">reset/</a></td>
+            <td>Reset MockServer (clear all state)</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/openapi" target="_blank" rel="noopener noreferrer">openapi/</a></td>
+            <td>Create expectations from an OpenAPI spec URL, by operation, or from the classpath</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/contract" target="_blank" rel="noopener noreferrer">contract/</a></td>
+            <td>Run an OpenAPI spec as a contract test against a live service</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/pact" target="_blank" rel="noopener noreferrer">pact/</a></td>
+            <td>Import a Pact v3 contract with provider state and activate the state so it matches</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario" target="_blank" rel="noopener noreferrer">scenario/</a></td>
+            <td>Stateful scenarios &mdash; state-machine flows (<code>scenarioName</code> / <code>scenarioState</code> / <code>newScenarioState</code>), sequential/cycling responses (<code>responseMode</code>), timed &amp; externally-triggered transitions, and cross-protocol correlation</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/graphql" target="_blank" rel="noopener noreferrer">graphql/</a></td>
+            <td>Import a GraphQL SDL and match requests by GraphQL query AST body matcher</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/grpc_stream" target="_blank" rel="noopener noreferrer">grpc_stream/</a></td>
+            <td>Mock gRPC server-streaming responses and gRPC error statuses</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/websocket" target="_blank" rel="noopener noreferrer">websocket/</a></td>
+            <td>WebSocket expectations with subprotocol and message matchers</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/sse" target="_blank" rel="noopener noreferrer">sse/</a></td>
+            <td>Server-Sent Events response with multiple events</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/binary_response" target="_blank" rel="noopener noreferrer">binary_response/</a></td>
+            <td>Return raw binary data (base64-encoded) in a response</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/dns_response" target="_blank" rel="noopener noreferrer">dns_response/</a></td>
+            <td>DNS A record and NXDOMAIN mock responses</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/llm" target="_blank" rel="noopener noreferrer">llm/</a></td>
+            <td>Mock OpenAI-style chat completions, embeddings, and rerank responses</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/mcp" target="_blank" rel="noopener noreferrer">mcp/</a></td>
+            <td>Mock an MCP server tool (<code>tools/list</code> and <code>tools/call</code>) over JSON-RPC</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/a2a" target="_blank" rel="noopener noreferrer">a2a/</a></td>
+            <td>Serve an A2A agent card and return completed A2A tasks (Agent-to-Agent protocol)</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="examples_chaos_scenarios" class="anchor" href="#examples_chaos_scenarios">&nbsp;</a>
+
+<h2>Chaos Engineering Scenarios</h2>
+
+<p>
+    The <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos" target="_blank" rel="noopener noreferrer">chaos/</a>
+    directory demonstrates MockServer's multi-layer fault injection — spanning TCP, HTTP, gRPC, and LLM protocols.
+</p>
+
+<table class="comparison">
+    <thead>
+        <tr>
+            <th>Scenario</th>
+            <th>Layer</th>
+            <th>What it demonstrates</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/http_latency_gaussian" target="_blank" rel="noopener noreferrer">http_latency_gaussian</a></td>
+            <td>HTTP</td>
+            <td>Inject Gaussian-distributed latency on a mocked response</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/http_error_with_retry_after" target="_blank" rel="noopener noreferrer">http_error_with_retry_after</a></td>
+            <td>HTTP</td>
+            <td>Deterministic 503 error injection with a Retry-After header</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/connection_drop_seeded" target="_blank" rel="noopener noreferrer">connection_drop_seeded</a></td>
+            <td>HTTP</td>
+            <td>Probabilistic TCP connection drops with a fixed seed for reproducibility</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/gradual_degradation_ramp" target="_blank" rel="noopener noreferrer">gradual_degradation_ramp</a></td>
+            <td>HTTP</td>
+            <td>Error probability that ramps from 0% to 100% over a configurable duration</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/outage_window_controllable_clock" target="_blank" rel="noopener noreferrer">outage_window_controllable_clock</a></td>
+            <td>HTTP</td>
+            <td>Time-based outage window using the controllable clock (<code>PUT /mockserver/clock</code>)</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/named_quota_rate_limit" target="_blank" rel="noopener noreferrer">named_quota_rate_limit</a></td>
+            <td>HTTP</td>
+            <td>Fixed-window rate limiting with a named, shared quota counter</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/service_scoped_profile_with_live_patch" target="_blank" rel="noopener noreferrer">service_scoped_profile_with_live_patch</a></td>
+            <td>HTTP</td>
+            <td>Register a service-level chaos profile and live-patch it with PATCH</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/tcp_reset_peer" target="_blank" rel="noopener noreferrer">tcp_reset_peer</a></td>
+            <td>TCP</td>
+            <td>Inject TCP RST (reset) on connections to a target host</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/tcp_bandwidth_throttle" target="_blank" rel="noopener noreferrer">tcp_bandwidth_throttle</a></td>
+            <td>TCP</td>
+            <td>Throttle bandwidth to a target host at the TCP layer</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/grpc_status_chaos" target="_blank" rel="noopener noreferrer">grpc_status_chaos</a></td>
+            <td>gRPC</td>
+            <td>Inject gRPC error statuses with latency and custom trailers</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/chaos/llm_midstream_truncation" target="_blank" rel="noopener noreferrer">llm_midstream_truncation</a></td>
+            <td>LLM</td>
+            <td>Truncate an LLM streaming (SSE) response mid-stream</td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="examples_docker_compose_recipes" class="anchor" href="#examples_docker_compose_recipes">&nbsp;</a>
+
+<h2>Docker Compose Recipes</h2>
+
+<p>
+    The <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose" target="_blank" rel="noopener noreferrer">docker-compose/</a>
+    directory contains quick-start recipes and configuration permutations. Each recipe is exercised in CI.
+</p>
+
+<table class="comparison">
+    <thead>
+        <tr>
+            <th>Recipe</th>
+            <th>What it does</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/mock-from-openapi" target="_blank" rel="noopener noreferrer">mock-from-openapi</a></td>
+            <td>Serve mocks generated from a mounted OpenAPI spec</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/record-replay-proxy" target="_blank" rel="noopener noreferrer">record-replay-proxy</a></td>
+            <td>Proxy to an upstream and record traffic to a replayable file</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/validation-proxy" target="_blank" rel="noopener noreferrer">validation-proxy</a></td>
+            <td>Proxy to an upstream and validate requests/responses against an OpenAPI spec</td>
+        </tr>
+        <tr>
+            <td><a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/docker-compose/chaos-proxy" target="_blank" rel="noopener noreferrer">chaos-proxy</a></td>
+            <td>Proxy to an upstream while injecting latency and intermittent errors</td>
+        </tr>
+    </tbody>
+</table>

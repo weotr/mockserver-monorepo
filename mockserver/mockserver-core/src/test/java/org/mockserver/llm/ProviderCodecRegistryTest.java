@@ -117,15 +117,15 @@ public class ProviderCodecRegistryTest {
     }
 
     @Test
-    public void shouldHaveAllSevenProvidersRegisteredInSingletonInstance() {
+    public void shouldHaveAllProvidersRegisteredInSingletonInstance() {
         // given
         ProviderCodecRegistry registry = ProviderCodecRegistry.getInstance();
 
         // when
         List<String> names = registry.supportedProviderNames();
 
-        // then — all 7 providers should be registered
-        assertThat(names, hasSize(7));
+        // then — all 9 providers should be registered (7 chat + 2 rerank-only)
+        assertThat(names, hasSize(9));
         assertThat(names, containsInAnyOrder(
             "ANTHROPIC",
             "OPENAI",
@@ -133,12 +133,14 @@ public class ProviderCodecRegistryTest {
             "GEMINI",
             "BEDROCK",
             "AZURE_OPENAI",
-            "OLLAMA"
+            "OLLAMA",
+            "COHERE",
+            "VOYAGE"
         ));
     }
 
     @Test
-    public void shouldLookUpAllSevenRegisteredProviders() {
+    public void shouldLookUpAllRegisteredProviders() {
         // given
         ProviderCodecRegistry registry = ProviderCodecRegistry.getInstance();
 

@@ -12,6 +12,7 @@ import org.mockserver.async.asyncapi.AsyncApiChannel;
 import org.mockserver.async.asyncapi.AsyncApiMessage;
 import org.mockserver.async.asyncapi.AsyncApiParser;
 import org.mockserver.async.asyncapi.AsyncApiSpec;
+import org.mockserver.async.publish.AmqpMessagePublisher;
 import org.mockserver.async.publish.KafkaMessagePublisher;
 import org.mockserver.async.publish.MessagePublisher;
 import org.mockserver.async.publish.MqttMessagePublisher;
@@ -175,6 +176,22 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
                     subscriber.subscribe(channel.getName());
                 }
             }
+        }
+
+        if (brokerConfig.amqpUri != null) {
+            MessagePublisher publisher = new AmqpMessagePublisher(brokerConfig.amqpUri, spec);
+            activePublishers.add(publisher);
+
+            AsyncApiMockOrchestrator orchestrator = new AsyncApiMockOrchestrator(spec, publisher, generator);
+            activeOrchestrators.add(orchestrator);
+
+            if (brokerConfig.publishOnLoad) {
+                orchestrator.publishAll();
+            }
+            if (brokerConfig.publishIntervalMillis > 0) {
+                orchestrator.startPublishing(brokerConfig.publishIntervalMillis);
+            }
+            // AMQP consumer/subscriber mocking is deferred (publish-side only for now).
         }
 
         if (brokerConfig.mqttBrokerUrl != null) {
@@ -422,6 +439,11 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
     }
 
     @Override
+    public String generateHttpExpectations(String requestBody) {
+        return new AsyncApiHttpExpectationGenerator().generateSerialized(requestBody);
+    }
+
+    @Override
     public void reset() {
         resetInternal();
         LOG.info("AsyncAPI control-plane reset");
@@ -575,6 +597,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
         if (node != null) {
             config.kafkaBootstrapServers = textOrNull(node, "kafkaBootstrapServers");
             config.mqttBrokerUrl = textOrNull(node, "mqttBrokerUrl");
+            config.amqpUri = textOrNull(node, "amqpUri");
             config.mqttClientId = textOrNull(node, "mqttClientId");
             config.kafkaGroupId = textOrNull(node, "kafkaGroupId");
             config.publishOnLoad = boolOrDefault(node, "publishOnLoad", true);
@@ -595,6 +618,12 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
             String configDefault = ConfigurationProperties.asyncMqttBrokerUrl();
             if (configDefault != null && !configDefault.isEmpty()) {
                 config.mqttBrokerUrl = configDefault;
+            }
+        }
+        if (config.amqpUri == null) {
+            String configDefault = ConfigurationProperties.asyncAmqpUri();
+            if (configDefault != null && !configDefault.isEmpty()) {
+                config.amqpUri = configDefault;
             }
         }
         return config;
@@ -720,6 +749,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
         String kafkaGroupId;
         String mqttBrokerUrl;
         String mqttClientId;
+        String amqpUri;
         boolean publishOnLoad = true;
         boolean consume = false;
         long publishIntervalMillis = 0;

@@ -146,6 +146,28 @@ describe('static response connectionOptions', () => {
   });
 });
 
+describe('WASM body matcher Java codegen', () => {
+  it('emits WasmBody.wasmBody() not a non-existent wasm() factory', () => {
+    const java = standardToJava(httpMatcher({ body: 'my-module', bodyMatcherType: 'wasm' }), {
+      type: 'static',
+      static: { statusCode: 200, body: '', contentType: '' },
+    });
+    expect(java).toContain('WasmBody.wasmBody("my-module")');
+    expect(java).not.toContain('wasm("my-module")');
+    expect(java).toContain('import org.mockserver.model.WasmBody;');
+  });
+
+  it('emits the correct JSON shape for a wasm body matcher', () => {
+    const json = buildExpectationJson(httpMatcher({ body: 'my-module', bodyMatcherType: 'wasm' }), {
+      type: 'static',
+      static: { statusCode: 200, body: '', contentType: '' },
+    });
+    const body = (json['httpRequest'] as Record<string, unknown>)['body'] as Record<string, unknown>;
+    expect(body['type']).toBe('WASM');
+    expect(body['moduleName']).toBe('my-module');
+  });
+});
+
 describe('expectation timeToLive', () => {
   const ttlAction: StandardActionPayload = { type: 'static', static: { statusCode: 200, body: '', contentType: '' } };
 

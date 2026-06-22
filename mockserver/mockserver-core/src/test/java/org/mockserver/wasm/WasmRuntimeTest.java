@@ -44,7 +44,7 @@ public class WasmRuntimeTest {
     @Test
     public void shouldReturnFalseForNullBody() {
         WasmRuntime runtime = new WasmRuntime(new byte[]{0x00, 0x61, 0x73, 0x6d});
-        assertThat(runtime.callMatch(null), is(false));
+        assertThat(runtime.callMatch((String) null), is(false));
     }
 
     @Test

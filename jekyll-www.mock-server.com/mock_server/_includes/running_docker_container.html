@@ -177,10 +177,12 @@ For example to add all jar files in the current directory, map <strong>$(pwd)</s
       periodSeconds: 5
     readinessProbe:
       httpGet:
-        path: /liveness/probe
+        path: /mockserver/ready
         port: 1080
       initialDelaySeconds: 5
       periodSeconds: 5</code></pre>
+
+<p><strong>Important:</strong> the <span class="inline_code">MOCKSERVER_LIVENESS_HTTP_GET_PATH</span> environment variable must be set (as shown above) for the <span class="inline_code">livenessProbe</span> <span class="inline_code">httpGet</span> to work. This path is empty (disabled) by default &mdash; without the env var, the liveness probe will return a 404. If you copy only the <span class="inline_code">livenessProbe</span> block without the <span class="inline_code">env</span> section, it will fail. The <span class="inline_code">readinessProbe</span> uses <span class="inline_code">/mockserver/ready</span>, a fixed built-in endpoint that needs no env var: it returns 503 until expectation initializers and OpenAPI seeding complete, then 200, so traffic is not routed to the pod before the seeded mocks exist.</p>
 
 <p>The MockServer Helm chart configures these probes automatically.</p>
 

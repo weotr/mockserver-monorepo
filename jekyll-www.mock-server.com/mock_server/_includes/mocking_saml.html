@@ -1,0 +1,141 @@
+<p>MockServer can stand up a complete mock <strong>SAML 2.0 Identity Provider (IdP)</strong> with a single call, so you can test SAML-secured applications without connecting to a real IdP. This is useful for:</p>
+
+<ul>
+    <li><strong>Integration testing</strong> &mdash; verify your Service Provider (SP) correctly consumes a signed SAML assertion and establishes a session</li>
+    <li><strong>Offline development</strong> &mdash; develop and test locally without network access to a real IdP</li>
+    <li><strong>Fast CI pipelines</strong> &mdash; eliminate the external IdP dependency and its network latency from your test suite</li>
+    <li><strong>Rejection-path testing</strong> &mdash; deliberately produce expired, wrong-audience, or tampered assertions to confirm your SP rejects them</li>
+</ul>
+
+<p>A single <code>PUT /mockserver/saml</code> generates up to three endpoints:</p>
+
+<ul>
+    <li><strong>Metadata</strong> (<code>GET /saml/metadata</code>) &mdash; SAML 2.0 IdP metadata XML containing the signing X.509 certificate, a <code>SingleSignOnService</code>, and a <code>SingleLogoutService</code> (both HTTP-POST binding).</li>
+    <li><strong>SSO</strong> (<code>/saml/sso</code>) &mdash; implements the SP-initiated Web-Browser-SSO POST profile. Returns an auto-submitting HTML form that POSTs a freshly XML-DSig-signed SAML <code>Response</code> to your SP's Assertion Consumer Service (ACS), echoing <code>RelayState</code> and the <code>AuthnRequest</code> <code>ID</code> as <code>InResponseTo</code>.</li>
+    <li><strong>Single Logout</strong> (<code>/saml/logout</code>) &mdash; accepts a <code>LogoutRequest</code> and returns a signed <code>LogoutResponse</code> form-POSTed to your SP's Single-Logout service, echoing <code>RelayState</code>.</li>
+</ul>
+
+<p>The signing credential is generated as a self-signed RSA key by default (no real IdP infrastructure required) and its certificate is published in the metadata so your SP can validate the assertion signature. You may supply your own PEM-encoded certificate and key, or choose a different signing algorithm.</p>
+
+<a id="quick_start" class="anchor" href="#quick_start">&nbsp;</a>
+
+<h2>Stand Up a Mock IdP With Defaults</h2>
+
+<button id="button_saml_defaults" class="accordion">mock a SAML IdP with default settings</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/saml"</code></pre>
+    </div>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">new MockServerClient("localhost", 1080)
+    .mockSamlProvider();</code></pre>
+    </div>
+</div>
+
+<a id="custom_config" class="anchor" href="#custom_config">&nbsp;</a>
+
+<h2>Configure the IdP</h2>
+
+<button id="button_saml_custom" class="accordion">mock a SAML IdP with a custom subject, attributes, and SP details</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/saml" -d '{
+    "idpEntityId": "https://idp.example.com/saml/idp",
+    "spEntityId": "https://sp.example.com/metadata",
+    "assertionConsumerServiceUrl": "https://sp.example.com/acs",
+    "spSingleLogoutServiceUrl": "https://sp.example.com/slo",
+    "subjectNameId": "alice@example.com",
+    "attributes": {
+        "email": "alice@example.com",
+        "role": "admin"
+    },
+    "signingAlgorithm": "ES256"
+}'</code></pre>
+    </div>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">new MockServerClient("localhost", 1080)
+    .mockSamlProvider(
+        new SamlProviderConfiguration()
+            .setIdpEntityId("https://idp.example.com/saml/idp")
+            .setSpEntityId("https://sp.example.com/metadata")
+            .setAssertionConsumerServiceUrl("https://sp.example.com/acs")
+            .setSpSingleLogoutServiceUrl("https://sp.example.com/slo")
+            .setSubjectNameId("alice@example.com")
+            .setAttributes(Map.of("email", "alice@example.com", "role", "admin"))
+            .setSigningAlgorithm("ES256")
+    );</code></pre>
+    </div>
+</div>
+
+<a id="negative_tests" class="anchor" href="#negative_tests">&nbsp;</a>
+
+<h2>Test Your SP's Rejection Paths</h2>
+
+<p>Set any of the negative-test flags to make the IdP deliberately mint a defective assertion, so you can confirm your SP rejects it (rather than silently accepting it):</p>
+
+<button id="button_saml_negative" class="accordion">mock an IdP that returns an expired, wrong-audience assertion</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/saml" -d '{
+    "expiredAssertion": true,
+    "wrongAudience": true,
+    "tamperedSignature": true
+}'</code></pre>
+    </div>
+</div>
+
+<a id="config_reference" class="anchor" href="#config_reference">&nbsp;</a>
+
+<h2>Configuration Reference</h2>
+
+<p>All fields are optional; the defaults produce a fully functional mock IdP.</p>
+
+<table>
+    <thead>
+        <tr><th>Field</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>idpEntityId</code></td><td><code>http://localhost:1080/saml/idp</code></td><td>The IdP entity id published in metadata and used as the assertion <code>Issuer</code>.</td></tr>
+        <tr><td><code>spEntityId</code></td><td><code>http://localhost:8080/saml/sp</code></td><td>The SP entity id, emitted as the assertion's <code>AudienceRestriction</code>.</td></tr>
+        <tr><td><code>assertionConsumerServiceUrl</code></td><td><code>http://localhost:8080/saml/acs</code></td><td>The SP ACS URL the signed <code>Response</code> is form-POSTed to.</td></tr>
+        <tr><td><code>spSingleLogoutServiceUrl</code></td><td><code>http://localhost:8080/saml/slo</code></td><td>The SP SLO URL the signed <code>LogoutResponse</code> is form-POSTed to.</td></tr>
+        <tr><td><code>metadataUrl</code></td><td><code>/saml/metadata</code></td><td>The IdP metadata endpoint path.</td></tr>
+        <tr><td><code>ssoServiceUrl</code></td><td><code>/saml/sso</code></td><td>The IdP SSO endpoint path.</td></tr>
+        <tr><td><code>sloServiceUrl</code></td><td><code>/saml/logout</code></td><td>The IdP Single-Logout endpoint path. Set to <code>null</code> to omit the SLO endpoint and metadata entry.</td></tr>
+        <tr><td><code>subjectNameId</code></td><td><code>mock-user@example.com</code></td><td>The authenticated subject's <code>NameID</code>.</td></tr>
+        <tr><td><code>nameIdFormat</code></td><td><code>...emailAddress</code></td><td>The <code>NameID</code> <code>Format</code>.</td></tr>
+        <tr><td><code>attributes</code></td><td><code>{}</code></td><td>Attribute name/value pairs emitted in an <code>AttributeStatement</code>.</td></tr>
+        <tr><td><code>sessionDurationSeconds</code></td><td><code>3600</code></td><td>Validity window for the assertion's <code>Conditions</code> / session.</td></tr>
+        <tr><td><code>signingAlgorithm</code></td><td><em>RSA / SHA-256</em></td><td>Signing algorithm: one of <code>RS256</code>, <code>RS384</code>, <code>RS512</code>, <code>ES256</code>, <code>ES384</code>, <code>ES512</code>. The metadata certificate always matches the signing key.</td></tr>
+        <tr><td><code>signingCertificatePem</code> / <code>signingPrivateKeyPem</code></td><td><em>self-signed</em></td><td>Supply your own PEM-encoded signing credential. The private key is never serialized back out.</td></tr>
+        <tr><td><code>expiredAssertion</code></td><td><code>false</code></td><td>Negative test: place <code>NotOnOrAfter</code> in the past so a conformant SP rejects the assertion as expired.</td></tr>
+        <tr><td><code>wrongAudience</code></td><td><code>false</code></td><td>Negative test: emit an <code>Audience</code> that does not match <code>spEntityId</code>.</td></tr>
+        <tr><td><code>tamperedSignature</code></td><td><code>false</code></td><td>Negative test: corrupt the assertion signature so verification fails.</td></tr>
+    </tbody>
+</table>
+
+<a id="sp_config" class="anchor" href="#sp_config">&nbsp;</a>
+
+<h2>Point Your Service Provider at the Mock IdP</h2>
+
+<p>Configure your SP to use the mock IdP's metadata URL. For example, with Spring Security SAML:</p>
+
+<pre class="prettyprint code"><code class="code">spring:
+  security:
+    saml2:
+      relyingparty:
+        registration:
+          mockserver:
+            assertingparty:
+              metadata-uri: http://localhost:1080/saml/metadata
+            acs:
+              location: https://sp.example.com/acs
+            singlelogout:
+              url: https://sp.example.com/slo</code></pre>
+
+<p>The SP will load the IdP signing certificate from the metadata and validate the assertion signature automatically. Each request to the SSO endpoint mints a fresh, signed <code>Response</code>.</p>

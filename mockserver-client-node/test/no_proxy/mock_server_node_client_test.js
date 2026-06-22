@@ -474,7 +474,7 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
     it('should create expectation with open api request', async function () {
         await client.mockAnyResponse({
             'httpRequest': {
-                'specUrlOrPayload': 'https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+                'specUrlOrPayload': 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
                 'operationId': 'listPets'
             },
             'httpResponse': { 'statusCode': 200, 'body': "open_api_response" }
@@ -489,7 +489,7 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
 
     it('should create open api expectation', async function () {
         await client.openAPIExpectation({
-            'specUrlOrPayload': 'https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+            'specUrlOrPayload': 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
             'operationsAndResponses': { 'showPetById': '200', 'listPets': '200' }
         });
 
@@ -935,6 +935,22 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
         assert.equal(expectations[1].httpResponse.statusCode, 201);
     });
 
+    it('should retrieve active expectations as generated code', async function () {
+        await client.mockSimpleResponse('/somePathOne', {name: 'one'}, 201);
+
+        var code = await client.retrieveExpectationsAsCode('java', '/somePathOne');
+        assert.equal(typeof code, 'string');
+        assert.ok(code.length > 0, 'expected non-empty generated code');
+        assert.ok(code.indexOf('/somePathOne') !== -1, 'generated code should reference the path');
+    });
+
+    it('should retrieve recorded expectations as generated code', async function () {
+        // No proxied traffic has been recorded, so the generated code is empty,
+        // but the call must succeed and return a string for the requested format.
+        var code = await client.retrieveRecordedExpectationsAsCode('python');
+        assert.equal(typeof code, 'string');
+    });
+
     it('should retrieve all expectations using object matcher', async function () {
         await client.mockSimpleResponse('/somePathOne', {name: 'one'}, 201);
         await client.mockSimpleResponse('/somePathOne', {name: 'one'}, 201);
@@ -954,6 +970,106 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
 
         var expectations = await client.retrieveActiveExpectations();
         assert.equal(expectations.length, 3);
+    });
+
+    it('should setup an SSE response expectation using respondWithSse', async function () {
+        await client.respondWithSse('/sse', {
+            statusCode: 200,
+            events: [
+                { event: 'message', data: 'first' },
+                { event: 'message', data: 'second' }
+            ],
+            closeConnection: true
+        });
+
+        var expectations = await client.retrieveActiveExpectations('/sse');
+        assert.equal(expectations.length, 1);
+        assert.equal(expectations[0].httpRequest.path, '/sse');
+        assert.ok(expectations[0].httpSseResponse, 'httpSseResponse should be present');
+        assert.equal(expectations[0].httpSseResponse.events.length, 2);
+        assert.equal(expectations[0].httpSseResponse.events[0].data, 'first');
+        assert.equal(expectations[0].httpSseResponse.closeConnection, true);
+        assert.ok(!expectations[0].httpResponse, 'no httpResponse action should be set');
+    });
+
+    it('should setup a WebSocket response expectation using respondWithWebSocket', async function () {
+        await client.respondWithWebSocket('/ws', {
+            messages: [
+                { text: 'hello' },
+                { text: 'world' }
+            ],
+            closeConnection: false
+        });
+
+        var expectations = await client.retrieveActiveExpectations('/ws');
+        assert.equal(expectations.length, 1);
+        assert.equal(expectations[0].httpRequest.path, '/ws');
+        assert.ok(expectations[0].httpWebSocketResponse, 'httpWebSocketResponse should be present');
+        assert.equal(expectations[0].httpWebSocketResponse.messages.length, 2);
+        assert.equal(expectations[0].httpWebSocketResponse.messages[0].text, 'hello');
+        assert.ok(!expectations[0].httpResponse, 'no httpResponse action should be set');
+    });
+
+    it('should setup a DNS response expectation using respondWithDns', async function () {
+        await client.respondWithDns('/dns', {
+            answerRecords: [
+                { name: 'example.com', type: 'A', ttl: 300, value: '127.0.0.1' }
+            ],
+            responseCode: 'NOERROR'
+        });
+
+        var expectations = await client.retrieveActiveExpectations('/dns');
+        assert.equal(expectations.length, 1);
+        assert.equal(expectations[0].httpRequest.path, '/dns');
+        assert.ok(expectations[0].dnsResponse, 'dnsResponse should be present');
+        assert.equal(expectations[0].dnsResponse.answerRecords.length, 1);
+        assert.equal(expectations[0].dnsResponse.answerRecords[0].value, '127.0.0.1');
+        assert.equal(expectations[0].dnsResponse.responseCode, 'NOERROR');
+        assert.ok(!expectations[0].httpResponse, 'no httpResponse action should be set');
+    });
+
+    it('should setup a binary response expectation using respondWithBinary', async function () {
+        var base64Data = Buffer.from('hello binary').toString('base64');
+        await client.respondWithBinary('/binary', {
+            binaryData: base64Data
+        });
+
+        var expectations = await client.retrieveActiveExpectations('/binary');
+        assert.equal(expectations.length, 1);
+        assert.equal(expectations[0].httpRequest.path, '/binary');
+        assert.ok(expectations[0].binaryResponse, 'binaryResponse should be present');
+        assert.equal(expectations[0].binaryResponse.binaryData, base64Data);
+        assert.ok(!expectations[0].httpResponse, 'no httpResponse action should be set');
+    });
+
+    it('should setup a gRPC stream response expectation using respondWithGrpcStream', async function () {
+        await client.respondWithGrpcStream('/my.Service/StreamItems', {
+            statusName: 'OK',
+            messages: [
+                { json: '{"value":"first"}' },
+                { json: '{"value":"second"}' }
+            ],
+            closeConnection: true
+        });
+
+        var expectations = await client.retrieveActiveExpectations('/my.Service/StreamItems');
+        assert.equal(expectations.length, 1);
+        assert.equal(expectations[0].httpRequest.path, '/my.Service/StreamItems');
+        assert.ok(expectations[0].grpcStreamResponse, 'grpcStreamResponse should be present');
+        assert.equal(expectations[0].grpcStreamResponse.messages.length, 2);
+        assert.equal(expectations[0].grpcStreamResponse.statusName, 'OK');
+        assert.ok(!expectations[0].httpResponse, 'no httpResponse action should be set');
+    });
+
+    it('should honour times on respondWithSse', async function () {
+        await client.respondWithSse('/sse-times', {
+            events: [ { event: 'message', data: 'x' } ]
+        }, 3);
+
+        var expectations = await client.retrieveActiveExpectations('/sse-times');
+        assert.equal(expectations.length, 1);
+        assert.equal(expectations[0].times.remainingTimes, 3);
+        assert.ok(!expectations[0].times.unlimited, 'expectation should not be unlimited');
     });
 
     it('should retrieve some requests using object matcher', async function () {
@@ -1198,6 +1314,231 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
         assert.equal(hosts.length, 0, "all service chaos should have been cleared");
     });
 
+    // ========================================================================
+    // Load scenario registry management
+    //   PUT    /mockserver/loadScenario        (register; allowed when off)
+    //   GET    /mockserver/loadScenario        (list all registered)
+    //   GET    /mockserver/loadScenario/{name} (one; 404 if absent)
+    //   DELETE /mockserver/loadScenario/{name} (remove one)
+    //   DELETE /mockserver/loadScenario        (clear all)
+    //   PUT    /mockserver/loadScenario/start  (start; 403 unless enabled)
+    //   PUT    /mockserver/loadScenario/stop   (stop running)
+    // The integration server is started WITHOUT loadGenerationEnabled, so
+    // REGISTRATION is allowed (exercises the registry CRUD paths) while STARTING
+    // is forbidden - which deterministically exercises the client's start path
+    // and its 403 rejection message.
+    // ========================================================================
+
+    var loadScenarioDefinition = {
+        name: "node-client-load-test",
+        templateType: "VELOCITY",
+        labels: { team: "node-client" },
+        maxRequests: 10,
+        startDelayMillis: 50,
+        profile: {
+            stages: [
+                { type: "VU", vus: 2, durationMillis: 1000 },
+                { type: "PAUSE", durationMillis: 200 },
+                { type: "RATE", rate: 5, durationMillis: 1000 }
+            ]
+        },
+        steps: [
+            {
+                name: "ping",
+                thinkTime: { timeUnit: "MILLISECONDS", value: 5 },
+                request: {
+                    method: "GET",
+                    path: "/load/ping",
+                    headers: { "X-Load": ["1"] }
+                }
+            }
+        ]
+    };
+
+    it('should register a load scenario even when load generation is disabled', async function () {
+        await client.clearLoadScenarios();
+        var registration = await client.loadScenario(loadScenarioDefinition);
+        assert.ok(registration, "loadScenario should resolve a registration object");
+        assert.equal(registration.name, loadScenarioDefinition.name, "registration should echo the scenario name");
+        assert.ok(typeof registration.state === "string", "registration should carry a string 'state'");
+    });
+
+    it('should list registered load scenarios', async function () {
+        await client.clearLoadScenarios();
+        await client.loadScenario(loadScenarioDefinition);
+        var list = await client.loadScenarios();
+        assert.ok(list && Array.isArray(list.scenarios), "loadScenarios should resolve {scenarios: [...]}");
+        var names = list.scenarios.map(function (s) { return s.name; });
+        assert.ok(names.indexOf(loadScenarioDefinition.name) !== -1, "the registered scenario should be listed");
+    });
+
+    it('should get a single registered load scenario by name', async function () {
+        await client.loadScenario(loadScenarioDefinition);
+        var entry = await client.getLoadScenario(loadScenarioDefinition.name);
+        assert.ok(entry, "getLoadScenario should resolve an entry");
+        assert.equal(entry.name, loadScenarioDefinition.name, "entry should carry the requested name");
+    });
+
+    it('should reject getLoadScenario with 404 for an unknown name', async function () {
+        var rejected = false;
+        try {
+            await client.getLoadScenario("node-client-no-such-scenario");
+        } catch (err) {
+            rejected = true;
+            var message = (typeof err === "string") ? err : String(err);
+            assert.ok(message.indexOf("404") !== -1, "expected a 404 but got: " + message);
+        }
+        assert.equal(rejected, true, "getLoadScenario should reject for an unknown scenario");
+    });
+
+    it('should reject startLoadScenarios with a clear message when load generation is disabled', async function () {
+        await client.loadScenario(loadScenarioDefinition);
+        var rejected = false;
+        try {
+            await client.startLoadScenarios(loadScenarioDefinition.name);
+        } catch (err) {
+            rejected = true;
+            var message = (typeof err === "string") ? err : String(err);
+            assert.ok(
+                message.toLowerCase().indexOf("load generation is not enabled") !== -1,
+                "expected a clear 'load generation is not enabled' message but got: " + message
+            );
+        }
+        assert.equal(rejected, true, "startLoadScenarios should reject when loadGenerationEnabled=false");
+    });
+
+    it('should accept an array of names for startLoadScenarios', async function () {
+        await client.loadScenario(loadScenarioDefinition);
+        var rejected = false;
+        try {
+            await client.startLoadScenarios([loadScenarioDefinition.name]);
+        } catch (err) {
+            rejected = true;
+            var message = (typeof err === "string") ? err : String(err);
+            assert.ok(
+                message.toLowerCase().indexOf("load generation is not enabled") !== -1,
+                "expected a clear 'load generation is not enabled' message but got: " + message
+            );
+        }
+        assert.equal(rejected, true, "startLoadScenarios(array) should reject when loadGenerationEnabled=false");
+    });
+
+    it('should stop all running load scenarios with an empty body', async function () {
+        var result = await client.stopLoadScenarios();
+        assert.ok(result, "stopLoadScenarios should resolve a result");
+        assert.equal(result.status, "stopped", "stopLoadScenarios should report status 'stopped'");
+    });
+
+    it('should delete a single registered load scenario by name', async function () {
+        await client.clearLoadScenarios();
+        await client.loadScenario(loadScenarioDefinition);
+        var result = await client.deleteLoadScenario(loadScenarioDefinition.name);
+        assert.ok(result, "deleteLoadScenario should resolve a response");
+        assert.equal(result.statusCode, 200, "deleteLoadScenario should return HTTP 200");
+        var list = await client.loadScenarios();
+        var names = list.scenarios.map(function (s) { return s.name; });
+        assert.ok(names.indexOf(loadScenarioDefinition.name) === -1, "the deleted scenario should no longer be listed");
+    });
+
+    it('should clear all registered load scenarios', async function () {
+        await client.loadScenario(loadScenarioDefinition);
+        var result = await client.clearLoadScenarios();
+        assert.ok(result, "clearLoadScenarios should resolve a response");
+        assert.equal(result.statusCode, 200, "clearLoadScenarios should return HTTP 200");
+        var list = await client.loadScenarios();
+        assert.equal(list.scenarios.length, 0, "registry should be empty after clearLoadScenarios");
+    });
+
+    it('should reject runLoadScenario (register then start) when load generation is disabled', async function () {
+        var rejected = false;
+        try {
+            await client.runLoadScenario(loadScenarioDefinition);
+        } catch (err) {
+            rejected = true;
+            var message = (typeof err === "string") ? err : String(err);
+            assert.ok(
+                message.toLowerCase().indexOf("load generation is not enabled") !== -1,
+                "expected a clear 'load generation is not enabled' message but got: " + message
+            );
+        }
+        assert.equal(rejected, true, "runLoadScenario should reject when loadGenerationEnabled=false");
+        // even though start failed, registration should have succeeded
+        var entry = await client.getLoadScenario(loadScenarioDefinition.name);
+        assert.equal(entry.name, loadScenarioDefinition.name, "runLoadScenario should still have registered the scenario");
+    });
+
+    // ========================================================================
+    // gRPC descriptor management
+    //   PUT /mockserver/grpc/descriptors  (raw FileDescriptorSet bytes)
+    //   PUT /mockserver/grpc/services     (list registered services)
+    //   PUT /mockserver/grpc/clear        (clear descriptors)
+    // ========================================================================
+
+    // A real compiled gRPC FileDescriptorSet (greeting.dsc) describing the
+    // com.example.grpc.GreetingService service with four methods covering all
+    // streaming combinations. Held as base64 so the test is self-contained.
+    var greetingDescriptorSetBase64 =
+        "CvgDCg5ncmVldGluZy5wcm90bxIQY29tLmV4YW1wbGUuZ3JwYyIiCgxIZWxsb1JlcXVlc3QSEgoEbmFt" +
+        "ZRgBIAEoCVIEbmFtZSIrCg1IZWxsb1Jlc3BvbnNlEhoKCGdyZWV0aW5nGAEgASgJUghncmVldGluZzLW" +
+        "AgoPR3JlZXRpbmdTZXJ2aWNlEksKCEdyZWV0aW5nEh4uY29tLmV4YW1wbGUuZ3JwYy5IZWxsb1JlcXVl" +
+        "c3QaHy5jb20uZXhhbXBsZS5ncnBjLkhlbGxvUmVzcG9uc2USUgoNTGlzdEdyZWV0aW5ncxIeLmNvbS5l" +
+        "eGFtcGxlLmdycGMuSGVsbG9SZXF1ZXN0Gh8uY29tLmV4YW1wbGUuZ3JwYy5IZWxsb1Jlc3BvbnNlMAES" +
+        "VQoQQ29sbGVjdEdyZWV0aW5ncxIeLmNvbS5leGFtcGxlLmdycGMuSGVsbG9SZXF1ZXN0Gh8uY29tLmV4" +
+        "YW1wbGUuZ3JwYy5IZWxsb1Jlc3BvbnNlKAESSwoEQ2hhdBIeLmNvbS5leGFtcGxlLmdycGMuSGVsbG9S" +
+        "ZXF1ZXN0Gh8uY29tLmV4YW1wbGUuZ3JwYy5IZWxsb1Jlc3BvbnNlKAEwAUIiChBjb20uZXhhbXBsZS5n" +
+        "cnBjQg5HcmVldGluZ1Byb3Rvc2IGcHJvdG8z";
+
+    it('should upload gRPC descriptor and list registered services', async function () {
+        var descriptorSet = Buffer.from(greetingDescriptorSetBase64, "base64");
+
+        var uploadResponse = await client.uploadGrpcDescriptor(descriptorSet);
+        assert.equal(uploadResponse.statusCode, 201,
+            "uploadGrpcDescriptor should return 201 Created");
+
+        var services = await client.retrieveGrpcServices();
+        assert.ok(Array.isArray(services), "retrieveGrpcServices should return an array");
+
+        var greeting = services.find(function (s) {
+            return s.name === "com.example.grpc.GreetingService";
+        });
+        assert.ok(greeting, "GreetingService should be registered");
+
+        var methodNames = greeting.methods.map(function (m) { return m.name; });
+        assert.ok(methodNames.indexOf("Greeting") !== -1, "Greeting method should be present");
+        assert.ok(methodNames.indexOf("Chat") !== -1, "Chat method should be present");
+
+        var chat = greeting.methods.find(function (m) { return m.name === "Chat"; });
+        assert.equal(chat.clientStreaming, true, "Chat should be client streaming");
+        assert.equal(chat.serverStreaming, true, "Chat should be server streaming");
+    });
+
+    it('should clear gRPC descriptors', async function () {
+        var descriptorSet = Buffer.from(greetingDescriptorSetBase64, "base64");
+        await client.uploadGrpcDescriptor(descriptorSet);
+
+        var before = await client.retrieveGrpcServices();
+        assert.ok(before.length >= 1, "at least one service should be registered before clear");
+
+        await client.clearGrpcDescriptors();
+
+        var after = await client.retrieveGrpcServices();
+        assert.equal(after.length, 0, "all gRPC services should have been cleared");
+    });
+
+    it('should reject uploadGrpcDescriptor without bytes', function () {
+        assert.throws(function () { client.uploadGrpcDescriptor(); },
+            /requires the descriptor set bytes/);
+    });
+
+    it('should reject an invalid gRPC descriptor set', async function () {
+        await assert.rejects(
+            client.uploadGrpcDescriptor(Buffer.from("not a valid descriptor set")),
+            function (err) {
+                return typeof err === "string" && /gRPC descriptor/i.test(err);
+            }
+        );
+    });
+
     it('should verify by expectation id', async function () {
         // Create expectation with known id
         await client.mockAnyResponse({
@@ -1276,6 +1617,90 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
 
         try {
             await client.verifyZeroInteractions();
+            assert.fail("should have thrown");
+        } catch (message) {
+            assert.ok(typeof message === 'string', "error should be a string");
+        }
+    });
+
+    // ---- response verification tests ----
+
+    it('should verify response by status code', async function () {
+        await client.mockSimpleResponse('/somePath', {name: 'value'}, 203);
+        var r = await sendRequest("POST", mockServerHost, mockServerPort, "/somePath", "someBody");
+        assert.equal(r.statusCode, 203);
+
+        await client.verifyResponse({ 'statusCode': 203 }, 1, 1);
+    });
+
+    it('should fail verifyResponse when no matching response exists', async function () {
+        await client.mockSimpleResponse('/somePath', {name: 'value'}, 200);
+        await sendRequest("GET", mockServerHost, mockServerPort, "/somePath");
+
+        try {
+            await client.verifyResponse({ 'statusCode': 404 }, 1);
+            assert.fail("should have thrown");
+        } catch (message) {
+            assert.ok(typeof message === 'string', "error should be a string");
+        }
+    });
+
+    it('should verify request and response pair', async function () {
+        await client.mockSimpleResponse('/somePath', {name: 'value'}, 203);
+        var r = await sendRequest("POST", mockServerHost, mockServerPort, "/somePath", "someBody");
+        assert.equal(r.statusCode, 203);
+
+        await client.verifyRequestAndResponse(
+            { 'method': 'POST', 'path': '/somePath', 'body': 'someBody' },
+            { 'statusCode': 203 },
+            1, 1
+        );
+    });
+
+    it('should fail verifyRequestAndResponse when request matches but response does not', async function () {
+        await client.mockSimpleResponse('/somePath', {name: 'value'}, 200);
+        await sendRequest("POST", mockServerHost, mockServerPort, "/somePath", "someBody");
+
+        try {
+            await client.verifyRequestAndResponse(
+                { 'method': 'POST', 'path': '/somePath', 'body': 'someBody' },
+                { 'statusCode': 404 },
+                1
+            );
+            assert.fail("should have thrown");
+        } catch (message) {
+            assert.ok(typeof message === 'string', "error should be a string");
+        }
+    });
+
+    it('should verify sequence with responses', async function () {
+        await client.mockSimpleResponse('/somePathOne', {name: 'one'}, 201);
+        await client.mockSimpleResponse('/somePathTwo', {name: 'two'}, 202);
+
+        var r1 = await sendRequest("POST", mockServerHost, mockServerPort, "/somePathOne", "someBody");
+        assert.equal(r1.statusCode, 201);
+
+        var r2 = await sendRequest("GET", mockServerHost, mockServerPort, "/somePathTwo");
+        assert.equal(r2.statusCode, 202);
+
+        await client.verifySequenceWithResponses([
+            { request: { 'method': 'POST', 'path': '/somePathOne', 'body': 'someBody' }, response: { 'statusCode': 201 } },
+            { request: { 'method': 'GET', 'path': '/somePathTwo' }, response: { 'statusCode': 202 } }
+        ]);
+    });
+
+    it('should fail verifySequenceWithResponses when response does not match', async function () {
+        await client.mockSimpleResponse('/somePathOne', {name: 'one'}, 201);
+        await client.mockSimpleResponse('/somePathTwo', {name: 'two'}, 202);
+
+        await sendRequest("POST", mockServerHost, mockServerPort, "/somePathOne", "someBody");
+        await sendRequest("GET", mockServerHost, mockServerPort, "/somePathTwo");
+
+        try {
+            await client.verifySequenceWithResponses([
+                { request: { 'method': 'POST', 'path': '/somePathOne' }, response: { 'statusCode': 201 } },
+                { request: { 'method': 'GET', 'path': '/somePathTwo' }, response: { 'statusCode': 404 } }
+            ]);
             assert.fail("should have thrown");
         } catch (message) {
             assert.ok(typeof message === 'string', "error should be a string");

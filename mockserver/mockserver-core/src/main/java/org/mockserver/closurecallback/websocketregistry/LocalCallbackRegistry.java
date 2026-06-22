@@ -1,7 +1,6 @@
 package org.mockserver.closurecallback.websocketregistry;
 
 import org.mockserver.collections.CircularHashMap;
-import org.mockserver.configuration.Configuration;
 import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.mock.action.ExpectationCallback;
 import org.mockserver.mock.action.ExpectationForwardAndResponseCallback;

@@ -3,6 +3,8 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Button from '@mui/material/Button';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
@@ -11,6 +13,8 @@ import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { registerExpectation } from '../lib/generateStub';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import HumanErrorAlert from './HumanErrorAlert';
 import JsonViewer from './JsonViewer';
 
 interface GenerateStubDialogProps {
@@ -28,33 +32,37 @@ export default function GenerateStubDialog({
   confidence,
   connectionParams,
 }: GenerateStubDialogProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [registering, setRegistering] = useState(false);
-  const [registered, setRegistered] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [registered, setRegistered] = useState<Set<number>>(new Set());
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [error, setError] = useState<HumanError | null>(null);
 
   const handleRegister = useCallback(async () => {
-    if (suggestions.length === 0) return;
+    if (suggestions.length === 0 || selectedIndex >= suggestions.length) return;
     setRegistering(true);
     setError(null);
     try {
-      await registerExpectation(connectionParams, suggestions[0]!);
-      setRegistered(true);
+      await registerExpectation(connectionParams, suggestions[selectedIndex]!);
+      setRegistered((prev) => new Set(prev).add(selectedIndex));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setRegistering(false);
     }
-  }, [connectionParams, suggestions]);
+  }, [connectionParams, suggestions, selectedIndex]);
 
   const handleClose = useCallback(() => {
-    setRegistered(false);
+    setRegistered(new Set());
+    setSelectedIndex(0);
     setError(null);
     onClose();
   }, [onClose]);
 
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
-      <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth fullScreen={fullScreen} aria-labelledby="generate-stub-dialog-title">
+      <DialogTitle id="generate-stub-dialog-title" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         Generated Expectation
         <Chip
           size="small"
@@ -65,13 +73,11 @@ export default function GenerateStubDialog({
       </DialogTitle>
       <DialogContent dividers>
         {error && (
-          <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setError(null)}>
-            {error}
-          </Alert>
+          <HumanErrorAlert error={error} sx={{ mb: 1.5 }} onClose={() => setError(null)} />
         )}
-        {registered && (
+        {registered.has(selectedIndex) && (
           <Alert severity="success" sx={{ mb: 1.5 }}>
-            Expectation registered successfully.
+            Suggestion {selectedIndex + 1} registered successfully.
           </Alert>
         )}
         {suggestions.length === 0 ? (
@@ -80,7 +86,22 @@ export default function GenerateStubDialog({
           </Typography>
         ) : (
           <Box>
-            <JsonViewer data={suggestions[0]!} collapsed={3} />
+            {suggestions.length > 1 && (
+              <Box sx={{ display: 'flex', gap: 0.5, mb: 1.5, flexWrap: 'wrap' }}>
+                {suggestions.map((_, i) => (
+                  <Chip
+                    key={i}
+                    label={`Suggestion ${i + 1}`}
+                    size="small"
+                    variant={i === selectedIndex ? 'filled' : 'outlined'}
+                    color={registered.has(i) ? 'success' : i === selectedIndex ? 'primary' : 'default'}
+                    onClick={() => setSelectedIndex(i)}
+                    sx={{ cursor: 'pointer' }}
+                  />
+                ))}
+              </Box>
+            )}
+            <JsonViewer data={suggestions[selectedIndex]!} collapsed={3} />
           </Box>
         )}
       </DialogContent>
@@ -88,11 +109,11 @@ export default function GenerateStubDialog({
         <Button onClick={handleClose}>Cancel</Button>
         <Button
           variant="contained"
-          disabled={registering || registered || suggestions.length === 0}
+          disabled={registering || registered.has(selectedIndex) || suggestions.length === 0}
           onClick={() => void handleRegister()}
           startIcon={registering ? <CircularProgress size={16} /> : undefined}
         >
-          {registered ? 'Registered' : 'Register Now'}
+          {registered.has(selectedIndex) ? 'Registered' : 'Register Now'}
         </Button>
       </DialogActions>
     </Dialog>

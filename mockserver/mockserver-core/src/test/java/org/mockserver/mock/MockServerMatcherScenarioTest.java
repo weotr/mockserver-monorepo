@@ -244,4 +244,59 @@ public class MockServerMatcherScenarioTest {
     public void shouldExposeScenarioManager() {
         assertThat(requestMatchers.getScenarioManager().getState("anything"), is(ScenarioManager.STARTED));
     }
+
+    @Test
+    public void shouldNotAdvanceScenarioStateWhenSkippedByPercentage() {
+        // given - a scenario step that would transition Started -> Step1, but whose
+        // percentage gate is 0 so it is NEVER served. The scenario must NOT advance:
+        // a skipped expectation must not produce a side-effecting state transition
+        // (consume-then-skip regression guard).
+        Expectation step1 = new Expectation(request().withPath("somePath"))
+            .withScenarioName("myScenario")
+            .withScenarioState("Started")
+            .withNewScenarioState("Step1")
+            .withPercentage(0)
+            .thenRespond(response().withBody("response1"));
+        requestMatchers.add(step1, API);
+
+        // when - the request is evaluated against step1 but skipped by the 0% gate
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(nullValue()));
+
+        // then - the scenario is STILL in "Started" (it did not advance to "Step1")
+        assertThat(requestMatchers.getScenarioManager().getState("myScenario"), is(ScenarioManager.STARTED));
+    }
+
+    @Test
+    public void shouldAdvanceScenarioExactlyOncePerServedExpectationWithTimes() {
+        // Progression sanity test (NOT a consume-then-skip distinguishing guard —
+        // an exhausted Times matcher goes inactive and never reaches the scenario
+        // gate, so the percentage test above is the guard for the reachable
+        // skip-after-gate path). This verifies the moved commit-point transition
+        // still advances correctly: a Times.exactly(1) step serves once and
+        // transitions Started -> Step1, and after it is exhausted the next request
+        // is served by the Step1 step — the scenario advanced exactly once per
+        // served expectation.
+        Expectation step1 = new Expectation(request().withPath("somePath"), Times.exactly(1), org.mockserver.matchers.TimeToLive.unlimited(), 0)
+            .withScenarioName("myScenario")
+            .withScenarioState("Started")
+            .withNewScenarioState("Step1")
+            .thenRespond(response().withBody("response1"));
+        requestMatchers.add(step1, API);
+
+        Expectation step2 = new Expectation(request().withPath("somePath"))
+            .withScenarioName("myScenario")
+            .withScenarioState("Step1")
+            .withNewScenarioState("Step2")
+            .thenRespond(response().withBody("response2"));
+        requestMatchers.add(step2, API);
+
+        // first request serves step1, consumes its single Times, advances to Step1
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step1));
+        assertThat(requestMatchers.getScenarioManager().getState("myScenario"), is("Step1"));
+
+        // second request: step1 is now exhausted (inactive), step2 matches "Step1"
+        // and advances to "Step2"
+        assertThat(requestMatchers.firstMatchingExpectation(new HttpRequest().withPath("somePath")), is(step2));
+        assertThat(requestMatchers.getScenarioManager().getState("myScenario"), is("Step2"));
+    }
 }

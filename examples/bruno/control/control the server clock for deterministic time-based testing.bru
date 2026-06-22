@@ -1,0 +1,30 @@
+meta {
+  name: control the server clock for deterministic time-based testing
+  type: http
+  seq: 9
+}
+
+put {
+  url: {{baseUrl}}/mockserver/clock
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "action": "freeze",
+    "instant": "2026-01-15T10:00:00Z"
+  }
+}
+
+docs {
+  Freeze, advance, or reset MockServer's internal clock. The controllable clock affects response template date/time helpers (now_iso_8601, now_epoch, now_rfc_1123, dates.*) and expectation TimeToLive expiry. Event-log timestamps and JWT issuance are not affected.
+  
+  clock action to perform
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

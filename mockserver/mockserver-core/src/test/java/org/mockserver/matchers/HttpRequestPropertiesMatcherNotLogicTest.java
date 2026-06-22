@@ -309,6 +309,32 @@ public class HttpRequestPropertiesMatcherNotLogicTest {
     }
 
     @Test
+    public void regression_notExpectationMatchesNonFirstFieldMismatch_withFailFastOn() {
+        // Concrete data-plane repro of the fail-fast/odd-NOT short-circuit bug.
+        //
+        // Expectation: not(GET /test) — "match anything that is NOT (GET AND /test)".
+        // Incoming:    GET /other     — it is NOT (GET /test), so it MUST match.
+        //
+        // matchersFailFast defaults to TRUE, which is precisely the configuration that exposed the
+        // bug: METHOD (GET) matched, then the short-circuit, asked at the PATH field whether
+        // "failures so far != 0", saw false (zero failures yet) and negated it through the single
+        // expectation NOT to a premature, WRONG non-match — so the matcher returned false even
+        // though /other is plainly not /test. The fix stops short-circuiting whenever any NOT flag
+        // is in play, so this now correctly matches.
+        Configuration failFastOn = configuration().matchersFailFast(true);
+        HttpRequest expectation = not(request().withMethod("GET").withPath("/test"));
+        HttpRequest actualRequest = request().withMethod("GET").withPath("/other");
+
+        HttpRequestPropertiesMatcher matcher = new HttpRequestPropertiesMatcher(failFastOn, mockServerLogger);
+        matcher.update(new Expectation(expectation));
+
+        assertThat(
+            "NOT expectation must match a request that mismatches a non-first field, with fail-fast on",
+            matcher.matches(null, actualRequest), is(true)
+        );
+    }
+
+    @Test
     public void regression_sequentialNotApplicationIsCorrect() {
         // Verify that NOT operators are applied sequentially, not via XOR
         // Case: Two NOTs should cancel out

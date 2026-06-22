@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.junit.Assert.assertThrows;
 import static org.mockserver.verify.VerificationTimes.*;
 
 /**
@@ -129,6 +130,67 @@ public class VerificationTimesTest {
         assertThat(times.matches(1), is(false));
         assertThat(times.matches(2), is(false));
         assertThat(times.matches(3), is(false));
+    }
+
+    @Test
+    public void shouldRejectNegativeExactly() {
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> exactly(-1));
+
+        // then
+        assertThat(exception.getMessage(), is("count must not be negative but was -1"));
+    }
+
+    @Test
+    public void shouldRejectNegativeAtLeast() {
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> atLeast(-1));
+
+        // then
+        assertThat(exception.getMessage(), is("count must not be negative but was -1"));
+    }
+
+    @Test
+    public void shouldRejectNegativeAtMost() {
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> atMost(-1));
+
+        // then
+        assertThat(exception.getMessage(), is("count must not be negative but was -1"));
+    }
+
+    @Test
+    public void shouldRejectNegativeBetweenAtLeast() {
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> between(-2, 2));
+
+        // then
+        assertThat(exception.getMessage(), is("atLeast must not be negative but was -2"));
+    }
+
+    @Test
+    public void shouldRejectNegativeBetweenAtMost() {
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> between(1, -2));
+
+        // then
+        assertThat(exception.getMessage(), is("atMost must not be negative but was -2"));
+    }
+
+    @Test
+    public void shouldAllowUnboundedSentinelInBetween() {
+        // the -1 unbounded sentinel must still be accepted so atLeast-only / atMost-only
+        // verifications round-trip through serialisation
+
+        // when
+        VerificationTimes atLeastOnly = between(3, -1);
+        VerificationTimes atMostOnly = between(-1, 2);
+
+        // then
+        assertThat(atLeastOnly.getAtLeast(), is(3));
+        assertThat(atLeastOnly.getAtMost(), is(-1));
+        assertThat(atMostOnly.getAtLeast(), is(-1));
+        assertThat(atMostOnly.getAtMost(), is(2));
     }
 
     @Test

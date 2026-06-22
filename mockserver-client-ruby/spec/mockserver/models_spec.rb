@@ -339,6 +339,96 @@ RSpec.describe 'MockServer models' do
       roundtrip = MockServer::Body.from_hash(original.to_h)
       expect(roundtrip.to_h).to eq(original.to_h)
     end
+
+    describe 'FILE body with file_path and template_type' do
+      it '.file factory creates FILE body with file_path' do
+        body = MockServer::Body.file('/data/response.json')
+        expect(body.type).to eq('FILE')
+        expect(body.file_path).to eq('/data/response.json')
+        expect(body.template_type).to be_nil
+        expect(body.content_type).to be_nil
+      end
+
+      it '.file factory accepts content_type and template_type' do
+        body = MockServer::Body.file(
+          '/templates/response.vm',
+          content_type: 'application/json',
+          template_type: 'VELOCITY'
+        )
+        expect(body.type).to eq('FILE')
+        expect(body.file_path).to eq('/templates/response.vm')
+        expect(body.content_type).to eq('application/json')
+        expect(body.template_type).to eq('VELOCITY')
+      end
+
+      it 'serializes file_path as filePath' do
+        body = MockServer::Body.new(type: 'FILE', file_path: '/data/body.json')
+        h = body.to_h
+        expect(h['type']).to eq('FILE')
+        expect(h['filePath']).to eq('/data/body.json')
+      end
+
+      it 'serializes template_type as templateType on FILE body' do
+        body = MockServer::Body.new(
+          type: 'FILE',
+          file_path: '/tpl/response.mustache',
+          template_type: 'MUSTACHE'
+        )
+        h = body.to_h
+        expect(h['templateType']).to eq('MUSTACHE')
+        expect(h['filePath']).to eq('/tpl/response.mustache')
+      end
+
+      it 'omits filePath and templateType when nil' do
+        body = MockServer::Body.new(type: 'STRING', string: 'hello')
+        h = body.to_h
+        expect(h).not_to have_key('filePath')
+        expect(h).not_to have_key('templateType')
+      end
+
+      it 'deserializes FILE body from hash' do
+        body = MockServer::Body.from_hash({
+          'type' => 'FILE',
+          'filePath' => '/data/response.json',
+          'contentType' => 'application/json'
+        })
+        expect(body.type).to eq('FILE')
+        expect(body.file_path).to eq('/data/response.json')
+        expect(body.content_type).to eq('application/json')
+        expect(body.template_type).to be_nil
+      end
+
+      it 'deserializes FILE body with templateType from hash' do
+        body = MockServer::Body.from_hash({
+          'type' => 'FILE',
+          'filePath' => '/templates/forward.vm',
+          'templateType' => 'VELOCITY'
+        })
+        expect(body.type).to eq('FILE')
+        expect(body.file_path).to eq('/templates/forward.vm')
+        expect(body.template_type).to eq('VELOCITY')
+      end
+
+      it 'round-trips FILE body with template_type' do
+        original = MockServer::Body.file(
+          '/etc/mockserver/templates/body.mustache',
+          content_type: 'text/html',
+          template_type: 'MUSTACHE'
+        )
+        roundtrip = MockServer::Body.from_hash(original.to_h)
+        expect(roundtrip.to_h).to eq(original.to_h)
+        expect(roundtrip.file_path).to eq('/etc/mockserver/templates/body.mustache')
+        expect(roundtrip.template_type).to eq('MUSTACHE')
+        expect(roundtrip.content_type).to eq('text/html')
+      end
+
+      it '#with_template_type sets template_type fluently' do
+        body = MockServer::Body.file('/data/response.vm')
+        result = body.with_template_type('VELOCITY')
+        expect(result).to be(body)
+        expect(body.template_type).to eq('VELOCITY')
+      end
+    end
   end
 
   # -------------------------------------------------------------------
@@ -368,6 +458,18 @@ RSpec.describe 'MockServer models' do
     it 'returns plain hash when type is not a known BODY_TYPE' do
       result = MockServer.deserialize_body({ 'type' => 'UNKNOWN', 'data' => 'x' })
       expect(result).to be_a(Hash)
+    end
+
+    it 'returns Body for FILE type' do
+      result = MockServer.deserialize_body({
+        'type' => 'FILE',
+        'filePath' => '/data/body.json',
+        'templateType' => 'VELOCITY'
+      })
+      expect(result).to be_a(MockServer::Body)
+      expect(result.type).to eq('FILE')
+      expect(result.file_path).to eq('/data/body.json')
+      expect(result.template_type).to eq('VELOCITY')
     end
   end
 
@@ -865,6 +967,62 @@ RSpec.describe 'MockServer models' do
       roundtrip = MockServer::HttpTemplate.from_hash(original.to_h)
       expect(roundtrip.to_h).to eq(original.to_h)
     end
+
+    describe 'template_file field' do
+      it 'defaults template_file to nil' do
+        tpl = MockServer::HttpTemplate.new
+        expect(tpl.template_file).to be_nil
+      end
+
+      it 'serializes template_file as templateFile' do
+        tpl = MockServer::HttpTemplate.new(
+          template_type: 'VELOCITY',
+          template_file: '/path/to/template.vm'
+        )
+        h = tpl.to_h
+        expect(h['templateFile']).to eq('/path/to/template.vm')
+        expect(h['templateType']).to eq('VELOCITY')
+      end
+
+      it 'omits templateFile when nil' do
+        tpl = MockServer::HttpTemplate.new(template_type: 'JAVASCRIPT', template: 'code')
+        expect(tpl.to_h).not_to have_key('templateFile')
+      end
+
+      it 'deserializes templateFile from hash' do
+        tpl = MockServer::HttpTemplate.from_hash({
+          'templateType' => 'MUSTACHE',
+          'templateFile' => '/templates/response.mustache'
+        })
+        expect(tpl.template_type).to eq('MUSTACHE')
+        expect(tpl.template_file).to eq('/templates/response.mustache')
+        expect(tpl.template).to be_nil
+      end
+
+      it 'round-trips with template_file' do
+        original = MockServer::HttpTemplate.new(
+          template_type: 'VELOCITY',
+          template_file: '/etc/mockserver/templates/forward.vm'
+        )
+        roundtrip = MockServer::HttpTemplate.from_hash(original.to_h)
+        expect(roundtrip.to_h).to eq(original.to_h)
+        expect(roundtrip.template_file).to eq('/etc/mockserver/templates/forward.vm')
+      end
+
+      it '.template factory accepts template_file keyword' do
+        tpl = MockServer::HttpTemplate.template('MUSTACHE', nil, template_file: '/tpl.mustache')
+        expect(tpl.template_type).to eq('MUSTACHE')
+        expect(tpl.template).to be_nil
+        expect(tpl.template_file).to eq('/tpl.mustache')
+      end
+
+      it '#with_template_file sets template_file fluently' do
+        tpl = MockServer::HttpTemplate.new(template_type: 'VELOCITY')
+        result = tpl.with_template_file('/path/to/file.vm')
+        expect(result).to be(tpl)
+        expect(tpl.template_file).to eq('/path/to/file.vm')
+      end
+    end
   end
 
   # -------------------------------------------------------------------
@@ -972,6 +1130,27 @@ RSpec.describe 'MockServer models' do
       original = MockServer::HttpError.new(drop_connection: true, response_bytes: 'XYZ')
       roundtrip = MockServer::HttpError.from_hash(original.to_h)
       expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'defaults stream_error to nil and omits it from the hash' do
+      expect(MockServer::HttpError.new.stream_error).to be_nil
+      expect(MockServer::HttpError.new(drop_connection: true).to_h).not_to have_key('streamError')
+    end
+
+    it 'serializes stream_error to the streamError key' do
+      err = MockServer::HttpError.new(stream_error: 7)
+      expect(err.to_h).to eq({ 'streamError' => 7 })
+    end
+
+    it 'deserializes streamError from a hash' do
+      err = MockServer::HttpError.from_hash({ 'streamError' => 268 })
+      expect(err.stream_error).to eq(268)
+    end
+
+    it 'round-trips stream_error correctly' do
+      original = MockServer::HttpError.new(stream_error: 7)
+      roundtrip = MockServer::HttpError.from_hash(original.to_h)
+      expect(roundtrip.stream_error).to eq(7)
     end
   end
 
@@ -1157,6 +1336,54 @@ RSpec.describe 'MockServer models' do
       expect(h['httpForwardClassCallback']['callbackClass']).to eq('z')
       expect(h['httpForwardObjectCallback']['clientId']).to eq('w')
       expect(h['httpOverrideForwardedRequest']['httpRequest']['path']).to eq('/override')
+    end
+
+    context 'class-callback coercion' do
+      it 'serializes httpResponseClassCallback.callbackClass from an HttpClassCallback' do
+        exp = MockServer::Expectation.new(
+          http_response_class_callback: MockServer::HttpClassCallback.new(callback_class: 'com.example.MyResponseCallback')
+        )
+        expect(exp.http_response_class_callback).to be_a(MockServer::HttpClassCallback)
+        expect(exp.to_h['httpResponseClassCallback']['callbackClass']).to eq('com.example.MyResponseCallback')
+      end
+
+      it 'wraps a class-name String passed to the constructor into an HttpClassCallback' do
+        exp = MockServer::Expectation.new(http_response_class_callback: 'com.example.MyResponseCallback')
+        expect(exp.http_response_class_callback).to be_a(MockServer::HttpClassCallback)
+        expect(exp.http_response_class_callback.callback_class).to eq('com.example.MyResponseCallback')
+        expect(exp.to_h['httpResponseClassCallback']).to eq({ 'callbackClass' => 'com.example.MyResponseCallback' })
+      end
+
+      it 'wraps a class-name String assigned via the setter into an HttpClassCallback' do
+        exp = MockServer::Expectation.new
+        exp.http_response_class_callback = 'com.example.MyResponseCallback'
+        expect(exp.to_h['httpResponseClassCallback']).to eq({ 'callbackClass' => 'com.example.MyResponseCallback' })
+      end
+
+      it 'wraps a class-name String for the forward class callback' do
+        exp = MockServer::Expectation.new(http_forward_class_callback: 'com.example.MyForwardCallback')
+        expect(exp.http_forward_class_callback).to be_a(MockServer::HttpClassCallback)
+        expect(exp.to_h['httpForwardClassCallback']).to eq({ 'callbackClass' => 'com.example.MyForwardCallback' })
+      end
+
+      it 'preserves delay and primary when given a pre-built HttpClassCallback' do
+        exp = MockServer::Expectation.new(
+          http_response_class_callback: MockServer::HttpClassCallback.new(
+            callback_class: 'com.example.MyResponseCallback',
+            delay: MockServer::Delay.new(time_unit: 'SECONDS', value: 2),
+            primary: true
+          )
+        )
+        h = exp.to_h['httpResponseClassCallback']
+        expect(h['callbackClass']).to eq('com.example.MyResponseCallback')
+        expect(h['delay']).to eq({ 'timeUnit' => 'SECONDS', 'value' => 2 })
+        expect(h['primary']).to eq(true)
+      end
+
+      it 'raises TypeError for an unsupported class-callback type' do
+        expect { MockServer::Expectation.new(http_response_class_callback: 123) }
+          .to raise_error(TypeError, /class-name String or HttpClassCallback/)
+      end
     end
 
     it 'deserializes from hash' do
@@ -1501,6 +1728,32 @@ RSpec.describe 'MockServer models' do
       expect(v.to_h['expectationId']).to eq({ 'id' => 'exp-1' })
     end
 
+    it 'serializes with http_response' do
+      v = MockServer::Verification.new(
+        http_request: MockServer::HttpRequest.new(path: '/test'),
+        http_response: MockServer::HttpResponse.new(status_code: 200)
+      )
+      h = v.to_h
+      expect(h['httpRequest']['path']).to eq('/test')
+      expect(h['httpResponse']['statusCode']).to eq(200)
+    end
+
+    it 'omits httpResponse when nil' do
+      v = MockServer::Verification.new(
+        http_request: MockServer::HttpRequest.new(path: '/test')
+      )
+      expect(v.to_h).not_to have_key('httpResponse')
+    end
+
+    it 'serializes response-only verification (no request)' do
+      v = MockServer::Verification.new(
+        http_response: MockServer::HttpResponse.new(status_code: 201)
+      )
+      h = v.to_h
+      expect(h).not_to have_key('httpRequest')
+      expect(h['httpResponse']['statusCode']).to eq(201)
+    end
+
     it 'deserializes from hash' do
       data = {
         'httpRequest' => { 'path' => '/api' },
@@ -1513,6 +1766,19 @@ RSpec.describe 'MockServer models' do
       expect(v.expectation_id.id).to eq('x')
     end
 
+    it 'deserializes http_response from hash' do
+      data = {
+        'httpRequest' => { 'path' => '/api' },
+        'httpResponse' => { 'statusCode' => 200, 'reasonPhrase' => 'OK' },
+        'times' => { 'atLeast' => 1 }
+      }
+      v = MockServer::Verification.from_hash(data)
+      expect(v.http_request.path).to eq('/api')
+      expect(v.http_response).not_to be_nil
+      expect(v.http_response.status_code).to eq(200)
+      expect(v.http_response.reason_phrase).to eq('OK')
+    end
+
     it 'returns nil from_hash when data is nil' do
       expect(MockServer::Verification.from_hash(nil)).to be_nil
     end
@@ -1521,6 +1787,16 @@ RSpec.describe 'MockServer models' do
       original = MockServer::Verification.new(
         http_request: MockServer::HttpRequest.new(path: '/x'),
         times: MockServer::VerificationTimes.once
+      )
+      roundtrip = MockServer::Verification.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'round-trips with http_response' do
+      original = MockServer::Verification.new(
+        http_request: MockServer::HttpRequest.new(path: '/x'),
+        http_response: MockServer::HttpResponse.new(status_code: 200),
+        times: MockServer::VerificationTimes.at_least(1)
       )
       roundtrip = MockServer::Verification.from_hash(original.to_h)
       expect(roundtrip.to_h).to eq(original.to_h)
@@ -1560,6 +1836,31 @@ RSpec.describe 'MockServer models' do
       expect(h['expectationIds'].length).to eq(2)
     end
 
+    it 'serializes http_responses' do
+      vs = MockServer::VerificationSequence.new(
+        http_requests: [
+          MockServer::HttpRequest.new(path: '/a'),
+          MockServer::HttpRequest.new(path: '/b')
+        ],
+        http_responses: [
+          MockServer::HttpResponse.new(status_code: 200),
+          MockServer::HttpResponse.new(status_code: 201)
+        ]
+      )
+      h = vs.to_h
+      expect(h['httpRequests'].length).to eq(2)
+      expect(h['httpResponses'].length).to eq(2)
+      expect(h['httpResponses'][0]['statusCode']).to eq(200)
+      expect(h['httpResponses'][1]['statusCode']).to eq(201)
+    end
+
+    it 'omits httpResponses when nil' do
+      vs = MockServer::VerificationSequence.new(
+        http_requests: [MockServer::HttpRequest.new(path: '/a')]
+      )
+      expect(vs.to_h).not_to have_key('httpResponses')
+    end
+
     it 'deserializes from hash' do
       data = {
         'httpRequests' => [{ 'path' => '/x' }, { 'path' => '/y' }],
@@ -1570,6 +1871,18 @@ RSpec.describe 'MockServer models' do
       expect(vs.expectation_ids.length).to eq(1)
     end
 
+    it 'deserializes http_responses from hash' do
+      data = {
+        'httpRequests' => [{ 'path' => '/a' }, { 'path' => '/b' }],
+        'httpResponses' => [{ 'statusCode' => 200 }, { 'statusCode' => 404 }]
+      }
+      vs = MockServer::VerificationSequence.from_hash(data)
+      expect(vs.http_requests.length).to eq(2)
+      expect(vs.http_responses.length).to eq(2)
+      expect(vs.http_responses[0].status_code).to eq(200)
+      expect(vs.http_responses[1].status_code).to eq(404)
+    end
+
     it 'returns nil from_hash when data is nil' do
       expect(MockServer::VerificationSequence.from_hash(nil)).to be_nil
     end
@@ -1577,6 +1890,21 @@ RSpec.describe 'MockServer models' do
     it 'round-trips correctly' do
       original = MockServer::VerificationSequence.new(
         http_requests: [MockServer::HttpRequest.new(path: '/test')]
+      )
+      roundtrip = MockServer::VerificationSequence.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'round-trips with http_responses' do
+      original = MockServer::VerificationSequence.new(
+        http_requests: [
+          MockServer::HttpRequest.new(path: '/a'),
+          MockServer::HttpRequest.new(path: '/b')
+        ],
+        http_responses: [
+          MockServer::HttpResponse.new(status_code: 200),
+          MockServer::HttpResponse.new(status_code: 201)
+        ]
       )
       roundtrip = MockServer::VerificationSequence.from_hash(original.to_h)
       expect(roundtrip.to_h).to eq(original.to_h)
@@ -2604,6 +2932,29 @@ RSpec.describe 'MockServer models' do
     it 'keeps false and empty string values' do
       result = MockServer.strip_none({ 'a' => false, 'b' => '', 'c' => nil })
       expect(result).to eq({ 'a' => false, 'b' => '' })
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # Cookie serialization (object map, not the header/query array form)
+  # -------------------------------------------------------------------
+  describe 'cookie serialization' do
+    it 'serializes request cookies as a {name => value} object map' do
+      req = MockServer::HttpRequest.new(path: '/c')
+      req.with_cookie('session', 'abc123')
+      expect(req.to_h['cookies']).to eq({ 'session' => 'abc123' })
+    end
+
+    it 'serializes response cookies as a {name => value} object map' do
+      resp = MockServer::HttpResponse.new
+      resp.with_cookie('set', 'v1')
+      expect(resp.to_h['cookies']).to eq({ 'set' => 'v1' })
+    end
+
+    it 'deserializes request cookies from an object map' do
+      req = MockServer::HttpRequest.from_hash({ 'path' => '/c', 'cookies' => { 'session' => 'abc123' } })
+      expect(req.cookies[0].name).to eq('session')
+      expect(req.cookies[0].values).to eq(['abc123'])
     end
   end
 end

@@ -1,5 +1,6 @@
 package org.mockserver.log;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
@@ -10,6 +11,7 @@ import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.HttpState;
+import org.mockserver.model.HttpRequest;
 import org.mockserver.model.RequestDefinition;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.time.EpochService;
@@ -19,6 +21,8 @@ import org.slf4j.event.Level;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.fail;
@@ -480,6 +484,44 @@ public class MockServerEventLogTest {
     }
 
     @Test
+    public void shouldClearWithNullRequestMatcherButPreserveRequestLessEntries() {
+        // pins the preserved behaviour: clear(null) auto-clears entries that carry >= 1 request,
+        // but a request-less entry (getHttpRequests() is the length-0 array, e.g. SERVER_CONFIGURATION
+        // logged without a request) SURVIVES the clear - exactly as before the efficiency change.
+        // given
+        configuration.logLevel(Level.INFO);
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setType(SERVER_CONFIGURATION)
+                .setLogLevel(INFO)
+                .setMessageFormat("some random{}configuration message")
+                .setArguments("argument_one")
+        );
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(EXPECTATION_RESPONSE)
+                .setHttpRequest(request("request_one"))
+                .setHttpResponse(response("response_one"))
+                .setMessageFormat("returning response:{}for request:{}")
+                .setArguments(response("response_one"), request("request_one"))
+        );
+
+        // when
+        mockServerEventLog.clear(null);
+
+        // then - the request-bearing entry is gone, the request-less entry survives
+        assertThat(retrieveRequests(null), empty());
+        List<LogEntry.LogMessageType> survivingTypes = retrieveMessageLogEntries(null).stream()
+            .map(LogEntry::getType)
+            .collect(Collectors.toList());
+        assertThat("request-less SERVER_CONFIGURATION entry must survive clear(null)",
+            survivingTypes.contains(SERVER_CONFIGURATION), is(true));
+        assertThat("request-bearing EXPECTATION_RESPONSE entry must be cleared by clear(null)",
+            survivingTypes.contains(EXPECTATION_RESPONSE), is(false));
+    }
+
+    @Test
     public void shouldClearWithNullRequestMatcherWhenWhenLogLevelDebug() {
         // given
         configuration.logLevel(Level.DEBUG);
@@ -916,5 +958,166 @@ public class MockServerEventLogTest {
             assertThat(retrieveMessageLogEntries(null), empty());
             assertThat(retrieveRequestLogEntries(), empty());
             assertThat(retrieveRequestResponseMessageLogEntries(null), empty());
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Regression guards for GitHub issue #2359 — "CPU usage (still) increases over time".
+    //
+    // Under sustained load the request/event log fills to maxLogEntries and stays full (clearing
+    // expectations does not clear the log, and at INFO level clear() only tombstones entries). The
+    // periodic /retrieve and per-cycle clear must therefore NOT pay the cost of the expensive
+    // request matcher (which clones the request and runs full field-by-field matching) for entries
+    // that the cheap type/not-deleted predicate would discard for free — otherwise per-request CPU
+    // climbs with the log size and stays high. These tests count how many entries the request
+    // matcher is actually evaluated against (via the per-entry cloneWithLogCorrelationId() probe)
+    // and assert it is gated by the cheap predicate, not run over the whole log.
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * An {@link HttpRequest} that counts how many times the request matcher evaluates it.
+     * {@link RequestDefinition#cloneWithLogCorrelationId()} is invoked exactly once per entry that
+     * {@link LogEntry#matches(org.mockserver.matchers.HttpRequestMatcher)} (during retrieve) or
+     * {@code clear(...)} evaluates against the matcher, so it is a precise probe for how many
+     * entries the expensive matcher actually touched.
+     */
+    private static final class CountingHttpRequest extends HttpRequest {
+        @JsonIgnore
+        private final AtomicInteger matcherEvaluations;
+
+        private CountingHttpRequest(AtomicInteger matcherEvaluations) {
+            this.matcherEvaluations = matcherEvaluations;
+        }
+
+        @Override
+        public RequestDefinition cloneWithLogCorrelationId() {
+            matcherEvaluations.incrementAndGet();
+            return super.cloneWithLogCorrelationId();
+        }
+    }
+
+    private static CountingHttpRequest countingRequest(AtomicInteger counter, String path) {
+        CountingHttpRequest request = new CountingHttpRequest(counter);
+        request.withPath(path);
+        return request;
+    }
+
+    private List<LogEntry> retrieveRequestLogEntries(RequestDefinition filter) {
+        CompletableFuture<List<LogEntry>> future = new CompletableFuture<>();
+        mockServerEventLog.retrieveRequestLogEntries(filter, future::complete);
+        try {
+            return future.get(60, SECONDS);
+        } catch (Exception e) {
+            fail(e.getMessage());
+            return null;
+        }
+    }
+
+    @Test
+    public void shouldNotEvaluateRequestMatcherForEntriesFilteredOutByType() {
+        // given - a mix of request and non-request entries, all carrying a counting request
+        configuration.logLevel(Level.INFO);
+        AtomicInteger matcherEvaluations = new AtomicInteger(0);
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/one")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(EXPECTATION_RESPONSE).setHttpRequest(countingRequest(matcherEvaluations, "/two")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/three")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(EXPECTATION_RESPONSE).setHttpRequest(countingRequest(matcherEvaluations, "/four")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/five")));
+
+        // and - a blocking null-filter retrieve drains the disruptor so every add is processed;
+        // the counter is then reset to isolate the measurement to the "when" step below
+        retrieveRequestLogEntries();
+        matcherEvaluations.set(0);
+
+        // when - retrieving request log entries with a non-null match-everything filter
+        List<LogEntry> requestLogEntries = retrieveRequestLogEntries(request());
+
+        // then - only the 3 RECEIVED_REQUEST entries are returned ...
+        assertThat(requestLogEntries.size(), is(3));
+        // ... and the expensive matcher was evaluated only for those 3, NOT for the 2 entries the
+        // cheap type predicate discards (before the #2359 fix this would have been 5)
+        assertThat(matcherEvaluations.get(), is(3));
+    }
+
+    @Test
+    public void shouldNotEvaluateRequestMatcherForDeletedTombstonesWhenRetrieving() {
+        // given - request entries, half of which are then tombstoned by a clear (INFO => mark only)
+        configuration.logLevel(Level.INFO);
+        AtomicInteger matcherEvaluations = new AtomicInteger(0);
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/keep")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/delete")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/keep")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/delete")));
+
+        // when - clear tombstones the two "/delete" entries (they remain physically in the log)
+        mockServerEventLog.clear(request("/delete"));
+        matcherEvaluations.set(0);
+
+        // and - retrieving with a match-everything filter
+        List<LogEntry> requestLogEntries = retrieveRequestLogEntries(request());
+
+        // then - only the 2 live entries are returned ...
+        assertThat(requestLogEntries.size(), is(2));
+        // ... and the matcher was evaluated only for those 2, NOT for the 2 deleted tombstones
+        // (before the #2359 fix this would have been 4)
+        assertThat(matcherEvaluations.get(), is(2));
+    }
+
+    @Test
+    public void shouldNotReEvaluateAlreadyDeletedTombstonesOnRepeatedClear() {
+        // given - 2 entries that will be tombstoned and 2 that will not, all counting requests
+        configuration.logLevel(Level.INFO);
+        AtomicInteger matcherEvaluations = new AtomicInteger(0);
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/keep")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/delete")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/keep")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/delete")));
+
+        // when - the first clear evaluates every entry (none deleted yet) and tombstones the 2 "/delete"
+        mockServerEventLog.clear(request("/delete"));
+        assertThat(matcherEvaluations.get(), is(4));
+
+        // and - a second identical clear runs again
+        matcherEvaluations.set(0);
+        mockServerEventLog.clear(request("/delete"));
+
+        // then - the already-deleted tombstones are skipped, so only the 2 live entries are
+        // evaluated (before the #2359 fix this would have re-scanned all 4)
+        assertThat(matcherEvaluations.get(), is(2));
+        // and the live entries are untouched
+        assertThat(retrieveRequestLogEntries(request()).size(), is(2));
+    }
+
+    @Test
+    public void shouldNotEvaluateRequestMatcherForEntriesFilteredOutByTypeOnReverseForUiPath() {
+        // given - the dashboard reverse-order retrieve path with a mix of request/non-request entries
+        configuration.logLevel(Level.INFO);
+        AtomicInteger matcherEvaluations = new AtomicInteger(0);
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/one")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(EXPECTATION_RESPONSE).setHttpRequest(countingRequest(matcherEvaluations, "/two")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/three")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(EXPECTATION_RESPONSE).setHttpRequest(countingRequest(matcherEvaluations, "/four")));
+        mockServerLogger.logEvent(new LogEntry().setLogLevel(INFO).setType(RECEIVED_REQUEST).setHttpRequest(countingRequest(matcherEvaluations, "/five")));
+
+        // when - retrieving in reverse for the UI with a match-everything filter and a RECEIVED_REQUEST predicate
+        CompletableFuture<List<LogEntry>> future = new CompletableFuture<>();
+        mockServerEventLog.retrieveLogEntriesInReverseForUI(
+            request(),
+            entry -> !entry.isDeleted() && entry.getType() == RECEIVED_REQUEST,
+            entry -> entry,
+            stream -> future.complete(stream.collect(Collectors.toList()))
+        );
+        List<LogEntry> reverseEntries;
+        try {
+            reverseEntries = future.get(60, SECONDS);
+        } catch (Exception e) {
+            fail(e.getMessage());
+            return;
+        }
+
+        // then - only the 3 RECEIVED_REQUEST entries are returned ...
+        assertThat(reverseEntries.size(), is(3));
+        // ... and the expensive matcher was evaluated only for those 3, NOT for the 2 entries the
+        // cheap type predicate discards (before the #2359 fix this would have been 5)
+        assertThat(matcherEvaluations.get(), is(3));
     }
 }

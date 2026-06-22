@@ -48,7 +48,7 @@ public class BinaryRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
         if (requestDefinition instanceof BinaryRequestDefinition) {
             BinaryRequestDefinition request = (BinaryRequestDefinition) requestDefinition;
             boolean overallMatch = matchesBinary(context, request);
-            if (!controlPlaneMatcher) {
+            if (!controlPlaneMatcher && (context == null || !context.isSuppressMatchResultLogging())) {
                 if (overallMatch) {
                     if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
                         mockServerLogger.logEvent(

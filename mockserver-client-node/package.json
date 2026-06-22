@@ -1,7 +1,7 @@
 {
   "name": "mockserver-client",
   "description": "A node client for the MockServer",
-  "version": "7.0.0",
+  "version": "7.1.0",
   "homepage": "http://mock-server.com",
   "author": {
     "name": "James Bloom",
@@ -25,6 +25,10 @@
     "LICENSE.md",
     "index.js",
     "index.d.ts",
+    "llm.js",
+    "llm.d.ts",
+    "mcpMockBuilder.js",
+    "mcpMockBuilder.d.ts",
     "mockServer.d.ts",
     "mockServerClient.js",
     "mockServerClient.d.ts",
@@ -33,17 +37,19 @@
     "stop_MockServer.sh"
   ],
   "scripts": {
-    "test": "node --test --test-force-exit --test-concurrency=1 test/no_proxy/mock_server_node_client_test.js test/with_proxy/proxy_client_node_test.js",
-    "test:coverage": "c8 --check-coverage --lines 68 --functions 83 --branches 74 node --test --test-force-exit --test-concurrency=1 test/no_proxy/mock_server_node_client_test.js test/with_proxy/proxy_client_node_test.js",
-    "test:browser": "npx playwright test --config test/browser/playwright.config.js"
+    "test": "node test/run_with_local_server.js",
+    "test:external": "node --test --test-force-exit --test-concurrency=1 test/no_proxy/scenario_helper_test.js test/no_proxy/class_callback_test.js test/no_proxy/dispose_test.js test/no_proxy/llm_builder_test.js test/no_proxy/mcp_mock_builder_test.js test/no_proxy/mock_server_node_client_test.js test/with_proxy/proxy_client_node_test.js",
+    "test:coverage": "c8 --check-coverage --lines 68 --functions 83 --branches 74 node --test --test-force-exit --test-concurrency=1 test/no_proxy/scenario_helper_test.js test/no_proxy/class_callback_test.js test/no_proxy/dispose_test.js test/no_proxy/llm_builder_test.js test/no_proxy/mcp_mock_builder_test.js test/no_proxy/mock_server_node_client_test.js test/with_proxy/proxy_client_node_test.js",
+    "test:browser": "npx playwright test --config test/browser/playwright.config.js",
+    "build:server": "cd ../mockserver && ./mvnw -q -pl mockserver-netty -am package -DskipTests"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
-    "@types/node": "~25.9.1",
+    "@types/node": "~26.0.0",
     "c8": "~11.0.0",
     "grunt-contrib-jshint": "~3.2.0",
     "grunt-exec": "~3.0.0",
-    "mockserver-node": "7.0.0",
+    "mockserver-node": "7.1.0",
     "typescript": "~6.0.3"
   },
   "keywords": [
@@ -64,6 +70,7 @@
     "websocket": "~1.0.34"
   },
   "overrides": {
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "js-yaml": "^4.2.0"
   }
 }

@@ -1,18 +1,16 @@
 package org.mockserver.llm.codec;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.StreamingFormat;
-import org.mockserver.llm.StreamingPhysicsExpander;
 import org.mockserver.model.*;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.mockserver.model.HttpResponse.response;
-import static org.mockserver.model.SseEvent.sseEvent;
 
 /**
  * Codec for AWS Bedrock (Anthropic-on-Bedrock) invokeModel API (version bedrock-2023-05-31).
@@ -38,6 +36,8 @@ import static org.mockserver.model.SseEvent.sseEvent;
  * a follow-up.
  */
 public class BedrockCodec implements ProviderCodec {
+
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final AnthropicCodec delegate = new AnthropicCodec();
 
@@ -89,8 +89,56 @@ public class BedrockCodec implements ProviderCodec {
         return delegate.decode(request);
     }
 
+    /**
+     * Bedrock embeddings without a model hint default to the Amazon Titan shape.
+     * Use the model-aware overload to select Cohere-on-Bedrock.
+     */
     @Override
     public HttpResponse encodeEmbedding(EmbeddingResponse embedding, String input) {
-        throw new UnsupportedOperationException("Bedrock embeddings use a model-specific shape not yet supported");
+        return encodeEmbedding(embedding, input, null);
+    }
+
+    /**
+     * Encodes a Bedrock {@code InvokeModel} embedding response. Bedrock's
+     * embedding wire shape is model-family specific:
+     * <ul>
+     *   <li><strong>Amazon Titan</strong> ({@code amazon.titan-embed-text-*}) —
+     *       {@code {"embedding":[...],"inputTextTokenCount":N}}</li>
+     *   <li><strong>Cohere</strong> ({@code cohere.embed-*}) —
+     *       {@code {"embeddings":[[...]]}}</li>
+     * </ul>
+     * When {@code model} starts with {@code cohere} the Cohere shape is emitted,
+     * otherwise the Titan shape (the Bedrock default). Both default to 1024
+     * dimensions.
+     */
+    @Override
+    public HttpResponse encodeEmbedding(EmbeddingResponse embedding, String input, String model) {
+        double[] vector = EmbeddingVectors.build(embedding, input, 1024);
+        ObjectNode root = OBJECT_MAPPER.createObjectNode();
+
+        boolean cohere = model != null && model.toLowerCase().startsWith("cohere");
+        if (cohere) {
+            ArrayNode embeddings = root.putArray("embeddings");
+            ArrayNode first = embeddings.addArray();
+            for (double v : vector) {
+                first.add(v);
+            }
+        } else {
+            ArrayNode embeddingArray = root.putArray("embedding");
+            for (double v : vector) {
+                embeddingArray.add(v);
+            }
+            root.put("inputTextTokenCount", EmbeddingVectors.approximateTokens(input));
+        }
+
+        try {
+            String json = OBJECT_MAPPER.writeValueAsString(root);
+            return response()
+                .withStatusCode(200)
+                .withHeader("content-type", "application/json")
+                .withBody(json);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to encode Bedrock embedding response", e);
+        }
     }
 }

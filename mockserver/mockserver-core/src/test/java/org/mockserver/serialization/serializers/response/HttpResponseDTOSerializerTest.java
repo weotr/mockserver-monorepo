@@ -129,4 +129,34 @@ public class HttpResponseDTOSerializerTest {
         );
     }
 
+    @Test
+    public void shouldReturnFormattedResponseWithGenerateFromSchema() throws JsonProcessingException {
+        assertThat(ObjectMapperFactory.createObjectMapper(true, false).writeValueAsString(
+            new HttpResponseDTO(
+                response()
+                    .withStatusCode(200)
+                    .withGenerateFromSchema("{\"type\":\"string\"}")
+            )
+            ),
+            is("{" + NEW_LINE +
+                "  \"statusCode\" : 200," + NEW_LINE +
+                "  \"generateFromSchema\" : \"{\\\"type\\\":\\\"string\\\"}\"" + NEW_LINE +
+                "}")
+        );
+    }
+
+    @Test
+    public void shouldReturnFormattedResponseWithStatusCodeRange() throws JsonProcessingException {
+        assertThat(ObjectMapperFactory.createObjectMapper(true, false).writeValueAsString(
+            new HttpResponseDTO(
+                response()
+                    .withStatusCodeRange("2XX")
+            )
+            ),
+            is("{" + NEW_LINE +
+                "  \"statusCodeRange\" : \"2XX\"" + NEW_LINE +
+                "}")
+        );
+    }
+
 }

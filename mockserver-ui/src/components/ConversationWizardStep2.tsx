@@ -14,7 +14,7 @@ import Collapse from '@mui/material/Collapse';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import PredicatePills from './PredicatePills';
-import type { TurnDraft, TurnMatchPredicates, TurnResponse, NormalizationDraft, ChaosDraft } from '../lib/conversationCodegen';
+import type { TurnDraft, TurnMatchPredicates, TurnResponse, NormalizationDraft, ChaosDraft, StreamingPhysicsDraft } from '../lib/conversationCodegen';
 import type { ToolCallDraft } from '../lib/expectationFromCapture';
 
 // ---------------------------------------------------------------------------
@@ -37,6 +37,53 @@ function emptyTurn(): TurnDraft {
     predicates: {},
     response: { text: '', toolCalls: [], stopReason: '', streaming: false },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Range validation — bounds verified against server source:
+//   StreamingPhysics.java: tokensPerSecond 1–10000, jitter 0.0–1.0
+//   LlmChaosProfile.java: errorStatus 100–599, errorProbability 0.0–1.0,
+//                          truncateAtFraction 0.0–1.0
+// ---------------------------------------------------------------------------
+
+function tokensPerSecondError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (v < 1 || v > 10000) return '1–10000';
+  return undefined;
+}
+
+function jitterError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (v < 0 || v > 1) return '0.0–1.0';
+  return undefined;
+}
+
+function chaosErrorStatusError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (!Number.isInteger(v) || v < 100 || v > 599) return '100–599';
+  return undefined;
+}
+
+function errorProbabilityError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (v < 0 || v > 1) return '0.0–1.0';
+  return undefined;
+}
+
+function truncateAtFractionError(v: number | undefined): string | undefined {
+  if (v == null) return undefined;
+  if (v < 0 || v > 1) return '0.0–1.0';
+  return undefined;
+}
+
+function outputSchemaWarning(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  try {
+    JSON.parse(v);
+    return undefined;
+  } catch {
+    return 'Invalid JSON';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -179,11 +226,12 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                 value={turn.predicates.turnIndex ?? ''}
                 onChange={(e) => {
                   const v = e.target.value;
+                  const n = parseInt(v, 10);
                   updatePredicates(i, {
-                    turnIndex: v === '' ? undefined : parseInt(v, 10),
+                    turnIndex: v === '' || Number.isNaN(n) ? undefined : n,
                   });
                 }}
-                sx={{ width: 110 }}
+                sx={{ width: { xs: '100%', sm: 110 } }}
               />
               <TextField
                 label="Latest msg contains"
@@ -218,7 +266,7 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                       (e.target.value as TurnMatchPredicates['latestMessageRole']) || undefined,
                   })
                 }
-                sx={{ width: 130 }}
+                sx={{ width: { xs: '100%', sm: 130 } }}
               >
                 <MenuItem value="">None</MenuItem>
                 {ROLES.map((r) => (
@@ -380,7 +428,76 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                   sx={{ '& .MuiFormControlLabel-label': { fontSize: '0.75rem' } }}
                 />
               </Box>
+              <Collapse in={turn.response.streaming} unmountOnExit>
+                <Box sx={{ pl: 1.5, mb: 1, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ width: '100%', mb: 0.5 }}>
+                    Streaming physics — controls the timing of SSE token delivery.
+                  </Typography>
+                  <TextField
+                    label="Time to first token (ms)"
+                    size="small"
+                    type="number"
+                    value={turn.response.streamingPhysics?.timeToFirstToken ?? ''}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      const val = e.target.value === '' || Number.isNaN(n) ? undefined : n;
+                      const sp: StreamingPhysicsDraft = { ...(turn.response.streamingPhysics ?? {}), timeToFirstToken: val };
+                      const hasValues = sp.timeToFirstToken != null || sp.tokensPerSecond != null || sp.jitter != null;
+                      updateResponse(i, { streamingPhysics: hasValues ? sp : undefined });
+                    }}
+                    sx={{ width: { xs: '100%', sm: 180 } }}
+                  />
+                  <TextField
+                    label="Tokens/sec"
+                    size="small"
+                    type="number"
+                    value={turn.response.streamingPhysics?.tokensPerSecond ?? ''}
+                    error={!!tokensPerSecondError(turn.response.streamingPhysics?.tokensPerSecond)}
+                    helperText={tokensPerSecondError(turn.response.streamingPhysics?.tokensPerSecond)}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      const val = e.target.value === '' || Number.isNaN(n) ? undefined : n;
+                      const sp: StreamingPhysicsDraft = { ...(turn.response.streamingPhysics ?? {}), tokensPerSecond: val };
+                      const hasValues = sp.timeToFirstToken != null || sp.tokensPerSecond != null || sp.jitter != null;
+                      updateResponse(i, { streamingPhysics: hasValues ? sp : undefined });
+                    }}
+                    sx={{ width: { xs: '100%', sm: 120 } }}
+                  />
+                  <TextField
+                    label="Jitter (0-1)"
+                    size="small"
+                    type="number"
+                    value={turn.response.streamingPhysics?.jitter ?? ''}
+                    error={!!jitterError(turn.response.streamingPhysics?.jitter)}
+                    helperText={jitterError(turn.response.streamingPhysics?.jitter)}
+                    onChange={(e) => {
+                      const n = parseFloat(e.target.value);
+                      const val = e.target.value === '' || Number.isNaN(n) ? undefined : n;
+                      const sp: StreamingPhysicsDraft = { ...(turn.response.streamingPhysics ?? {}), jitter: val };
+                      const hasValues = sp.timeToFirstToken != null || sp.tokensPerSecond != null || sp.jitter != null;
+                      updateResponse(i, { streamingPhysics: hasValues ? sp : undefined });
+                    }}
+                    sx={{ width: { xs: '100%', sm: 120 } }}
+                  />
+                </Box>
+              </Collapse>
             </Box>
+
+            {/* Structured output schema */}
+            <TextField
+              label="Output schema (JSON Schema for structured output)"
+              size="small"
+              fullWidth
+              multiline
+              minRows={1}
+              maxRows={4}
+              value={turn.response.outputSchema ?? ''}
+              onChange={(e) => updateResponse(i, { outputSchema: e.target.value || undefined })}
+              placeholder='{"type":"object","properties":{"answer":{"type":"string"}}}'
+              error={!!outputSchemaWarning(turn.response.outputSchema)}
+              helperText={outputSchemaWarning(turn.response.outputSchema) ?? 'Optional JSON Schema to validate the response text against'}
+              sx={{ mt: 0.5 }}
+            />
 
             {/* Fault / chaos injection (resilience testing) */}
             <FormControlLabel
@@ -401,23 +518,27 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                   size="small"
                   type="number"
                   value={turn.chaos?.errorStatus ?? ''}
-                  onChange={(e) => updateChaos(i, { errorStatus: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
-                  sx={{ width: 110 }}
+                  error={!!chaosErrorStatusError(turn.chaos?.errorStatus)}
+                  helperText={chaosErrorStatusError(turn.chaos?.errorStatus)}
+                  onChange={(e) => { const n = parseInt(e.target.value, 10); updateChaos(i, { errorStatus: e.target.value === '' || Number.isNaN(n) ? undefined : n }); }}
+                  sx={{ width: { xs: '100%', sm: 110 } }}
                 />
                 <TextField
                   label="Retry-After"
                   size="small"
                   value={turn.chaos?.retryAfter ?? ''}
                   onChange={(e) => updateChaos(i, { retryAfter: e.target.value || undefined })}
-                  sx={{ width: 110 }}
+                  sx={{ width: { xs: '100%', sm: 110 } }}
                 />
                 <TextField
                   label="Error prob (0-1)"
                   size="small"
                   type="number"
                   value={turn.chaos?.errorProbability ?? ''}
-                  onChange={(e) => updateChaos(i, { errorProbability: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
-                  sx={{ width: 130 }}
+                  error={!!errorProbabilityError(turn.chaos?.errorProbability)}
+                  helperText={errorProbabilityError(turn.chaos?.errorProbability)}
+                  onChange={(e) => { const n = parseFloat(e.target.value); updateChaos(i, { errorProbability: e.target.value === '' || Number.isNaN(n) ? undefined : n }); }}
+                  sx={{ width: { xs: '100%', sm: 130 } }}
                 />
                 <TextField
                   label="Truncate"
@@ -425,7 +546,7 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                   select
                   value={turn.chaos?.truncateMode ?? 'NONE'}
                   onChange={(e) => updateChaos(i, { truncateMode: e.target.value as ChaosDraft['truncateMode'] })}
-                  sx={{ width: 130 }}
+                  sx={{ width: { xs: '100%', sm: 130 } }}
                 >
                   <MenuItem value="NONE">None</MenuItem>
                   <MenuItem value="MID_STREAM">Mid-stream</MenuItem>
@@ -435,8 +556,10 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                   size="small"
                   type="number"
                   value={turn.chaos?.truncateAtFraction ?? ''}
-                  onChange={(e) => updateChaos(i, { truncateAtFraction: e.target.value === '' ? undefined : parseFloat(e.target.value) })}
-                  sx={{ width: 120 }}
+                  error={!!truncateAtFractionError(turn.chaos?.truncateAtFraction)}
+                  helperText={truncateAtFractionError(turn.chaos?.truncateAtFraction)}
+                  onChange={(e) => { const n = parseFloat(e.target.value); updateChaos(i, { truncateAtFraction: e.target.value === '' || Number.isNaN(n) ? undefined : n }); }}
+                  sx={{ width: { xs: '100%', sm: 120 } }}
                 />
                 <FormControlLabel
                   control={
@@ -454,8 +577,8 @@ export default function ConversationWizardStep2({ turns, onTurnsChange }: Step2P
                   size="small"
                   type="number"
                   value={turn.chaos?.seed ?? ''}
-                  onChange={(e) => updateChaos(i, { seed: e.target.value === '' ? undefined : parseInt(e.target.value, 10) })}
-                  sx={{ width: 100 }}
+                  onChange={(e) => { const n = parseInt(e.target.value, 10); updateChaos(i, { seed: e.target.value === '' || Number.isNaN(n) ? undefined : n }); }}
+                  sx={{ width: { xs: '100%', sm: 100 } }}
                   helperText="reproducible prob"
                 />
               </Box>

@@ -18,6 +18,7 @@ public class JsonSchemaHttpResponseValidator extends JsonSchemaValidator {
             "bodyWithContentType",
             "delay",
             "connectionOptions",
+            "recoverAfter",
             "keyToMultiValue",
             "keyToValue",
             "draft-07"

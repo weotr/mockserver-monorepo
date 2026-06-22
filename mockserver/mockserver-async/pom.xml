@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>7.0.1-SNAPSHOT</version>
+        <version>7.1.1-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -11,7 +11,7 @@
     <artifactId>mockserver-async</artifactId>
 
     <name>MockServer Async Messaging</name>
-    <description>AsyncAPI-driven message-broker mocking for Kafka and MQTT</description>
+    <description>AsyncAPI-driven message-broker mocking for Kafka, MQTT and AMQP (RabbitMQ)</description>
     <url>https://www.mock-server.com</url>
 
     <properties>
@@ -51,6 +51,13 @@
             <version>1.2.5</version>
         </dependency>
 
+        <!-- amqp (RabbitMQ 0.9.1) -->
+        <dependency>
+            <groupId>com.rabbitmq</groupId>
+            <artifactId>amqp-client</artifactId>
+            <version>5.28.0</version>
+        </dependency>
+
         <!-- logging -->
         <dependency>
             <groupId>org.slf4j</groupId>
@@ -88,6 +95,12 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>kafka</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>

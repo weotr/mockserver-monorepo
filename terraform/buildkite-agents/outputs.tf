@@ -57,3 +57,8 @@ output "perf_results_bucket" {
   description = "S3 bucket name for performance-regression result history"
   value       = aws_s3_bucket.perf_results.id
 }
+
+output "default_instance_role_arn" {
+  description = "IAM role ARN of the default-queue agent instance role (needed for cross-account binaries bucket policy)"
+  value       = module.buildkite_stack.instance_role_arn
+}

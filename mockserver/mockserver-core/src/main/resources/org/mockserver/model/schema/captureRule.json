@@ -1,0 +1,28 @@
+{
+  "title": "captureRule",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "source": {
+      "enum": [
+        "jsonPath",
+        "xpath",
+        "header",
+        "queryStringParameter",
+        "cookie",
+        "pathParameter"
+      ]
+    },
+    "expression": {
+      "type": "string"
+    },
+    "into": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "source",
+    "expression",
+    "into"
+  ]
+}

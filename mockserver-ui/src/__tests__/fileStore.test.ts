@@ -63,14 +63,16 @@ describe('fileStore client', () => {
     expect(content).toBe('file-content-here');
   });
 
-  it('throws with the server text message on a non-ok response', async () => {
+  it('throws in the standard "MockServer returned <status>: <body>" shape on a non-ok response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, text: async () => 'file not found: missing.json' }));
-    await expect(retrieveFileText(params, 'missing.json')).rejects.toThrow('file not found: missing.json');
+    await expect(retrieveFileText(params, 'missing.json')).rejects.toThrow(
+      'MockServer returned 404: file not found: missing.json',
+    );
   });
 
-  it('throws with a fallback message when the error body is empty', async () => {
+  it('throws the standard shape with an empty body when the error body is empty', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => '' }));
-    await expect(listFiles(params)).rejects.toThrow('HTTP 500');
+    await expect(listFiles(params)).rejects.toThrow('MockServer returned 500: ');
   });
 
   it('passes the abort signal to list', async () => {

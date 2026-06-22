@@ -1017,7 +1017,7 @@ sitemap:
 
 <h3>mock_llm_completion</h3>
 
-<p>Creates a mock LLM completion expectation that returns a provider-correct response from a high-level description of text, tool calls, stop reason, and usage. The response wire format matches the target provider — for example, Anthropic returns the Anthropic Messages API format, OpenAI returns the Chat Completions format. Streaming responses are supported for all providers.</p>
+<p>Creates a mock LLM completion expectation that returns a provider-correct response from a high-level description of text, tool calls, stop reason, and usage. The response wire format matches the target provider — for example, Anthropic returns the Anthropic Messages API format, OpenAI returns the Chat Completions format. Streaming responses are supported for all providers. See <a href="/mock_server/llm_response_mocking.html">LLM Response Mocking</a> for the full feature guide with raw JSON examples.</p>
 
 <p>Both <code>provider</code> and <code>path</code> are required. All other parameters are optional.</p>
 
@@ -1035,6 +1035,7 @@ sitemap:
         <tr><td><code>usage</code></td><td>object</td><td>No</td><td>Token usage. Accepts <code>inputTokens</code> (integer) and <code>outputTokens</code> (integer).</td></tr>
         <tr><td><code>streaming</code></td><td>boolean</td><td>No</td><td>When <code>true</code>, the response is delivered as a Server-Sent Events stream. Defaults to <code>false</code>.</td></tr>
         <tr><td><code>outputSchema</code></td><td>string or object</td><td>No</td><td>A JSON Schema the response <code>text</code> is expected to conform to. Validated as the response is encoded (<strong>fail-soft</strong>): on a mismatch the body is returned unchanged but an <code>x-mockserver-structured-output-invalid</code> header is added and a warning logged. A blank or malformed schema, or absent text, is a no-op. Use this to catch malformed structured-output fixtures; use <a href="#verify_structured_output"><code>verify_structured_output</code></a> to assert over recorded traffic.</td></tr>
+        <tr><td><code>enforceOutputSchema</code></td><td>boolean</td><td>No</td><td>Opt-in <strong>strict</strong> structured-output enforcement (default <code>false</code>). When <code>true</code> and an <code>outputSchema</code> is set, a non-conforming configured response <strong>fails loudly</strong> with a provider-correct error (HTTP <code>502</code>) instead of the fail-soft diagnostic header &mdash; modelling a provider's strict <code>response_format: json_schema</code> mode that guarantees schema-valid output. No effect without an <code>outputSchema</code>.</td></tr>
         <tr><td><code>chaos</code></td><td>object</td><td>No</td><td>Optional fault/chaos profile for resilience testing (see the table below). Also accepted per turn in <a href="#create_llm_conversation"><code>create_llm_conversation</code></a>.</td></tr>
     </tbody>
 </table>
@@ -1050,7 +1051,7 @@ sitemap:
         <tr><td><code>retryAfter</code></td><td>string</td><td>Value for the <code>Retry-After</code> header on an injected error (e.g. <code>"30"</code>).</td></tr>
         <tr><td><code>errorProbability</code></td><td>number</td><td>Probability 0.0&ndash;1.0 of injecting the error. <code>1.0</code> (or omitted with <code>errorStatus</code> set) always fires; <code>0.0</code> never does. Fractional values are non-deterministic unless <code>seed</code> is set.</td></tr>
         <tr><td><code>truncateMode</code></td><td>string</td><td><code>NONE</code> or <code>MID_STREAM</code>. <code>MID_STREAM</code> truncates a streaming response after a leading fraction of events.</td></tr>
-        <tr><td><code>truncateAtFraction</code></td><td>number</td><td>Fraction 0.0&ndash;1.0 of SSE events to keep before truncating (default <code>0.5</code>).</td></tr>
+        <tr><td><code>truncateAtFraction</code></td><td>number</td><td>Fraction 0.0&ndash;1.0 of streaming events to keep before truncating (default <code>0.5</code>). Only applies when <code>truncateMode</code> is <code>MID_STREAM</code>.</td></tr>
         <tr><td><code>malformedSse</code></td><td>boolean</td><td>Append a malformed (broken-JSON) SSE chunk so the client must handle a corrupt event.</td></tr>
         <tr><td><code>seed</code></td><td>integer</td><td>Makes a fractional <code>errorProbability</code> reproducible.</td></tr>
         <tr><td><code>quotaName</code></td><td>string</td><td>Enables a <strong>stateful</strong> request quota (a fixed-window rate limit). Expectations sharing a <code>quotaName</code> share one request counter, so you can model an upstream account limit across several mocks.</td></tr>
@@ -1668,6 +1669,95 @@ sitemap:
     }
   }
 }</code></pre>
+
+<a id="mcp_server_capabilities" class="anchor" href="#mcp_server_capabilities">&nbsp;</a>
+
+<h2>MockServer MCP Server Capabilities</h2>
+
+<p>In addition to the tools above, MockServer's own MCP server (<code>/mockserver/mcp</code>) also implements the <strong>prompts</strong> and <strong>sampling</strong> capabilities from the MCP specification. These are available alongside the tools described in this page.</p>
+
+<a id="mcp_prompts" class="anchor" href="#mcp_prompts">&nbsp;</a>
+
+<h3>Prompts (<code>prompts/list</code> and <code>prompts/get</code>)</h3>
+
+<p>MockServer's MCP server advertises a built-in prompt set. An AI assistant can discover and retrieve these prompts using standard MCP JSON-RPC methods:</p>
+
+<table>
+    <thead>
+        <tr><th>Method</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>prompts/list</code></td><td>Returns the configured prompt set — each prompt's <code>name</code>, <code>description</code>, and <code>arguments</code> list (each argument has a <code>name</code>, optional <code>description</code>, and <code>required</code> flag)</td></tr>
+        <tr><td><code>prompts/get</code></td><td>Returns a prompt's message(s) with <code>{{argument}}</code> placeholders substituted from the supplied <code>arguments</code> map. An unknown prompt name returns JSON-RPC error code <code>INVALID_PARAMS</code> (<code>-32602</code>).</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example &mdash; list available prompts:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 100,
+  "method": "prompts/list",
+  "params": {}
+}</code></pre>
+
+<p><strong>Example &mdash; get a prompt with arguments:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 101,
+  "method": "prompts/get",
+  "params": {
+    "name": "create_expectation_prompt",
+    "arguments": {
+      "method": "GET",
+      "path": "/api/users"
+    }
+  }
+}</code></pre>
+
+<a id="mcp_sampling" class="anchor" href="#mcp_sampling">&nbsp;</a>
+
+<h3>Sampling (<code>sampling/createMessage</code>)</h3>
+
+<p>MockServer's MCP server implements <code>sampling/createMessage</code>, which returns a deterministic mocked completion in the MCP sampling result shape. This lets you test MCP clients that use server-side sampling without connecting to a real LLM.</p>
+
+<p>The response includes <code>role</code>, <code>content</code> (a text content part), <code>model</code>, and <code>stopReason</code>. The model is echoed from the request's <code>modelPreferences.hints</code> when supplied; otherwise a default model name is reported. Supply a <code>mockResponse</code> field in the request params to override the default response text.</p>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 102,
+  "method": "sampling/createMessage",
+  "params": {
+    "messages": [
+      { "role": "user", "content": { "type": "text", "text": "What is MockServer?" } }
+    ],
+    "modelPreferences": {
+      "hints": [{ "name": "claude-sonnet-4" }]
+    },
+    "mockResponse": "MockServer is an open-source HTTP mock and proxy server."
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 102,
+  "result": {
+    "role": "assistant",
+    "content": {
+      "type": "text",
+      "text": "MockServer is an open-source HTTP mock and proxy server."
+    },
+    "model": "claude-sonnet-4",
+    "stopReason": "end_turn"
+  }
+}</code></pre>
+
+<p>When <code>mockResponse</code> is omitted, MockServer returns a fixed default completion text. The response is always deterministic and does not call any external LLM.</p>
 
 <a id="resources" class="anchor" href="#resources">&nbsp;</a>
 

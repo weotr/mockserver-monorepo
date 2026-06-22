@@ -29,6 +29,14 @@ export interface LogEntryValue {
   description?: Description;
   style?: Record<string, string>;
   messageParts?: MessagePart[];
+  /**
+   * Server-side capture time of the log entry, as the raw string MockServer
+   * formats it (`yyyy-MM-dd HH:mm:ss.SSS`). Optional: older servers — and the
+   * current dashboard WebSocket serializer — may omit it, in which case no time
+   * is rendered. When present, the row shows a compact time with the full
+   * timestamp on hover.
+   */
+  timestamp?: string;
 }
 
 export interface LogEntry {
@@ -63,9 +71,28 @@ export interface WebSocketMessage {
   error?: string;
 }
 
+/**
+ * A MockServer STRING body matcher DTO. `subString: true` makes the server-side
+ * matcher do a contains-match rather than full-body equality — see the
+ * BodyDTODeserializer, which builds `new StringBody(string, …, subString, …)`.
+ * A bare string would deserialize to `subString=false` (exact match), so the
+ * "Body contains" filter must send this object form with `subString: true`.
+ */
+export interface StringBodyMatcher {
+  type: 'STRING';
+  string: string;
+  subString: boolean;
+}
+
 export interface RequestFilter {
   method?: string;
   path?: string;
+  /**
+   * Request-body matcher. The "Body contains" filter ships a STRING body with
+   * `subString: true` so the server does substring (contains) matching, not
+   * full-body equality.
+   */
+  body?: StringBodyMatcher;
   keepAlive?: boolean;
   secure?: boolean;
   headers?: KeyToMultiValue[];

@@ -323,7 +323,9 @@ function getHeaderValue(headers: unknown, headerName: string): string | null {
 
 export function parseSseStream(text: string): SseEvent[] {
   const events: SseEvent[] = [];
-  const lines = text.split('\n');
+  // SSE on the wire is CRLF-terminated; normalise CRLF/CR to LF first so the
+  // `[DONE]` sentinel comparison and reassembled text don't carry stray `\r`.
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
   let currentEvent: string | undefined;
   let currentData: string[] = [];
 
@@ -1139,6 +1141,45 @@ export function getTokenSummary(parsed: ParsedTraffic): string | null {
     if (parsed.usage.prompt_eval_count != null) parts.push(`${parsed.usage.prompt_eval_count} in`);
     if (parsed.usage.eval_count != null) parts.push(`${parsed.usage.eval_count} out`);
     return parts.length > 0 ? parts.join(' / ') : null;
+  }
+  return null;
+}
+
+/**
+ * Extract numeric input/output tokens from parsed traffic.
+ * Returns { inputTokens, outputTokens } or null if the parsed traffic
+ * has no usage data. Used by the Sessions view to compute per-session totals.
+ */
+export function getNumericTokens(parsed: ParsedTraffic): { inputTokens: number; outputTokens: number } | null {
+  if (parsed.kind === 'anthropic' && parsed.usage) {
+    return {
+      inputTokens: parsed.usage.input_tokens ?? 0,
+      outputTokens: parsed.usage.output_tokens ?? 0,
+    };
+  }
+  if (parsed.kind === 'openai' && parsed.usage) {
+    return {
+      inputTokens: parsed.usage.prompt_tokens ?? 0,
+      outputTokens: parsed.usage.completion_tokens ?? 0,
+    };
+  }
+  if (parsed.kind === 'openai_responses' && parsed.usage) {
+    return {
+      inputTokens: parsed.usage.input_tokens ?? 0,
+      outputTokens: parsed.usage.output_tokens ?? 0,
+    };
+  }
+  if (parsed.kind === 'gemini' && parsed.usage) {
+    return {
+      inputTokens: parsed.usage.promptTokenCount ?? 0,
+      outputTokens: parsed.usage.candidatesTokenCount ?? 0,
+    };
+  }
+  if (parsed.kind === 'ollama' && parsed.usage) {
+    return {
+      inputTokens: parsed.usage.prompt_eval_count ?? 0,
+      outputTokens: parsed.usage.eval_count ?? 0,
+    };
   }
   return null;
 }

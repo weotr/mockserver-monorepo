@@ -471,12 +471,28 @@ public class RequestMatchersStateBackendTest {
 
     @Test
     public void reconcileFromBackendPicksUpResponseBodyChange() {
+        // Remote-update reconciliation (picking up a backend write that bypassed
+        // the local add() path) only applies to a CLUSTERED backend — for the
+        // non-clustered in-memory default every mutation originates locally, so
+        // reconcileFromBackend() does a cheap eviction-only trim. Use a clustered
+        // backend so this test exercises the full remote-update reconcile path.
+        InMemoryStateBackend clusteredBackend = new InMemoryStateBackend(MAX_EXPECTATIONS) {
+            @Override
+            public boolean isClustered() {
+                return true;
+            }
+        };
+        RequestMatchers clusteredMatchers = new RequestMatchers(
+            configurationWithMax, new MockServerLogger(),
+            mock(Scheduler.class), mock(WebSocketClientRegistry.class));
+        clusteredMatchers.setStateBackend(clusteredBackend);
+
         // Add an expectation via the normal path
-        backendMatchers.add(new Expectation(request().withPath("/a")).withId("a")
+        clusteredMatchers.add(new Expectation(request().withPath("/a")).withId("a")
             .thenRespond(response().withBody("original-body")), API);
 
         // Verify matcher serves the original body
-        Expectation matched = backendMatchers.firstMatchingExpectation(request().withPath("/a"));
+        Expectation matched = clusteredMatchers.firstMatchingExpectation(request().withPath("/a"));
         assertThat(matched, is(notNullValue()));
         assertThat(matched.getHttpResponse().getBodyAsString(), is("original-body"));
 
@@ -486,16 +502,51 @@ public class RequestMatchersStateBackendTest {
         Expectation remoteUpdate = new Expectation(request().withPath("/a")).withId("a")
             .thenRespond(response().withBody("updated-body"));
         remoteUpdate.withCreated(matched.getCreated());
-        stateBackend.expectations().put("a", new ExpectationEntry(remoteUpdate));
+        clusteredBackend.expectations().put("a", new ExpectationEntry(remoteUpdate));
 
         // Trigger reconcile (simulates what the InvalidationListener does)
-        backendMatchers.reconcileFromBackend();
+        clusteredMatchers.reconcileFromBackend();
 
         // The matcher should now serve the updated body
-        Expectation matchedAfter = backendMatchers.firstMatchingExpectation(request().withPath("/a"));
+        Expectation matchedAfter = clusteredMatchers.firstMatchingExpectation(request().withPath("/a"));
         assertThat(matchedAfter, is(notNullValue()));
         assertThat("reconcile should pick up response body change",
             matchedAfter.getHttpResponse().getBodyAsString(), is("updated-body"));
+    }
+
+    @Test
+    public void clusteredReconcilePicksUpRemoteAdd() {
+        // Clustered remote-ADD reconciliation: an entry written directly to the
+        // backend by another node (bypassing add()) must materialise as a local
+        // matcher after reconcileFromBackend(). This guards that the clustered
+        // full-reconcile path is unchanged by the non-clustered fast-path.
+        InMemoryStateBackend clusteredBackend = new InMemoryStateBackend(10) {
+            @Override
+            public boolean isClustered() {
+                return true;
+            }
+        };
+        Configuration config10 = configuration().maxExpectations(10);
+        RequestMatchers clusteredMatchers = new RequestMatchers(
+            config10, new MockServerLogger(),
+            mock(Scheduler.class), mock(WebSocketClientRegistry.class));
+        clusteredMatchers.setStateBackend(clusteredBackend);
+
+        // Write an entry directly to the backend, simulating a remote node's add
+        Expectation remoteAdd = new Expectation(request().withPath("/remote")).withId("remote")
+            .thenRespond(response().withBody("remote-body"));
+        clusteredBackend.expectations().put("remote", new ExpectationEntry(remoteAdd));
+
+        // Before reconcile, the local cache has no matcher for it
+        assertThat(clusteredMatchers.size(), is(0));
+
+        // Reconcile picks up the remote add
+        clusteredMatchers.reconcileFromBackend();
+
+        assertThat(clusteredMatchers.size(), is(1));
+        Expectation matched = clusteredMatchers.firstMatchingExpectation(request().withPath("/remote"));
+        assertThat(matched, is(notNullValue()));
+        assertThat(matched.getHttpResponse().getBodyAsString(), is("remote-body"));
     }
 
     // -------------------------------------------------------
@@ -517,5 +568,80 @@ public class RequestMatchersStateBackendTest {
 
         // maxExpectations=2, so only 2 should remain
         assertThat(backendMatchers.size(), is(2));
+    }
+
+    // -------------------------------------------------------
+    // (g) clusterSharedTimesEnabled knob: shared CAS vs node-local Times
+    // -------------------------------------------------------
+
+    private InMemoryStateBackend newClusteredBackend() {
+        return new InMemoryStateBackend(10) {
+            @Override
+            public boolean isClustered() {
+                return true;
+            }
+        };
+    }
+
+    @Test
+    public void clusteredLimitedTimesUsesSharedBackendCasByDefault() {
+        // Default (clusterSharedTimesEnabled=true): a match on a clustered
+        // backend decrements the SHARED remainingTimes counter via CAS, so
+        // the backend entry reflects fleet-wide consumption.
+        InMemoryStateBackend clusteredBackend = newClusteredBackend();
+        Configuration config = configuration().maxExpectations(10);
+        RequestMatchers matchers = new RequestMatchers(
+            config, new MockServerLogger(),
+            mock(Scheduler.class), mock(WebSocketClientRegistry.class));
+        matchers.setStateBackend(clusteredBackend);
+
+        matchers.add(new Expectation(request().withPath("/a"),
+            Times.exactly(3), null, 0).withId("a")
+            .thenRespond(response().withBody("a")), API);
+
+        // Backend seeded with remainingTimes = 3
+        assertThat(clusteredBackend.expectations().get("a").get().getValue().getRemainingTimes(),
+            is(3));
+
+        // One match decrements the SHARED counter via CAS
+        Expectation matched = matchers.firstMatchingExpectation(request().withPath("/a"));
+        assertThat(matched, is(notNullValue()));
+        assertThat("default shared-Times path decrements the backend counter",
+            clusteredBackend.expectations().get("a").get().getValue().getRemainingTimes(),
+            is(2));
+    }
+
+    @Test
+    public void clusteredLimitedTimesFallsBackToNodeLocalWhenSharedTimesDisabled() {
+        // Opt-out (clusterSharedTimesEnabled=false): even on a clustered
+        // backend, the match takes the NODE-LOCAL fast path — no shared CAS,
+        // so the backend's shared remainingTimes counter is NOT touched.
+        InMemoryStateBackend clusteredBackend = newClusteredBackend();
+        Configuration config = configuration().maxExpectations(10)
+            .clusterSharedTimesEnabled(false);
+        RequestMatchers matchers = new RequestMatchers(
+            config, new MockServerLogger(),
+            mock(Scheduler.class), mock(WebSocketClientRegistry.class));
+        matchers.setStateBackend(clusteredBackend);
+
+        matchers.add(new Expectation(request().withPath("/a"),
+            Times.exactly(3), null, 0).withId("a")
+            .thenRespond(response().withBody("a")), API);
+
+        // Backend seeded with remainingTimes = 3
+        assertThat(clusteredBackend.expectations().get("a").get().getValue().getRemainingTimes(),
+            is(3));
+
+        // The match succeeds via node-local Times...
+        Expectation matched = matchers.firstMatchingExpectation(request().withPath("/a"));
+        assertThat(matched, is(notNullValue()));
+        // ...and the node-local Times counter is what decremented (3 -> 2).
+        assertThat("node-local Times decrements when shared-Times is disabled",
+            matched.getTimes().getRemainingTimes(), is(2));
+        // ...while the SHARED backend counter is untouched (still 3),
+        // proving the synchronous backend CAS round-trip was bypassed.
+        assertThat("backend shared counter is NOT touched when shared-Times disabled",
+            clusteredBackend.expectations().get("a").get().getValue().getRemainingTimes(),
+            is(3));
     }
 }

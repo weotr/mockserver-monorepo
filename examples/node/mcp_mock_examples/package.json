@@ -1,0 +1,11 @@
+{
+  "name": "mcp_mock_examples",
+  "version": "1.0.0",
+  "description": "",
+  "main": "mcp_mock.js",
+  "author": "James D Bloom",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "mockserver-client": "7.1.0"
+  }
+}

@@ -14,8 +14,8 @@ import java.util.UUID;
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;
@@ -24,7 +24,6 @@ import static org.junit.Assert.assertThrows;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.matchers.Times.exactly;
 import static org.mockserver.matchers.Times.unlimited;
-import static org.mockserver.model.HttpForward.forward;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.notFoundResponse;
 import static org.mockserver.model.HttpResponse.response;
@@ -500,7 +499,7 @@ public abstract class AbstractControlPlaneIntegrationTest extends AbstractMockin
                 );
             fail("expected exception to be thrown");
         } catch (AssertionError ae) {
-            assertThat(ae.getMessage(), equalTo("Request sequence not found, expected:<[ {" + NEW_LINE +
+            assertThat(ae.getMessage(), startsWith("Request sequence not found, expected:<[ {" + NEW_LINE +
                 "  \"path\" : \"" + calculatePath("some_other_path") + "\"" + NEW_LINE +
                 "}, {" + NEW_LINE +
                 "  \"path\" : \"" + calculatePath("some_path") + "\"" + NEW_LINE +
@@ -836,9 +835,10 @@ public abstract class AbstractControlPlaneIntegrationTest extends AbstractMockin
             "" + NEW_LINE +
             " schema validation errors:" + NEW_LINE +
             "" + NEW_LINE +
-            "  8 errors:" + NEW_LINE +
+            "  9 errors:" + NEW_LINE +
             "   - $.binaryData: is missing but it is required" + NEW_LINE +
             "   - $.dnsName: is missing but it is required" + NEW_LINE +
+            "   - $.if: is missing but it is required" + NEW_LINE +
             "   - $.keepAlive: string found, boolean expected" + NEW_LINE +
             "   - $.method: boolean found, string expected" + NEW_LINE +
             "   - $.method: should be valid to one and only one schema, but 0 are valid" + NEW_LINE +

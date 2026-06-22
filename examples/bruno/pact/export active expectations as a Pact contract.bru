@@ -1,0 +1,22 @@
+meta {
+  name: export active expectations as a Pact contract
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/pact
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~consumer: 
+  ~provider: 
+}
+
+docs {
+  Exports the current active expectations as a Pact consumer-driven contract (JSON). The optional 'consumer' and 'provider' query parameters set the contract's consumer and provider names.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

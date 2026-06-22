@@ -151,6 +151,9 @@ if [[ "$OS" == "windows" ]]; then
 @echo off
 setlocal
 set "DIR=%~dp0.."
+rem Tell MockServer it was started via this launcher so usage/help text reads
+rem "mockserver ..." instead of the "java -jar <jar>" form.
+if not defined MOCKSERVER_LAUNCHER set "MOCKSERVER_LAUNCHER=%~n0"
 "%DIR%\runtime\bin\java.exe" %MOCKSERVER_JAVA_OPTS% -jar "%DIR%\lib\mockserver.jar" %*
 BAT
 else
@@ -160,6 +163,9 @@ else
 # so no separate JVM installation is required. Override JVM options via
 # the MOCKSERVER_JAVA_OPTS environment variable.
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# Tell MockServer it was started via this launcher so usage/help text reads
+# "mockserver ..." instead of the "java -jar <jar>" form.
+export MOCKSERVER_LAUNCHER="${MOCKSERVER_LAUNCHER:-$(basename -- "$0")}"
 exec "$DIR/runtime/bin/java" ${MOCKSERVER_JAVA_OPTS:-} -jar "$DIR/lib/mockserver.jar" "$@"
 SH
   chmod +x "$STAGE/bin/mockserver"

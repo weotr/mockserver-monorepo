@@ -1,0 +1,17 @@
+meta {
+  name: remove all registered breakpoint matchers
+  type: http
+  seq: 21
+}
+
+put {
+  url: {{baseUrl}}/mockserver/breakpoint/matcher/clear
+  body: none
+  auth: inherit
+}
+
+docs {
+  Removes all registered breakpoint matchers. After this call, no exchanges will be paused at breakpoints until new matchers are registered. Returns the number of matchers cleared.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

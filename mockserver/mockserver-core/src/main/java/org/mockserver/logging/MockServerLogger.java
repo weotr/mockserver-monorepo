@@ -60,9 +60,14 @@ public class MockServerLogger {
                     "io.netty.level=WARNING").getBytes(UTF_8)));
             }
         } catch (Throwable throwable) {
-            // Must not call logEvent() here: it would read ConfigurationProperties (disableLogging,
-            // logLevel) and re-introduce the class-init dependency this method exists to avoid.
-            throwable.printStackTrace();
+            // Deliberate stderr fallback (NOT a logging-convention violation): this is the logging
+            // subsystem's own bootstrap failure path, before logging is even configured. Routing this
+            // through logEvent()/the slf4j convention is impossible here because logEvent() reads
+            // ConfigurationProperties (disableLogging, logLevel), which would re-introduce the
+            // MockServerLogger <-> ConfigurationProperties class-init dependency this method exists to
+            // avoid (the cause of the reverted parallel-Surefire deadlock). System.err is the only
+            // safe sink at this point (explicit stream form to make the stderr target deliberate).
+            throwable.printStackTrace(System.err);
         }
     }
 

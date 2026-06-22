@@ -1,0 +1,29 @@
+meta {
+  name: retrieve a file from the file store
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/mockserver/files/retrieve
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "template.json"
+  }
+}
+
+docs {
+  returns the raw bytes of a previously stored file
+  
+  name of the file to retrieve
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

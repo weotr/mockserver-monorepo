@@ -90,22 +90,48 @@ public class FixtureRedactor {
     /**
      * Redact sensitive headers in an array of expectations. Returns new Expectation objects;
      * the originals are not modified.
+     * <p>
+     * The {@code Times} / {@code TimeToLive} of the result default to unlimited and the
+     * expectation {@code id} is dropped — appropriate for the fixture export/import use
+     * case where redacted expectations are re-imported as fresh, unlimited mocks. Use
+     * {@link #redact(Expectation[], boolean)} with {@code preserveConstraints=true} to keep
+     * the original replay constraints and id (e.g. on the recorded-expectation path).
      *
      * @param expectations the expectations to redact
      * @return new expectations with sensitive header values replaced
      */
     public Expectation[] redact(Expectation[] expectations) {
+        return redact(expectations, false);
+    }
+
+    /**
+     * Redact sensitive headers in an array of expectations. Returns new Expectation objects;
+     * the originals are not modified.
+     *
+     * @param expectations        the expectations to redact
+     * @param preserveConstraints when {@code true}, copy {@code Times}, {@code TimeToLive},
+     *                            {@code priority} and {@code id} from each source expectation
+     *                            into its redacted result; when {@code false}, default to
+     *                            unlimited {@code Times} / {@code TimeToLive} and drop the id
+     *                            (original fixture export/import behaviour)
+     * @return new expectations with sensitive header values replaced
+     */
+    public Expectation[] redact(Expectation[] expectations, boolean preserveConstraints) {
         if (expectations == null) {
             return new Expectation[0];
         }
         Expectation[] result = new Expectation[expectations.length];
         for (int i = 0; i < expectations.length; i++) {
-            result[i] = redactExpectation(expectations[i]);
+            result[i] = redactExpectation(expectations[i], preserveConstraints);
         }
         return result;
     }
 
     private Expectation redactExpectation(Expectation expectation) {
+        return redactExpectation(expectation, false);
+    }
+
+    private Expectation redactExpectation(Expectation expectation, boolean preserveConstraints) {
         RequestDefinition requestDef = expectation.getHttpRequest();
         HttpResponse response = expectation.getHttpResponse();
         HttpSseResponse sseResponse = expectation.getHttpSseResponse();
@@ -119,10 +145,22 @@ public class FixtureRedactor {
 
         Expectation result = new Expectation(
             redactedRequestDef,
-            Times.unlimited(),
-            TimeToLive.unlimited(),
+            preserveConstraints ? expectation.getTimes() : Times.unlimited(),
+            preserveConstraints ? expectation.getTimeToLive() : TimeToLive.unlimited(),
             expectation.getPriority()
         );
+
+        if (preserveConstraints && expectation.getId() != null) {
+            result.withId(expectation.getId());
+        }
+
+        // Scenario state carries no sensitive data — it is matching metadata (e.g. Pact
+        // provider-state preconditions). Preserve it across redaction so a state-gated
+        // expectation keeps gating after import.
+        result
+            .withScenarioName(expectation.getScenarioName())
+            .withScenarioState(expectation.getScenarioState())
+            .withNewScenarioState(expectation.getNewScenarioState());
 
         if (redactedSseResponse != null) {
             result.thenRespondWithSse(redactedSseResponse);
@@ -135,6 +173,40 @@ public class FixtureRedactor {
         }
 
         return result;
+    }
+
+    /**
+     * Redact sensitive headers (and configured JSON body fields) in a single
+     * request definition, returning a redacted clone. The original is never
+     * mutated. Non-{@link HttpRequest} request definitions (e.g. OpenAPI
+     * definitions) are returned unchanged.
+     * <p>
+     * Used by the live event-log / dashboard redaction path so the masked copy
+     * is shown without affecting verification, which reads the unredacted
+     * request directly.
+     *
+     * @param requestDefinition the request to redact (may be {@code null})
+     * @return a redacted clone, or the original for null / non-HttpRequest inputs
+     */
+    public RequestDefinition redactRequestDefinition(RequestDefinition requestDefinition) {
+        if (requestDefinition instanceof HttpRequest) {
+            return redactRequest((HttpRequest) requestDefinition);
+        }
+        return requestDefinition;
+    }
+
+    /**
+     * Redact sensitive headers (and configured JSON body fields) in a single
+     * response, returning a redacted clone. The original is never mutated.
+     *
+     * @param response the response to redact (may be {@code null})
+     * @return a redacted clone, or {@code null} when {@code response} is null
+     */
+    public HttpResponse redactResponseObject(HttpResponse response) {
+        if (response == null) {
+            return null;
+        }
+        return redactResponse(response);
     }
 
     private HttpRequest redactRequest(HttpRequest request) {

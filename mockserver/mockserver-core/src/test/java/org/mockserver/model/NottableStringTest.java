@@ -40,6 +40,50 @@ public class NottableStringTest {
     }
 
     @Test
+    public void shouldParseOptionalOnlyPrefixWithoutThrowing() {
+        // when
+        NottableString nottableString = string("?");
+
+        // then
+        assertThat(nottableString.isOptional(), is(true));
+        assertThat(nottableString.isNot(), is(false));
+        assertThat(nottableString.getValue(), is(""));
+    }
+
+    @Test
+    public void shouldParseNotOnlyPrefixWithoutThrowing() {
+        // when
+        NottableString nottableString = string("!");
+
+        // then
+        assertThat(nottableString.isOptional(), is(false));
+        assertThat(nottableString.isNot(), is(true));
+        assertThat(nottableString.getValue(), is(""));
+    }
+
+    @Test
+    public void shouldParseOptionalThenNotPrefixWithoutThrowing() {
+        // when
+        NottableString nottableString = string("?!");
+
+        // then
+        assertThat(nottableString.isOptional(), is(true));
+        assertThat(nottableString.isNot(), is(true));
+        assertThat(nottableString.getValue(), is(""));
+    }
+
+    @Test
+    public void shouldParseNotThenOptionalPrefixWithoutThrowing() {
+        // when
+        NottableString nottableString = string("!?");
+
+        // then
+        assertThat(nottableString.isOptional(), is(true));
+        assertThat(nottableString.isNot(), is(true));
+        assertThat(nottableString.getValue(), is(""));
+    }
+
+    @Test
     public void shouldEqual() {
         assertThat(string("value"), is(string("value")));
         assertThat(NottableString.not("value"), is(NottableString.not("value")));
@@ -101,6 +145,36 @@ public class NottableStringTest {
         assertThat(NottableString.string("value").toString(), is("value"));
         assertThat("" + NottableString.string("value"), is("value"));
         assertThat(String.valueOf(NottableString.string("value")), is("value"));
+    }
+
+    @Test
+    public void shouldMatchCaseInsensitivelyByDefault() {
+        // the original matches(String) overload compiles with CASE_INSENSITIVE | UNICODE_CASE
+        assertThat(string("Hello.*").matches("hello world"), is(true));
+        assertThat(string("Hello.*").matches("Hello world"), is(true));
+    }
+
+    @Test
+    public void shouldMatchCaseSensitivelyWhenRequested() {
+        // the matches(String, true) overload compiles without CASE_INSENSITIVE | UNICODE_CASE
+        assertThat(string("Hello.*").matches("Hello world", true), is(true));
+        assertThat(string("Hello.*").matches("hello world", true), is(false));
+    }
+
+    @Test
+    public void shouldNotThrowForNullValueWhenMatchingCaseSensitively() {
+        // a null value can never compile as a regex; the case-sensitive path must return false, not NPE
+        assertThat(string(null).matches("anything", true), is(false));
+    }
+
+    @Test
+    public void shouldCacheCaseSensitiveAndCaseInsensitivePatternsIndependently() {
+        // the same NottableString can be used both ways within one instance
+        NottableString value = string("Hello.*");
+        assertThat(value.matches("hello world"), is(true));
+        assertThat(value.matches("hello world", true), is(false));
+        assertThat(value.matches("Hello world", true), is(true));
+        assertThat(value.matches("HELLO world"), is(true));
     }
 
 }

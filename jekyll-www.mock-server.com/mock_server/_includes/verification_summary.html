@@ -1,8 +1,10 @@
-<p>MockServer supports verification of requests it has received, including both proxied requests and requests that have matched an expectation.</p>
+<p>MockServer supports verification of requests and responses it has received, including both proxied requests and requests that have matched an expectation.</p>
 <p>Verification can be specified as follows:</p>
 <ul>
     <li>a <a href="/mock_server/creating_expectations.html#request_matchers"><strong>request matcher</strong></a> and a condition indicating the number of times the request should be matched</li>
+	<li>a <strong>response matcher</strong> (optionally combined with a request matcher) and a condition indicating the number of times a matching response should have been recorded</li>
 	<li>a sequence of <a href="/mock_server/creating_expectations.html#request_matchers"><strong>request matchers</strong></a> that is matched in order</li>
+	<li>a sequence of <strong>request and response matcher pairs</strong> that is matched in order</li>
 </ul>
 
 <a id="how_verification_works" class="anchor" href="#how_verification_works">&nbsp;</a>
@@ -13,9 +15,22 @@
 
 <p><strong>For request matcher count verification:</strong> MockServer filters the event log to find all <code>RECEIVED_REQUEST</code> entries matching your request matcher, counts them, and compares the count against your constraint (<code>atLeast(n)</code>, <code>exactly(n)</code>, etc.). Returns HTTP 202 if the count matches, or HTTP 406 with an error message if it does not.</p>
 
+<p><strong>Verifying by disposition (forwarded vs mocked):</strong> By default a request-count verification counts every matching received request regardless of how it was handled. Use <code>withDisposition(Disposition.FORWARDED)</code> to count only requests that MockServer forwarded/proxied to an upstream server, or <code>withDisposition(Disposition.MOCKED)</code> to count only requests that matched an expectation and received a mocked response. This is useful when MockServer is acting as a proxy for some paths and a mock for others, and you want to assert that a particular request was (or was not) sent upstream. When no disposition is set the original behaviour is unchanged. (Disposition applies to request-count verification only — it is ignored for response and expectation-id verifications.)</p>
+
+<p><strong>Collecting all failures with <code>verifyAll(...)</code>:</strong> A normal <code>verify(...)</code> call throws on the first verification that fails. <code>verifyAll(...)</code> instead evaluates every supplied verification and, if any fail, throws a single <code>AssertionError</code> that lists all of the failures together — so a test reports every mismatch at once instead of one per run. If all verifications pass, no error is thrown.</p>
+
+<p><strong>Waiting for asynchronous requests (Java client):</strong> A normal <code>verify(...)</code> checks the event log once, as a single snapshot. When your system under test sends requests asynchronously (fire-and-forget, background workers), the request may not have reached MockServer at the instant you verify. The Java client provides two timeout-aware variants so you do not need an external retry helper:</p>
+<ul>
+    <li><strong>Eventual verification</strong> — <code>verify(request, VerificationTimes.once(), Duration.ofSeconds(5))</code> (or the <code>verify(Verification, Duration)</code> overload) polls the event log with a small backoff and passes as soon as the condition is satisfied, throwing the last failure only if the timeout expires first. Use this to wait for a request that should eventually arrive.</li>
+    <li><strong>Negative-within-timeout verification</strong> — <code>verifyNever(request, Duration.ofSeconds(2))</code> (or the <code>verifyNever(Verification, Duration)</code> overload) asserts that no matching request arrives for the whole window. It fails the moment a matching request is observed and returns normally if the window elapses with no match — useful for asserting "no request was made within N seconds".</li>
+</ul>
+<p>Both are implemented entirely in the Java client by polling the standard verify endpoint; no server-side wait is involved, and the existing single-snapshot <code>verify(...)</code> methods are unchanged.</p>
+
+<p><strong>For response verification:</strong> When a <strong>response matcher</strong> is included in the verification, MockServer retrieves all recorded request-response pairs (from <code>EXPECTATION_RESPONSE</code> and <code>FORWARDED_REQUEST</code> entries — MockServer's own auto-generated no-match responses are excluded) and filters them by the response matcher. If a request matcher is also supplied, both must match the same pair. The count of matching pairs is then checked against <code>VerificationTimes</code>. On failure, MockServer returns HTTP 406 with a <code>"Response not found ..."</code> error message listing the actual responses recorded. When <code>detailedVerificationFailures</code> is enabled, a field-level diff against the closest recorded response is appended to the error message.</p>
+
 <p><strong>For expectation ID verification:</strong> MockServer retrieves all events associated with the specified expectation ID (including <code>EXPECTATION_RESPONSE</code> and <code>FORWARDED_REQUEST</code> entries) and verifies the count.</p>
 
-<p><strong>For sequence verification:</strong> MockServer scans recorded requests in order, checking that each expected request appears after the previous match. This is not a simple count comparison—order matters.</p>
+<p><strong>For sequence verification:</strong> MockServer scans recorded requests in order, checking that each expected request appears after the previous match. This is not a simple count comparison—order matters. When <code>httpResponses</code> are included in a sequence verification, each step checks both the request and the response matcher against the same recorded exchange.</p>
 
 <p><strong>Important notes for parallel testing:</strong></p>
 <ul>
@@ -82,6 +97,70 @@ mockServerClient("localhost", 1080)
   );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, VerificationTimes
+
+client = MockServerClient("localhost", 1080)
+client.verify(
+    HttpRequest(path="/some/path"),
+    VerificationTimes.at_least(2)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify(
+    MockServer::HttpRequest.new(path: '/some/path'),
+    times: MockServer::VerificationTimes.at_least(2)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.AtLeast(2),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpRequest.Request().WithPath("/some/path"),
+    VerificationTimes.AtLeastTimes(2)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify(
+    HttpRequest::new().path("/some/path"),
+    VerificationTimes::at_least(2),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/some/path'),
+    VerificationTimes::atLeast(2)
+);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
@@ -124,6 +203,70 @@ function (error) {
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, VerificationTimes
+
+client = MockServerClient("localhost", 1080)
+client.verify(
+    HttpRequest(path="/some/path"),
+    VerificationTimes.at_most(2)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify(
+    MockServer::HttpRequest.new(path: '/some/path'),
+    times: MockServer::VerificationTimes.at_most(2)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.AtMost(2),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpRequest.Request().WithPath("/some/path"),
+    VerificationTimes.AtMostTimes(2)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify(
+    HttpRequest::new().path("/some/path"),
+    VerificationTimes::at_most(2),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/some/path'),
+    VerificationTimes::atMost(2)
+);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
@@ -165,6 +308,70 @@ mockServerClient("localhost", 1080)
         }
     );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, VerificationTimes
+
+client = MockServerClient("localhost", 1080)
+client.verify(
+    HttpRequest(path="/some/path"),
+    VerificationTimes.exactly(2)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify(
+    MockServer::HttpRequest.new(path: '/some/path'),
+    times: MockServer::VerificationTimes.exactly(2)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.ExactlyTimes(2),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpRequest.Request().WithPath("/some/path"),
+    VerificationTimes.ExactlyTimes(2)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify(
+    HttpRequest::new().path("/some/path"),
+    VerificationTimes::exactly(2),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/some/path'),
+    VerificationTimes::exactly(2)
+);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -209,6 +416,126 @@ mockServerClient("localhost", 1080)
         }
     );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import requests
+
+# OpenAPI matchers are not supported in the Python client verify method;
+# use the REST API directly
+requests.put("http://localhost:1080/mockserver/verify", json={
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "times": {
+        "atLeast": 2
+    }
+})</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+# OpenAPI matchers are not supported in the Ruby client verify method;
+# use the REST API directly
+uri = URI("http://localhost:1080/mockserver/verify")
+req = Net::HTTP::Put.new(uri, 'Content-Type' =&gt; 'application/json')
+req.body = JSON.generate({
+    "httpRequest" =&gt; {
+        "specUrlOrPayload" =&gt; "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "times" =&gt; { "atLeast" =&gt; 2 }
+})
+Net::HTTP.start(uri.host, uri.port) { |http| http.request(req) }</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    // OpenAPI matchers are not supported in the Go client;
+    // use the REST API directly
+    body := []byte(`{
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "times": {
+        "atLeast": 2
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/verify",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// OpenAPI matchers are not supported in the .NET client;
+// use the REST API directly
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""specUrlOrPayload"": ""https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json""
+    },
+    ""times"": {
+        ""atLeast"": 2
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/verify",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+// OpenAPI matchers are not supported in the Rust client;
+// use the REST API directly
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+    },
+    "times": {
+        "atLeast": 2
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/verify")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/verify');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json',
+        ],
+        'times' =&gt; ['atLeast' =&gt; 2],
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -255,6 +582,136 @@ mockServerClient("localhost", 1080)
     );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import requests
+
+# OpenAPI matchers are not supported in the Python client verify method;
+# use the REST API directly
+requests.put("http://localhost:1080/mockserver/verify", json={
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "times": {
+        "atLeast": 1,
+        "atMost": 1
+    }
+})</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+# OpenAPI matchers are not supported in the Ruby client verify method;
+# use the REST API directly
+uri = URI("http://localhost:1080/mockserver/verify")
+req = Net::HTTP::Put.new(uri, 'Content-Type' =&gt; 'application/json')
+req.body = JSON.generate({
+    "httpRequest" =&gt; {
+        "specUrlOrPayload" =&gt; "org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId" =&gt; "showPetById"
+    },
+    "times" =&gt; { "atLeast" =&gt; 1, "atMost" =&gt; 1 }
+})
+Net::HTTP.start(uri.host, uri.port) { |http| http.request(req) }</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    // OpenAPI matchers are not supported in the Go client;
+    // use the REST API directly
+    body := []byte(`{
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "times": {
+        "atLeast": 1,
+        "atMost": 1
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/verify",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// OpenAPI matchers are not supported in the .NET client;
+// use the REST API directly
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""specUrlOrPayload"": ""org/mockserver/openapi/openapi_petstore_example.json"",
+        ""operationId"": ""showPetById""
+    },
+    ""times"": {
+        ""atLeast"": 1,
+        ""atMost"": 1
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/verify",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+// OpenAPI matchers are not supported in the Rust client;
+// use the REST API directly
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+        "operationId": "showPetById"
+    },
+    "times": {
+        "atLeast": 1,
+        "atMost": 1
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/verify")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/verify');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'httpRequest' =&gt; [
+            'specUrlOrPayload' =&gt; 'org/mockserver/openapi/openapi_petstore_example.json',
+            'operationId' =&gt; 'showPetById',
+        ],
+        'times' =&gt; ['atLeast' =&gt; 1, 'atMost' =&gt; 1],
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
@@ -298,11 +755,102 @@ mockServerClient("localhost", 1080)
     );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import requests
+
+# verify by expectation ID is not supported in the Python client;
+# use the REST API directly
+requests.put("http://localhost:1080/mockserver/verify", json={
+    "expectationId": {
+        "id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"
+    }
+})</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+# verify by expectation ID is not supported in the Ruby client;
+# use the REST API directly
+uri = URI("http://localhost:1080/mockserver/verify")
+req = Net::HTTP::Put.new(uri, 'Content-Type' =&gt; 'application/json')
+req.body = JSON.generate({
+    "expectationId" =&gt; {
+        "id" =&gt; "31e4ca35-66c6-4645-afeb-6e66c4ca0559"
+    }
+})
+Net::HTTP.start(uri.host, uri.port) { |http| http.request(req) }</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    // verify by expectation ID is not supported in the Go client;
+    // use the REST API directly
+    body := []byte(`{"expectationId": {"id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"}}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/verify",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// verify by expectation ID is not supported in the .NET client;
+// use the REST API directly
+using var httpClient = new HttpClient();
+var json = @"{""expectationId"": {""id"": ""31e4ca35-66c6-4645-afeb-6e66c4ca0559""}}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/verify",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+// verify by expectation ID is not supported in the Rust client;
+// use the REST API directly
+let client = Client::new();
+client.put("http://localhost:1080/mockserver/verify")
+    .header("Content-Type", "application/json")
+    .body(r#"{"expectationId": {"id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"}}"#.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// verify by expectation ID is not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/verify');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode(['expectationId' =&gt; ['id' =&gt; '31e4ca35-66c6-4645-afeb-6e66c4ca0559']]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
-            "id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"
-        }'</code></pre>
+    "expectationId": {
+        "id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"
+    }
+}'</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
 </div>
@@ -324,7 +872,7 @@ mockServerClient("localhost", 1080)
   .verify(
     {
       'path': '/some/path'
-    }, 0, true)
+    }, 0, 0)
   .then(
     function () {
       console.log("request found zero times");
@@ -334,6 +882,70 @@ mockServerClient("localhost", 1080)
     }
   );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, VerificationTimes
+
+client = MockServerClient("localhost", 1080)
+client.verify(
+    HttpRequest(path="/some/path"),
+    VerificationTimes.exactly(0)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify(
+    MockServer::HttpRequest.new(path: '/some/path'),
+    times: MockServer::VerificationTimes.at_most(0)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.AtMost(0),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpRequest.Request().WithPath("/some/path"),
+    VerificationTimes.AtMostTimes(0)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify(
+    HttpRequest::new().path("/some/path"),
+    VerificationTimes::exactly(0),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/some/path'),
+    VerificationTimes::exactly(0)
+);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -371,12 +983,392 @@ mockServerClient("localhost", 1080)
   );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+client.verify_zero_interactions()</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify_zero_interactions</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+// verify that no requests were received
+err := client.Verify(
+    mockserver.Request(),
+    mockserver.AtMost(0),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+// verify that no requests were received
+client.Verify(
+    HttpRequest.Request(),
+    VerificationTimes.AtMostTimes(0)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+// verify that no requests were received
+client.verify(
+    HttpRequest::new(),
+    VerificationTimes::at_most(0),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+// verify that no requests were received
+$client-&gt;verify(
+    HttpRequest::request(),
+    VerificationTimes::exactly(0)
+);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
     "httpRequest": {},
     "times": {
         "atMost": 0
+    }
+}'</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+</div>
+
+<a id="verifying_responses" class="anchor" href="#verifying_responses">&nbsp;</a>
+
+<h3>Verifying Responses</h3>
+
+<p>MockServer can verify the <strong>responses</strong> recorded from proxied/forwarded upstream systems, or from served expectations. This is especially useful when MockServer acts as a <strong>proxy in front of a system under test (SUT)</strong> — you can assert not only that the correct requests were sent, but that the SUT returned the expected responses.</p>
+
+<p>When a <strong>response matcher</strong> is supplied in a verification, MockServer switches from counting received requests to counting <strong>recorded request-response pairs</strong> whose response matches. The response matcher can match by:</p>
+<ul>
+    <li><strong>Status code</strong> — exact match (e.g., <code>200</code>, <code>404</code>), or a <strong>status-code range / operator</strong> using the <code>statusCodeRange</code> field:
+        <ul>
+            <li><strong>Class range</strong>: <code>"2XX"</code> matches 200–299, <code>"5xx"</code> matches 500–599 (case-insensitive).</li>
+            <li><strong>Numeric operator</strong>: <code>"&gt;= 400"</code>, <code>"&gt; 200"</code>, <code>"&lt; 300"</code>, <code>"&lt;= 204"</code>, <code>"== 201"</code>.</li>
+            <li>When <code>statusCodeRange</code> is set it takes priority over an exact <code>statusCode</code>.</li>
+        </ul>
+    </li>
+    <li><strong>Reason phrase</strong> — string or regex match. When the <code>matchExactCase</code> configuration property is enabled, this comparison is case-sensitive (matching the request-side behaviour for path and method).</li>
+    <li><strong>Headers</strong> — same header matching as request matchers (subset match, multi-value, notted values supported).</li>
+    <li><strong>Cookies</strong> — structured cookie matching (subset match, extra cookies allowed, notted values supported), the same as request cookie matching.</li>
+    <li><strong>Body</strong> — the same body matchers available for request bodies: JSON, JSON Schema, JSONPath, XML, XPath, regex, sub-string, binary, multipart, etc. An <code>optional</code> body template matches a response with no body.</li>
+</ul>
+
+<p>If both a request matcher and a response matcher are supplied, <strong>both must match the same recorded exchange</strong>. <code>VerificationTimes</code> (<code>atLeast</code>, <code>atMost</code>, <code>exactly</code>) applies to the count of matching pairs, exactly like request verification.</p>
+
+<p><strong>REST API:</strong> <code>PUT /mockserver/verify</code> with body <code>{ "httpRequest": {...}, "httpResponse": {...}, "times": {...} }</code>. Returns HTTP 202 on pass, or HTTP 406 with a <code>"Response not found ..."</code> error message on failure. The request matcher is optional — omit it to match responses regardless of which request produced them.</p>
+
+<button id="button_verify_response" class="accordion title"><strong>Verify Responses Code Examples</strong></button>
+<div class="panel title">
+<button id="button_verify_response_with_request" class="accordion">verify response with request and response matcher</button>
+<div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .verify(
+        request()
+            .withPath("/some/path"),
+        response()
+            .withStatusCode(200)
+            .withBody(json("{\"status\": \"ok\"}")),
+        VerificationTimes.atLeast(1)
+    );</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+  .verify(
+    {
+      'path': '/some/path'
+    },
+    {
+      'statusCode': 200,
+      'body': JSON.stringify({status: 'ok'})
+    }, 1)
+  .then(
+    function () {
+      console.log("matching request-response pair found at least once");
+    },
+    function (error) {
+      console.log(error);
+    }
+  );</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, HttpResponse, VerificationTimes
+
+client = MockServerClient("localhost", 1080)
+client.verify(
+    HttpRequest(path="/some/path"),
+    HttpResponse(status_code=200, body='{"status": "ok"}'),
+    VerificationTimes.at_least(1)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify(
+    MockServer::HttpRequest.new(path: '/some/path'),
+    MockServer::HttpResponse.new(status_code: 200, body: '{"status": "ok"}'),
+    times: MockServer::VerificationTimes.at_least(1)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.Verify(
+    mockserver.Request().Path("/some/path"),
+    mockserver.Response().StatusCode(200).Body(`{"status": "ok"}`),
+    mockserver.AtLeast(1),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpRequest.Request().WithPath("/some/path"),
+    HttpResponse.Response().WithStatusCode(200).WithBody("{\"status\": \"ok\"}"),
+    VerificationTimes.AtLeastTimes(1)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify_with_response(
+    HttpRequest::new().path("/some/path"),
+    HttpResponse::new().status_code(200).body(r#"{"status": "ok"}"#),
+    VerificationTimes::at_least(1),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpRequest::request()-&gt;path('/some/path'),
+    HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"status": "ok"}'),
+    VerificationTimes::atLeast(1)
+);</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+            <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\": \"ok\"}"
+    },
+    "times": {
+        "atLeast": 1
+    }
+}'</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+<button id="button_verify_response_only" class="accordion">verify response without request matcher (response-only)</button>
+<div class="panel">
+    <p>When no request matcher is supplied, MockServer matches responses from <strong>all</strong> recorded request-response pairs. This is useful when you want to verify that a particular response was returned regardless of which request produced it.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .verify(
+        response()
+            .withStatusCode(200)
+            .withHeaders(
+                header("Content-Type", "application/json")
+            ),
+        VerificationTimes.atLeast(1)
+    );</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+  .verify(
+    null,
+    {
+      'statusCode': 200,
+      'headers': {
+        'Content-Type': ['application/json']
+      }
+    }, 1)
+  .then(
+    function () {
+      console.log("matching response found at least once");
+    },
+    function (error) {
+      console.log(error);
+    }
+  );</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpResponse, VerificationTimes
+
+client = MockServerClient("localhost", 1080)
+client.verify(
+    HttpResponse(status_code=200, headers={"Content-Type": "application/json"}),
+    VerificationTimes.at_least(1)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify(
+    MockServer::HttpResponse.new(
+        status_code: 200,
+        headers: { 'Content-Type' => 'application/json' }
+    ),
+    times: MockServer::VerificationTimes.at_least(1)
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.VerifyResponse(
+    mockserver.Response().StatusCode(200).
+        Header("Content-Type", "application/json"),
+    mockserver.AtLeast(1),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.Verify(
+    HttpResponse.Response().WithStatusCode(200)
+        .WithHeader("Content-Type", "application/json"),
+    VerificationTimes.AtLeastTimes(1)
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpResponse, VerificationTimes};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify_response(
+    HttpResponse::new().status_code(200)
+        .header("Content-Type", "application/json"),
+    VerificationTimes::at_least(1),
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpResponse;
+use MockServer\VerificationTimes;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verify(
+    HttpResponse::response()-&gt;statusCode(200)
+        -&gt;header('Content-Type', 'application/json'),
+    VerificationTimes::atLeast(1)
+);</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+            <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
+    "httpResponse": {
+        "statusCode": 200,
+        "headers": {
+            "Content-Type": ["application/json"]
+        }
+    },
+    "times": {
+        "atLeast": 1
+    }
+}'</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+<button id="button_verify_response_json_schema" class="accordion">verify response body matches JSON Schema</button>
+<div class="panel">
+    <p>Response body matchers support the same matching types as request body matchers, including JSON Schema. This example verifies that a response was recorded whose body conforms to a given JSON Schema.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .verify(
+        request()
+            .withPath("/api/users"),
+        response()
+            .withStatusCode(200)
+            .withBody(jsonSchema("{" +
+                "  \"type\": \"object\"," +
+                "  \"required\": [\"id\", \"name\"]," +
+                "  \"properties\": {" +
+                "    \"id\": { \"type\": \"integer\" }," +
+                "    \"name\": { \"type\": \"string\" }" +
+                "  }" +
+                "}")),
+        VerificationTimes.atLeast(1)
+    );</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+            <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verify" -d '{
+    "httpRequest": {
+        "path": "/api/users"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": {
+            "type": "JSON_SCHEMA",
+            "jsonSchema": "{\"type\":\"object\",\"required\":[\"id\",\"name\"],\"properties\":{\"id\":{\"type\":\"integer\"},\"name\":{\"type\":\"string\"}}}"
+        }
+    },
+    "times": {
+        "atLeast": 1
     }
 }'</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verify" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
@@ -430,6 +1422,75 @@ mockServerClient("localhost", 1080)
     }
   );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verifySequence" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest
+
+client = MockServerClient("localhost", 1080)
+client.verify_sequence(
+    HttpRequest(path="/some/path/one"),
+    HttpRequest(path="/some/path/two"),
+    HttpRequest(path="/some/path/three"),
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify_sequence(
+    MockServer::HttpRequest.new(path: '/some/path/one'),
+    MockServer::HttpRequest.new(path: '/some/path/two'),
+    MockServer::HttpRequest.new(path: '/some/path/three'),
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.VerifySequence(
+    mockserver.Request().Path("/some/path/one"),
+    mockserver.Request().Path("/some/path/two"),
+    mockserver.Request().Path("/some/path/three"),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.VerifySequence(
+    HttpRequest.Request().WithPath("/some/path/one"),
+    HttpRequest.Request().WithPath("/some/path/two"),
+    HttpRequest.Request().WithPath("/some/path/three")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify_sequence(vec![
+    HttpRequest::new().path("/some/path/one"),
+    HttpRequest::new().path("/some/path/two"),
+    HttpRequest::new().path("/some/path/three"),
+]).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verifySequence(
+    HttpRequest::request()-&gt;path('/some/path/one'),
+    HttpRequest::request()-&gt;path('/some/path/two'),
+    HttpRequest::request()-&gt;path('/some/path/three')
+);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -494,6 +1555,160 @@ mockServerClient("localhost", 1080)
     );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verifySequence" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import requests
+
+# OpenAPI matchers in verification sequences are not supported in the
+# Python client; use the REST API directly
+requests.put("http://localhost:1080/mockserver/verifySequence", json={
+    "httpRequests": [
+        {"path": "/status"},
+        {
+            "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+            "operationId": "listPets"
+        },
+        {
+            "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+            "operationId": "showPetById"
+        }
+    ]
+})</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+# OpenAPI matchers in verification sequences are not supported in the
+# Ruby client; use the REST API directly
+uri = URI("http://localhost:1080/mockserver/verifySequence")
+req = Net::HTTP::Put.new(uri, 'Content-Type' =&gt; 'application/json')
+req.body = JSON.generate({
+    "httpRequests" =&gt; [
+        { "path" =&gt; "/status" },
+        {
+            "specUrlOrPayload" =&gt; "org/mockserver/openapi/openapi_petstore_example.json",
+            "operationId" =&gt; "listPets"
+        },
+        {
+            "specUrlOrPayload" =&gt; "org/mockserver/openapi/openapi_petstore_example.json",
+            "operationId" =&gt; "showPetById"
+        }
+    ]
+})
+Net::HTTP.start(uri.host, uri.port) { |http| http.request(req) }</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    // OpenAPI matchers are not supported in the Go client;
+    // use the REST API directly
+    body := []byte(`{
+   "httpRequests":[
+      {"path": "/status"},
+      {
+         "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+         "operationId": "listPets"
+      },
+      {
+         "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+         "operationId": "showPetById"
+      }
+   ]
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/verifySequence",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// OpenAPI matchers are not supported in the .NET client;
+// use the REST API directly
+using var httpClient = new HttpClient();
+var json = @"{
+   ""httpRequests"":[
+      {""path"": ""/status""},
+      {
+         ""specUrlOrPayload"": ""org/mockserver/openapi/openapi_petstore_example.json"",
+         ""operationId"": ""listPets""
+      },
+      {
+         ""specUrlOrPayload"": ""org/mockserver/openapi/openapi_petstore_example.json"",
+         ""operationId"": ""showPetById""
+      }
+   ]
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/verifySequence",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+// OpenAPI matchers are not supported in the Rust client;
+// use the REST API directly
+let client = Client::new();
+let body = r#"{
+   "httpRequests":[
+      {"path": "/status"},
+      {
+         "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+         "operationId": "listPets"
+      },
+      {
+         "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json",
+         "operationId": "showPetById"
+      }
+   ]
+}"#;
+client.put("http://localhost:1080/mockserver/verifySequence")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// OpenAPI matchers in verification sequences are not supported in the
+// PHP client; use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/verifySequence');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'httpRequests' =&gt; [
+            ['path' =&gt; '/status'],
+            [
+                'specUrlOrPayload' =&gt; 'org/mockserver/openapi/openapi_petstore_example.json',
+                'operationId' =&gt; 'listPets',
+            ],
+            [
+                'specUrlOrPayload' =&gt; 'org/mockserver/openapi/openapi_petstore_example.json',
+                'operationId' =&gt; 'showPetById',
+            ],
+        ],
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verifySequence" -d '{
@@ -550,10 +1765,128 @@ mockServerClient("localhost", 1080)
     );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verifySequence" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import requests
+
+# verify sequence by expectation IDs is not supported in the Python
+# client; use the REST API directly
+requests.put("http://localhost:1080/mockserver/verifySequence", json={
+    "expectationIds": [
+        {"id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"},
+        {"id": "66c6ca35-ca35-66f5-8feb-5e6ac7ca0559"},
+        {"id": "ca3531e4-23c8-ff45-88f5-4ca0c7ca0559"}
+    ]
+})</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'json'
+
+# verify sequence by expectation IDs is not supported in the Ruby
+# client; use the REST API directly
+uri = URI("http://localhost:1080/mockserver/verifySequence")
+req = Net::HTTP::Put.new(uri, 'Content-Type' =&gt; 'application/json')
+req.body = JSON.generate({
+    "expectationIds" =&gt; [
+        { "id" =&gt; "31e4ca35-66c6-4645-afeb-6e66c4ca0559" },
+        { "id" =&gt; "66c6ca35-ca35-66f5-8feb-5e6ac7ca0559" },
+        { "id" =&gt; "ca3531e4-23c8-ff45-88f5-4ca0c7ca0559" }
+    ]
+})
+Net::HTTP.start(uri.host, uri.port) { |http| http.request(req) }</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    // verify sequence by expectation IDs is not supported in the Go
+    // client; use the REST API directly
+    body := []byte(`{
+    "expectationIds": [
+        {"id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"},
+        {"id": "66c6ca35-ca35-66f5-8feb-5e6ac7ca0559"},
+        {"id": "ca3531e4-23c8-ff45-88f5-4ca0c7ca0559"}
+    ]
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/verifySequence",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// verify sequence by expectation IDs is not supported in the .NET
+// client; use the REST API directly
+using var httpClient = new HttpClient();
+var json = @"{
+    ""expectationIds"": [
+        {""id"": ""31e4ca35-66c6-4645-afeb-6e66c4ca0559""},
+        {""id"": ""66c6ca35-ca35-66f5-8feb-5e6ac7ca0559""},
+        {""id"": ""ca3531e4-23c8-ff45-88f5-4ca0c7ca0559""}
+    ]
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/verifySequence",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+// verify sequence by expectation IDs is not supported in the Rust
+// client; use the REST API directly
+let client = Client::new();
+let body = r#"{
+    "expectationIds": [
+        {"id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"},
+        {"id": "66c6ca35-ca35-66f5-8feb-5e6ac7ca0559"},
+        {"id": "ca3531e4-23c8-ff45-88f5-4ca0c7ca0559"}
+    ]
+}"#;
+client.put("http://localhost:1080/mockserver/verifySequence")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// verify sequence by expectation IDs is not supported in the PHP
+// client; use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/verifySequence');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([
+        'expectationIds' =&gt; [
+            ['id' =&gt; '31e4ca35-66c6-4645-afeb-6e66c4ca0559'],
+            ['id' =&gt; '66c6ca35-ca35-66f5-8feb-5e6ac7ca0559'],
+            ['id' =&gt; 'ca3531e4-23c8-ff45-88f5-4ca0c7ca0559'],
+        ],
+    ]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
             <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verifySequence" -d '{
-    "httpRequests": [
+    "expectationIds": [
         {
             "id": "31e4ca35-66c6-4645-afeb-6e66c4ca0559"
         },
@@ -562,6 +1895,175 @@ mockServerClient("localhost", 1080)
         },
         {
             "id": "ca3531e4-23c8-ff45-88f5-4ca0c7ca0559"
+        }
+    ]
+}'</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verifySequence" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+</div>
+<button id="button_verify_sequence_with_responses" class="accordion">verify request and response sequence received</button>
+<div class="panel">
+    <p>You can verify that a sequence of request-response <strong>pairs</strong> was recorded in order. Each step in the sequence can include a request matcher, a response matcher, or both. The <code>httpRequests</code> and <code>httpResponses</code> arrays are matched by index — <code>httpRequests[0]</code> is paired with <code>httpResponses[0]</code>, and so on. Either array element can be omitted (or null) to act as a wildcard for that side of the pair.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+            <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
+    .verify(
+        verificationSequence()
+            .withRequests(
+                request().withPath("/api/login"),
+                request().withPath("/api/data")
+            )
+            .withResponses(
+                response().withStatusCode(200),
+                response().withStatusCode(200)
+                    .withBody(json("{\"result\": \"success\"}"))
+            )
+    );</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+            <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+    .verifySequence(
+        {
+            httpRequests: [
+                { 'path': '/api/login' },
+                { 'path': '/api/data' }
+            ],
+            httpResponses: [
+                { 'statusCode': 200 },
+                { 'statusCode': 200, 'body': JSON.stringify({result: 'success'}) }
+            ]
+        }
+    )
+    .then(
+        function () {
+            console.log("request-response sequence found in the order specified");
+        },
+        function (error) {
+            console.log(error);
+        }
+    );</code></pre>
+        <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/verify/put_verifySequence" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, HttpResponse
+
+client = MockServerClient("localhost", 1080)
+client.verify_sequence(
+    requests=[
+        HttpRequest(path="/api/login"),
+        HttpRequest(path="/api/data"),
+    ],
+    responses=[
+        HttpResponse(status_code=200),
+        HttpResponse(status_code=200, body='{"result": "success"}'),
+    ]
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.verify_sequence(
+    requests: [
+        MockServer::HttpRequest.new(path: '/api/login'),
+        MockServer::HttpRequest.new(path: '/api/data'),
+    ],
+    responses: [
+        MockServer::HttpResponse.new(status_code: 200),
+        MockServer::HttpResponse.new(status_code: 200, body: '{"result": "success"}'),
+    ]
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+err := client.VerifySequenceWithResponses(
+    []mockserver.RequestDefinition{
+        mockserver.Request().Path("/api/login"),
+        mockserver.Request().Path("/api/data"),
+    },
+    []mockserver.HttpResponse{
+        mockserver.Response().StatusCode(200),
+        mockserver.Response().StatusCode(200).Body(`{"result": "success"}`),
+    },
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.VerifySequence(
+    new[] {
+        HttpRequest.Request().WithPath("/api/login"),
+        HttpRequest.Request().WithPath("/api/data")
+    },
+    new[] {
+        HttpResponse.Response().WithStatusCode(200),
+        HttpResponse.Response().WithStatusCode(200).WithBody("{\"result\": \"success\"}")
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.verify_sequence_with_responses(
+    vec![
+        HttpRequest::new().path("/api/login"),
+        HttpRequest::new().path("/api/data"),
+    ],
+    vec![
+        HttpResponse::new().status_code(200),
+        HttpResponse::new().status_code(200).body(r#"{"result": "success"}"#),
+    ],
+).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;verifySequence(
+    [
+        HttpRequest::request()-&gt;path('/api/login'),
+        HttpRequest::request()-&gt;path('/api/data'),
+    ],
+    [
+        HttpResponse::response()-&gt;statusCode(200),
+        HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"result": "success"}'),
+    ]
+);</code></pre>{% endraw %}
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+            <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/verifySequence" -d '{
+    "httpRequests": [
+        {
+            "path": "/api/login"
+        },
+        {
+            "path": "/api/data"
+        }
+    ],
+    "httpResponses": [
+        {
+            "statusCode": 200
+        },
+        {
+            "statusCode": 200,
+            "body": "{\"result\": \"success\"}"
         }
     ]
 }'</code></pre>

@@ -73,3 +73,6 @@ npm-debug.log
 tmp
 custom_tmp
 .tscache
+/test-results/.last-run.json
+# transient auth file written by the client-snapshot CI step
+.npmrc.snapshot

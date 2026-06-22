@@ -468,4 +468,116 @@ public class PactVerifierTest {
         PactVerifier.PactVerificationResult result = verifier.verify(pactJson, requestMatchers);
         assertTrue("should verify against first response in sequence", result.isVerified());
     }
+
+    // ---- provider states ----
+
+    @Test
+    public void verifiesStateGatedExpectationWhenProviderStateActivated() {
+        // a state-gated expectation (as PactImporter would produce) — only serviceable once the
+        // provider state is active; the verifier must activate it before matching
+        addExpectation(new Expectation(
+            request().withMethod("GET").withPath("/users/1")
+        ).withId("getUser1")
+            .withScenarioName(PactProviderStates.SCENARIO_NAME)
+            .withScenarioState("a user with id 1 exists")
+            .thenRespond(response().withStatusCode(200).withBody(json("{\"id\":1}"))));
+
+        String pactJson = "{\n"
+            + "  \"interactions\": [{\n"
+            + "    \"description\": \"get user 1\",\n"
+            + "    \"providerStates\": [{\"name\": \"a user with id 1 exists\"}],\n"
+            + "    \"request\": {\"method\": \"GET\", \"path\": \"/users/1\"},\n"
+            + "    \"response\": {\"status\": 200, \"body\": {\"id\": 1}}\n"
+            + "  }]\n"
+            + "}";
+
+        PactVerifier.PactVerificationResult result = verifier.verify(pactJson, requestMatchers);
+
+        assertTrue("state-gated interaction should verify when its provider state is honoured", result.isVerified());
+    }
+
+    @Test
+    public void failsStateGatedExpectationWhenInteractionProvidesWrongState() {
+        addExpectation(new Expectation(
+            request().withMethod("GET").withPath("/users/1")
+        ).withId("getUser1")
+            .withScenarioName(PactProviderStates.SCENARIO_NAME)
+            .withScenarioState("a user with id 1 exists")
+            .thenRespond(response().withStatusCode(200)));
+
+        // interaction declares a DIFFERENT provider state, so the gated expectation must not satisfy it
+        String pactJson = "{\n"
+            + "  \"interactions\": [{\n"
+            + "    \"description\": \"get user 1\",\n"
+            + "    \"providerStates\": [{\"name\": \"no users exist\"}],\n"
+            + "    \"request\": {\"method\": \"GET\", \"path\": \"/users/1\"},\n"
+            + "    \"response\": {\"status\": 200}\n"
+            + "  }]\n"
+            + "}";
+
+        PactVerifier.PactVerificationResult result = verifier.verify(pactJson, requestMatchers);
+
+        assertFalse("wrong provider state should not satisfy a state-gated expectation", result.isVerified());
+        assertThat(result.getInteractions().get(0).getReason(), containsString("provider state"));
+        assertThat(result.getInteractions().get(0).getReason(), containsString("no users exist"));
+    }
+
+    @Test
+    public void honoursDistinctProviderStatesAcrossInteractions() {
+        // two expectations on the same request path, each gated on a different provider state,
+        // returning different bodies — verification must pick the right one per interaction
+        addExpectation(new Expectation(
+            request().withMethod("GET").withPath("/account")
+        ).withId("activeAccount")
+            .withScenarioName(PactProviderStates.SCENARIO_NAME)
+            .withScenarioState("account is active")
+            .thenRespond(response().withStatusCode(200).withBody(json("{\"status\":\"active\"}"))));
+        addExpectation(new Expectation(
+            request().withMethod("GET").withPath("/account")
+        ).withId("closedAccount")
+            .withScenarioName(PactProviderStates.SCENARIO_NAME)
+            .withScenarioState("account is closed")
+            .thenRespond(response().withStatusCode(200).withBody(json("{\"status\":\"closed\"}"))));
+
+        String pactJson = "{\n"
+            + "  \"interactions\": [\n"
+            + "    {\n"
+            + "      \"description\": \"active account\",\n"
+            + "      \"providerStates\": [{\"name\": \"account is active\"}],\n"
+            + "      \"request\": {\"method\": \"GET\", \"path\": \"/account\"},\n"
+            + "      \"response\": {\"status\": 200, \"body\": {\"status\": \"active\"}}\n"
+            + "    },\n"
+            + "    {\n"
+            + "      \"description\": \"closed account\",\n"
+            + "      \"providerStates\": [{\"name\": \"account is closed\"}],\n"
+            + "      \"request\": {\"method\": \"GET\", \"path\": \"/account\"},\n"
+            + "      \"response\": {\"status\": 200, \"body\": {\"status\": \"closed\"}}\n"
+            + "    }\n"
+            + "  ]\n"
+            + "}";
+
+        PactVerifier.PactVerificationResult result = verifier.verify(pactJson, requestMatchers);
+
+        assertTrue("each interaction should verify against the expectation for its provider state", result.isVerified());
+        assertThat(result.getInteractions(), hasSize(2));
+    }
+
+    @Test
+    public void statelessInteractionStillVerifiesAgainstUngatedExpectation() {
+        // an ungated expectation must keep verifying regardless of provider-state plumbing
+        addExpectation(new Expectation(
+            request().withMethod("GET").withPath("/health")
+        ).thenRespond(response().withStatusCode(200)));
+
+        String pactJson = "{\n"
+            + "  \"interactions\": [{\n"
+            + "    \"description\": \"health check\",\n"
+            + "    \"request\": {\"method\": \"GET\", \"path\": \"/health\"},\n"
+            + "    \"response\": {\"status\": 200}\n"
+            + "  }]\n"
+            + "}";
+
+        PactVerifier.PactVerificationResult result = verifier.verify(pactJson, requestMatchers);
+        assertTrue("stateless interaction should still verify", result.isVerified());
+    }
 }

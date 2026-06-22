@@ -881,6 +881,43 @@ public class PathParametersDecoderTest {
     }
 
     @Test
+    public void shouldRetrievePathParametersWithRegexMetaCharactersInName() {
+        // a parameter name containing regex metacharacters must be treated literally
+        // (via Pattern.quote) rather than being interpreted as a regex when building
+        // the value-extraction pattern
+        shouldRetrieveParameters(
+            "/users/{;a.b*}",
+            new Parameter[]{
+                param("a.b", ".*")
+            },
+            "/users/;a.b=5",
+            Collections.singletonList(
+                param("a.b", "5")
+            )
+        );
+        shouldRetrieveParameters(
+            "/users/{;a+b*}",
+            new Parameter[]{
+                param("a+b", ".*")
+            },
+            "/users/;a+b=5",
+            Collections.singletonList(
+                param("a+b", "5")
+            )
+        );
+        shouldRetrieveParameters(
+            "/users/{;a(b)*}",
+            new Parameter[]{
+                param("a(b)", ".*")
+            },
+            "/users/;a(b)=5",
+            Collections.singletonList(
+                param("a(b)", "5")
+            )
+        );
+    }
+
+    @Test
     public void shouldNotAlterRequestPathParametersDuringExtraction() {
         HttpRequest originalRequest = request()
             .withPath("/path/{pathId}/subPath")

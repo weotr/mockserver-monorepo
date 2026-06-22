@@ -300,7 +300,12 @@ declarations are needed -- they resolve automatically.
   shared with the HTTP/2 path via `GrpcStreamMessageEncoder`, and `HttpActionHandler`
   routes the `GRPC_STREAM_RESPONSE` action to the transport-specific
   `GrpcStreamResponseWriter` (implemented by `Http3GrpcResponseWriter`) when the request
-  arrived over HTTP/3.
+  arrived over HTTP/3. When a matching `RESPONSE_STREAM` breakpoint is registered,
+  each outbound DATA frame is parked in `StreamFrameBreakpointRegistry`
+  (stream-id suffix `-h3-grpc-stream`, `Direction.OUTBOUND`) before writing,
+  supporting per-frame continue/modify/drop/inject/close decisions. Frame bytes are `byte[]` from `GrpcStreamMessageEncoder` --
+  no ByteBuf is retained. Decision callbacks run on the QUIC stream's event loop.
+  Held frames are evicted on stream close.
 - **gRPC bidi-streaming over HTTP/3**: a `grpcBidiResponse` expectation drives true
   bidirectional streaming on a single (full-duplex) QUIC stream. Enabled by
   `grpcBidiStreamingEnabled` (same flag as HTTP/2). At HEADERS time the stream is routed
@@ -310,6 +315,25 @@ declarations are needed -- they resolve automatically.
   HEADERS plus any eager messages, then for each inbound request message evaluates the
   `GrpcBidiRule`s (shared `GrpcBidiRuleMatcher`) and emits the first match's responses,
   writing the trailing HEADERS once the client half-closes and all responses have drained.
+  When a matching `INBOUND_STREAM` breakpoint is registered for the stream (resolved once at
+  HEADERS time, default-off), each inbound (client→server) gRPC DATA frame is parked in
+  `StreamFrameBreakpointRegistry` / `StreamFrameCallbackDispatcher`
+  (stream-id `grpc-bidi-inbound-<path>-h3-<uuid>`, `Direction.INBOUND`, `INBOUND_STREAM`
+  phase) before it is decoded, supporting per-frame continue/modify/drop/inject/close — the
+  HTTP/3 analogue of the inbound interception in the HTTP/2 `GrpcBidiStreamHandler`. Because
+  the driver copies each frame to a `byte[]` and releases the `Http3DataFrame` before calling
+  `onData`, no `ByteBuf` is retained and the QUIC flow-control window is never pinned by a held
+  frame; per-frame ordering is preserved by dispatching one frame at a time and buffering any
+  frames the client sends while one is held (bounded by `maxRequestBodySize`). Held frames are
+  evicted on stream close. (Outbound bidi response frames are not breakpointed, matching the
+  HTTP/2 bidi handler.)
+- **Stream-level error injection (HttpError streamError)**: an `httpError` action carrying a
+  `streamError` resets the matched QUIC request stream with the given HTTP/3 error code (RFC 9114
+  §8.1, e.g. `H3_REQUEST_CANCELLED`=0x10c) instead of returning a response. Reached via the
+  transport-neutral `StreamErrorWriter` seam: `Http3ResponseWriter.writeStreamError(code)` calls
+  `QuicStreamChannel.shutdownOutput(code)`, sending a QUIC `RESET_STREAM` for just that stream; other
+  streams on the connection are unaffected and no ByteBuf is allocated. (On HTTP/2 the same action
+  sends `RST_STREAM`; on HTTP/1.1 it falls back to dropping the connection.)
 - **Alt-Svc auto-discovery (RFC 7838)**: when `http3Port > 0`, responses served over
   the TCP (HTTP/1.1 and HTTP/2) paths include an `Alt-Svc: h3=":<port>"; ma=<maxAge>`
   header so HTTP/3-capable clients automatically upgrade to QUIC. The max-age is

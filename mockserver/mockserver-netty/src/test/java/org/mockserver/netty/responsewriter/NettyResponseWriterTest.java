@@ -1,6 +1,11 @@
 package org.mockserver.netty.responsewriter;
 
 import io.netty.channel.*;
+import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.util.ReferenceCountUtil;
+import io.netty.util.ReferenceCounted;
 import io.netty.util.concurrent.GenericFutureListener;
 import org.junit.Before;
 import org.junit.Test;
@@ -258,6 +263,61 @@ public class NettyResponseWriterTest {
                         .withCloseSocket(true)
                 )
         );
+    }
+
+    @Test
+    public void shouldEmitTrailersOnStreamingResponseOverHttp1() throws Exception {
+        // given -- a streaming-body response that also carries trailers (INC-02): the streaming
+        // path used to flush LastHttpContent.EMPTY_LAST_CONTENT, silently dropping trailers.
+        EmbeddedChannel channel = new EmbeddedChannel(new ChannelOutboundHandlerAdapter());
+        try {
+            org.mockserver.model.StreamingBody streamingBody = new org.mockserver.model.StreamingBody(1024);
+            streamingBody.setEventLoop(channel.eventLoop());
+
+            org.mockserver.model.HttpResponse response = response()
+                .withStatusCode(200)
+                .withStreamingBody(streamingBody)
+                .withTrailer("x-checksum", "abc123")
+                .withTrailer("x-signature", "deadbeef");
+
+            // subscribe via the writer (runs on the channel event loop)
+            channel.eventLoop().execute(() ->
+                new NettyResponseWriter(configuration(), new MockServerLogger(), channel.pipeline().firstContext(), scheduler)
+                    .sendResponse(request("/stream"), response)
+            );
+            channel.runPendingTasks();
+
+            // feed one chunk and complete the stream, draining the event loop after each step
+            channel.eventLoop().execute(() -> streamingBody.addChunk(io.netty.buffer.Unpooled.copiedBuffer("chunk-1", java.nio.charset.StandardCharsets.UTF_8)));
+            channel.runPendingTasks();
+            channel.eventLoop().execute(streamingBody::complete);
+            channel.runPendingTasks();
+
+            // then -- the head announces the trailers and the terminating LastHttpContent carries them
+            io.netty.handler.codec.http.HttpResponse head = channel.readOutbound();
+            assertThat(head.headers().get(HttpHeaderNames.TRANSFER_ENCODING), is("chunked"));
+            String trailerHeader = head.headers().get(HttpHeaderNames.TRAILER);
+            assertThat(trailerHeader.toLowerCase().contains("x-checksum"), is(true));
+            assertThat(trailerHeader.toLowerCase().contains("x-signature"), is(true));
+
+            // drain the remaining outbound messages; the last LastHttpContent must carry the trailers
+            LastHttpContent lastContent = null;
+            Object outbound;
+            while ((outbound = channel.readOutbound()) != null) {
+                if (outbound instanceof LastHttpContent) {
+                    lastContent = (LastHttpContent) outbound;
+                }
+                ReferenceCountUtil.release(outbound);
+            }
+            assertThat("a LastHttpContent must be written at stream completion", lastContent != null, is(true));
+            assertThat(lastContent.trailingHeaders().get("x-checksum"), is("abc123"));
+            assertThat(lastContent.trailingHeaders().get("x-signature"), is("deadbeef"));
+            if (head instanceof ReferenceCounted) {
+                ((ReferenceCounted) head).release();
+            }
+        } finally {
+            channel.finishAndReleaseAll();
+        }
     }
 
     @Test

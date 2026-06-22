@@ -45,13 +45,13 @@ public class HttpOverrideForwardedRequestActionHandler extends HttpForwardAction
                 if (result == null) {
                     result = httpOverrideForwardedRequest.getResponseOverride();
                 } else {
-                    result = result.update(httpOverrideForwardedRequest.getResponseOverride(), httpOverrideForwardedRequest.getResponseModifier());
+                    result = result.update(httpOverrideForwardedRequest.getResponseOverride(), httpOverrideForwardedRequest.getResponseModifier(), request);
                 }
                 if (responseTemplate != null && result != null) {
                     TemplateEngine templateEngine = resolveTemplateEngine(responseTemplate);
                     if (templateEngine != null) {
                         HttpResponse templatedResponse = templateEngine.executeTemplate(
-                            responseTemplate.getTemplate(), request, result, HttpResponseDTO.class
+                            responseTemplate.getTemplateContent(), request, result, HttpResponseDTO.class
                         );
                         if (templatedResponse != null) {
                             result = templatedResponse;

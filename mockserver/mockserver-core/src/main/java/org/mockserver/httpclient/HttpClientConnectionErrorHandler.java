@@ -29,7 +29,7 @@ public class HttpClientConnectionErrorHandler extends ChannelDuplexHandler {
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
         CompletableFuture<? extends Message> responseFuture = ctx.channel().attr(RESPONSE_FUTURE).get();
-        if (!responseFuture.isDone()) {
+        if (responseFuture != null && !responseFuture.isDone()) {
             responseFuture.completeExceptionally(cause);
         }
         super.exceptionCaught(ctx, cause);

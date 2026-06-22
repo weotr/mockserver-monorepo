@@ -109,4 +109,11 @@ public final class Llm {
     public static LlmConversationBuilder conversation() {
         return LlmConversationBuilder.conversation();
     }
+
+    /**
+     * Creates a new LlmFailoverBuilder for scripting provider failover/retry scenarios.
+     */
+    public static LlmFailoverBuilder llmFailover() {
+        return LlmFailoverBuilder.llmFailover();
+    }
 }

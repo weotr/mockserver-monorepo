@@ -2,10 +2,7 @@ package org.mockserver.client;
 
 import org.mockserver.llm.IsolationSource;
 import org.mockserver.llm.LlmScenarioNames;
-import org.mockserver.llm.ParsedMessage;
-import org.mockserver.matchers.LlmConversationMatcher;
 import org.mockserver.mock.Expectation;
-import org.mockserver.model.Completion;
 import org.mockserver.model.ConversationPredicates;
 import org.mockserver.model.HttpLlmResponse;
 import org.mockserver.model.Provider;
@@ -13,7 +10,6 @@ import org.mockserver.model.Provider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 import static org.mockserver.model.HttpLlmResponse.llmResponse;
 import static org.mockserver.model.HttpRequest.request;

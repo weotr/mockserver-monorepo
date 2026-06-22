@@ -168,14 +168,11 @@ echo "--- :docker: Building and pushing mockserver/mockserver:snapshot-graaljs (
 cp docker/local/mockserver-netty-jar-with-dependencies.jar docker/graaljs/mockserver-netty-jar-with-dependencies.jar
 # Stage a CA bundle into the graaljs build context. The alpine stages COPY it
 # in and (when non-empty) trust it before `apk add`, so builds behind a
-# corporate TLS-inspecting proxy succeed. Empty file in CI is a no-op.
-LOCAL_CA="${LOCAL_CA_BUNDLE:-${NODE_EXTRA_CA_CERTS:-${AWS_CA_BUNDLE:-}}}"
-if [[ -n "$LOCAL_CA" && -f "$LOCAL_CA" ]]; then
-  echo "Staging local CA into docker/graaljs build context ($LOCAL_CA)"
-  cp "$LOCAL_CA" docker/graaljs/ca-bundle.pem
-else
-  : > docker/graaljs/ca-bundle.pem
-fi
+# corporate TLS-inspecting proxy succeed. Empty file in CI is a no-op. Populated
+# from MOCKSERVER_LOCAL_CA_BUNDLE (or the NODE_EXTRA_CA_CERTS / AWS_CA_BUNDLE
+# fallbacks). Remove any stale bundle first so a fresh one is always written.
+rm -f docker/graaljs/ca-bundle.pem
+docker/ensure-ca-bundle.sh docker/graaljs >/dev/null
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --push \

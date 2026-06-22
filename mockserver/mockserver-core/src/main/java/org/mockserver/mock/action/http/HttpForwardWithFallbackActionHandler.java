@@ -11,7 +11,6 @@ import org.slf4j.event.Level;
 import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Handles forward-with-fallback actions: forwards the request to the upstream

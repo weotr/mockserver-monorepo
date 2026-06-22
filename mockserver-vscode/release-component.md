@@ -33,5 +33,5 @@ npx ovsx publish -p "$OVSX_PAT"
 
 ```bash
 # Verify VS Code Marketplace publication
-curl -sf "https://marketplace.visualstudio.com/items?itemName=mock-server.mockserver" | grep -q "${RELEASE_VERSION}"
+curl -sf "https://marketplace.visualstudio.com/items?itemName=mockserver.mockserver" | grep -q "${RELEASE_VERSION}"
 ```

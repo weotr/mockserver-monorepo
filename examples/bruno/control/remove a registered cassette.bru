@@ -1,0 +1,33 @@
+meta {
+  name: remove a registered cassette
+  type: http
+  seq: 15
+}
+
+delete {
+  url: {{baseUrl}}/mockserver/cassettes
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+params:query {
+  ~path: 
+}
+
+body:json {
+  {
+    "path": "/api/users"
+  }
+}
+
+docs {
+  removes a cassette by path, supplied either as the 'path' query parameter or a JSON body with a 'path' field
+  
+  path of the cassette to remove (alternative to the query parameter)
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -97,34 +97,71 @@ public class FilesystemBlobStore implements BlobStore {
                 }
             }
 
-            // Ensure the file exists (matching ExpectationFileSystemPersistence pattern)
+            // Atomic write: write the full payload to a temporary file in the
+            // SAME directory, then atomically move it into place. This means a
+            // concurrent reader (e.g. the FileWatcher poll, or BlobStore.get())
+            // never observes a truncated/partial file mid-write — it sees either
+            // the previous complete file or the new complete file. The previous
+            // implementation opened a FileOutputStream directly on the target,
+            // which truncates the file on open BEFORE the FileLock is acquired
+            // and the data written, exposing an empty-file window to readers
+            // that hold no lock (Files.readAllBytes takes no FileLock).
+            Path tempPath;
             try {
-                Files.createFile(filePath);
-            } catch (FileAlreadyExistsException ignore) {
-                // expected
+                // Place the temp file in the SAME directory as the target so the
+                // subsequent move is a same-filesystem rename (a prerequisite for
+                // ATOMIC_MOVE). A null parent only arises for a filesystem-root
+                // key, which is never a valid blob key; fall back to the base dir.
+                Path tempDir = filePath.getParent() != null ? filePath.getParent() : baseDir;
+                tempPath = Files.createTempFile(tempDir, filePath.getFileName().toString(), ".tmp");
             } catch (IOException e) {
-                logError("exception creating blob file " + filePath, e);
-                throw new UncheckedIOException("failed to create blob file: " + key, e);
+                logError("exception creating temporary blob file for " + filePath, e);
+                throw new UncheckedIOException("failed to create temporary blob file: " + key, e);
             }
 
-            // Write data using FileOutputStream + FileChannel + FileLock
-            // (identical pattern to ExpectationFileSystemPersistence.updated())
-            try (
-                FileOutputStream fileOutputStream = new FileOutputStream(filePath.toFile());
-                FileChannel fileChannel = fileOutputStream.getChannel();
-                FileLock fileLock = fileChannel.lock()
-            ) {
-                if (fileLock != null) {
-                    ByteBuffer buffer = ByteBuffer.wrap(data);
-                    buffer.put(data);
-                    buffer.rewind();
-                    while (buffer.hasRemaining()) {
-                        fileChannel.write(buffer);
+            try {
+                // Write the full payload to the temp file, holding a FileLock for
+                // the duration to serialise against other writers/processes.
+                try (
+                    FileOutputStream fileOutputStream = new FileOutputStream(tempPath.toFile());
+                    FileChannel fileChannel = fileOutputStream.getChannel();
+                    FileLock fileLock = fileChannel.lock()
+                ) {
+                    if (fileLock != null) {
+                        ByteBuffer buffer = ByteBuffer.wrap(data);
+                        while (buffer.hasRemaining()) {
+                            fileChannel.write(buffer);
+                        }
+                        fileChannel.force(true);
                     }
+                } catch (IOException e) {
+                    logError("exception while writing blob to " + tempPath, e);
+                    throw new UncheckedIOException("failed to write blob: " + key, e);
                 }
-            } catch (IOException e) {
-                logError("exception while writing blob to " + filePath, e);
-                throw new UncheckedIOException("failed to write blob: " + key, e);
+
+                // Atomically move the completed temp file into place. Fall back to
+                // a plain replace if the filesystem does not support atomic moves.
+                try {
+                    Files.move(tempPath, filePath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException atomicNotSupported) {
+                    try {
+                        Files.move(tempPath, filePath, StandardCopyOption.REPLACE_EXISTING);
+                    } catch (IOException e) {
+                        logError("exception while moving blob into place at " + filePath, e);
+                        throw new UncheckedIOException("failed to write blob: " + key, e);
+                    }
+                } catch (IOException e) {
+                    logError("exception while moving blob into place at " + filePath, e);
+                    throw new UncheckedIOException("failed to write blob: " + key, e);
+                }
+            } finally {
+                // If the move succeeded the temp file is gone; this is a no-op.
+                // If it failed we clean up the orphaned temp file.
+                try {
+                    Files.deleteIfExists(tempPath);
+                } catch (IOException ignore) {
+                    // best-effort cleanup
+                }
             }
 
             // Write metadata file if metadata is non-empty

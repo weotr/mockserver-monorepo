@@ -140,11 +140,63 @@
         },
         "type": {
           "enum": [
+            "MULTIPART"
+          ]
+        },
+        "fields": {
+          "$ref": "#/definitions/keyToMultiValue"
+        },
+        "filenames": {
+          "$ref": "#/definitions/keyToMultiValue"
+        },
+        "partContentTypes": {
+          "$ref": "#/definitions/keyToMultiValue"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "not": {
+          "type": "boolean"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "type": {
+          "enum": [
             "REGEX"
           ]
         },
         "regex": {
           "type": "string"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "not": {
+          "type": "boolean"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "type": {
+          "enum": [
+            "FUZZY"
+          ]
+        },
+        "fuzzy": {
+          "type": "string"
+        },
+        "threshold": {
+          "type": "number"
+        },
+        "ignoreCase": {
+          "type": "boolean"
         }
       }
     },
@@ -286,6 +338,22 @@
         },
         "variablesSchema": {
           "type": "string"
+        },
+        "selectionSetMatchType": {
+          "enum": [
+            "NORMALISED_STRING",
+            "AST_EXACT",
+            "AST_SUBSET"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schema": {
+          "type": "string"
         }
       },
       "required": [
@@ -310,6 +378,12 @@
         },
         "filePath": {
           "type": "string"
+        },
+        "templateType": {
+          "enum": [
+            "VELOCITY",
+            "MUSTACHE"
+          ]
         },
         "contentType": {
           "type": "string"

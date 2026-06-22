@@ -3,8 +3,11 @@
 src/**
 **/*.ts
 !out/**
-node_modules/**
 .gitignore
 tsconfig.json
 **/*.map
 .eslintrc*
+# node_modules is intentionally NOT globally ignored: vsce bundles production
+# dependencies (e.g. jsonc-parser) and prunes devDependencies, so runtime deps
+# ship in the .vsix. A blanket node_modules/** ignore would drop jsonc-parser
+# and the extension would fail with "Cannot find module" at runtime.

@@ -9,6 +9,7 @@ import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.validator.jsonschema.JsonSchemaHttpRequestValidator.jsonSchemaHttpRequestValidator;
+import static org.mockserver.validator.jsonschema.JsonSchemaVerificationValidator.jsonSchemaVerificationValidator;
 
 /**
  * @author jamesdbloom
@@ -16,6 +17,7 @@ import static org.mockserver.validator.jsonschema.JsonSchemaHttpRequestValidator
 public class JsonSchemaVerificationValidatorTest {
 
     private final JsonSchemaValidator jsonSchemaValidator = jsonSchemaHttpRequestValidator(new MockServerLogger());
+    private final JsonSchemaValidator verificationSchemaValidator = jsonSchemaVerificationValidator(new MockServerLogger());
 
     @Test
     public void shouldValidateValidCompleteRequestWithStringBody() {
@@ -122,6 +124,45 @@ public class JsonSchemaVerificationValidatorTest {
         assertThat(result, containsString("$.headers: should be valid to one and only one schema, but 0 are valid"));
         assertThat(result, containsString("$.headers[0]: string found, object expected"));
         assertThat(result, containsString("$.headers[1]: string found, object expected"));
+    }
+
+    // --- Verification schema with httpResponse ---
+
+    @Test
+    public void shouldValidateVerificationWithHttpRequestAndHttpResponse() {
+        // when
+        assertThat(verificationSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"httpRequest\" : {" + NEW_LINE +
+            "      \"path\" : \"/some/path\"" + NEW_LINE +
+            "    }," + NEW_LINE +
+            "    \"httpResponse\" : {" + NEW_LINE +
+            "      \"statusCode\" : 200" + NEW_LINE +
+            "    }," + NEW_LINE +
+            "    \"times\" : {" + NEW_LINE +
+            "      \"atLeast\" : 1" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }"), is(""));
+    }
+
+    @Test
+    public void shouldValidateVerificationWithHttpResponseOnly() {
+        // when
+        assertThat(verificationSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"httpResponse\" : {" + NEW_LINE +
+            "      \"statusCode\" : 200" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }"), is(""));
+    }
+
+    @Test
+    public void shouldValidateVerificationWithHttpResponseAndBody() {
+        // when
+        assertThat(verificationSchemaValidator.isValid("{" + NEW_LINE +
+            "    \"httpResponse\" : {" + NEW_LINE +
+            "      \"statusCode\" : 200," + NEW_LINE +
+            "      \"body\" : \"some response body\"" + NEW_LINE +
+            "    }" + NEW_LINE +
+            "  }"), is(""));
     }
 
 }

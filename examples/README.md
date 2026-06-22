@@ -14,6 +14,10 @@ topic** folders (`chaos/`, `wasm/`) that apply regardless of client:
 | [`node/`](node/) | Node.js / TypeScript client examples |
 | [`python/`](python/) | Python client examples |
 | [`ruby/`](ruby/) | Ruby client examples |
+| [`go/`](go/) | Go client examples (including interactive breakpoints) |
+| [`dotnet/`](dotnet/) | .NET / C# client examples (including interactive breakpoints) |
+| [`rust/`](rust/) | Rust client examples (including interactive breakpoints) |
+| [`php/`](php/) | PHP client examples (REST-only; static forward overrides) |
 | [`curl/`](curl/) | Raw REST control-plane examples as runnable `curl` scripts (+ original reference markdown) |
 | [`json/`](json/) | Expectation & initializer JSON payloads (+ original reference markdown) |
 | [`docker-compose/`](docker-compose/) | Deployment scenarios: ports, env vars, mTLS, persistence, expectation initialiser |

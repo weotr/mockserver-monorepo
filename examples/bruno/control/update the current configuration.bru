@@ -1,0 +1,29 @@
+meta {
+  name: update the current configuration
+  type: http
+  seq: 8
+}
+
+put {
+  url: {{baseUrl}}/mockserver/configuration
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "logLevel": "INFO"
+  }
+}
+
+docs {
+  updates MockServer configuration properties at runtime, only non-null fields in the request body are applied
+  
+  configuration properties to update, only non-null fields are applied
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

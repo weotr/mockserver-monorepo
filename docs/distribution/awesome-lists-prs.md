@@ -2,18 +2,19 @@
 
 ## TL;DR
 
-MockServer is being added to / refreshed across the community "awesome" lists. **4 PRs are open**
-and **1 was skipped as out of scope**.
+MockServer is being added to / refreshed across the community "awesome" lists. **1 PR is merged,
+3 are open**, and **1 was skipped as out of scope**.
 
 | List | Outcome | Link |
 |------|---------|------|
-| `TheJambo/awesome-testing` | ✅ PR open (new entry) | [#150](https://github.com/TheJambo/awesome-testing/pull/150) |
-| `mfornos/awesome-microservices` | ✅ PR open (new entry) | [#314](https://github.com/mfornos/awesome-microservices/pull/314) |
-| `Kikobeats/awesome-api` | ✅ PR open (new entry) | [#98](https://github.com/Kikobeats/awesome-api/pull/98) |
-| `atinfo/awesome-test-automation` | ✅ PR open (refresh existing entry) | [#551](https://github.com/atinfo/awesome-test-automation/pull/551) |
+| `TheJambo/awesome-testing` | ✅ merged (new entry) | [#150](https://github.com/TheJambo/awesome-testing/pull/150) |
+| `mfornos/awesome-microservices` | ⏳ PR open (new entry) | [#314](https://github.com/mfornos/awesome-microservices/pull/314) |
+| `Kikobeats/awesome-api` | ⏳ PR open (new entry) | [#98](https://github.com/Kikobeats/awesome-api/pull/98) |
+| `atinfo/awesome-test-automation` | ⏳ PR open (refresh existing entry) | [#551](https://github.com/atinfo/awesome-test-automation/pull/551) |
 | `awesome-selfhosted/awesome-selfhosted` | ⏭️ skipped (out of scope) | see below |
 
-All PRs are OPEN. The three new-entry PRs were raised from forks `jamesdbloom/<repo>` on branch
+`TheJambo/awesome-testing` #150 **merged on 2026-06-09**; the other 3 PRs remain OPEN awaiting their
+maintainers. The three new-entry PRs were raised from forks `jamesdbloom/<repo>` on branch
 `add-mockserver`; the atinfo refresh is on branch `update-mockserver-description`. None of the
 target repos runs `awesome-lint`, though TheJambo/awesome-testing runs a dead-link checker + Copilot
 review and mfornos/awesome-microservices runs a link linter (the added URLs are live, so these
@@ -23,7 +24,7 @@ MockServer as a **mocking, debugging proxy and chaos engineering** tool for **mu
 
 ---
 
-## ✅ Target 1 — `TheJambo/awesome-testing` → PR #150
+## ✅ Target 1 — `TheJambo/awesome-testing` → PR #150 (merged 2026-06-09)
 
 Section **`### Service Virtualization`** in `README.md`, inserted after `mockd` and before
 `WireMock` (the section isn't strictly alphabetical, but this matches the existing ordering). Entry
@@ -33,7 +34,7 @@ Section **`### Service Virtualization`** in `README.md`, inserted after `mockd` 
 - [MockServer](https://github.com/mock-server/mockserver-monorepo) - Mocking, debugging proxy and chaos engineering tool for multiple protocols (HTTP, gRPC, GraphQL, LLM, MCP, Kafka, TCP and more); mock any dependency, record/replay and inspect traffic, verify requests, and inject faults. Docker, JAR, Helm, multi-language clients.
 ```
 
-## ✅ Target 2 — `mfornos/awesome-microservices` → PR #314
+## ⏳ Target 2 — `mfornos/awesome-microservices` → PR #314
 
 Section **`### Testing`** in `README.md`, alphabetically between `Mitmproxy` and `Mountebank`.
 Entry (homepage link, matching neighbours like Mountebank/WireMock):
@@ -42,7 +43,7 @@ Entry (homepage link, matching neighbours like Mountebank/WireMock):
 - [MockServer](https://www.mock-server.com) - Mocking, debugging proxy and chaos engineering for multiple protocols (HTTP, gRPC, GraphQL, LLM, MCP, Kafka, TCP and more); mock dependencies, record/replay traffic, verify requests, and inject faults for integration and resilience testing.
 ```
 
-## ✅ Target 3 — `Kikobeats/awesome-api` → PR #98
+## ⏳ Target 3 — `Kikobeats/awesome-api` → PR #98
 
 Section **`### Mocking`** in `README.md` (uses `*` bullets), placed among the mock-server tools
 after `json-server`:
@@ -51,7 +52,7 @@ after `json-server`:
 * [MockServer](https://www.mock-server.com) - Mocking, debugging proxy and chaos engineering for HTTP, gRPC, GraphQL, LLM, MCP, Kafka, TCP and more; mock APIs, record/replay and inspect traffic, verify requests, and inject chaos. Docker, JAR, Helm.
 ```
 
-## ✅ Target 4 — `atinfo/awesome-test-automation` → PR #551 (refresh existing entry)
+## ⏳ Target 4 — `atinfo/awesome-test-automation` → PR #551 (refresh existing entry)
 
 MockServer was already listed in `java-test-automation.md` ("Useful libs") with a stale HTTP-only
 description. PR [#551](https://github.com/atinfo/awesome-test-automation/pull/551) updates it to the
@@ -75,8 +76,8 @@ entry), not by editing the README. Revisit only if their scope changes.
 
 ## Shared notes
 
-- All PRs are to external repos under the maintainer's GitHub account (`jamesdbloom`); merging is up
-  to each list's maintainer.
+- All PRs were raised from the maintainer's GitHub account (`jamesdbloom`) to external repos; merging
+  is up to each list's maintainer.
 - Entries follow `awesome-lint` style (sentence-case, trailing period) where it fits the house style.
   Note Kikobeats/awesome-api uses `*` bullets (not `-`), so that entry matches `*` to fit the list.
 - The bullets only claim channels that are live (Docker Hub, Helm OCI, multi-language clients).

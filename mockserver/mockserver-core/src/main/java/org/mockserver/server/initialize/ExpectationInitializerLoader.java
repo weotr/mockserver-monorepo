@@ -74,6 +74,19 @@ public class ExpectationInitializerLoader {
         }
     }
 
+    /**
+     * When {@code failOnInitializationError} is enabled, a failed expectation initializer load must
+     * fail server startup rather than logging a WARN and continuing with zero expectations from that
+     * source. The throwable has already been logged at WARN by the caller; here it is re-thrown
+     * wrapped in an {@link ExpectationInitializerException} so the {@code HttpState} constructor (and
+     * therefore the whole startup) aborts.
+     */
+    private void failFastIfConfigured(String sourceType, String source, Throwable throwable) {
+        if (configuration.failOnInitializationError()) {
+            throw new ExpectationInitializerException("exception while loading " + sourceType + " expectation initializer (failOnInitializationError=true), failing startup for:" + source, throwable);
+        }
+    }
+
     private void addExpectationsFromInitializer() {
         retrieveExpectationsFromJson();
         retrieveExpectationsFromOpenAPI();
@@ -127,6 +140,7 @@ public class ExpectationInitializerLoader {
                         .setThrowable(throwable)
                 );
             }
+            failFastIfConfigured("class", initializationClass, throwable);
         }
         return expectations;
     }
@@ -169,6 +183,7 @@ public class ExpectationInitializerLoader {
                                     .setThrowable(throwable)
                             );
                         }
+                        failFastIfConfigured("OpenAPI file", initializationOpenAPIPath, throwable);
                     }
                 }
                 if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
@@ -229,6 +244,7 @@ public class ExpectationInitializerLoader {
                                     .setThrowable(throwable)
                             );
                         }
+                        failFastIfConfigured("JSON file", initializationJsonPath, throwable);
                     }
                 }
                 if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {

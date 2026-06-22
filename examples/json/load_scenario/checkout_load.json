@@ -1,0 +1,58 @@
+{
+  "name": "checkout-load",
+  "templateType": "VELOCITY",
+  "maxRequests": 100000,
+  "startDelayMillis": 0,
+  "labels": {
+    "team": "payments",
+    "env": "staging"
+  },
+  "profile": {
+    "stages": [
+      {
+        "type": "RATE",
+        "startRate": 5,
+        "endRate": 50,
+        "durationMillis": 30000,
+        "curve": "LINEAR",
+        "maxVus": 50
+      },
+      {
+        "type": "VU",
+        "vus": 25,
+        "durationMillis": 60000
+      },
+      {
+        "type": "PAUSE",
+        "durationMillis": 10000
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "browse",
+      "request": {
+        "method": "GET",
+        "path": "/products/$!iteration.index"
+      },
+      "thinkTime": {
+        "timeUnit": "MILLISECONDS",
+        "value": 500
+      }
+    },
+    {
+      "name": "checkout",
+      "request": {
+        "method": "POST",
+        "path": "/cart/checkout",
+        "headers": {
+          "Content-Type": [ "application/json" ]
+        },
+        "body": "{\"item\":\"$!iteration.index\",\"qty\":1}"
+      },
+      "labels": {
+        "critical": "true"
+      }
+    }
+  ]
+}

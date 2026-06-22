@@ -57,10 +57,21 @@ export function useMetricsPolling(
 
   useEffect(() => {
     let cancelled = false;
+    let polling = false;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
 
+    const isHidden = () => typeof document !== 'undefined' && document.hidden;
+
+    function scheduleNext(): void {
+      // Pause scraping while the tab is hidden — a background Metrics view
+      // otherwise keeps scraping and re-parsing Prometheus text for nothing.
+      if (cancelled || isHidden()) return;
+      timer = setTimeout(() => void poll(), intervalMs);
+    }
+
     async function poll(): Promise<void> {
+      polling = true;
       try {
         const res = await fetch(`${baseUrl}/mockserver/metrics`, { signal: controller.signal });
         if (cancelled) return;
@@ -86,15 +97,36 @@ export function useMetricsPolling(
         setStatus('error');
         setError(e instanceof Error ? e.message : String(e));
       } finally {
-        if (!cancelled) timer = setTimeout(() => void poll(), intervalMs);
+        polling = false;
+        scheduleNext();
       }
     }
 
+    function onVisibilityChange(): void {
+      if (cancelled) return;
+      if (isHidden()) {
+        // Cancel the pending tick so scraping pauses immediately on hide.
+        if (timer) { clearTimeout(timer); timer = undefined; }
+        return;
+      }
+      // Resuming: skip if a scrape is already in flight — it reschedules itself
+      // on completion, so launching another here would fork a duplicate loop.
+      if (polling) return;
+      if (timer) clearTimeout(timer);
+      void poll();
+    }
+
     void poll();
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
     return () => {
       cancelled = true;
       controller.abort();
       if (timer) clearTimeout(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
     };
   }, [baseUrl, intervalMs, historySize, refreshTick]);
 

@@ -69,6 +69,109 @@ client.when(
     MockServer::HttpResponse.response(body: '{"status":"ok"}', status_code: 200)
 )</code></pre>
     </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.3,
+        "retryAfter": "30"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/service""
+    },
+    ""httpResponse"": {
+        ""statusCode"": 200,
+        ""body"": ""{\""status\"":\""ok\""}""
+    },
+    ""chaos"": {
+        ""errorStatus"": 503,
+        ""errorProbability"": 0.3,
+        ""retryAfter"": ""30""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.3,
+        "retryAfter": "30"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/service'],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; '{"status":"ok"}'],
+        'chaos' =&gt; [
+            'errorStatus' =&gt; 503,
+            'errorProbability' =&gt; 0.3,
+            'retryAfter' =&gt; '30',
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -157,6 +260,109 @@ client.when(
 ).respond(
     MockServer::HttpResponse.response(body: '{"data":"result"}', status_code: 200)
 )</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/external-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\":\"result\"}"
+    },
+    "chaos": {
+        "errorStatus": 429,
+        "errorProbability": 1.0,
+        "retryAfter": "60"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/external-service""
+    },
+    ""httpResponse"": {
+        ""statusCode"": 200,
+        ""body"": ""{\""data\"":\""result\""}""
+    },
+    ""chaos"": {
+        ""errorStatus"": 429,
+        ""errorProbability"": 1.0,
+        ""retryAfter"": ""60""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/external-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"data\":\"result\"}"
+    },
+    "chaos": {
+        "errorStatus": 429,
+        "errorProbability": 1.0,
+        "retryAfter": "60"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/external-service'],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; '{"data":"result"}'],
+        'chaos' =&gt; [
+            'errorStatus' =&gt; 429,
+            'errorProbability' =&gt; 1.0,
+            'retryAfter' =&gt; '60',
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -247,6 +453,110 @@ client.when(
 ).respond(
     MockServer::HttpResponse.response(body: '{"result":"delayed"}', status_code: 200)
 )</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/slow-dependency"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"result\":\"delayed\"}"
+    },
+    "chaos": {
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 2000
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/slow-dependency""
+    },
+    ""httpResponse"": {
+        ""statusCode"": 200,
+        ""body"": ""{\""result\"":\""delayed\""}""
+    },
+    ""chaos"": {
+        ""latency"": {
+            ""timeUnit"": ""MILLISECONDS"",
+            ""value"": 2000
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/slow-dependency"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"result\":\"delayed\"}"
+    },
+    "chaos": {
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 2000
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/slow-dependency'],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; '{"result":"delayed"}'],
+        'chaos' =&gt; [
+            'latency' =&gt; ['timeUnit' =&gt; 'MILLISECONDS', 'value' =&gt; 2000],
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -359,6 +669,126 @@ client.when(
     MockServer::HttpResponse.response(body: '{"transactionId":"abc-123"}', status_code: 200)
 )</code></pre>
     </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/payments"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"transactionId\":\"abc-123\"}"
+    },
+    "chaos": {
+        "errorStatus": 500,
+        "errorProbability": 0.1,
+        "retryAfter": "10",
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 500
+        },
+        "seed": 42
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/payments""
+    },
+    ""httpResponse"": {
+        ""statusCode"": 200,
+        ""body"": ""{\""transactionId\"":\""abc-123\""}""
+    },
+    ""chaos"": {
+        ""errorStatus"": 500,
+        ""errorProbability"": 0.1,
+        ""retryAfter"": ""10"",
+        ""latency"": {
+            ""timeUnit"": ""MILLISECONDS"",
+            ""value"": 500
+        },
+        ""seed"": 42
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/payments"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"transactionId\":\"abc-123\"}"
+    },
+    "chaos": {
+        "errorStatus": 500,
+        "errorProbability": 0.1,
+        "retryAfter": "10",
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 500
+        },
+        "seed": 42
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/payments'],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; '{"transactionId":"abc-123"}'],
+        'chaos' =&gt; [
+            'errorStatus' =&gt; 500,
+            'errorProbability' =&gt; 0.1,
+            'retryAfter' =&gt; '10',
+            'latency' =&gt; ['timeUnit' =&gt; 'MILLISECONDS', 'value' =&gt; 500],
+            'seed' =&gt; 42,
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -468,6 +898,125 @@ client.when(
     MockServer::HttpForward.new(host: 'upstream.example.com', port: 443, scheme: 'HTTPS')
 )</code></pre>
     </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/upstream-service"
+    },
+    "httpForward": {
+        "host": "upstream.example.com",
+        "port": 443,
+        "scheme": "HTTPS"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.5,
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 1000
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/upstream-service""
+    },
+    ""httpForward"": {
+        ""host"": ""upstream.example.com"",
+        ""port"": 443,
+        ""scheme"": ""HTTPS""
+    },
+    ""chaos"": {
+        ""errorStatus"": 503,
+        ""errorProbability"": 0.5,
+        ""latency"": {
+            ""timeUnit"": ""MILLISECONDS"",
+            ""value"": 1000
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/upstream-service"
+    },
+    "httpForward": {
+        "host": "upstream.example.com",
+        "port": 443,
+        "scheme": "HTTPS"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 0.5,
+        "latency": {
+            "timeUnit": "MILLISECONDS",
+            "value": 1000
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/upstream-service'],
+        'httpForward' =&gt; [
+            'host' =&gt; 'upstream.example.com',
+            'port' =&gt; 443,
+            'scheme' =&gt; 'HTTPS',
+        ],
+        'chaos' =&gt; [
+            'errorStatus' =&gt; 503,
+            'errorProbability' =&gt; 0.5,
+            'latency' =&gt; ['timeUnit' =&gt; 'MILLISECONDS', 'value' =&gt; 1000],
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -561,6 +1110,109 @@ client.when(
     MockServer::HttpResponse.response(body: '{"status":"ok"}', status_code: 200)
 )</code></pre>
     </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "failRequestCount": 2
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/service""
+    },
+    ""httpResponse"": {
+        ""statusCode"": 200,
+        ""body"": ""{\""status\"":\""ok\""}""
+    },
+    ""chaos"": {
+        ""errorStatus"": 503,
+        ""errorProbability"": 1.0,
+        ""failRequestCount"": 2
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"status\":\"ok\"}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "failRequestCount": 2
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/service'],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; '{"status":"ok"}'],
+        'chaos' =&gt; [
+            'errorStatus' =&gt; 503,
+            'errorProbability' =&gt; 1.0,
+            'failRequestCount' =&gt; 2,
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -649,6 +1301,109 @@ client.when(
 ).respond(
     MockServer::HttpResponse.response(body: '{"healthy":true}', status_code: 200)
 )</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/api/critical-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"healthy\":true}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "retryAfter": "120"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/api/critical-service""
+    },
+    ""httpResponse"": {
+        ""statusCode"": 200,
+        ""body"": ""{\""healthy\"":true}""
+    },
+    ""chaos"": {
+        ""errorStatus"": 503,
+        ""errorProbability"": 1.0,
+        ""retryAfter"": ""120""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/api/critical-service"
+    },
+    "httpResponse": {
+        "statusCode": 200,
+        "body": "{\"healthy\":true}"
+    },
+    "chaos": {
+        "errorStatus": 503,
+        "errorProbability": 1.0,
+        "retryAfter": "120"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        {% raw %}<pre class="prettyprint lang-php code"><code class="code">// chaos profiles are not supported in the PHP client;
+// use the REST API directly
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST =&gt; 'PUT',
+    CURLOPT_POSTFIELDS =&gt; json_encode([[
+        'httpRequest' =&gt; ['path' =&gt; '/api/critical-service'],
+        'httpResponse' =&gt; ['statusCode' =&gt; 200, 'body' =&gt; '{"healthy":true}'],
+        'chaos' =&gt; [
+            'errorStatus' =&gt; 503,
+            'errorProbability' =&gt; 1.0,
+            'retryAfter' =&gt; '120',
+        ],
+    ]]),
+    CURLOPT_RETURNTRANSFER =&gt; true,
+    CURLOPT_HTTPHEADER =&gt; ['Content-Type: application/json; charset=utf-8'],
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>{% endraw %}
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">

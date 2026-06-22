@@ -473,4 +473,42 @@ public class FullHttpRequestToMockServerHttpRequestTest {
         // then
         assertThat(result, is(notNullValue()));
     }
+
+    // --- HTTP/2 stream id capture (SEC-05: only over genuine HTTP/2, never from a spoofed h1 header) ---
+
+    @Test
+    public void shouldCaptureStreamIdWhenRequestArrivedOverHttp2() {
+        // given - InboundHttp2ToHttpAdapter sets the x-http2-stream-id extension header on h2/h2c requests
+        FullHttpRequest nettyRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/some/path");
+        nettyRequest.headers().add(io.netty.handler.codec.http2.HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), "3");
+
+        try {
+            // when - the mapper is told the request genuinely arrived over HTTP/2 (trusted server-side signal)
+            HttpRequest result = createMapper(false, 80)
+                .mapFullHttpRequestToMockServerRequest(nettyRequest, null, null, null, Protocol.HTTP_2);
+
+            // then - the stream id is captured so a stream-scoped action (e.g. HttpError reset) can target it
+            assertThat(result.getStreamId(), is(3));
+        } finally {
+            nettyRequest.release();
+        }
+    }
+
+    @Test
+    public void shouldNotCaptureSpoofedStreamIdOnHttp1Request() {
+        // given - a plain HTTP/1.1 client forges an x-http2-stream-id header
+        FullHttpRequest nettyRequest = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.GET, "/some/path");
+        nettyRequest.headers().add(io.netty.handler.codec.http2.HttpConversionUtil.ExtensionHeaderNames.STREAM_ID.text(), "99");
+
+        try {
+            // when - the request arrived over HTTP/1.1 (no HTTP/2 negotiation)
+            HttpRequest result = createMapper(false, 80)
+                .mapFullHttpRequestToMockServerRequest(nettyRequest, null, null, null, Protocol.HTTP_1_1);
+
+            // then - the forged header is ignored: no stream id is captured on an HTTP/1.1 connection
+            assertThat(result.getStreamId(), is(nullValue()));
+        } finally {
+            nettyRequest.release();
+        }
+    }
 }

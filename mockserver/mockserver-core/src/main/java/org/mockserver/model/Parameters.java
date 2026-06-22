@@ -34,6 +34,7 @@ public class Parameters extends KeysToMultiValues<Parameter, Parameters> {
     }
 
     protected void isModified() {
+        super.isModified();
         rawParameterString = null;
     }
 

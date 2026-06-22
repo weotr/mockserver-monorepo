@@ -32,7 +32,7 @@ export default function ConfirmDialog({
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth aria-labelledby="confirm-dialog-title">
       <DialogTitle id="confirm-dialog-title">{title}</DialogTitle>
       <DialogContent>
-        <DialogContentText sx={{ fontSize: '0.85rem' }}>{message}</DialogContentText>
+        <DialogContentText variant="body2">{message}</DialogContentText>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{cancelLabel}</Button>

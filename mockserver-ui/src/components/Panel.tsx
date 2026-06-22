@@ -7,22 +7,39 @@ import Chip from '@mui/material/Chip';
 import InputAdornment from '@mui/material/InputAdornment';
 import SearchIcon from '@mui/icons-material/Search';
 import { useDashboardStore } from '../store';
+import { transitions } from '../theme';
 
 interface PanelProps {
   title: string;
   count: number;
+  /** When a filter or search is active, pass the filtered count to show "N / total". */
+  filteredCount?: number;
   searchValue: string;
   onSearchChange: (value: string) => void;
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
+  /**
+   * Optional controls rendered in the panel header, between the count chip and
+   * the search box (e.g. a sort toggle). Omitted by most panels.
+   */
+  headerActions?: ReactNode;
+  /**
+   * When true, the scrollable content region is announced to assistive tech as
+   * a polite live region (`role="log"` + `aria-live="polite"`) so newly
+   * appended rows are read out. Used by the Log panel.
+   */
+  liveRegion?: boolean;
   children: ReactNode;
 }
 
 export default function Panel({
   title,
   count,
+  filteredCount,
   searchValue,
   onSearchChange,
   searchInputRef,
+  headerActions,
+  liveRegion,
   children,
 }: PanelProps) {
   const autoScroll = useDashboardStore((s) => s.autoScroll);
@@ -42,6 +59,14 @@ export default function Panel({
         flexDirection: 'column',
         height: '100%',
         overflow: 'hidden',
+        // Gentle affordance: the panel lifts and its border warms on hover so the
+        // dashboard feels responsive rather than inert. Uses the shared transition
+        // token and theme shadow ramp so motion stays consistent.
+        transition: transitions.forProps(['box-shadow', 'border-color']),
+        '&:hover': {
+          boxShadow: (theme) => theme.shadows[2],
+          borderColor: 'primary.main',
+        },
       }}
     >
       <Box
@@ -56,11 +81,23 @@ export default function Panel({
           flexShrink: 0,
         }}
       >
-        <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.79rem' }}>
-          {title}
-        </Typography>
+        <Typography variant="subtitle2">{title}</Typography>
         {count > 0 && (
-          <Chip label={count > 999 ? '999+' : count} color="primary" size="small" sx={{ height: 18, fontSize: '0.65rem', '& .MuiChip-label': { px: 0.75 } }} />
+          <Chip
+            label={
+              filteredCount != null && filteredCount !== count
+                ? `${filteredCount > 999 ? '999+' : filteredCount} / ${count > 999 ? '999+' : count}`
+                : count > 999 ? '999+' : count
+            }
+            color="primary"
+            size="small"
+            sx={{ height: 18, fontSize: '0.65rem', '& .MuiChip-label': { px: 0.75 } }}
+          />
+        )}
+        {headerActions && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            {headerActions}
+          </Box>
         )}
         <TextField
           id={`${title.toLowerCase().replace(/\s+/g, '-')}-search`}
@@ -78,11 +115,12 @@ export default function Panel({
               ),
             },
           }}
-          sx={{ ml: 'auto', maxWidth: 200, '& .MuiInputBase-root': { height: 28, fontSize: '0.75rem' }, '& .MuiSvgIcon-root': { fontSize: '0.875rem' } }}
+          sx={{ ml: 'auto', maxWidth: 200, '& .MuiInputBase-root': { height: 28, typography: 'subtitle2', fontWeight: 400 }, '& .MuiSvgIcon-root': { fontSize: '0.875rem' } }}
         />
       </Box>
       <Box
         ref={scrollRef}
+        {...(liveRegion ? { role: 'log', 'aria-live': 'polite' as const, 'aria-relevant': 'additions' as const } : {})}
         sx={{
           flex: 1,
           overflowY: 'auto',

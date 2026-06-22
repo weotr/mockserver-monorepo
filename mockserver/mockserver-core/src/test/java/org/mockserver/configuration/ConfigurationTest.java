@@ -567,6 +567,182 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetForwardConnectionPoolEnabled() {
+        boolean original = ConfigurationProperties.forwardConnectionPoolEnabled();
+        try {
+            // then - default value (pooling is ON by default: it is safe because the forward client
+            // runs on a dedicated event-loop group disjoint from the server workers and a channel is
+            // only pooled when its codec is genuinely quiescent — raw/non-HTTP error() replies are
+            // never pooled, and the disjoint group prevents loopback-callback self-deadlock)
+            assertThat(configuration.forwardConnectionPoolEnabled(), equalTo(true));
+
+            // when - system property setter disables it (the opt-out)
+            ConfigurationProperties.forwardConnectionPoolEnabled(false);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardConnectionPoolEnabled(), equalTo(false));
+            assertThat(System.getProperty("mockserver.forwardConnectionPoolEnabled"), equalTo("false"));
+            assertThat(configuration.forwardConnectionPoolEnabled(), equalTo(false));
+            ConfigurationProperties.forwardConnectionPoolEnabled(original);
+
+            // when - setter
+            configuration.forwardConnectionPoolEnabled(false);
+
+            // then - getter
+            assertThat(configuration.forwardConnectionPoolEnabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.forwardConnectionPoolEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardConnectionPoolMaxIdlePerKey() {
+        int original = ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey();
+        try {
+            // then - default value
+            assertThat(configuration.forwardConnectionPoolMaxIdlePerKey(), equalTo(8));
+
+            // when - system property setter
+            ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey(16);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey(), equalTo(16));
+            assertThat(System.getProperty("mockserver.forwardConnectionPoolMaxIdlePerKey"), equalTo("16"));
+            assertThat(configuration.forwardConnectionPoolMaxIdlePerKey(), equalTo(16));
+            ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey(original);
+
+            // when - setter
+            configuration.forwardConnectionPoolMaxIdlePerKey(4);
+
+            // then - getter
+            assertThat(configuration.forwardConnectionPoolMaxIdlePerKey(), equalTo(4));
+        } finally {
+            ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardConnectionPoolIdleTimeoutMillis() {
+        long original = ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis();
+        try {
+            // then - default value
+            assertThat(configuration.forwardConnectionPoolIdleTimeoutMillis(), equalTo(30_000L));
+
+            // when - system property setter
+            ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis(60_000);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis(), equalTo(60_000L));
+            assertThat(System.getProperty("mockserver.forwardConnectionPoolIdleTimeoutMillis"), equalTo("60000"));
+            assertThat(configuration.forwardConnectionPoolIdleTimeoutMillis(), equalTo(60_000L));
+            ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis(original);
+
+            // when - setter
+            configuration.forwardConnectionPoolIdleTimeoutMillis(15_000L);
+
+            // then - getter
+            assertThat(configuration.forwardConnectionPoolIdleTimeoutMillis(), equalTo(15_000L));
+        } finally {
+            ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardProxyRetryCount() {
+        int original = ConfigurationProperties.forwardProxyRetryCount();
+        try {
+            assertThat(configuration.forwardProxyRetryCount(), equalTo(0));
+
+            ConfigurationProperties.forwardProxyRetryCount(3);
+            assertThat(ConfigurationProperties.forwardProxyRetryCount(), equalTo(3));
+            assertThat(System.getProperty("mockserver.forwardProxyRetryCount"), equalTo("3"));
+            assertThat(configuration.forwardProxyRetryCount(), equalTo(3));
+            ConfigurationProperties.forwardProxyRetryCount(original);
+
+            configuration.forwardProxyRetryCount(5);
+            assertThat(configuration.forwardProxyRetryCount(), equalTo(5));
+        } finally {
+            ConfigurationProperties.forwardProxyRetryCount(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardProxyRetryBackoffMillis() {
+        long original = ConfigurationProperties.forwardProxyRetryBackoffMillis();
+        try {
+            assertThat(configuration.forwardProxyRetryBackoffMillis(), equalTo(100L));
+
+            ConfigurationProperties.forwardProxyRetryBackoffMillis(250L);
+            assertThat(ConfigurationProperties.forwardProxyRetryBackoffMillis(), equalTo(250L));
+            assertThat(System.getProperty("mockserver.forwardProxyRetryBackoffMillis"), equalTo("250"));
+            assertThat(configuration.forwardProxyRetryBackoffMillis(), equalTo(250L));
+            ConfigurationProperties.forwardProxyRetryBackoffMillis(original);
+
+            configuration.forwardProxyRetryBackoffMillis(75L);
+            assertThat(configuration.forwardProxyRetryBackoffMillis(), equalTo(75L));
+        } finally {
+            ConfigurationProperties.forwardProxyRetryBackoffMillis(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardProxyCircuitBreakerEnabled() {
+        boolean original = ConfigurationProperties.forwardProxyCircuitBreakerEnabled();
+        try {
+            assertThat(configuration.forwardProxyCircuitBreakerEnabled(), equalTo(false));
+
+            ConfigurationProperties.forwardProxyCircuitBreakerEnabled(true);
+            assertThat(ConfigurationProperties.forwardProxyCircuitBreakerEnabled(), equalTo(true));
+            assertThat(System.getProperty("mockserver.forwardProxyCircuitBreakerEnabled"), equalTo("true"));
+            assertThat(configuration.forwardProxyCircuitBreakerEnabled(), equalTo(true));
+            ConfigurationProperties.forwardProxyCircuitBreakerEnabled(original);
+
+            configuration.forwardProxyCircuitBreakerEnabled(true);
+            assertThat(configuration.forwardProxyCircuitBreakerEnabled(), equalTo(true));
+        } finally {
+            ConfigurationProperties.forwardProxyCircuitBreakerEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardProxyCircuitBreakerFailureThreshold() {
+        int original = ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold();
+        try {
+            assertThat(configuration.forwardProxyCircuitBreakerFailureThreshold(), equalTo(5));
+
+            ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold(10);
+            assertThat(ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold(), equalTo(10));
+            assertThat(System.getProperty("mockserver.forwardProxyCircuitBreakerFailureThreshold"), equalTo("10"));
+            assertThat(configuration.forwardProxyCircuitBreakerFailureThreshold(), equalTo(10));
+            ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold(original);
+
+            configuration.forwardProxyCircuitBreakerFailureThreshold(2);
+            assertThat(configuration.forwardProxyCircuitBreakerFailureThreshold(), equalTo(2));
+        } finally {
+            ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardProxyCircuitBreakerWindowMillis() {
+        long original = ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis();
+        try {
+            assertThat(configuration.forwardProxyCircuitBreakerWindowMillis(), equalTo(30_000L));
+
+            ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis(45_000L);
+            assertThat(ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis(), equalTo(45_000L));
+            assertThat(System.getProperty("mockserver.forwardProxyCircuitBreakerWindowMillis"), equalTo("45000"));
+            assertThat(configuration.forwardProxyCircuitBreakerWindowMillis(), equalTo(45_000L));
+            ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis(original);
+
+            configuration.forwardProxyCircuitBreakerWindowMillis(5_000L);
+            assertThat(configuration.forwardProxyCircuitBreakerWindowMillis(), equalTo(5_000L));
+        } finally {
+            ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetMatchersFailFast() {
         boolean original = ConfigurationProperties.matchersFailFast();
         try {
@@ -589,6 +765,60 @@ public class ConfigurationTest {
             assertThat(configuration.matchersFailFast(), equalTo(false));
         } finally {
             ConfigurationProperties.matchersFailFast(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetEnforceResponseValidationForMocks() {
+        boolean original = ConfigurationProperties.enforceResponseValidationForMocks();
+        try {
+            // then - default value
+            assertThat(configuration.enforceResponseValidationForMocks(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.enforceResponseValidationForMocks(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.enforceResponseValidationForMocks(), equalTo(true));
+            assertThat(System.getProperty("mockserver.enforceResponseValidationForMocks"), equalTo("true"));
+            assertThat(configuration.enforceResponseValidationForMocks(), equalTo(true));
+            ConfigurationProperties.enforceResponseValidationForMocks(original);
+
+            // when - instance setter overrides the system property
+            ConfigurationProperties.enforceResponseValidationForMocks(false);
+            configuration.enforceResponseValidationForMocks(true);
+
+            // then - getter
+            assertThat(configuration.enforceResponseValidationForMocks(), equalTo(true));
+        } finally {
+            ConfigurationProperties.enforceResponseValidationForMocks(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetValidateRequestsAgainstOpenApiSpec() {
+        boolean original = ConfigurationProperties.validateRequestsAgainstOpenApiSpec();
+        try {
+            // then - default value
+            assertThat(configuration.validateRequestsAgainstOpenApiSpec(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.validateRequestsAgainstOpenApiSpec(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.validateRequestsAgainstOpenApiSpec(), equalTo(true));
+            assertThat(System.getProperty("mockserver.validateRequestsAgainstOpenApiSpec"), equalTo("true"));
+            assertThat(configuration.validateRequestsAgainstOpenApiSpec(), equalTo(true));
+            ConfigurationProperties.validateRequestsAgainstOpenApiSpec(original);
+
+            // when - instance setter overrides the system property
+            ConfigurationProperties.validateRequestsAgainstOpenApiSpec(false);
+            configuration.validateRequestsAgainstOpenApiSpec(true);
+
+            // then - getter
+            assertThat(configuration.validateRequestsAgainstOpenApiSpec(), equalTo(true));
+        } finally {
+            ConfigurationProperties.validateRequestsAgainstOpenApiSpec(original);
         }
     }
 
@@ -1278,6 +1508,32 @@ public class ConfigurationTest {
             assertThat(configuration.watchInitializationJson(), equalTo(true));
         } finally {
             ConfigurationProperties.watchInitializationJson(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetFailOnInitializationError() {
+        boolean original = ConfigurationProperties.failOnInitializationError();
+        try {
+            // then - default value
+            assertThat(configuration.failOnInitializationError(), equalTo(false));
+
+            // when - system property setter
+            ConfigurationProperties.failOnInitializationError(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.failOnInitializationError(), equalTo(true));
+            assertThat(System.getProperty("mockserver.failOnInitializationError"), equalTo("true"));
+            assertThat(configuration.failOnInitializationError(), equalTo(true));
+            ConfigurationProperties.failOnInitializationError(original);
+
+            // when - setter
+            configuration.failOnInitializationError(true);
+
+            // then - getter
+            assertThat(configuration.failOnInitializationError(), equalTo(true));
+        } finally {
+            ConfigurationProperties.failOnInitializationError(original);
         }
     }
 
@@ -2862,6 +3118,31 @@ public class ConfigurationTest {
             assertThat(configuration.asyncMqttBrokerUrl(), equalTo("tcp://mqtt.example.com:1883"));
         } finally {
             ConfigurationProperties.asyncMqttBrokerUrl(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetAsyncAmqpUri() {
+        String original = ConfigurationProperties.asyncAmqpUri();
+        try {
+            // then - default value
+            assertThat(configuration.asyncAmqpUri(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.asyncAmqpUri("amqp://guest:guest@localhost:5672/");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.asyncAmqpUri(), equalTo("amqp://guest:guest@localhost:5672/"));
+            assertThat(System.getProperty("mockserver.asyncAmqpUri"), equalTo("amqp://guest:guest@localhost:5672/"));
+            assertThat(configuration.asyncAmqpUri(), equalTo("amqp://guest:guest@localhost:5672/"));
+
+            // when - setter
+            configuration.asyncAmqpUri("amqp://user:pass@amqp.example.com:5672/vhost");
+
+            // then - getter
+            assertThat(configuration.asyncAmqpUri(), equalTo("amqp://user:pass@amqp.example.com:5672/vhost"));
+        } finally {
+            ConfigurationProperties.asyncAmqpUri(original);
         }
     }
 

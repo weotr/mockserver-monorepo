@@ -1,0 +1,17 @@
+meta {
+  name: remove one registered load scenario
+  type: http
+  seq: 5
+}
+
+delete {
+  url: {{baseUrl}}/mockserver/loadScenario/checkout
+  body: none
+  auth: inherit
+}
+
+docs {
+  Removes a single load scenario from the registry, stopping it first if it is running.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

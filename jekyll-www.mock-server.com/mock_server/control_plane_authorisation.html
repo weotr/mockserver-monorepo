@@ -23,7 +23,7 @@ sitemap:
     <li>set security-focused configuration property values &mdash; see <a href="#configuration_hardening">Configuration Hardening</a> below</li>
 </ul>
 
-<p><strong>Important:</strong> MockServer does not currently support HTTP proxy authentication (Proxy-Authenticate / Proxy-Authorization headers). The authentication mechanisms described on this page secure the <strong>control plane</strong> (expectation management, verification, retrieval, etc.), not the data plane when MockServer is used as an HTTP proxy. If you need to test proxy authentication, you must use a different proxy server that supports it.</p>
+<p><strong>Proxy Authentication:</strong> When MockServer is used as an HTTP proxy, it supports <strong>HTTP Basic proxy authentication</strong> (RFC 7235) on the data plane via three configuration properties: <code>proxyAuthenticationUsername</code>, <code>proxyAuthenticationPassword</code>, and <code>proxyAuthenticationRealm</code>. When these are configured, MockServer responds with <code>407 Proxy Authentication Required</code> and a <code>Proxy-Authenticate: Basic realm="&hellip;"</code> header to any CONNECT or forwarded request that does not include valid <code>Proxy-Authorization</code> credentials. The authentication mechanisms described below secure the <strong>control plane</strong> (expectation management, verification, retrieval, etc.), which is separate from this data-plane proxy authentication.</p>
 
 <p><strong>Common confusion:</strong> The <code>MockServerClient.withProxyConfiguration()</code> method configures how the <em>client</em> connects to MockServer through an upstream proxy—it does not add authentication to MockServer itself. See the <a href="/mock_server/mockserver_clients.html">client documentation</a> for details.</p>
 
@@ -49,6 +49,96 @@ sitemap:
 <p>When JWT authentication is enabled all control plane requests need and JWT via a <strong>authorization</strong> header which is validated using the <a href="#button_configuration_control_plane_jwt_authentication_jwk_source">controlPlaneJWTAuthenticationJWKSource</a></p>
 
 {% include_subpage _includes/control_plane_authentication_jwt_configuration.html %}
+
+<a id="control_plane_oidc_authentication" class="anchor" href="#control_plane_oidc_authentication">&nbsp;</a>
+
+<h3>Control Plane OIDC Authentication</h3>
+
+<p>When OIDC authentication is enabled all control plane requests need a Bearer access token via an <strong>authorization</strong> header issued by an external OpenID Connect identity provider. The token signature is verified against the provider's JWK set (configured directly via <a href="#button_configuration_control_plane_oidc_jwks_uri">controlPlaneOidcJwksUri</a> or discovered from <a href="#button_configuration_control_plane_oidc_issuer">controlPlaneOidcIssuer</a>), and its issuer, <a href="#button_configuration_control_plane_oidc_audience">audience</a>, expiry and <a href="#button_configuration_control_plane_oidc_required_scopes">required scopes</a> are checked. The verified subject is recorded as the principal in the control plane audit log.</p>
+
+{% include_subpage _includes/control_plane_authentication_oidc_configuration.html %}
+
+<a id="control_plane_authorization" class="anchor" href="#control_plane_authorization">&nbsp;</a>
+
+<h2>Control Plane Authorization</h2>
+
+<p>Once a principal has been <a href="#control_plane_authentication">authenticated</a>, you can layer a coarse <strong>role-based authorization</strong> check on top. Authorization maps the verified principal's OIDC scopes or groups to one of three hierarchical roles and enforces them on every control-plane operation.</p>
+
+<p><strong>Prerequisite:</strong> Authorization requires a verified principal, so <a href="#control_plane_oidc_authentication">OIDC authentication</a> must be configured. Without authentication there is no principal and authorization has nothing to enforce.</p>
+
+<p><strong>Important limitations:</strong></p>
+<ul>
+    <li>The endpoints <code>/mockserver/bind</code>, <code>/mockserver/stop</code>, and <code>/mockserver/status</code> are <strong>neither authenticated nor authorized</strong> — they are always reachable.</li>
+    <li>MockServer's own <a href="/mock_server/ai_mcp_setup.html">MCP control plane</a> (<code>/mockserver/mcp</code>) is authenticated (the bearer token is validated), but per-tool authorization is <strong>not yet enforced</strong>. Treat any authenticated MCP session as <code>mutate</code>-capable.</li>
+</ul>
+
+<a id="control_plane_authorization_roles" class="anchor" href="#control_plane_authorization_roles">&nbsp;</a>
+
+<h3>Roles</h3>
+
+<p>The three roles form a strict hierarchy. A principal granted a higher role satisfies every requirement at or below it:</p>
+
+<table>
+    <thead>
+        <tr><th>Role</th><th>Permits</th><th>Examples</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><strong>read</strong></td><td>Read-only control-plane operations</td><td><code>retrieve</code>, <code>verify</code>, <code>verifySequence</code>, <code>explainUnmatched</code>, <code>debugMismatch</code></td></tr>
+        <tr><td><strong>mutate</strong></td><td>Everything <code>read</code> permits, plus all mutating operations</td><td><code>expectation</code>, <code>clear</code>, <code>reset</code>, <code>configuration</code>, <code>chaosExperiment</code>, LLM endpoints</td></tr>
+        <tr><td><strong>admin</strong></td><td>Everything <code>mutate</code> permits (reserved for future fine-grained admin operations)</td><td>Currently identical to <code>mutate</code></td></tr>
+    </tbody>
+</table>
+
+<a id="control_plane_authorization_configuration" class="anchor" href="#control_plane_authorization_configuration">&nbsp;</a>
+
+<h3>Configuration</h3>
+
+<p>Enable authorization with <code>controlPlaneAuthorizationEnabled</code> (default <code>false</code>) and map scope/group values to roles with <code>controlPlaneScopeMapping</code>:</p>
+
+<table>
+    <thead>
+        <tr><th>Property</th><th>Environment Variable</th><th>Default</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>mockserver.controlPlaneAuthorizationEnabled</code></td>
+            <td><code>MOCKSERVER_CONTROL_PLANE_AUTHORIZATION_ENABLED</code></td>
+            <td><code>false</code></td>
+            <td>Enable coarse role-based authorization of all control-plane requests. Requires a verified principal (OIDC authentication must be configured).</td>
+        </tr>
+        <tr>
+            <td><code>mockserver.controlPlaneScopeMapping</code></td>
+            <td><code>MOCKSERVER_CONTROL_PLANE_SCOPE_MAPPING</code></td>
+            <td><em>empty</em></td>
+            <td>Comma-separated <code>scope=role</code> pairs mapping a principal's OIDC scope or group value to a role (<code>read</code>, <code>mutate</code>, or <code>admin</code>). Example: <code>platform-admins=admin,qa-team=mutate,viewers=read</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Example — system property configuration:</strong></p>
+
+<pre class="prettyprint code"><code class="code">-Dmockserver.controlPlaneAuthorizationEnabled=true
+-Dmockserver.controlPlaneScopeMapping=platform-admins=admin,qa-team=mutate,viewers=read</code></pre>
+
+<p><strong>Example — Java programmatic configuration:</strong></p>
+
+<pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneAuthorizationEnabled(true);
+ConfigurationProperties.controlPlaneScopeMapping(Map.of(
+    "platform-admins", ControlPlaneRole.ADMIN,
+    "qa-team",         ControlPlaneRole.MUTATE,
+    "viewers",         ControlPlaneRole.READ
+));</code></pre>
+
+<a id="control_plane_authorization_behaviour" class="anchor" href="#control_plane_authorization_behaviour">&nbsp;</a>
+
+<h3>Behaviour</h3>
+
+<ul>
+    <li><strong>Fail-closed:</strong> a principal whose scopes do not map to any role in <code>controlPlaneScopeMapping</code> is denied every mutation (and every read unless a <code>read</code>-or-higher role is mapped). An unmapped or blank role value grants nothing.</li>
+    <li><strong>Denied mutations return HTTP 403.</strong> The response body is a generic <code>Forbidden for control plane</code> message. The detailed reason (granted role vs. required role) is logged server-side only so authorization policy is not disclosed to the client.</li>
+    <li><strong>Denials are recorded in the audit log</strong> with <code>outcome=FORBIDDEN</code>. Successful authorized requests are recorded with <code>outcome=AUTHORIZED</code>.</li>
+    <li><strong>A principal may hold multiple scopes.</strong> The highest-ranked role from all matched scopes wins (e.g. a token with both <code>viewers</code> and <code>qa-team</code> scopes is granted <code>mutate</code> from the example mapping above).</li>
+</ul>
 
 <a id="configuration_hardening" class="anchor" href="#configuration_hardening">&nbsp;</a>
 
@@ -115,4 +205,5 @@ sitemap:
     <li><a href="/mock_server/CORS_support.html"><strong>CORS Support</strong></a> &mdash; harden cross-origin access to the control plane (see also the CORS hardening note above)</li>
     <li><a href="/mock_server/configuration_properties.html#control_plane_authentication_configuration"><strong>Control Plane Authentication Configuration</strong></a> &mdash; all mTLS and JWT control-plane authentication configuration properties</li>
     <li><a href="/mock_server/configuration_properties.html#tls_configuration"><strong>TLS Configuration Properties</strong></a> &mdash; certificate and key configuration used by control-plane mTLS</li>
+    <li><a href="#control_plane_authorization"><strong>Control Plane Authorization</strong></a> &mdash; role-based authorization layered on top of OIDC authentication</li>
 </ul>

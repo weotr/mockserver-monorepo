@@ -17,6 +17,9 @@
     "chaos": {
       "$ref": "#/definitions/httpChaosProfile"
     },
+    "rateLimit": {
+      "$ref": "#/definitions/rateLimit"
+    },
     "httpRequest": {
       "$ref": "#/definitions/requestDefinition"
     },
@@ -89,6 +92,16 @@
         { "type": "array", "items": { "$ref": "#/definitions/afterAction" }, "minItems": 1 }
       ]
     },
+    "capture": {
+      "oneOf": [
+        { "$ref": "#/definitions/captureRule" },
+        { "type": "array", "items": { "$ref": "#/definitions/captureRule" }, "minItems": 1 }
+      ]
+    },
+    "namespace": {
+      "description": "optional namespace (tenant) this expectation belongs to; when set, the expectation only matches requests carrying the configured matchNamespaceHeader with this value, plus it remains isolated from other namespaces",
+      "type": "string"
+    },
     "scenarioName": {
       "type": "string"
     },
@@ -108,8 +121,52 @@
     "responseMode": {
       "enum": [
         "SEQUENTIAL",
-        "RANDOM"
+        "RANDOM",
+        "WEIGHTED",
+        "SWITCH"
       ]
+    },
+    "responseWeights": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "switchAfter": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "crossProtocolScenarios": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "trigger": {
+            "enum": [
+              "DNS_QUERY",
+              "WEBSOCKET_CONNECT",
+              "GRPC_REQUEST",
+              "HTTP_REQUEST"
+            ]
+          },
+          "matchPattern": {
+            "type": "string"
+          },
+          "scenarioName": {
+            "type": "string"
+          },
+          "targetState": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "trigger",
+          "scenarioName",
+          "targetState"
+        ]
+      }
     },
     "times": {
       "$ref": "#/definitions/times"

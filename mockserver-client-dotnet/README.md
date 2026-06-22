@@ -1,17 +1,19 @@
-# MockServer.Client for .NET
+# MockServerClient for .NET
 
 A hand-written, idiomatic .NET client for [MockServer](https://www.mock-server.com)'s control-plane REST API.
 
 ## Installation
 
+The NuGet package is `MockServerClient` (the assembly and namespace remain `MockServer.Client`):
+
 ```bash
-dotnet add package MockServer.Client
+dotnet add package MockServerClient
 ```
 
 Or via PackageReference in your `.csproj`:
 
 ```xml
-<PackageReference Include="MockServer.Client" Version="7.0.1" />
+<PackageReference Include="MockServerClient" Version="7.0.1" />
 ```
 
 ## Supported Targets
@@ -92,6 +94,214 @@ await client.VerifyAsync(
 );
 ```
 
+### Interactive Breakpoints
+
+Register breakpoint matchers to pause forwarded/proxied traffic at REQUEST, RESPONSE, RESPONSE_STREAM, or INBOUND_STREAM phases. A callback WebSocket connection is opened automatically.
+
+```csharp
+using MockServer.Client.Models;
+using System.Text.Json.Nodes;
+
+// REQUEST-only breakpoint
+var id = client.AddRequestBreakpoint(
+    HttpRequest.Request().WithPath("/api/.*").Build(),
+    request => request // continue with original
+);
+
+// REQUEST + RESPONSE breakpoint
+var id2 = client.AddRequestResponseBreakpoint(
+    HttpRequest.Request().WithPath("/api/.*").Build(),
+    request => request,
+    (request, response) => response
+);
+
+// Streaming breakpoint
+var id3 = client.AddStreamBreakpoint(
+    HttpRequest.Request().WithPath("/stream/.*").Build(),
+    new[] { BreakpointPhase.ResponseStream },
+    frame => StreamFrameDecision.Continue(frame.CorrelationId!)
+);
+
+// Manage matchers
+var list = client.ListBreakpointMatchers();
+client.RemoveBreakpointMatcher(id);
+client.ClearBreakpointMatchers();
+```
+
+**Stream frame decisions:** `StreamFrameDecision.Continue`, `.Modify`, `.Drop`, `.Inject`, `.Close`.
+
+## Mocking LLM providers
+
+The `MockServer.Client.Llm` namespace provides fluent builders that mock LLM provider
+APIs (Anthropic, OpenAI, Gemini, Bedrock, Azure OpenAI, Ollama). They build
+expectations carrying an `httpLlmResponse` action; the produced wire JSON is
+equivalent to the Java/Node/Python clients, so a mock scripted here behaves
+identically to one scripted elsewhere.
+
+### Single completion / embedding
+
+```csharp
+using MockServer.Client.Llm;
+
+// A single chat completion mock.
+LlmMockBuilder.LlmMock("/v1/chat/completions")
+    .WithProvider(Provider.OPENAI)
+    .WithModel("gpt-4o")
+    .RespondingWith(Completion.Create()
+        .WithText("Hello! How can I help?")
+        .WithStopReason("stop")
+        .WithUsage(Usage.Create().WithInputTokens(12).WithOutputTokens(8)))
+    .ApplyTo(client);
+
+// An embedding mock.
+LlmMockBuilder.LlmMock("/v1/embeddings")
+    .WithProvider(Provider.OPENAI)
+    .RespondingWith(EmbeddingResponse.Create().WithDimensions(1536).WithDeterministicFromInput(true))
+    .ApplyTo(client);
+```
+
+Completions also support tool calls (`WithToolCall(ToolUse.Of("name")...)`), structured
+output (`WithOutputSchema`), and streaming physics (`Stream().WithStreamingPhysics(
+StreamingPhysics.Create().WithTokensPerSecond(50).WithJitter(0.2))`).
+
+### Multi-turn conversations
+
+Conversation mocks advance MockServer scenario state turn-by-turn (`Started` -> `turn_1`
+-> ... -> `__done`). Optionally isolate concurrent sessions by a request header,
+query parameter, or cookie.
+
+```csharp
+LlmConversationBuilder.Conversation()
+    .WithPath("/v1/chat/completions")
+    .WithProvider(Provider.ANTHROPIC)
+    .WithModel("claude-3-5-sonnet")
+    .IsolateBy(IsolationSource.Header("x-session-id"))
+    .Turn().RespondingWith(Completion.Create().WithText("Hi, I'm your assistant."))
+    .Turn().WhenLatestMessageContains("weather")
+        .RespondingWith(Completion.Create().WithText("It's sunny."))
+    .Turn().RespondingWith(Completion.Create().WithText("Anything else?"))
+    .ApplyTo(client);
+```
+
+### Failover / retry scenarios
+
+Emit N failing responses (consumed first) followed by a success. Consecutive identical
+failures are coalesced into a single limited-`times` expectation; each failure gets a
+provider-shaped default error body unless you supply one.
+
+```csharp
+LlmFailoverBuilder.LlmFailover()
+    .WithPath("/v1/chat/completions")
+    .WithProvider(Provider.OPENAI)
+    .WithModel("gpt-4o")
+    .FailWith(429, count: 2)   // two rate-limit responses
+    .FailWith(503)             // then one service-unavailable
+    .ThenRespondWith(Completion.Create().WithText("recovered"))
+    .ApplyTo(client);
+```
+
+## Mocking an MCP server
+
+The `MockServer.Client.Mcp` namespace builds the expectation set needed to emulate a
+Streamable-HTTP MCP (Model Context Protocol) server speaking JSON-RPC 2.0. It wires up
+`initialize`, `ping`, `notifications/initialized`, and per-capability `*/list` and
+`*/call` (or `*/read` / `*/get`) handlers.
+
+```csharp
+using MockServer.Client.Mcp;
+
+McpMockBuilder.McpMock("/mcp")
+    .WithServerName("WeatherServer")
+    .WithTool("get_weather")
+        .WithDescription("Get the weather for a city")
+        .WithInputSchema("{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}}")
+        .RespondingWith("72F and sunny")
+    .And()
+    .WithResource("file:///config.json")
+        .WithName("config")
+        .WithMimeType("application/json")
+        .WithContent("{\"debug\":true}")
+    .And()
+    .WithPrompt("greeting")
+        .WithArgument("name", "the name to greet", required: true)
+        .RespondingWith("user", "Hello!")
+    .And()
+    .ApplyTo(client);
+```
+
+Each builder also exposes `Build()` returning the raw `List<Expectation>` if you want to
+inspect or register them yourself.
+
+## Start / Launch MockServer
+
+The .NET client can download and launch a local MockServer instance directly -- no Java installation and no Docker required. The launcher downloads a self-contained platform bundle (`mockserver-<version>-<os>-<arch>`) from the GitHub Release, verifies its SHA-256, caches it per-user, and starts it.
+
+### Quick start
+
+```csharp
+using MockServer.Client;
+
+// Download (first run) and start MockServer on port 1080
+using var launcher = MockServerBinaryLauncher.Start(port: 1080);
+Console.WriteLine($"MockServer started, PID {launcher.Process?.Id}");
+
+// ... use MockServer ...
+
+launcher.Stop();
+// or let the using statement dispose and stop it automatically
+```
+
+### Async API
+
+```csharp
+using var launcher = await MockServerBinaryLauncher.StartAsync(port: 1080);
+```
+
+### Just ensure the binary is present
+
+```csharp
+string launcherPath = await MockServerBinaryLauncher.EnsureBinaryAsync();
+// or synchronously:
+string launcherPath = MockServerBinaryLauncher.EnsureBinary();
+```
+
+### Specify a version
+
+```csharp
+using var launcher = MockServerBinaryLauncher.Start(port: 1080, version: "7.1.0");
+```
+
+### API reference
+
+| Method / Class | Description |
+|---|---|
+| `MockServerBinaryLauncher.EnsureBinaryAsync(version?, options?)` | Download, verify, cache, and return the launcher path. Defaults to `DefaultVersion`. |
+| `MockServerBinaryLauncher.EnsureBinary(version?, options?)` | Synchronous wrapper for `EnsureBinaryAsync`. |
+| `MockServerBinaryLauncher.StartAsync(port, version?, options?)` | Ensure the binary and start MockServer. Returns a `MockServerBinaryLauncher` instance. |
+| `MockServerBinaryLauncher.Start(port, version?, options?)` | Synchronous wrapper for `StartAsync`. |
+| `MockServerBinaryLauncher` | Implements `IDisposable`. Properties: `Process`. Methods: `Stop()`, `Dispose()`. |
+| `MockServerBinaryLauncher.DefaultVersion` | The default MockServer version, derived from the NuGet package version at runtime. |
+
+### Supported platforms
+
+| OS | Architecture |
+|---|---|
+| Linux | x86_64, aarch64 |
+| macOS (darwin) | x86_64, aarch64 |
+| Windows | x86_64, aarch64 |
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `MOCKSERVER_BINARY_BASE_URL` | Mirror host for the release assets (corporate / air-gapped networks) |
+| `MOCKSERVER_BINARY_CACHE` | Override the cache directory (default: `~/.cache/mockserver/binaries` on Unix, `%LOCALAPPDATA%` on Windows) |
+| `MOCKSERVER_SKIP_BINARY_DOWNLOAD` | Fail instead of downloading (use with a pre-seeded cache in CI) |
+
+### Version
+
+By default the launcher downloads the MockServer version matching this NuGet package (derived from the `<Version>` property in the `.csproj` at build time). Pass an explicit `version` argument to override.
+
 ## Building
 
 ```bash
@@ -100,9 +310,35 @@ dotnet build
 dotnet test
 ```
 
+## Using in tests (xUnit)
+
+`MockServerFixture` is a reusable xUnit `IAsyncLifetime` fixture that creates a
+`MockServerClient` and resets the server before and after each test, so recorded
+requests, expectations and logs never leak between tests. Derive your test class
+from it, or use it as an `IClassFixture` / collection fixture for a shared
+instance:
+
+```csharp
+public class MyTests : MockServerFixture
+{
+    [SkippableFact]
+    public void RecordsRequest()
+    {
+        SkipIfNoServer();
+        // Client is reset before this test and again after it finishes.
+        Client!.MockAnyResponse(/* ... */);
+    }
+}
+```
+
+The server URL is read from the `MOCKSERVER_URL` environment variable (for
+example `http://localhost:1080`); when it is unset the fixture's lifecycle hooks
+are no-ops and tests are skipped via `SkipIfNoServer()`.
+
 ## Requirements
 
 - .NET SDK 8.0+ (for building)
+- `System.Net.WebSockets.ClientWebSocket` (built-in, for breakpoint callback WebSocket)
 - No external runtime dependencies beyond `System.Text.Json` (included via .NET or NuGet for netstandard2.0)
 
 ## License

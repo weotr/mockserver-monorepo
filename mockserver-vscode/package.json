@@ -1,10 +1,15 @@
 {
   "name": "mockserver",
   "displayName": "MockServer",
-  "description": "Start, stop, and manage MockServer Docker containers directly from VS Code",
-  "version": "7.0.1",
-  "publisher": "mock-server",
+  "description": "Author and validate expectation files, generate from OpenAPI, record live traffic, inspect requests and drift, open the in-editor dashboard, and manage a local MockServer Docker container — all without leaving VS Code.",
+  "version": "7.1.0",
+  "publisher": "mockserver",
   "license": "Apache-2.0",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/mock-server/mockserver.git",
@@ -21,17 +26,33 @@
     "mockserver",
     "mock",
     "http",
+    "http2",
+    "http3",
+    "grpc",
+    "quic",
     "api",
     "testing",
-    "docker"
+    "docker",
+    "openapi",
+    "expectations",
+    "dashboard",
+    "proxy",
+    "debugging",
+    "wasm",
+    "drift",
+    "swagger",
+    "stub"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "mockserver.start",
-        "title": "MockServer: Start (Docker)"
+        "title": "MockServer: Start (Docker)",
+        "icon": "$(play)"
       },
       {
         "command": "mockserver.stop",
@@ -39,21 +60,299 @@
       },
       {
         "command": "mockserver.openDashboard",
-        "title": "MockServer: Open Dashboard"
+        "title": "MockServer: Open Dashboard in Browser"
+      },
+      {
+        "command": "mockserver.openDashboardInEditor",
+        "title": "MockServer: Open Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "mockserver.refreshView",
+        "title": "MockServer: Refresh Panel",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "mockserver.loadExpectations",
+        "title": "MockServer: Load Expectations Into Running Server"
+      },
+      {
+        "command": "mockserver.diffAgainstLive",
+        "title": "MockServer: Diff Expectations Against Live Server"
+      },
+      {
+        "command": "mockserver.verifyExpectations",
+        "title": "MockServer: Verify Declared Requests Were Received"
+      },
+      {
+        "command": "mockserver.deleteExpectations",
+        "title": "MockServer: Delete Expectations From Running Server"
+      },
+      {
+        "command": "mockserver.saveRecorded",
+        "title": "MockServer: Save Recorded Expectations (JSON or Java)"
+      },
+      {
+        "command": "mockserver.generateFromOpenApi",
+        "title": "MockServer: Generate Expectations From OpenAPI Spec"
+      },
+      {
+        "command": "mockserver.sendRequest",
+        "title": "MockServer: Send Test Request"
+      },
+      {
+        "command": "mockserver.showDrift",
+        "title": "MockServer: Show Drift Report"
+      },
+      {
+        "command": "mockserver.showDriftDiagnostics",
+        "title": "MockServer: Show Drift as Diagnostics"
+      },
+      {
+        "command": "mockserver.viewRequestLog",
+        "title": "MockServer: View Request Log"
+      },
+      {
+        "command": "mockserver.findByTrace",
+        "title": "MockServer: Find Requests by Trace"
+      },
+      {
+        "command": "mockserver.viewTrace",
+        "title": "MockServer: View Trace in Backend (Jaeger/Tempo)"
+      },
+      {
+        "command": "mockserver.reset",
+        "title": "MockServer: Reset (Clear Expectations & Logs)",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "mockserver.uploadWasm",
+        "title": "MockServer: Upload WASM Module"
+      },
+      {
+        "command": "mockserver.listWasm",
+        "title": "MockServer: List WASM Modules"
+      },
+      {
+        "command": "mockserver.openDebugger",
+        "title": "MockServer: Open Debugger (Breakpoints)",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "mockserver.addBreakpoint",
+        "title": "MockServer: Add Breakpoint Matcher"
+      },
+      {
+        "command": "mockserver.clearBreakpoints",
+        "title": "MockServer: Clear All Breakpoints"
+      },
+      {
+        "command": "mockserver.chaosStatus",
+        "title": "MockServer: Show Chaos Experiment Status"
+      },
+      {
+        "command": "mockserver.stopChaos",
+        "title": "MockServer: Stop Chaos Experiment"
+      },
+      {
+        "command": "mockserver.contractTest",
+        "title": "MockServer: Run OpenAPI Contract Test"
+      },
+      {
+        "command": "mockserver.showCallGraph",
+        "title": "MockServer: Show Agent-Run Call Graph"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mockserver",
+          "title": "MockServer",
+          "icon": "media/activitybar.svg"
+        }
+      ],
+      "panel": [
+        {
+          "id": "mockserverDashboard",
+          "title": "MockServer Dashboard",
+          "icon": "media/activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "mockserver": [
+        {
+          "id": "mockserver.actions",
+          "name": "Actions"
+        }
+      ],
+      "mockserverDashboard": [
+        {
+          "id": "mockserver.dashboard",
+          "name": "Dashboard",
+          "type": "webview"
+        }
+      ]
+    },
     "snippets": [
       {
         "language": "json",
         "path": "./snippets/expectation.json"
+      },
+      {
+        "language": "jsonc",
+        "path": "./snippets/expectation.json"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mockserver.start",
+          "when": "view == mockserver.actions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mockserver.openDashboardInEditor",
+          "when": "view == mockserver.actions",
+          "group": "navigation@2"
+        },
+        {
+          "command": "mockserver.reset",
+          "when": "view == mockserver.actions",
+          "group": "navigation@3"
+        },
+        {
+          "command": "mockserver.refreshView",
+          "when": "view == mockserver.actions",
+          "group": "navigation@4"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "mockserver.refreshView",
+          "when": "false"
+        },
+        {
+          "command": "mockserver.loadExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/"
+        },
+        {
+          "command": "mockserver.diffAgainstLive",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/"
+        },
+        {
+          "command": "mockserver.verifyExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/"
+        },
+        {
+          "command": "mockserver.deleteExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/"
+        },
+        {
+          "command": "mockserver.showDriftDiagnostics",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/"
+        },
+        {
+          "command": "mockserver.sendRequest",
+          "when": "resourceFilename =~ /\\.mockserver-request\\.json$/"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "mockserver.loadExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "mockserver.diffAgainstLive",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "mockserver.sendRequest",
+          "when": "resourceFilename =~ /\\.mockserver-request\\.json$/",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "mockserver.loadExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "mockserver@1"
+        },
+        {
+          "command": "mockserver.verifyExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "mockserver@2"
+        },
+        {
+          "command": "mockserver.diffAgainstLive",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "mockserver@3"
+        },
+        {
+          "command": "mockserver.deleteExpectations",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "mockserver@4"
+        },
+        {
+          "command": "mockserver.showDrift",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "mockserver@5"
+        },
+        {
+          "command": "mockserver.showDriftDiagnostics",
+          "when": "resourceFilename =~ /\\.mockserver\\.jsonc?$/",
+          "group": "mockserver@6"
+        },
+        {
+          "command": "mockserver.sendRequest",
+          "when": "resourceFilename =~ /\\.mockserver-request\\.json$/",
+          "group": "mockserver@1"
+        }
+      ]
+    },
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "*.mockserver.json",
+          "*.mockserver.jsonc"
+        ],
+        "url": "./schemas/mockserver-expectation.schema.json"
+      }
+    ],
+    "configuration": {
+      "title": "MockServer",
+      "properties": {
+        "mockserver.dockerImage": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Docker image used to start MockServer. Leave empty to use `mockserver/mockserver:<extension-version>`, which keeps the image tag in lockstep with this extension."
+        },
+        "mockserver.containerName": {
+          "type": "string",
+          "default": "mockserver-vscode",
+          "description": "Name of the MockServer Docker container started and stopped by this extension."
+        },
+        "mockserver.port": {
+          "type": "number",
+          "default": 1080,
+          "description": "Host port mapped to the MockServer container's port 1080 (used for the dashboard URL and the run command)."
+        },
+        "mockserver.traceUrlTemplate": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "URL template for opening an OpenTelemetry trace in your trace backend (Jaeger, Tempo, Grafana). The `{traceId}` placeholder is replaced with the W3C trace id, e.g. `http://localhost:16686/trace/{traceId}`. Leave empty to just surface the trace id. Used by the **View Trace in Backend** command."
+        }
+      }
+    }
   },
   "scripts": {
+    "generate-schema": "node ../scripts/generate-editor-expectation-schema.mjs",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "node ./out/test/extension.test.js",
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run generate-schema && npm run compile",
     "package": "vsce package",
     "publish:marketplace": "vsce publish -p $VSCE_PAT",
     "publish:openvsx": "ovsx publish -p $OVSX_PAT"
@@ -61,8 +360,13 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.80.0",
+    "@types/ws": "^8.18.1",
     "@vscode/vsce": "^3.0.0",
     "ovsx": "^0.9.0",
     "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1",
+    "ws": "^8.21.0"
   }
 }

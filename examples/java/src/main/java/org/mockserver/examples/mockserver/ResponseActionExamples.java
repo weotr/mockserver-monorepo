@@ -21,7 +21,6 @@ import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.HttpTemplate.template;
 import static org.mockserver.model.JsonBody.json;
-import static org.mockserver.model.NottableString.string;
 
 /**
  * @author jamesdbloom

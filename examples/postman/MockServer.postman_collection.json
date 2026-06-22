@@ -2,160 +2,2546 @@
   "info": {
     "_postman_id": "9d7b6a51-2c84-4f0e-9b2a-7f1c3e5a6b40",
     "name": "MockServer Control Plane",
-    "description": "Drive MockServer's REST control plane: create expectations, verify requests, inspect recorded traffic, and manage server state. Set the `baseUrl` collection variable to your MockServer (default http://localhost:1080). Start MockServer with: docker run -d --rm -p 1080:1080 mockserver/mockserver. Full API: https://www.mock-server.com",
+    "description": "MockServer REST control plane \u2014 every endpoint, generated from the OpenAPI spec (mockserver-openapi.yaml). Set the baseUrl variable to your MockServer instance. https://www.mock-server.com/mock_server/mockserver_clients.html",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "variable": [
-    { "key": "baseUrl", "value": "http://localhost:1080" }
-  ],
   "item": [
     {
-      "name": "Expectations",
+      "name": "expectation",
       "item": [
         {
-          "name": "Create expectation (GET /hello -> 200)",
+          "name": "create expectation",
           "request": {
             "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/expectation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "expectation"
+              ]
+            },
+            "description": "Create expectation.\n\nexpectation(s) to create\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"httpRequest\": { \"method\": \"GET\", \"path\": \"/hello\" },\n  \"httpResponse\": { \"statusCode\": 200, \"body\": \"Hello World\" }\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": { "raw": "{{baseUrl}}/mockserver/expectation", "host": ["{{baseUrl}}"], "path": ["mockserver", "expectation"] },
-            "description": "Register an expectation. Returns 201 with the created expectation(s)."
+              "raw": "{\n  \"httpRequest\": {\n    \"method\": \"GET\",\n    \"path\": \"/api/users\",\n    \"queryStringParameters\": {\n      \"page\": [\n        \"1\"\n      ],\n      \"limit\": [\n        \"10\"\n      ]\n    }\n  },\n  \"httpResponse\": {\n    \"statusCode\": 200,\n    \"headers\": {\n      \"Content-Type\": [\n        \"application/json\"\n      ]\n    },\n    \"body\": \"{\\\"users\\\":[{\\\"id\\\":1,\\\"name\\\":\\\"John Doe\\\"}],\\\"total\\\":1}\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           }
         },
         {
-          "name": "Call the mocked endpoint (GET /hello)",
+          "name": "create expectations from OpenAPI or Swagger",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/openapi",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "openapi"
+              ]
+            },
+            "description": "Create expectations from openapi or swagger.\n\nexpectation(s) to create\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"specUrlOrPayload\": \"https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json\",\n  \"operationsAndResponses\": {\n    \"listPets\": \"200\",\n    \"showPetById\": \"200\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "generate expectation suggestion(s) from an unmatched request",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/generateExpectation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "generateExpectation"
+              ]
+            },
+            "description": "Generates one or more suggested expectations for an unmatched HttpRequest. When 'preview' is true (the default) the suggestions are only returned; when false they are also added. If an LLM backend is configured it is used, otherwise a simple template-based stub is generated.\n\nthe unmatched request to generate expectation(s) for\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"request\": {\n    \"method\": \"POST\",\n    \"path\": \"/api/orders\"\n  },\n  \"preview\": true,\n  \"limit\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "create expectations from a WSDL",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/xml"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/wsdl",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "wsdl"
+              ]
+            },
+            "description": "generates expectations from a WSDL document (the request body is the raw WSDL) and adds them\n\nWSDL document to generate expectations from\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><definitions xmlns=\"http://schemas.xmlsoap.org/wsdl/\" xmlns:soap=\"http://schemas.xmlsoap.org/wsdl/soap/\" xmlns:tns=\"http://example.com/greeting\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" name=\"GreetingService\" targetNamespace=\"http://example.com/greeting\"><types><xsd:schema targetNamespace=\"http://example.com/greeting\"><xsd:element name=\"GreetRequest\"><xsd:complexType><xsd:sequence><xsd:element name=\"name\" type=\"xsd:string\"/></xsd:sequence></xsd:complexType></xsd:element><xsd:element name=\"GreetResponse\"><xsd:complexType><xsd:sequence><xsd:element name=\"greeting\" type=\"xsd:string\"/></xsd:sequence></xsd:complexType></xsd:element></xsd:schema></types><message name=\"GreetRequestMessage\"><part name=\"parameters\" element=\"tns:GreetRequest\"/></message><message name=\"GreetResponseMessage\"><part name=\"parameters\" element=\"tns:GreetResponse\"/></message><portType name=\"GreetingPortType\"><operation name=\"Greet\"><input message=\"tns:GreetRequestMessage\"/><output message=\"tns:GreetResponseMessage\"/></operation></portType><binding name=\"GreetingBinding\" type=\"tns:GreetingPortType\"><soap:binding style=\"document\" transport=\"http://schemas.xmlsoap.org/soap/http\"/><operation name=\"Greet\"><soap:operation soapAction=\"http://example.com/greeting/Greet\"/><input><soap:body use=\"literal\"/></input><output><soap:body use=\"literal\"/></output></operation></binding><service name=\"GreetingService\"><port name=\"GreetingPort\" binding=\"tns:GreetingBinding\"><soap:address location=\"http://localhost:1080/ws/greeting\"/></port></service></definitions>",
+              "options": {
+                "raw": {
+                  "language": "xml"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "create expectations from a GraphQL schema",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/graphql"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/graphql",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "graphql"
+              ],
+              "query": [
+                {
+                  "key": "path",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Generates expectations from a GraphQL schema (the request body is a GraphQL SDL document or an introspection JSON result) and adds them. One expectation is created per root operation type (query / mutation / subscription); each matches any operation of that kind and synthesizes a schema-valid response per request. The optional \"path\" query parameter overrides the default \"/graphql\" request path the generated expectations match.\n\nGraphQL schema to generate expectations from\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "type Query { hello: String } type Mutation { ping: String }",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "create HTTP expectations from an AsyncAPI spec",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/asyncapi/http",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "asyncapi",
+                "http"
+              ]
+            },
+            "description": "Generates HTTP expectations from an AsyncAPI 2.x/3.x spec (JSON/YAML, or a {spec, channelPathPrefix} wrapper) so each channel's example message can be served over plain HTTP without a live broker. One GET expectation is created per channel returning that channel's schema-aware example payload. This is distinct from PUT /mockserver/asyncapi, which loads a spec into the broker-publishing mock. Requires the mockserver-async module on the classpath (501 otherwise).\n\nAsyncAPI spec to import as HTTP expectations\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "verify",
+      "item": [
+        {
+          "name": "verify a request has been received a specific number of times",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "verify"
+              ]
+            },
+            "description": "Verify a request has been received a specific number of times.\n\nrequest matcher and the number of times to match\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"httpRequest\": {\n    \"method\": \"GET\",\n    \"path\": \"/api/users\"\n  },\n  \"times\": {\n    \"atLeast\": 1\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "verify a sequence of request has been received in the specific order",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/verifySequence",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "verifySequence"
+              ]
+            },
+            "description": "Verify a sequence of request has been received in the specific order.\n\nthe sequence of requests matchers\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"httpRequests\": [\n    {\n      \"method\": \"POST\",\n      \"path\": \"/api/login\"\n    },\n    {\n      \"method\": \"GET\",\n      \"path\": \"/api/dashboard\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "compare two HTTP requests field-by-field",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/diff",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "diff"
+              ]
+            },
+            "description": "Diffs an 'expected' against an 'actual' HttpRequest and returns the per-field differences, a total diff count and whether the two requests are identical.\n\nthe two HTTP requests to compare\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expected\": {\n    \"method\": \"GET\",\n    \"path\": \"/api/pets\",\n    \"headers\": {\n      \"Accept\": [\n        \"application/json\"\n      ]\n    }\n  },\n  \"actual\": {\n    \"method\": \"GET\",\n    \"path\": \"/api/pets\",\n    \"headers\": {\n      \"Accept\": [\n        \"text/xml\"\n      ]\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "control",
+      "item": [
+        {
+          "name": "clears expectations and recorded requests that match the request matcher",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/clear",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "clear"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "all",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Clears expectations and recorded requests that match the request matcher.\n\nrequest used to match expectations and record requests to clear\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/api/users\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "clears all expectations and recorded requests",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "reset"
+              ]
+            },
+            "description": "Clears all expectations and recorded requests.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "retrieve recorded requests, active expectations, recorded expectations or log messages",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/retrieve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "retrieve"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "java",
+                  "disabled": true
+                },
+                {
+                  "key": "type",
+                  "value": "logs",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Retrieve recorded requests, active expectations, recorded expectations or log messages.\n\nrequest used to match which recorded requests, expectations or log messages to return, an empty body matches all requests, expectations or log messages\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/api/users\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "return listening ports",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "status"
+              ]
+            },
+            "description": "Return listening ports.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "bind additional listening ports",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/bind",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "bind"
+              ]
+            },
+            "description": "only supported on Netty version\n\nlist of ports to bind to, where 0 indicates dynamically bind to any available port\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ports\": [\n    1090\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retrieve the OpenAPI specification for MockServer",
           "request": {
             "method": "GET",
             "header": [],
-            "url": { "raw": "{{baseUrl}}/hello", "host": ["{{baseUrl}}"], "path": ["hello"] },
-            "description": "Calls the endpoint mocked above — returns 200 'Hello World'."
-          }
-        },
-        {
-          "name": "Retrieve active expectations",
-          "request": {
-            "method": "PUT",
-            "header": [],
             "url": {
-              "raw": "{{baseUrl}}/mockserver/retrieve?type=active_expectations&format=json",
-              "host": ["{{baseUrl}}"],
-              "path": ["mockserver", "retrieve"],
-              "query": [
-                { "key": "type", "value": "active_expectations" },
-                { "key": "format", "value": "json" }
+              "raw": "{{baseUrl}}/mockserver/openapi.yaml",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "openapi.yaml"
               ]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "name": "Verify",
-      "item": [
-        {
-          "name": "Verify request received",
-          "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"httpRequest\": { \"path\": \"/hello\" },\n  \"times\": { \"atLeast\": 1 }\n}",
-              "options": { "raw": { "language": "json" } }
             },
-            "url": { "raw": "{{baseUrl}}/mockserver/verify", "host": ["{{baseUrl}}"], "path": ["mockserver", "verify"] },
-            "description": "202 if the request was received the expected number of times; 406 with a failure message otherwise."
+            "description": "returns the OpenAPI specification describing the MockServer REST API in YAML format\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
           }
         },
         {
-          "name": "Verify sequence",
+          "name": "retrieve the current configuration",
           "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"httpRequests\": [\n    { \"path\": \"/hello\" }\n  ]\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": { "raw": "{{baseUrl}}/mockserver/verifySequence", "host": ["{{baseUrl}}"], "path": ["mockserver", "verifySequence"] },
-            "description": "Verify a set of requests were received in the given order."
-          }
-        }
-      ]
-    },
-    {
-      "name": "Traffic",
-      "item": [
-        {
-          "name": "Retrieve recorded requests",
-          "request": {
-            "method": "PUT",
+            "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/mockserver/retrieve?type=requests&format=json",
-              "host": ["{{baseUrl}}"],
-              "path": ["mockserver", "retrieve"],
-              "query": [
-                { "key": "type", "value": "requests" },
-                { "key": "format", "value": "json" }
+              "raw": "{{baseUrl}}/mockserver/configuration",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "configuration"
               ]
+            },
+            "description": "returns the current MockServer configuration as JSON\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "update the current configuration",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/configuration",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "configuration"
+              ]
+            },
+            "description": "updates MockServer configuration properties at runtime, only non-null fields in the request body are applied\n\nconfiguration properties to update, only non-null fields are applied\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"logLevel\": \"INFO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           }
         },
         {
-          "name": "Retrieve logs",
+          "name": "control the server clock for deterministic time-based testing",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/clock",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "clock"
+              ]
+            },
+            "description": "Freeze, advance, or reset MockServer's internal clock. The controllable clock affects response template date/time helpers (now_iso_8601, now_epoch, now_rfc_1123, dates.*) and expectation TimeToLive expiry. Event-log timestamps and JWT issuance are not affected.\n\nclock action to perform\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"freeze\",\n  \"instant\": \"2026-01-15T10:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retrieve the current server clock status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/clock",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "clock"
+              ]
+            },
+            "description": "Returns the current instant, epoch milliseconds, and whether the clock is frozen.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "set the proxy / mock operating mode",
           "request": {
             "method": "PUT",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/mockserver/retrieve?type=logs",
-              "host": ["{{baseUrl}}"],
-              "path": ["mockserver", "retrieve"],
-              "query": [{ "key": "type", "value": "logs" }]
+              "raw": "{{baseUrl}}/mockserver/mode?mode=SIMULATE",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "mode"
+              ],
+              "query": [
+                {
+                  "key": "mode",
+                  "value": "SIMULATE"
+                }
+              ]
+            },
+            "description": "Sets the operating mode that controls how unmatched requests are handled. SIMULATE matches expectations and returns a 404 for unmatched requests; SPY matches expectations but forwards (and records) unmatched requests to the real downstream; CAPTURE forwards and records all traffic (the same proxy-on-no-match behaviour as SPY).\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "retrieve the current proxy / mock operating mode",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/mode",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "mode"
+              ]
+            },
+            "description": "returns the current operating mode and whether unmatched requests are proxied\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "register or update a record/replay cassette",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/cassettes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "cassettes"
+              ]
+            },
+            "description": "Registers (or updates) a cassette entry in the in-memory cassette registry from a JSON body. The 'path' field is required; 'filename', 'expectationCount' and 'origin' are optional.\n\ncassette registration details\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/api/users\",\n  \"filename\": \"users-cassette.json\",\n  \"expectationCount\": 3,\n  \"origin\": \"test\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list registered cassettes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/cassettes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "cassettes"
+              ]
+            },
+            "description": "returns all registered cassettes held in the in-memory cassette registry\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "remove a registered cassette",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/cassettes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "cassettes"
+              ],
+              "query": [
+                {
+                  "key": "path",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "removes a cassette by path, supplied either as the 'path' query parameter or a JSON body with a 'path' field\n\npath of the cassette to remove (alternative to the query parameter)\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"path\": \"/api/users\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "replay a previously recorded request to its original target",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "replay"
+              ]
+            },
+            "description": "Re-issues a previously recorded or proxied HTTP request to its upstream target and returns the upstream response. The target host/port is resolved from the socketAddress field or the Host header in the submitted HttpRequest JSON. Subject to the SSRF policy (mockserver.forwardProxyBlockPrivateNetworks) and a 10 MB body-size cap on both the outbound request and the upstream response.\n\nthe HTTP request to replay to its original upstream target\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"PUT\",\n  \"path\": \"/mockserver/status\",\n  \"headers\": {\n    \"Host\": [\n      \"localhost:1080\"\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "register a breakpoint matcher",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/breakpoint/matcher",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "breakpoint",
+                "matcher"
+              ]
+            },
+            "description": "Registers a request matcher that activates breakpoints for forwarded/proxied exchanges. When a proxied request matches the httpRequest definition, the exchange is paused at each specified phase. Returns the assigned matcher id and the registered phases. The clientId field is required \u2014 paused items are dispatched over the callback WebSocket (/_mockserver_callback_websocket) to the owning client for interactive resolution.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"httpRequest\": {\n    \"method\": \"GET\",\n    \"path\": \"/api/test\"\n  },\n  \"phases\": [\n    \"REQUEST\"\n  ],\n  \"clientId\": \"test-client-123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list all registered breakpoint matchers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/breakpoint/matchers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "breakpoint",
+                "matchers"
+              ]
+            },
+            "description": "Returns all currently registered breakpoint matchers. Each entry includes the matcher id, the httpRequest definition, the set of phases, and the clientId.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "list all registered breakpoint matchers (PUT variant)",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/breakpoint/matchers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "breakpoint",
+                "matchers"
+              ]
+            },
+            "description": "Same as GET /mockserver/breakpoint/matchers. The PUT variant exists for consistency with other control-plane endpoints that use PUT for idempotent queries.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "remove a registered breakpoint matcher",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/breakpoint/matcher/remove",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "breakpoint",
+                "matcher",
+                "remove"
+              ]
+            },
+            "description": "Removes a previously registered breakpoint matcher by id. Returns status \"removed\" on success or 404 if no matcher with the given id exists.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"78fa44ff-5989-467a-ba44-ff5989667a71\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "remove all registered breakpoint matchers",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/breakpoint/matcher/clear",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "breakpoint",
+                "matcher",
+                "clear"
+              ]
+            },
+            "description": "Removes all registered breakpoint matchers. After this call, no exchanges will be paused at breakpoints until new matchers are registered. Returns the number of matchers cleared.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "stop running process",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/stop",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "stop"
+              ]
+            },
+            "description": "only supported on Netty version\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "import",
+      "item": [
+        {
+          "name": "import expectations from a HAR or Postman collection",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/import",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "import"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "har",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Converts an HTTP Archive (HAR) export or a Postman collection into MockServer expectations and adds them. The format is auto-detected from the document structure or can be forced with the format query parameter.\n\nHAR or Postman collection JSON document to import\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"log\": {\n    \"version\": \"1.2\",\n    \"entries\": [\n      {\n        \"request\": {\n          \"method\": \"GET\",\n          \"url\": \"http://example.com/api/users\",\n          \"headers\": [],\n          \"queryString\": []\n        },\n        \"response\": {\n          \"status\": 200,\n          \"headers\": [],\n          \"content\": {\n            \"text\": \"{\\\"users\\\":[{\\\"id\\\":1,\\\"name\\\":\\\"Alice\\\"}]}\"\n          }\n        }\n      }\n    ]\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             }
           }
         }
       ]
     },
     {
-      "name": "Manage",
+      "name": "crud",
       "item": [
         {
-          "name": "Status",
+          "name": "register a generated CRUD data store",
           "request": {
             "method": "PUT",
-            "header": [],
-            "url": { "raw": "{{baseUrl}}/mockserver/status", "host": ["{{baseUrl}}"], "path": ["mockserver", "status"] },
-            "description": "Returns the bound ports — a simple readiness check."
-          }
-        },
-        {
-          "name": "Clear (by request matcher)",
-          "request": {
-            "method": "PUT",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/crud",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "crud"
+              ]
+            },
+            "description": "Registers a REST resource backed by an in-memory data store that automatically handles list, read, create, update and delete operations under the supplied base path.\n\nCRUD resource definition including the base path and id strategy\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"path\": \"/hello\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"basePath\": \"/api/users\",\n  \"idField\": \"id\",\n  \"idStrategy\": \"AUTO_INCREMENT\",\n  \"initialData\": [\n    {\n      \"id\": 1,\n      \"name\": \"Alice\",\n      \"email\": \"alice@example.com\"\n    },\n    {\n      \"id\": 2,\n      \"name\": \"Bob\",\n      \"email\": \"bob@example.com\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "files",
+      "item": [
+        {
+          "name": "store a file in the file store",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/files/store",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "files",
+                "store"
+              ]
             },
-            "url": { "raw": "{{baseUrl}}/mockserver/clear", "host": ["{{baseUrl}}"], "path": ["mockserver", "clear"] },
-            "description": "Clear expectations and recorded requests matching the body (or all when empty)."
+            "description": "stores a file (text or base64-encoded binary) under the supplied name in the in-memory file store\n\nfile name and content to store\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"template.json\",\n  \"content\": \"{\\\"status\\\":\\\"ok\\\"}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           }
         },
         {
-          "name": "Reset (everything)",
+          "name": "retrieve a file from the file store",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/files/retrieve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "files",
+                "retrieve"
+              ]
+            },
+            "description": "returns the raw bytes of a previously stored file\n\nname of the file to retrieve\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"template.json\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list files in the file store",
           "request": {
             "method": "PUT",
             "header": [],
-            "url": { "raw": "{{baseUrl}}/mockserver/reset", "host": ["{{baseUrl}}"], "path": ["mockserver", "reset"] },
-            "description": "Remove ALL expectations and recorded requests."
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/files/list",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "files",
+                "list"
+              ]
+            },
+            "description": "returns the names of all files currently held in the in-memory file store\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "delete a file from the file store",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/files/delete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "files",
+                "delete"
+              ]
+            },
+            "description": "removes a previously stored file from the in-memory file store\n\nname of the file to delete\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"template.json\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "chaos",
+      "item": [
+        {
+          "name": "register, remove or clear service-scoped HTTP chaos",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/serviceChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "serviceChaos"
+              ]
+            },
+            "description": "Registers an HTTP chaos / fault-injection profile for a downstream host, removes a host's profile, or clears all service-scoped chaos. Supply a 'host' with a 'chaos' object to register, 'host' with 'remove':true (or no 'chaos') to remove a single host, or 'clear':true to clear all.\n\nservice chaos registration, removal or clear instruction\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"host\": \"payments.internal:8443\",\n  \"chaos\": {\n    \"errorStatus\": 503,\n    \"errorProbability\": 0.3,\n    \"latency\": {\n      \"timeUnit\": \"MILLISECONDS\",\n      \"value\": 200\n    }\n  },\n  \"ttlMillis\": 60000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list registered service-scoped HTTP chaos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/serviceChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "serviceChaos"
+              ]
+            },
+            "description": "returns all registered service-scoped chaos profiles keyed by host, plus any remaining time-to-live\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "update an existing service-scoped HTTP chaos profile (JSON Merge Patch)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/serviceChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "serviceChaos"
+              ]
+            },
+            "description": "Applies a JSON Merge Patch to an already-registered service-scoped chaos profile for a host, updating only the supplied fields and leaving the rest unchanged.\n\nJSON Merge Patch with 'host' and the chaos fields to update\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"host\": \"payments.internal:8443\",\n  \"chaos\": {\n    \"errorProbability\": 0.5\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "register, remove or clear TCP chaos",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/tcpChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "tcpChaos"
+              ]
+            },
+            "description": "Registers a TCP-layer chaos / fault-injection profile for a downstream host, removes a host's profile, or clears all TCP chaos. Supply a 'host' with a 'chaos' object to register, 'host' with 'remove':true (or no 'chaos') to remove a single host, or 'clear':true to clear all.\n\nTCP chaos registration, removal or clear instruction\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"host\": \"slow-api.example.com\",\n  \"chaos\": {\n    \"bandwidthBytesPerSec\": 1024,\n    \"latencyMs\": 50\n  },\n  \"ttlMillis\": 30000\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list registered TCP chaos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/tcpChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "tcpChaos"
+              ]
+            },
+            "description": "returns all registered TCP chaos profiles keyed by host, plus any remaining time-to-live\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "update an existing TCP chaos profile (JSON Merge Patch)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/tcpChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "tcpChaos"
+              ]
+            },
+            "description": "Applies a JSON Merge Patch to an already-registered TCP chaos profile for a host, updating only the supplied fields and leaving the rest unchanged.\n\nJSON Merge Patch with 'host' and the TCP chaos fields to update\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"host\": \"slow-api.example.com\",\n  \"chaos\": {\n    \"slicerChunkSize\": 256\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "register, remove or clear gRPC chaos",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpcChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpcChaos"
+              ]
+            },
+            "description": "Registers a gRPC chaos / fault-injection profile for a service, removes a service's profile, or clears all gRPC chaos. Supply a 'service' with a 'chaos' object to register, 'service' with 'remove':true (or no 'chaos') to remove a single service, or 'clear':true to clear all.\n\ngRPC chaos registration, removal or clear instruction\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service\": \"com.example.OrderService\",\n  \"chaos\": {\n    \"errorStatusCode\": \"UNAVAILABLE\",\n    \"errorMessage\": \"service maintenance\",\n    \"errorProbability\": 0.5,\n    \"latencyMs\": 100\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list registered gRPC chaos",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpcChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpcChaos"
+              ]
+            },
+            "description": "returns all registered gRPC chaos profiles keyed by service, plus any remaining time-to-live\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "update an existing gRPC chaos profile (JSON Merge Patch)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpcChaos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpcChaos"
+              ]
+            },
+            "description": "Applies a JSON Merge Patch to an already-registered gRPC chaos profile for a service, updating only the supplied fields and leaving the rest unchanged.\n\nJSON Merge Patch with 'service' and the gRPC chaos fields to update\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service\": \"com.example.OrderService\",\n  \"chaos\": {\n    \"errorProbability\": 0.8\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "start a scheduled multi-stage chaos experiment",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment"
+              ]
+            },
+            "description": "Starts a chaos experiment with an ordered sequence of stages, each applying service-scoped chaos profiles to one or more hosts for a specified duration. Stages progress automatically. Only one experiment may be active at a time; starting a new one stops the previous one. Safety limits: max 50 stages, max 24h per stage duration, auto-halt integration.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"gradual-degradation\",\n  \"stages\": [\n    {\n      \"durationMillis\": 10000,\n      \"profiles\": {\n        \"api.example.com\": {\n          \"errorStatus\": 500,\n          \"errorProbability\": 0.1\n        }\n      }\n    },\n    {\n      \"durationMillis\": 10000,\n      \"profiles\": {\n        \"api.example.com\": {\n          \"errorStatus\": 500,\n          \"errorProbability\": 0.5\n        }\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "get the status of the current chaos experiment",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment"
+              ]
+            },
+            "description": "Returns the current experiment status including name, running status (running/completed/halted_by_auto_halt/stopped), current stage index, total stages, elapsed/remaining time, loop iteration count, and the full experiment definition. Returns null/empty when no experiment is or was recently active.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "stop the current chaos experiment",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment"
+              ]
+            },
+            "description": "Stops the current experiment and clears all chaos from the service registry. Idempotent \u2014 no-op if no experiment is running.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "cordon and drain the server (preemption simulation)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/preemption",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "preemption"
+              ]
+            },
+            "description": "Simulates a connection-lifecycle preemption (e.g. a Kubernetes node drain or spot reclamation). While cordoned, new exchanges are signalled to back off \u2014 by a 503 + Connection: close, an HTTP/2 GOAWAY frame, or both \u2014 while in-flight requests are allowed to drain. The simulation is server-scoped and does not stop the JVM. An empty body uses defaults (mode \"both\", drainMillis from stopDrainMillis, no TTL). drainMillis and ttlMillis are clamped to preemptionSimulationMaxDrainMillis.\n\npreemption simulation parameters (all fields optional)\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"both\",\n  \"drainMillis\": 10000,\n  \"ttlMillis\": 60000,\n  \"lastStreamId\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retrieve the current preemption status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/preemption",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "preemption"
+              ]
+            },
+            "description": "Returns the current cordon/drain status: state (inactive / draining / drained), the number of in-flight requests, the remaining drain window in milliseconds and the active signalling mode.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "uncordon the server (clear preemption)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/preemption",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "preemption"
+              ]
+            },
+            "description": "Explicitly clears any active preemption simulation, returning the server to normal operation. Idempotent \u2014 returns 200 whether or not a simulation was active.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "list saved chaos profile names",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment/profiles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment",
+                "profiles"
+              ]
+            },
+            "description": "returns the names of all saved chaos experiment profiles, sorted ascending\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "save a chaos experiment profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment/profiles/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment",
+                "profiles",
+                "checkout"
+              ]
+            },
+            "description": "Saves a chaos experiment definition (the same body shape as PUT /mockserver/chaosExperiment) under the given name so it can be applied later with POST /mockserver/chaosExperiment/apply/{name}. The name in the path is authoritative; any name field in the body is ignored. The name must be 1-128 characters of letters, digits, space, dot, underscore or hyphen with no leading/trailing space.\n\nchaos experiment definition to save\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stages\": [\n    {\n      \"durationMillis\": 30000,\n      \"profiles\": {\n        \"payments.svc\": {\n          \"errorStatus\": 503,\n          \"errorProbability\": 0.5\n        }\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retrieve a saved chaos profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment/profiles/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment",
+                "profiles",
+                "checkout"
+              ]
+            },
+            "description": "returns the full saved chaos experiment definition stored under the given name\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "delete a saved chaos profile",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment/profiles/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment",
+                "profiles",
+                "checkout"
+              ]
+            },
+            "description": "Removes the saved chaos profile with the given name. Idempotent \u2014 returns 200 with status \"deleted\" when the profile existed, or \"absent\" when it did not.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "apply a saved chaos profile",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/chaosExperiment/apply/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "chaosExperiment",
+                "apply",
+                "checkout"
+              ]
+            },
+            "description": "Starts the chaos experiment previously saved under the given name (as if its definition had been sent to PUT /mockserver/chaosExperiment). The request body is ignored.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "drift",
+      "item": [
+        {
+          "name": "retrieve recorded mock drift",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/drift",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "drift"
+              ],
+              "query": [
+                {
+                  "key": "expectationId",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Returns recorded drift records (differences between expectations and observed responses), optionally filtered by expectation id and limited in count.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "clear all recorded mock drift",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/drift/clear",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "drift",
+                "clear"
+              ]
+            },
+            "description": "removes all recorded drift records\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "audit",
+      "item": [
+        {
+          "name": "retrieve the control-plane audit log",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/audit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "audit"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "200",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Returns the most-recent control-plane audit entries (one per authorised control-plane mutation, newest first). Off by default \u2014 enable with controlPlaneAuditEnabled. Each entry records redacted, structural metadata only (method, control-plane path with query string dropped, logical operation, source address, best-effort principal, outcome); it never contains request headers or bodies.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "scenario",
+      "item": [
+        {
+          "name": "list all scenarios and their current state",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/scenario",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "scenario"
+              ]
+            },
+            "description": "Returns every known stateful scenario and its current state. Scenarios are created implicitly by registering expectations with a scenarioName / scenarioState, or explicitly via PUT /mockserver/scenario/{name}. All scenario state is reset when MockServer is reset.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "get the current state of one scenario",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/scenario/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "scenario",
+                "checkout"
+              ]
+            },
+            "description": "Returns the current state of the named scenario (null when the scenario has no state yet).\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "set a scenario's state, optionally scheduling a timed auto-transition",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/scenario/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "scenario",
+                "checkout"
+              ]
+            },
+            "description": "Sets the named scenario to the given state immediately. Optionally schedules a timed auto-transition to nextState after transitionAfterMs milliseconds; the transition only fires if the scenario is still in the set state when the timer expires, and scheduling a new transition cancels any pending one.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"state\": \"Pending\",\n  \"transitionAfterMs\": 5000,\n  \"nextState\": \"Completed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "externally trigger a scenario state transition",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/scenario/checkout/trigger",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "scenario",
+                "checkout",
+                "trigger"
+              ]
+            },
+            "description": "Advances the named scenario to newState immediately. Intended for driving a scenario forward from a test harness or CI pipeline.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newState\": \"Failed\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "oidc",
+      "item": [
+        {
+          "name": "generate a turnkey OIDC / OAuth2 provider",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/oidc",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "oidc"
+              ]
+            },
+            "description": "Generates a set of expectations that emulate an OpenID Connect / OAuth2 provider (discovery document, JWKS, token, authorize, userinfo and related endpoints) and adds them. An empty body uses the default provider configuration.\n\nOIDC provider configuration\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"issuer\": \"http://localhost:1080\",\n  \"clientId\": \"my-app\",\n  \"subject\": \"test-user\",\n  \"audience\": \"api://my-api\",\n  \"scopes\": [\n    \"openid\",\n    \"profile\",\n    \"email\"\n  ],\n  \"tokenExpirySeconds\": 7200\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "saml",
+      "item": [
+        {
+          "name": "generate a turnkey SAML identity provider",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/saml",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "saml"
+              ]
+            },
+            "description": "Generates a set of expectations that emulate a SAML 2.0 identity provider (metadata, single sign-on and single logout endpoints) and adds them. An empty body uses the default provider configuration.\n\nSAML provider configuration\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"idpEntityId\": \"http://localhost:1080/saml/idp\",\n  \"spEntityId\": \"urn:my-app:sp\",\n  \"scopes\": [\n    \"profile\",\n    \"email\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "scim",
+      "item": [
+        {
+          "name": "generate a turnkey SCIM provisioning provider",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/scim",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "scim"
+              ]
+            },
+            "description": "Generates a set of expectations that emulate a SCIM 2.0 provisioning provider (Users, Groups and ServiceProviderConfig endpoints) and adds them. An empty body uses the default provider configuration.\n\nSCIM provider configuration\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"basePath\": \"/scim/v2\",\n  \"requireBearerToken\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "asyncapi",
+      "item": [
+        {
+          "name": "load an AsyncAPI specification",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/asyncapi",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "asyncapi"
+              ]
+            },
+            "description": "Loads an AsyncAPI specification (JSON or YAML), or a { spec, brokerConfig } document, to mock the described message broker. Requires the mockserver-async module on the classpath.\n\nAsyncAPI specification or spec plus broker configuration\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"spec\": \"asyncapi: 2.6.0\\ninfo:\\n  title: Test Service\\n  version: 1.0.0\\nchannels:\\n  user/signedup:\\n    publish:\\n      message:\\n        payload:\\n          type: object\\n          properties:\\n            userId:\\n              type: string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retrieve AsyncAPI mock status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/asyncapi",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "asyncapi"
+              ]
+            },
+            "description": "returns the status of the currently loaded AsyncAPI mock. Requires the mockserver-async module on the classpath.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "verify AsyncAPI messages",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/asyncapi/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "asyncapi",
+                "verify"
+              ]
+            },
+            "description": "Verifies that messages were published/received against the loaded AsyncAPI mock. Requires the mockserver-async module on the classpath.\n\nAsyncAPI message verification request\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channel\": \"user/signedup\",\n  \"count\": {\n    \"atLeast\": 0\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "wasm",
+      "item": [
+        {
+          "name": "load a WebAssembly custom rule module",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/octet-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/wasm/modules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "wasm",
+                "modules"
+              ],
+              "query": [
+                {
+                  "key": "name",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "stores a compiled WebAssembly module (raw .wasm bytes) under the name supplied in the query parameter\n\nBinary upload of a compiled WebAssembly module. Disabled by default \u2014 enable with `MOCKSERVER_WASM_ENABLED=true` (or `-Dmockserver.wasmEnabled=true`). Requires the `?name=<moduleName>` query parameter. Send the raw .wasm bytes with Content-Type application/octet-stream.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "list loaded WebAssembly modules",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/wasm/modules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "wasm",
+                "modules"
+              ]
+            },
+            "description": "returns the names of all currently loaded WebAssembly custom rule modules\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "grpc",
+      "item": [
+        {
+          "name": "load a gRPC proto descriptor set",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/octet-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpc/descriptors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpc",
+                "descriptors"
+              ]
+            },
+            "description": "loads a compiled protobuf FileDescriptorSet (raw bytes) so gRPC services can be matched and mocked\n\nBinary upload of a compiled protobuf FileDescriptorSet (the .desc file produced by `protoc --descriptor_set_out`). Send the raw bytes with Content-Type application/octet-stream.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "set a gRPC health serving status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpc/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpc",
+                "health"
+              ]
+            },
+            "description": "Sets the gRPC health-checking serving status for a service (an empty service name sets the default), or removes a service override with 'remove':true.\n\ngRPC service name and serving status\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"service\": \"helloworld.Greeter\",\n  \"status\": \"SERVING\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "retrieve gRPC health serving statuses",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpc/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpc",
+                "health"
+              ]
+            },
+            "description": "returns the configured gRPC health serving status for each service (the default is reported under \"_default\")\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "list loaded gRPC services",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpc/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpc",
+                "services"
+              ]
+            },
+            "description": "Returns the gRPC services available from the loaded proto descriptor set, each with its methods and their input/output types and streaming flags.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "reset the gRPC descriptor store",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/grpc/clear",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "grpc",
+                "clear"
+              ]
+            },
+            "description": "clears all loaded gRPC proto descriptors and the services derived from them\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "troubleshooting",
+      "item": [
+        {
+          "name": "explain why recent requests did not match any expectation",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/explainUnmatched",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "explainUnmatched"
+              ]
+            },
+            "description": "Returns a diagnostic report for recently recorded unmatched requests, including the closest-matching expectations and the per-field differences that prevented a match. An optional 'limit' in the body bounds how many unmatched requests are analysed (default 10).\n\noptional limit on the number of unmatched requests to analyse\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"limit\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "return per-expectation mismatch debug information for a request",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/debugMismatch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "debugMismatch"
+              ]
+            },
+            "description": "Evaluates the supplied HttpRequest against every active expectation and returns, for each, whether it matched and the per-field differences, plus the closest match. Only HttpRequest definitions are supported (not OpenAPI definitions).\n\nthe request to evaluate against all active expectations\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"GET\",\n  \"path\": \"/api/unknown-endpoint\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "pact",
+      "item": [
+        {
+          "name": "export active expectations as a Pact contract",
+          "request": {
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/pact",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "pact"
+              ],
+              "query": [
+                {
+                  "key": "consumer",
+                  "value": "",
+                  "disabled": true
+                },
+                {
+                  "key": "provider",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Exports the current active expectations as a Pact consumer-driven contract (JSON). The optional 'consumer' and 'provider' query parameters set the contract's consumer and provider names.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "verify active expectations against a Pact contract",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/pact/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "pact",
+                "verify"
+              ]
+            },
+            "description": "Verifies the supplied Pact contract (JSON) against the current expectations and returns the verification result. Returns 202 when verification passes and 406 when it fails.\n\nthe Pact contract to verify\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"consumer\": {\n    \"name\": \"web-app\"\n  },\n  \"provider\": {\n    \"name\": \"api-service\"\n  },\n  \"interactions\": [\n    {\n      \"description\": \"a health check request\",\n      \"request\": {\n        \"method\": \"GET\",\n        \"path\": \"/api/health\"\n      },\n      \"response\": {\n        \"status\": 200,\n        \"headers\": {\n          \"content-type\": \"application/json\"\n        },\n        \"body\": {\n          \"status\": \"ok\"\n        }\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "loadgen",
+      "item": [
+        {
+          "name": "load (register) a load scenario into the registry",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario"
+              ]
+            },
+            "description": "Loads (registers) an API load scenario into the named registry under its \"name\" (the unique registry key). Loading does NOT run the scenario \u2014 it is staged in the LOADED state, ready to be triggered by PUT /mockserver/loadScenario/start. Loading the same name replaces the prior definition. A scenario is an ordered list of templated request steps driven through a sequence of stages (a load profile): a stage holds/ramps virtual users (VU, closed model), holds/ramps an arrival rate in iterations/second (RATE, open model), or pauses; an optional startDelayMillis defers the start after a trigger. Loading is allowed even when loadGenerationEnabled is false (no traffic is generated). Hard caps validated at load time: max 50 virtual users, max 5000 iterations/second, max 20 stages, max 50 steps, max 1h total duration.\n\nthe load scenario to load (register)\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"checkout-load\",\n  \"templateType\": \"VELOCITY\",\n  \"maxRequests\": 5000,\n  \"startDelayMillis\": 0,\n  \"profile\": {\n    \"stages\": [\n      {\n        \"type\": \"VU\",\n        \"startVus\": 1,\n        \"endVus\": 10,\n        \"durationMillis\": 30000,\n        \"curve\": \"LINEAR\"\n      },\n      {\n        \"type\": \"VU\",\n        \"vus\": 10,\n        \"durationMillis\": 60000\n      }\n    ]\n  },\n  \"steps\": [\n    {\n      \"request\": {\n        \"method\": \"GET\",\n        \"path\": \"/api/item/$iteration.index\",\n        \"headers\": {\n          \"Host\": [\n            \"target.svc:8080\"\n          ]\n        },\n        \"socketAddress\": {\n          \"host\": \"target.svc\",\n          \"port\": 8080,\n          \"scheme\": \"HTTP\"\n        }\n      },\n      \"thinkTime\": {\n        \"timeUnit\": \"MILLISECONDS\",\n        \"value\": 20\n      }\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "list all registered load scenarios",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario"
+              ]
+            },
+            "description": "Lists every registered load scenario with its lifecycle state (LOADED / PENDING / RUNNING / COMPLETED / STOPPED), startDelayMillis, full definition, and \u2014 when active or recently run \u2014 the live status fields (stage, virtual users, request counts, latency percentiles, run id, timestamps).\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "clear the load scenario registry",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario"
+              ]
+            },
+            "description": "Removes ALL registered load scenarios, stopping any that are running. Idempotent.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "retrieve one registered load scenario",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "checkout"
+              ]
+            },
+            "description": "Returns a single registered load scenario (definition + state + live/terminal status). 404 if not registered.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "remove one registered load scenario",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/checkout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "checkout"
+              ]
+            },
+            "description": "Removes a single load scenario from the registry, stopping it first if it is running.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "trigger registered load scenario(s) to run",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/start",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "start"
+              ]
+            },
+            "description": "Triggers one or more registered load scenarios to start running concurrently. Each gets a fresh run id and honours its own startDelayMillis (a positive delay \u2192 the scenario is PENDING until the delay elapses, then RUNNING). Requires loadGenerationEnabled=true (else 403). 404 if a name is not registered. Rejected with 400 if it would exceed loadGenerationMaxConcurrentScenarios (default 10). Re-triggering an already-active name replaces that run.\n\nthe registered scenario name(s) to trigger\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "stop running load scenario(s)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/stop",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "stop"
+              ]
+            },
+            "description": "Stops one or more running load scenarios. Body is {\"names\":[...]}, {\"all\":true}, or an empty body (stop all running). Stopped scenarios stay registered (state STOPPED) and can be re-triggered.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        }
+      ]
+    },
+    {
+      "name": "slo",
+      "item": [
+        {
+          "name": "verify a service-level objective over a window",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/verifySLO",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "verifySLO"
+              ]
+            },
+            "description": "Evaluates a named set of objectives (latency percentiles, error rate) over a time window against the recorded forward-path SLI samples and returns a PASS / FAIL / INCONCLUSIVE verdict. The HTTP status encodes the verdict so a CI or chaos gate can assert on the status code alone: 200 when the verdict is PASS or INCONCLUSIVE, 406 when it is FAIL. A criteria PASSes only when all objectives hold (logical AND); it is INCONCLUSIVE when an indicator cannot be computed or the window holds fewer than minimumSampleCount samples. Off by default \u2014 returns 400 until sloTrackingEnabled=true.\n\nthe service-level objective criteria to evaluate\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"checkout-slo\",\n  \"window\": {\n    \"type\": \"LOOKBACK\",\n    \"lookbackMillis\": 60000\n  },\n  \"minimumSampleCount\": 20,\n  \"upstreamHosts\": [\n    \"payments.svc\"\n  ],\n  \"objectives\": [\n    {\n      \"sli\": \"LATENCY_P95\",\n      \"comparator\": \"LESS_THAN\",\n      \"threshold\": 250.0,\n      \"scope\": \"FORWARD\"\n    },\n    {\n      \"sli\": \"ERROR_RATE\",\n      \"comparator\": \"LESS_THAN_OR_EQUAL\",\n      \"threshold\": 0.01\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "contract",
+      "item": [
+        {
+          "name": "run an OpenAPI spec as a contract test against a live service",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/contractTest",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "contractTest"
+              ]
+            },
+            "description": "Runs each operation of an OpenAPI specification against a live service and validates that the actual responses conform to the spec. Supply the spec as a URL, file path or inline JSON/YAML (\"spec\", or its alias \"specUrlOrPayload\"), the base URL of the service under test (\"baseUrl\"), and optionally a single \"operationId\" to restrict the run. The target host is subject to the SSRF policy (forwardProxyBlockPrivateNetworks). Returns a per-operation pass/fail report.\n\nthe OpenAPI spec and live-service base URL to contract-test\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"spec\": \"https://petstore.swagger.io/v2/swagger.json\",\n  \"baseUrl\": \"http://localhost:8080\",\n  \"operationId\": \"listPets\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           }
         }
       ]
     }
-  ]
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:1080"
+    },
+    {
+      "key": "bearerToken",
+      "value": ""
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{bearerToken}}",
+        "type": "string"
+      }
+    ]
+  }
 }

@@ -3,11 +3,15 @@ import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
 import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
 import Button from '@mui/material/Button';
 import TextField from '@mui/material/TextField';
 import Alert from '@mui/material/Alert';
 import Typography from '@mui/material/Typography';
 import { importWsdl } from '../lib/wsdlImport';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+import HumanErrorAlert from './HumanErrorAlert';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 
 interface WsdlImportDialogProps {
@@ -21,9 +25,11 @@ interface WsdlImportDialogProps {
  * creating one expectation per SOAP operation.
  */
 export default function WsdlImportDialog({ open, onClose, connectionParams }: WsdlImportDialogProps) {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
   const [wsdl, setWsdl] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HumanError | null>(null);
   const [createdCount, setCreatedCount] = useState<number | null>(null);
 
   const handleImport = async () => {
@@ -34,7 +40,7 @@ export default function WsdlImportDialog({ open, onClose, connectionParams }: Ws
       const created = await importWsdl(connectionParams, wsdl);
       setCreatedCount(created.length);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanizeError(e));
     } finally {
       setBusy(false);
     }
@@ -48,8 +54,8 @@ export default function WsdlImportDialog({ open, onClose, connectionParams }: Ws
   };
 
   return (
-    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth>
-      <DialogTitle>Import WSDL</DialogTitle>
+    <Dialog open={open} onClose={handleClose} maxWidth="md" fullWidth fullScreen={fullScreen} aria-labelledby="wsdl-dialog-title">
+      <DialogTitle id="wsdl-dialog-title">Import WSDL</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           Paste a WSDL 1.1 document (SOAP 1.1 or 1.2). MockServer generates one expectation per
@@ -66,9 +72,7 @@ export default function WsdlImportDialog({ open, onClose, connectionParams }: Ws
           spellCheck={false}
         />
         {error !== null && (
-          <Alert severity="error" sx={{ mt: 1 }}>
-            {error}
-          </Alert>
+          <HumanErrorAlert error={error} sx={{ mt: 1 }} />
         )}
         {createdCount !== null && (
           <Alert severity="success" sx={{ mt: 1 }}>

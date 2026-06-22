@@ -1,0 +1,1284 @@
+<p>Stateful scenarios let you model <strong>multi-step API conversations</strong> where MockServer's response changes based on prior interactions. Each scenario is an independent named state machine. Every scenario starts in the <span class="inline_code">"Started"</span> state and advances as expectations match, as a timer fires, or as your test harness pushes it forward via the REST API.</p>
+
+<p>An expectation joins a scenario by setting <span class="inline_code">scenarioName</span> (which machine), <span class="inline_code">scenarioState</span> (the required current state), and <span class="inline_code">newScenarioState</span> (the state to enter after a match). Expectations without a <span class="inline_code">scenarioName</span> match regardless of any scenario state. Scenarios are independent of each other; all scenario states are cleared when MockServer is <a href="/mock_server/clearing_and_resetting.html">reset</a>.</p>
+
+<p>Every feature on this page has a runnable example for all supported clients. See <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples">examples/</a> in the repository.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Feature</th>
+            <th>What it does</th>
+            <th>Examples</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><a href="#state_machine_scenarios">State-Machine Scenarios</a></td>
+            <td>Gate expectations on named state; advance the machine on match</td>
+            <td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">curl</a> &middot; <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/java/src/test/java/org/mockserver/examples/mockserver">Java</a></td>
+        </tr>
+        <tr>
+            <td><a href="#sequential_cycling_responses">Sequential / Cycling Responses</a></td>
+            <td>Return a different response each call from a list: SEQUENTIAL, RANDOM, WEIGHTED, or SWITCH</td>
+            <td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">curl</a> &middot; <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/json/scenario">JSON</a></td>
+        </tr>
+        <tr>
+            <td><a href="#timed_triggered_flows">Timed &amp; Triggered Scenario Flows</a></td>
+            <td>Auto-transition after a delay, or jump to any state from a test harness on demand</td>
+            <td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">curl</a> &middot; <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/python/scenario">Python</a></td>
+        </tr>
+        <tr>
+            <td><a href="#cross_protocol_correlation">Cross-Protocol Scenario Correlation</a></td>
+            <td>A DNS query, WebSocket connect, gRPC request, or HTTP request can advance a scenario used by any other expectation</td>
+            <td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">curl</a> &middot; <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/go/scenario">Go</a></td>
+        </tr>
+        <tr>
+            <td><a href="#scenario_rest_api">Scenario REST API &amp; Client Helper</a></td>
+            <td>Inspect, set, and trigger scenario state directly via REST or the typed client helpers</td>
+            <td><a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">curl</a></td>
+        </tr>
+        <tr>
+            <td><a href="/mock_server/llm_response_mocking.html">Multi-Turn LLM Conversations</a></td>
+            <td>Scenarios power scripted multi-turn agent loops for AI testing</td>
+            <td><a href="/mock_server/llm_response_mocking.html">LLM mocking docs</a></td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="state_machine_scenarios" class="anchor" href="#state_machine_scenarios">&nbsp;</a>
+
+<h4>State-Machine Scenarios</h4>
+
+<p>Register a set of expectations that share a <span class="inline_code">scenarioName</span>. Each expectation specifies the state it requires (<span class="inline_code">scenarioState</span>) and the state to enter after it matches (<span class="inline_code">newScenarioState</span>). The scenario starts in <span class="inline_code">"Started"</span> and advances as the matching expectation is used. This lets you model realistic multi-step API conversations — authentication flows, order lifecycles, retry sequences, and pagination — without any custom scripting.</p>
+
+<button class="accordion title"><strong>Login Flow</strong> &mdash; GET /profile returns 401 until POST /login advances the scenario to LoggedIn</button>
+<div class="panel title">
+    <p>Three expectations share the <span class="inline_code">LoginFlow</span> scenario. The POST /login expectation matches only in the <span class="inline_code">Started</span> state, returns a token, and advances the scenario to <span class="inline_code">LoggedIn</span> (with <span class="inline_code">times.remainingTimes: 1</span> so it fires exactly once). The GET /profile expectations are gated on the current state and return a different response before and after login.</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">[
+  {
+    "httpRequest": { "method": "POST", "path": "/login" },
+    "httpResponse": { "statusCode": 200, "body": "{\"token\": \"abc123\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "Started",
+    "newScenarioState": "LoggedIn",
+    "times": { "remainingTimes": 1 }
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/profile" },
+    "httpResponse": { "statusCode": 200, "body": "{\"name\": \"Alice\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "LoggedIn"
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/profile" },
+    "httpResponse": { "statusCode": 401, "body": "{\"error\": \"Not authenticated\"}" },
+    "scenarioName": "LoginFlow",
+    "scenarioState": "Started"
+  }
+]</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Step 1: login returns a token once, advancing Started -&gt; LoggedIn
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "POST", "path": "/login" },
+  "httpResponse": { "statusCode": 200, "body": "{\"token\": \"abc123\"}" },
+  "scenarioName": "LoginFlow",
+  "scenarioState": "Started",
+  "newScenarioState": "LoggedIn",
+  "times": { "remainingTimes": 1 }
+}'
+
+# Step 2: once LoggedIn, GET /profile returns the user
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/profile" },
+  "httpResponse": { "statusCode": 200, "body": "{\"name\": \"Alice\"}" },
+  "scenarioName": "LoginFlow",
+  "scenarioState": "LoggedIn"
+}'
+
+# Step 3: before login (Started), GET /profile is unauthorised
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/profile" },
+  "httpResponse": { "statusCode": 401, "body": "{\"error\": \"Not authenticated\"}" },
+  "scenarioName": "LoginFlow",
+  "scenarioState": "Started"
+}'</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Java</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
+import static org.mockserver.model.JsonBody.json;
+import org.mockserver.matchers.Times;
+
+mockServerClient
+    .when(request().withMethod("POST").withPath("/login"), Times.exactly(1))
+    .withScenarioName("LoginFlow")
+    .withScenarioState("Started")
+    .withNewScenarioState("LoggedIn")
+    .respond(response().withStatusCode(200).withBody(json("{\"token\":\"abc123\"}")));
+
+mockServerClient
+    .when(request().withMethod("GET").withPath("/profile"))
+    .withScenarioName("LoginFlow")
+    .withScenarioState("LoggedIn")
+    .respond(response().withStatusCode(200).withBody(json("{\"name\":\"Alice\"}")));
+
+mockServerClient
+    .when(request().withMethod("GET").withPath("/profile"))
+    .withScenarioName("LoginFlow")
+    .withScenarioState("Started")
+    .respond(response().withStatusCode(401).withBody(json("{\"error\":\"Not authenticated\"}")));</code></pre>
+    </div>
+
+    <button class="accordion"><strong>JavaScript</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient('localhost', 1080);
+
+await client.mockAnyResponse([
+    {
+        httpRequest: { method: 'POST', path: '/login' },
+        httpResponse: { statusCode: 200, body: JSON.stringify({ token: 'abc123' }) },
+        scenarioName: 'LoginFlow',
+        scenarioState: 'Started',
+        newScenarioState: 'LoggedIn',
+        times: { remainingTimes: 1, unlimited: false }
+    },
+    {
+        httpRequest: { method: 'GET', path: '/profile' },
+        httpResponse: { statusCode: 200, body: JSON.stringify({ name: 'Alice' }) },
+        scenarioName: 'LoginFlow',
+        scenarioState: 'LoggedIn'
+    },
+    {
+        httpRequest: { method: 'GET', path: '/profile' },
+        httpResponse: { statusCode: 401, body: JSON.stringify({ error: 'Not authenticated' }) },
+        scenarioName: 'LoginFlow',
+        scenarioState: 'Started'
+    }
+]);</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Python</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import Expectation, HttpRequest, HttpResponse, MockServerClient, Times
+
+client = MockServerClient('localhost', 1080)
+
+client.upsert(
+    Expectation(
+        http_request=HttpRequest(method='POST', path='/login'),
+        http_response=HttpResponse().with_status_code(200).with_body('{"token":"abc123"}'),
+        scenario_name='LoginFlow',
+        scenario_state='Started',
+        new_scenario_state='LoggedIn',
+        times=Times(remaining_times=1, unlimited=False),
+    ),
+    Expectation(
+        http_request=HttpRequest(method='GET', path='/profile'),
+        http_response=HttpResponse().with_status_code(200).with_body('{"name":"Alice"}'),
+        scenario_name='LoginFlow',
+        scenario_state='LoggedIn',
+    ),
+    Expectation(
+        http_request=HttpRequest(method='GET', path='/profile'),
+        http_response=HttpResponse().with_status_code(401).with_body('{"error":"Not authenticated"}'),
+        scenario_name='LoginFlow',
+        scenario_state='Started',
+    ),
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Ruby</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+client.upsert(
+  Expectation.new(
+    http_request: HttpRequest.new(method: 'POST', path: '/login'),
+    http_response: HttpResponse.new(status_code: 200, body: '{"token":"abc123"}'),
+    times: Times.exactly(1),
+    scenario_name: 'LoginFlow',
+    scenario_state: 'Started',
+    new_scenario_state: 'LoggedIn'
+  ),
+  Expectation.new(
+    http_request: HttpRequest.new(method: 'GET', path: '/profile'),
+    http_response: HttpResponse.new(status_code: 200, body: '{"name":"Alice"}'),
+    scenario_name: 'LoginFlow',
+    scenario_state: 'LoggedIn'
+  ),
+  Expectation.new(
+    http_request: HttpRequest.new(method: 'GET', path: '/profile'),
+    http_response: HttpResponse.new(status_code: 401, body: '{"error":"Not authenticated"}'),
+    scenario_name: 'LoginFlow',
+    scenario_state: 'Started'
+  )
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Go</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+
+login := mockserver.Response().StatusCode(200).JSONBody(`{"token":"abc123"}`).Build()
+profileOK := mockserver.Response().StatusCode(200).JSONBody(`{"name":"Alice"}`).Build()
+profile401 := mockserver.Response().StatusCode(401).JSONBody(`{"error":"Not authenticated"}`).Build()
+loginReq := mockserver.Request().Method("POST").Path("/login").Build()
+profileReq := mockserver.Request().Method("GET").Path("/profile").Build()
+
+client.Upsert(
+    mockserver.Expectation{
+        HttpRequest: &amp;loginReq, HttpResponse: &amp;login,
+        ScenarioName: "LoginFlow", ScenarioState: "Started", NewScenarioState: "LoggedIn",
+        Times: mockserver.Once(),
+    },
+    mockserver.Expectation{
+        HttpRequest: &amp;profileReq, HttpResponse: &amp;profileOK,
+        ScenarioName: "LoginFlow", ScenarioState: "LoggedIn",
+    },
+    mockserver.Expectation{
+        HttpRequest: &amp;profileReq, HttpResponse: &amp;profile401,
+        ScenarioName: "LoginFlow", ScenarioState: "Started",
+    },
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>.NET</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+var client = new MockServerClient("localhost", 1080);
+
+client.When(HttpRequest.Request().WithMethod("POST").WithPath("/login"), Times.Once())
+    .WithScenarioName("LoginFlow")
+    .WithScenarioState("Started")
+    .WithNewScenarioState("LoggedIn")
+    .Respond(HttpResponse.Response().WithStatusCode(200).WithBody("{\"token\":\"abc123\"}"));
+
+client.When(HttpRequest.Request().WithMethod("GET").WithPath("/profile"))
+    .WithScenarioName("LoginFlow")
+    .WithScenarioState("LoggedIn")
+    .Respond(HttpResponse.Response().WithStatusCode(200).WithBody("{\"name\":\"Alice\"}"));
+
+client.When(HttpRequest.Request().WithMethod("GET").WithPath("/profile"))
+    .WithScenarioName("LoginFlow")
+    .WithScenarioState("Started")
+    .Respond(HttpResponse.Response().WithStatusCode(401).WithBody("{\"error\":\"Not authenticated\"}"));</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Rust</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, Expectation, HttpRequest, HttpResponse, Times};
+
+let client = ClientBuilder::new("localhost".to_string(), 1080).build().unwrap();
+
+let expectations = vec![
+    Expectation::new(HttpRequest::new().method("POST").path("/login"))
+        .scenario_name("LoginFlow")
+        .scenario_state("Started")
+        .new_scenario_state("LoggedIn")
+        .times(Times::once())
+        .respond(HttpResponse::new().status_code(200).body(r#"{"token":"abc123"}"#)),
+    Expectation::new(HttpRequest::new().method("GET").path("/profile"))
+        .scenario_name("LoginFlow")
+        .scenario_state("LoggedIn")
+        .respond(HttpResponse::new().status_code(200).body(r#"{"name":"Alice"}"#)),
+    Expectation::new(HttpRequest::new().method("GET").path("/profile"))
+        .scenario_name("LoginFlow")
+        .scenario_state("Started")
+        .respond(HttpResponse::new().status_code(401).body(r#"{"error":"Not authenticated"}"#)),
+];
+client.upsert(&amp;expectations).unwrap();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>PHP</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\Expectation;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+use MockServer\MockServerClient;
+use MockServer\Times;
+
+$client = new MockServerClient('localhost', 1080);
+
+$client-&gt;upsertExpectation(
+    (new Expectation())
+        -&gt;httpRequest(HttpRequest::request()-&gt;method('POST')-&gt;path('/login'))
+        -&gt;scenarioName('LoginFlow')
+        -&gt;scenarioState('Started')
+        -&gt;newScenarioState('LoggedIn')
+        -&gt;times(Times::once())
+        -&gt;httpResponse(HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"token":"abc123"}'))
+);
+$client-&gt;upsertExpectation(
+    (new Expectation())
+        -&gt;httpRequest(HttpRequest::request()-&gt;method('GET')-&gt;path('/profile'))
+        -&gt;scenarioName('LoginFlow')
+        -&gt;scenarioState('LoggedIn')
+        -&gt;httpResponse(HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"name":"Alice"}'))
+);
+$client-&gt;upsertExpectation(
+    (new Expectation())
+        -&gt;httpRequest(HttpRequest::request()-&gt;method('GET')-&gt;path('/profile'))
+        -&gt;scenarioName('LoginFlow')
+        -&gt;scenarioState('Started')
+        -&gt;httpResponse(HttpResponse::response()-&gt;statusCode(401)-&gt;body('{"error":"Not authenticated"}'))
+);</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<a id="sequential_cycling_responses" class="anchor" href="#sequential_cycling_responses">&nbsp;</a>
+
+<h4>Sequential / Cycling Responses</h4>
+
+<p>A single expectation can return <strong>multiple different responses</strong> by providing an array in <span class="inline_code">httpResponses</span> instead of a single <span class="inline_code">httpResponse</span>. This does not require a named scenario. The <span class="inline_code">responseMode</span> field controls how responses are selected:</p>
+
+<ul>
+    <li><strong>SEQUENTIAL</strong> (default) &mdash; responses are returned in order, cycling back to the first after the last</li>
+    <li><strong>RANDOM</strong> &mdash; a random response is picked from the list for each request</li>
+    <li><strong>WEIGHTED</strong> &mdash; a response is selected probabilistically using relative weights in <span class="inline_code">responseWeights</span> (index-aligned with <span class="inline_code">httpResponses</span>)</li>
+    <li><strong>SWITCH</strong> &mdash; serve the first response for the first <span class="inline_code">switchAfter</span> requests, then switch permanently to the next response; stays on the last response once reached</li>
+</ul>
+
+<button class="accordion title"><strong>Sequential Cycling</strong> &mdash; one expectation cycles 200, 503, 200, then wraps back</button>
+<div class="panel title">
+    <p>Use <span class="inline_code">httpResponses</span> (plural) with <span class="inline_code">responseMode: "SEQUENTIAL"</span>. The first request returns the first response, the second returns the second, and so on. After the last response the cycle restarts. The fourth call below wraps back to the first (200).</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">{
+  "httpRequest": { "path": "/api/status" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"degraded\"}" },
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" }
+  ],
+  "responseMode": "SEQUENTIAL"
+}</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code">curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "path": "/api/status" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"degraded\"}" },
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" }
+  ]
+}'
+# GET /api/status 4 times -&gt; 200, 503, 200, 200 (4th cycles back to first)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Java</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
+import static org.mockserver.model.JsonBody.json;
+import org.mockserver.mock.ResponseMode;
+import java.util.Arrays;
+
+mockServerClient
+    .when(request().withMethod("GET").withPath("/api/status"))
+    .withResponseMode(ResponseMode.SEQUENTIAL)
+    .withHttpResponses(Arrays.asList(
+        response().withStatusCode(200).withBody(json("{\"status\":\"ok\"}")),
+        response().withStatusCode(503).withBody(json("{\"status\":\"degraded\"}")),
+        response().withStatusCode(200).withBody(json("{\"status\":\"ok\"}"))
+    ));</code></pre>
+    </div>
+
+    <button class="accordion"><strong>JavaScript</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">await client.mockAnyResponse({
+    httpRequest: { method: 'GET', path: '/api/status' },
+    httpResponses: [
+        { statusCode: 200, body: JSON.stringify({ status: 'ok' }) },
+        { statusCode: 503, body: JSON.stringify({ status: 'degraded' }) },
+        { statusCode: 200, body: JSON.stringify({ status: 'ok' }) }
+    ],
+    responseMode: 'SEQUENTIAL'
+});</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Python</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import Expectation, HttpRequest, HttpResponse, MockServerClient, ResponseMode
+
+client.upsert(
+    Expectation(
+        http_request=HttpRequest(method='GET', path='/api/status'),
+        http_responses=[
+            HttpResponse().with_status_code(200).with_body('{"status":"ok"}'),
+            HttpResponse().with_status_code(503).with_body('{"status":"degraded"}'),
+            HttpResponse().with_status_code(200).with_body('{"status":"ok"}'),
+        ],
+        response_mode=ResponseMode.SEQUENTIAL,
+    )
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Ruby</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">client.upsert(
+  Expectation.new(
+    http_request: HttpRequest.new(method: 'GET', path: '/api/status'),
+    http_responses: [
+      HttpResponse.new(status_code: 200, body: '{"status":"ok"}'),
+      HttpResponse.new(status_code: 503, body: '{"status":"degraded"}'),
+      HttpResponse.new(status_code: 200, body: '{"status":"ok"}')
+    ],
+    response_mode: ResponseMode::SEQUENTIAL
+  )
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Go</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">client.
+    When(mockserver.Request().Method("GET").Path("/api/status")).
+    WithResponseMode(mockserver.ResponseModeSequential).
+    RespondMultiple(
+        mockserver.Response().StatusCode(200).JSONBody(`{"status":"ok"}`),
+        mockserver.Response().StatusCode(503).JSONBody(`{"status":"degraded"}`),
+        mockserver.Response().StatusCode(200).JSONBody(`{"status":"ok"}`),
+    )</code></pre>
+    </div>
+
+    <button class="accordion"><strong>.NET</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">client.When(HttpRequest.Request().WithMethod("GET").WithPath("/api/status"))
+    .WithResponseMode(ResponseMode.SEQUENTIAL)
+    .Respond(new[]
+    {
+        HttpResponse.Response().WithStatusCode(200).WithBody("{\"status\":\"ok\"}").Build(),
+        HttpResponse.Response().WithStatusCode(503).WithBody("{\"status\":\"degraded\"}").Build(),
+        HttpResponse.Response().WithStatusCode(200).WithBody("{\"status\":\"ok\"}").Build()
+    });</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Rust</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let expectation = Expectation::new(HttpRequest::new().method("GET").path("/api/status"))
+    .http_responses(vec![
+        HttpResponse::new().status_code(200).body(r#"{"status":"ok"}"#),
+        HttpResponse::new().status_code(503).body(r#"{"status":"degraded"}"#),
+        HttpResponse::new().status_code(200).body(r#"{"status":"ok"}"#),
+    ])
+    .response_mode(ResponseMode::Sequential);
+client.upsert(&amp;[expectation]).unwrap();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>PHP</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$client-&gt;upsertExpectation(
+    (new Expectation())
+        -&gt;httpRequest(HttpRequest::request()-&gt;method('GET')-&gt;path('/api/status'))
+        -&gt;responseMode(ResponseMode::SEQUENTIAL)
+        -&gt;httpResponses(
+            HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"status":"ok"}'),
+            HttpResponse::response()-&gt;statusCode(503)-&gt;body('{"status":"degraded"}'),
+            HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"status":"ok"}'),
+        )
+);</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<button class="accordion title"><strong>SWITCH After N Calls</strong> &mdash; succeed for the first N requests, then permanently fail</button>
+<div class="panel title">
+    <p>With <span class="inline_code">responseMode: "SWITCH"</span> and <span class="inline_code">switchAfter: 3</span>, the first three requests return the first response and every subsequent request returns the second. Useful for modelling a service that works for a while and then degrades, without needing a full named scenario.</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">{
+  "httpRequest": { "path": "/api/orders" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"unavailable\"}" }
+  ],
+  "responseMode": "SWITCH",
+  "switchAfter": 3
+}</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code">curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "path": "/api/orders" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"unavailable\"}" }
+  ],
+  "responseMode": "SWITCH",
+  "switchAfter": 3
+}'
+# Calls 1-3: 200; call 4 onwards: 503</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<button class="accordion title"><strong>WEIGHTED Responses</strong> &mdash; simulate an 80% success / 20% failure split</button>
+<div class="panel title">
+    <p>With <span class="inline_code">responseMode: "WEIGHTED"</span>, each response is selected probabilistically using the relative weights in <span class="inline_code">responseWeights</span> (index-aligned with <span class="inline_code">httpResponses</span>). Weights do not need to sum to 100 &mdash; they are normalised internally. A weight of <span class="inline_code">[4, 1]</span> and <span class="inline_code">[80, 20]</span> both produce an 80% / 20% split.</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">{
+  "httpRequest": { "path": "/api/payments" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"unavailable\"}" }
+  ],
+  "responseMode": "WEIGHTED",
+  "responseWeights": [80, 20]
+}</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code">curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "path": "/api/payments" },
+  "httpResponses": [
+    { "statusCode": 200, "body": "{\"status\": \"ok\"}" },
+    { "statusCode": 503, "body": "{\"status\": \"unavailable\"}" }
+  ],
+  "responseMode": "WEIGHTED",
+  "responseWeights": [80, 20]
+}'</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<a id="timed_triggered_flows" class="anchor" href="#timed_triggered_flows">&nbsp;</a>
+
+<h4>Timed &amp; Triggered Scenario Flows</h4>
+
+<p>Beyond expectation-driven state transitions, MockServer supports <strong>timed auto-transitions</strong> and <strong>external triggers</strong> via REST endpoints and typed client helpers. These let you model scenarios where state changes happen after a time delay (for example, a background job completing) or are driven by a test harness rather than by an incoming request.</p>
+
+<button class="accordion title"><strong>Timed Auto-Transition</strong> &mdash; model a deployment that automatically completes after 1 second</button>
+<div class="panel title">
+    <p>Register expectations for each state, then call <span class="inline_code">PUT /mockserver/scenario/{name}</span> with <span class="inline_code">state</span>, <span class="inline_code">transitionAfterMs</span>, and <span class="inline_code">nextState</span>. The scenario enters the state immediately and automatically advances after the delay. The transition only fires if the scenario is still in the expected state when the timer expires &mdash; any intervening manual trigger or expectation match cancels it.</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// First register state-gated expectations:
+// { "httpRequest": { "path": "/status" }, "httpResponse": { "body": "deploying" },
+//   "scenarioName": "DeployFlow", "scenarioState": "Deploying" }
+// { "httpRequest": { "path": "/status" }, "httpResponse": { "body": "complete" },
+//   "scenarioName": "DeployFlow", "scenarioState": "Deployed" }
+
+// Then PUT to /mockserver/scenario/DeployFlow:
+{
+  "state": "Deploying",
+  "transitionAfterMs": 1000,
+  "nextState": "Deployed"
+}</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Register the two expectations (one per state):
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/status" },
+  "httpResponse": { "statusCode": 200, "body": "deploying" },
+  "scenarioName": "DeployFlow",
+  "scenarioState": "Deploying"
+}'
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/status" },
+  "httpResponse": { "statusCode": 200, "body": "complete" },
+  "scenarioName": "DeployFlow",
+  "scenarioState": "Deployed"
+}'
+
+# Enter "Deploying" now, auto-advance to "Deployed" after 1000ms:
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{ "state": "Deploying", "transitionAfterMs": 1000, "nextState": "Deployed" }'
+
+# GET /status returns "deploying" now, "complete" after ~1s</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Java</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// Register expectations for each state first ...
+
+// Then schedule the timed transition:
+mockServerClient.scenario("DeployFlow").set("Deploying", 1000L, "Deployed");
+
+// GET /status returns "deploying" immediately, "complete" after ~1s
+Thread.sleep(1300L);
+// now "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>JavaScript</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// Register expectations for each state first ...
+
+// Set the starting state with a timed auto-transition:
+await client.scenario('DeployFlow').set('Deploying', { transitionAfterMs: 1000, nextState: 'Deployed' });
+
+await new Promise(resolve =&gt; setTimeout(resolve, 1300));
+// GET /status now returns "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Python</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import time
+
+# Register expectations for each state first ...
+
+client.scenario('DeployFlow').set(
+    'Deploying', transition_after_ms=1000, next_state='Deployed'
+)
+
+time.sleep(1.3)
+# GET /status now returns "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Ruby</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code"># Register expectations for each state first ...
+
+client.scenario('DeployFlow').set('Deploying', transition_after_ms: 1000, next_state: 'Deployed')
+
+sleep(1.3)
+# GET /status now returns "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Go</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import "time"
+
+// Register expectations for each state first ...
+
+client.Scenario("DeployFlow").SetTimed("Deploying", 1000, "Deployed")
+
+time.Sleep(1300 * time.Millisecond)
+// GET /status now returns "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>.NET</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">// Register expectations for each state first ...
+
+client.Scenario("DeployFlow").Set("Deploying", 1000, "Deployed");
+
+await Task.Delay(1300);
+// GET /status now returns "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Rust</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use std::time::Duration;
+
+// Register expectations for each state first ...
+
+client.scenario("DeployFlow").set_timed("Deploying", 1000, "Deployed").unwrap();
+
+std::thread::sleep(Duration::from_millis(1300));
+// GET /status now returns "complete"</code></pre>
+    </div>
+
+    <button class="accordion"><strong>PHP</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">// Register expectations for each state first ...
+
+$client-&gt;scenario('DeployFlow')-&gt;set('Deploying', 1000, 'Deployed');
+
+usleep(1_300_000);
+// GET /status now returns "complete"</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<button class="accordion title"><strong>External Trigger</strong> &mdash; flip a dependency from healthy to down on demand from your test harness</button>
+<div class="panel title">
+    <p>Call <span class="inline_code">PUT /mockserver/scenario/{name}/trigger</span> with <span class="inline_code">{"newState": "..."}</span> to jump the scenario to any state immediately. This is ideal for simulating failure injection, CI pipeline gates, or test teardown without waiting for a timer.</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// PUT to /mockserver/scenario/HealthFlow/trigger:
+{ "newState": "Down" }</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Register expectations first:
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/health" },
+  "httpResponse": { "statusCode": 200, "body": "healthy" },
+  "scenarioName": "HealthFlow",
+  "scenarioState": "Started"
+}'
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/health" },
+  "httpResponse": { "statusCode": 503, "body": "down" },
+  "scenarioName": "HealthFlow",
+  "scenarioState": "Down"
+}'
+
+# GET /health -&gt; 200 healthy (default Started state)
+
+# Trigger the failure from the test harness:
+curl -X PUT http://localhost:1080/mockserver/scenario/HealthFlow/trigger \
+  -H "Content-Type: application/json" \
+  -d '{ "newState": "Down" }'
+
+# GET /health -&gt; 503 down</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Java</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// Register expectations first ...
+
+mockServerClient.scenario("HealthFlow").trigger("Down");</code></pre>
+    </div>
+
+    <button class="accordion"><strong>JavaScript</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// Register expectations first ...
+
+await client.scenario('HealthFlow').trigger('Down');</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Python</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code"># Register expectations first ...
+
+client.scenario('HealthFlow').trigger('Down')</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Ruby</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code"># Register expectations first ...
+
+client.scenario('HealthFlow').trigger('Down')</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Go</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">// Register expectations first ...
+
+client.Scenario("HealthFlow").Trigger("Down")</code></pre>
+    </div>
+
+    <button class="accordion"><strong>.NET</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">// Register expectations first ...
+
+client.Scenario("HealthFlow").Trigger("Down");</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Rust</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">// Register expectations first ...
+
+client.scenario("HealthFlow").trigger("Down").unwrap();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>PHP</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">// Register expectations first ...
+
+$client-&gt;scenario('HealthFlow')-&gt;trigger('Down');</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<a id="cross_protocol_correlation" class="anchor" href="#cross_protocol_correlation">&nbsp;</a>
+
+<h4>Cross-Protocol Scenario Correlation</h4>
+
+<p>Scenario state transitions are not limited to HTTP request matches. A <strong>DNS query, WebSocket connection, gRPC request, or HTTP request</strong> can advance a named scenario via a <span class="inline_code">crossProtocolScenarios</span> array on an expectation. This lets you model multi-protocol test flows where, for example, a WebSocket connection must be established before certain HTTP endpoints become active.</p>
+
+<p>Each entry in <span class="inline_code">crossProtocolScenarios</span> specifies:</p>
+<ul>
+    <li><strong>trigger</strong> &mdash; the event type: <span class="inline_code">HTTP_REQUEST</span>, <span class="inline_code">WEBSOCKET_CONNECT</span>, <span class="inline_code">DNS_QUERY</span>, or <span class="inline_code">GRPC_REQUEST</span></li>
+    <li><strong>matchPattern</strong> &mdash; optional substring filter on the event identifier (HTTP path, WebSocket URL, DNS query name, or gRPC service name); omit to match all events of that type</li>
+    <li><strong>scenarioName</strong> &mdash; the scenario to advance</li>
+    <li><strong>targetState</strong> &mdash; the state to transition to</li>
+</ul>
+
+<p>Multiple entries are evaluated independently &mdash; a single event can advance several scenarios at once.</p>
+
+<button class="accordion title"><strong>Cross-Protocol Trigger</strong> &mdash; a request to /events unlocks GET /api/conn-status by advancing a shared scenario</button>
+<div class="panel title">
+    <p>The first expectation handles GET /events and carries a <span class="inline_code">crossProtocolScenarios</span> entry with <span class="inline_code">trigger: "HTTP_REQUEST"</span> that advances <span class="inline_code">ConnFlow</span> to <span class="inline_code">Connected</span>. The second expectation gates on that state, so it only matches after /events has been called. The same mechanism works with <span class="inline_code">WEBSOCKET_CONNECT</span>, <span class="inline_code">DNS_QUERY</span>, and <span class="inline_code">GRPC_REQUEST</span> triggers.</p>
+
+    <button class="accordion"><strong>JSON</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">[
+  {
+    "httpRequest": { "method": "GET", "path": "/events" },
+    "httpResponse": { "statusCode": 200, "body": "event-stream" },
+    "crossProtocolScenarios": [
+      {
+        "trigger": "HTTP_REQUEST",
+        "matchPattern": "/events",
+        "scenarioName": "ConnFlow",
+        "targetState": "Connected"
+      }
+    ]
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/api/conn-status" },
+    "httpResponse": { "statusCode": 200, "body": "connected" },
+    "scenarioName": "ConnFlow",
+    "scenarioState": "Connected"
+  }
+]</code></pre>
+    </div>
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Expectation 1: /events fires the cross-protocol trigger
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/events" },
+  "httpResponse": { "statusCode": 200, "body": "event-stream" },
+  "crossProtocolScenarios": [
+    {
+      "trigger": "HTTP_REQUEST",
+      "matchPattern": "/events",
+      "scenarioName": "ConnFlow",
+      "targetState": "Connected"
+    }
+  ]
+}'
+
+# Expectation 2: only active once ConnFlow is Connected
+curl -X PUT http://localhost:1080/mockserver/expectation -d '{
+  "httpRequest": { "method": "GET", "path": "/api/conn-status" },
+  "httpResponse": { "statusCode": 200, "body": "connected" },
+  "scenarioName": "ConnFlow",
+  "scenarioState": "Connected"
+}'
+
+# Before /events: GET /api/conn-status -&gt; 404 (unmatched)
+# After  /events: GET /api/conn-status -&gt; 200</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Java</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.model.CrossProtocolScenario;
+
+mockServerClient
+    .when(request().withMethod("GET").withPath("/events"))
+    .withCrossProtocolScenario(
+        CrossProtocolScenario.onHttpPath("/events", "ConnFlow", "Connected"))
+    .respond(response().withStatusCode(200));
+
+mockServerClient
+    .when(request().withMethod("GET").withPath("/api/conn-status"))
+    .withScenarioName("ConnFlow")
+    .withScenarioState("Connected")
+    .respond(response().withStatusCode(200).withBody(json("{\"status\":\"connected\"}")));</code></pre>
+    </div>
+
+    <button class="accordion"><strong>JavaScript</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">await client.mockAnyResponse([
+    {
+        httpRequest: { method: 'GET', path: '/events' },
+        httpResponse: { statusCode: 200, body: JSON.stringify({ stream: 'open' }) },
+        crossProtocolScenarios: [{
+            trigger: 'HTTP_REQUEST',
+            matchPattern: '/events',
+            scenarioName: 'ConnFlow',
+            targetState: 'Connected'
+        }]
+    },
+    {
+        httpRequest: { method: 'GET', path: '/api/status' },
+        httpResponse: { statusCode: 200, body: JSON.stringify({ status: 'connected' }) },
+        scenarioName: 'ConnFlow',
+        scenarioState: 'Connected'
+    }
+]);</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Python</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import CrossProtocolScenario, Expectation, HttpRequest, HttpResponse, MockServerClient
+
+client.upsert(
+    Expectation(
+        http_request=HttpRequest(method='GET', path='/events'),
+        http_response=HttpResponse().with_status_code(200).with_body('{"status":"subscribed"}'),
+        cross_protocol_scenarios=[
+            CrossProtocolScenario(
+                trigger='HTTP_REQUEST',
+                match_pattern='/events',
+                scenario_name='ConnFlow',
+                target_state='Connected',
+            )
+        ],
+    ),
+    Expectation(
+        http_request=HttpRequest(method='GET', path='/api/conn-status'),
+        http_response=HttpResponse().with_status_code(200).with_body('{"status":"connected"}'),
+        scenario_name='ConnFlow',
+        scenario_state='Connected',
+    ),
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Ruby</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">client.upsert(
+  Expectation.new(
+    http_request: HttpRequest.new(method: 'GET', path: '/events'),
+    http_response: HttpResponse.new(status_code: 200),
+    cross_protocol_scenarios: [
+      CrossProtocolScenario.new(
+        trigger: CrossProtocolTrigger::HTTP_REQUEST,
+        match_pattern: '/events',
+        scenario_name: 'ConnFlow',
+        target_state: 'Connected'
+      )
+    ]
+  ),
+  Expectation.new(
+    http_request: HttpRequest.new(method: 'GET', path: '/api/conn-status'),
+    http_response: HttpResponse.new(status_code: 200, body: '{"status":"connected"}'),
+    scenario_name: 'ConnFlow',
+    scenario_state: 'Connected'
+  )
+)</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Go</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">client.
+    When(mockserver.Request().Method("GET").Path("/events")).
+    WithCrossProtocolScenario(mockserver.CrossProtocolScenario{
+        Trigger:      mockserver.CrossProtocolTriggerHTTPRequest,
+        MatchPattern: "/events",
+        ScenarioName: "ConnFlow",
+        TargetState:  "Connected",
+    }).
+    Respond(mockserver.Response().StatusCode(200).JSONBody(`{"status":"listening"}`))
+
+apiStatusReq := mockserver.Request().Method("GET").Path("/api/status").Build()
+connected := mockserver.Response().StatusCode(200).JSONBody(`{"status":"connected"}`).Build()
+client.Upsert(mockserver.Expectation{
+    HttpRequest:   &amp;apiStatusReq,
+    HttpResponse:  &amp;connected,
+    ScenarioName:  "ConnFlow",
+    ScenarioState: "Connected",
+})</code></pre>
+    </div>
+
+    <button class="accordion"><strong>.NET</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">client.When(HttpRequest.Request().WithMethod("GET").WithPath("/events"))
+    .WithCrossProtocolScenario(new CrossProtocolScenario
+    {
+        Trigger = CrossProtocolTrigger.HTTP_REQUEST,
+        MatchPattern = "/events",
+        ScenarioName = "ConnFlow",
+        TargetState = "Connected"
+    })
+    .Respond(HttpResponse.Response().WithStatusCode(200).WithBody("{\"events\":\"subscribed\"}"));
+
+client.When(HttpRequest.Request().WithMethod("GET").WithPath("/api/conn-status"))
+    .WithScenarioName("ConnFlow")
+    .WithScenarioState("Connected")
+    .Respond(HttpResponse.Response().WithStatusCode(200).WithBody("{\"status\":\"connected\"}"));</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Rust</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{CrossProtocolScenario, CrossProtocolTrigger, Expectation, HttpRequest, HttpResponse};
+
+let expectations = vec![
+    Expectation::new(HttpRequest::new().method("GET").path("/events"))
+        .cross_protocol_scenario(
+            CrossProtocolScenario::new(CrossProtocolTrigger::HttpRequest, "ConnFlow", "Connected")
+                .match_pattern("/events"),
+        )
+        .respond(HttpResponse::new().status_code(200).body(r#"{"events":"subscribed"}"#)),
+    Expectation::new(HttpRequest::new().method("GET").path("/api/conn-status"))
+        .scenario_name("ConnFlow")
+        .scenario_state("Connected")
+        .respond(HttpResponse::new().status_code(200).body(r#"{"status":"connected"}"#)),
+];
+client.upsert(&amp;expectations).unwrap();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>PHP</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\CrossProtocolScenario;
+use MockServer\CrossProtocolTrigger;
+
+$client-&gt;upsertExpectation(
+    (new Expectation())
+        -&gt;httpRequest(HttpRequest::request()-&gt;method('GET')-&gt;path('/events'))
+        -&gt;httpResponse(HttpResponse::response()-&gt;statusCode(200))
+        -&gt;crossProtocolScenarios(
+            CrossProtocolScenario::trigger(CrossProtocolTrigger::HTTP_REQUEST)
+                -&gt;matchPattern('/events')
+                -&gt;scenarioName('ConnFlow')
+                -&gt;targetState('Connected'),
+        )
+);
+$client-&gt;upsertExpectation(
+    (new Expectation())
+        -&gt;httpRequest(HttpRequest::request()-&gt;method('GET')-&gt;path('/api/conn-status'))
+        -&gt;scenarioName('ConnFlow')
+        -&gt;scenarioState('Connected')
+        -&gt;httpResponse(HttpResponse::response()-&gt;statusCode(200)-&gt;body('{"status":"connected"}'))
+);</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<a id="scenario_rest_api" class="anchor" href="#scenario_rest_api">&nbsp;</a>
+
+<h4>Scenario REST API &amp; Client Helper</h4>
+
+<p>The following endpoints let you inspect and control scenario state directly, without going through expectation matching. All typed clients expose these as a <span class="inline_code">scenario(name)</span> helper.</p>
+
+<table>
+    <thead>
+        <tr>
+            <th>Method</th>
+            <th>Endpoint</th>
+            <th>Body</th>
+            <th>What it does</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">GET</span></td>
+            <td><span class="inline_code">/mockserver/scenario</span></td>
+            <td>&mdash;</td>
+            <td>Return all known scenarios and their current state</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">GET</span></td>
+            <td><span class="inline_code">/mockserver/scenario/{name}</span></td>
+            <td>&mdash;</td>
+            <td>Return <span class="inline_code">{"scenarioName": "...", "currentState": "..."}</span> for the named scenario</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">PUT</span></td>
+            <td><span class="inline_code">/mockserver/scenario/{name}</span></td>
+            <td><span class="inline_code">{"state": "...", "transitionAfterMs"?: N, "nextState"?: "..."}</span></td>
+            <td>Set the scenario to <span class="inline_code">state</span> immediately; optionally schedule an auto-transition to <span class="inline_code">nextState</span> after <span class="inline_code">transitionAfterMs</span> milliseconds</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">PUT</span></td>
+            <td><span class="inline_code">/mockserver/scenario/{name}/trigger</span></td>
+            <td><span class="inline_code">{"newState": "..."}</span></td>
+            <td>Jump the scenario to <span class="inline_code">newState</span> immediately, cancelling any pending timed transition</td>
+        </tr>
+    </tbody>
+</table>
+
+<button class="accordion title"><strong>REST API Reference</strong> &mdash; inspect and control scenarios with curl</button>
+<div class="panel title">
+
+    <button class="accordion"><strong>REST (curl)</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># List all scenarios and their current state:
+curl -X GET http://localhost:1080/mockserver/scenario
+
+# Get the current state of a specific scenario:
+curl -X GET http://localhost:1080/mockserver/scenario/DeployFlow
+# -&gt; {"scenarioName": "DeployFlow", "currentState": "Started"}
+
+# Set state immediately (no timed transition):
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{"state": "Deploying"}'
+
+# Set state with a timed auto-transition after 5 seconds:
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow \
+  -H "Content-Type: application/json" \
+  -d '{"state": "Deploying", "transitionAfterMs": 5000, "nextState": "Deployed"}'
+
+# Jump to a state immediately (cancels any pending timed transition):
+curl -X PUT http://localhost:1080/mockserver/scenario/DeployFlow/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"newState": "Failed"}'</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Java</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// Inspect state:
+String state = mockServerClient.scenario("DeployFlow").state();
+
+// Set state immediately:
+mockServerClient.scenario("DeployFlow").set("Deploying");
+
+// Set state with timed auto-transition (transitionAfterMs, nextState):
+mockServerClient.scenario("DeployFlow").set("Deploying", 5000L, "Deployed");
+
+// Jump to a state immediately:
+mockServerClient.scenario("DeployFlow").trigger("Failed");
+
+// List all scenarios:
+List&lt;ScenarioState&gt; all = mockServerClient.scenarios();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>JavaScript</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">// Get state:
+const state = await client.scenario('DeployFlow').state();
+
+// Set state immediately:
+await client.scenario('DeployFlow').set('Deploying');
+
+// Set state with timed auto-transition:
+await client.scenario('DeployFlow').set('Deploying', { transitionAfterMs: 5000, nextState: 'Deployed' });
+
+// Jump immediately:
+await client.scenario('DeployFlow').trigger('Failed');
+
+// List all:
+const all = await client.scenarios();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Python</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code"># Get state:
+state = client.scenario('DeployFlow').state()
+
+# Set state immediately:
+client.scenario('DeployFlow').set('Deploying')
+
+# Set state with timed auto-transition:
+client.scenario('DeployFlow').set('Deploying', transition_after_ms=5000, next_state='Deployed')
+
+# Jump immediately:
+client.scenario('DeployFlow').trigger('Failed')
+
+# List all:
+all_scenarios = client.scenarios()</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Ruby</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code"># Get state:
+state = client.scenario('DeployFlow').state
+
+# Set state immediately:
+client.scenario('DeployFlow').set('Deploying')
+
+# Set state with timed auto-transition:
+client.scenario('DeployFlow').set('Deploying', transition_after_ms: 5000, next_state: 'Deployed')
+
+# Jump immediately:
+client.scenario('DeployFlow').trigger('Failed')
+
+# List all:
+all = client.scenarios</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Go</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">// Get state:
+state, err := client.Scenario("DeployFlow").State()
+
+// Set state immediately:
+client.Scenario("DeployFlow").Set("Deploying")
+
+// Set state with timed auto-transition:
+client.Scenario("DeployFlow").SetTimed("Deploying", 5000, "Deployed")
+
+// Jump immediately:
+client.Scenario("DeployFlow").Trigger("Failed")
+
+// List all:
+all, err := client.Scenarios()</code></pre>
+    </div>
+
+    <button class="accordion"><strong>.NET</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">// Get state:
+var state = client.Scenario("DeployFlow").State();
+
+// Set state immediately:
+client.Scenario("DeployFlow").Set("Deploying");
+
+// Set state with timed auto-transition:
+client.Scenario("DeployFlow").Set("Deploying", 5000, "Deployed");
+
+// Jump immediately:
+client.Scenario("DeployFlow").Trigger("Failed");
+
+// List all:
+var all = client.Scenarios();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>Rust</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">// Get state:
+let state = client.scenario("DeployFlow").state().unwrap();
+
+// Set state immediately:
+client.scenario("DeployFlow").set("Deploying").unwrap();
+
+// Set state with timed auto-transition:
+client.scenario("DeployFlow").set_timed("Deploying", 5000, "Deployed").unwrap();
+
+// Jump immediately:
+client.scenario("DeployFlow").trigger("Failed").unwrap();
+
+// List all:
+let all = client.scenarios().unwrap();</code></pre>
+    </div>
+
+    <button class="accordion"><strong>PHP</strong></button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">// Get state:
+$state = $client-&gt;scenario('DeployFlow')-&gt;state();
+
+// Set state immediately:
+$client-&gt;scenario('DeployFlow')-&gt;set('Deploying');
+
+// Set state with timed auto-transition:
+$client-&gt;scenario('DeployFlow')-&gt;set('Deploying', 5000, 'Deployed');
+
+// Jump immediately:
+$client-&gt;scenario('DeployFlow')-&gt;trigger('Failed');
+
+// List all:
+$all = $client-&gt;scenarios();</code></pre>
+    </div>
+
+    <p>Runnable example: <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/curl/scenario">examples/curl/scenario</a> (and the same under <span class="inline_code">examples/&lt;language&gt;/scenario</span>).</p>
+</div>
+
+<a id="llm_multi_turn" class="anchor" href="#llm_multi_turn">&nbsp;</a>
+
+<h4>Multi-Turn LLM Conversations</h4>
+
+<p>Scenarios power scripted multi-turn agent loops for AI testing. Each turn advances the scenario state, so you can specify exactly what the mock LLM returns at each step &mdash; first call a tool, next return the final answer, and so on. The <span class="inline_code">isolateBy</span> option lets concurrent sessions (identified by a header, query parameter, or cookie) maintain independent state.</p>
+
+<p>See <a href="/mock_server/llm_response_mocking.html">LLM Response Mocking</a> for the full conversation builder API and per-provider examples.</p>

@@ -11,7 +11,7 @@ Run all four gates in order. **Any failure stops the merge** and leaves the work
    ```bash
    ./mvnw verify -pl :mockserver-core $(...) -DforkCount=1 -DreuseForks=false -fae -Djacoco.skip=true
    ```
-   For long runs, use the IntelliJ MCP background pattern (see `.opencode/rules/intellij-mcp-preference.md`): kick off in IntelliJ's terminal with `&` redirection and poll the log.
+   For long runs, launch the build in the background (`Bash run_in_background`, or `./cmd > log 2>&1 &`) and poll the log.
 
 3. **Gate 2 — Lint / checkstyle / type checks.** Maven's `validate` phase runs checkstyle. For frontend changes also run `npm run lint && npm run build`.
 

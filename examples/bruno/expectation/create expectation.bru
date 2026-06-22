@@ -1,0 +1,49 @@
+meta {
+  name: create expectation
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/expectation
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "httpRequest": {
+      "method": "GET",
+      "path": "/api/users",
+      "queryStringParameters": {
+        "page": [
+          "1"
+        ],
+        "limit": [
+          "10"
+        ]
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "Content-Type": [
+          "application/json"
+        ]
+      },
+      "body": "{\"users\":[{\"id\":1,\"name\":\"John Doe\"}],\"total\":1}"
+    }
+  }
+}
+
+docs {
+  Create expectation.
+  
+  expectation(s) to create
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

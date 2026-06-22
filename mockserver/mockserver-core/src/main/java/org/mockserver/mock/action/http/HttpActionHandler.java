@@ -27,9 +27,11 @@ import org.mockserver.proxyconfiguration.NoProxyHostsUtils;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
 import org.mockserver.responsewriter.GrpcStreamResponseWriter;
 import org.mockserver.responsewriter.ResponseWriter;
+import org.mockserver.responsewriter.StreamErrorWriter;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.curl.HttpRequestToCurlSerializer;
 import org.mockserver.socket.tls.NettySslContextFactory;
+import org.mockserver.telemetry.GenAiSpans;
 import org.mockserver.telemetry.RequestSpans;
 import org.mockserver.telemetry.TraceContextAttributes;
 import org.mockserver.telemetry.W3CTraceContext;
@@ -41,7 +43,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpResponseStatus.OK;
@@ -56,6 +57,7 @@ import static org.mockserver.log.model.LogEntryMessages.*;
 import static org.mockserver.model.HttpResponse.badGatewayResponse;
 import static org.mockserver.model.HttpResponse.notFoundResponse;
 import static org.mockserver.model.HttpResponse.response;
+import static org.mockserver.model.HttpStatusCode.SERVICE_UNAVAILABLE_503;
 import static org.slf4j.event.Level.TRACE;
 
 /**
@@ -65,6 +67,15 @@ import static org.slf4j.event.Level.TRACE;
 public class HttpActionHandler {
 
     public static final AttributeKey<InetSocketAddress> REMOTE_SOCKET = AttributeKey.valueOf("REMOTE_SOCKET");
+
+    /**
+     * Internal header carrying the upstream round-trip time (in milliseconds) on the LOGGED
+     * {@code FORWARDED_REQUEST} response only. Mirrors the {@code x-mockserver-streamed} /
+     * {@code x-mockserver-chunk-delays-ms} convention: it is attached to a clone stored in the
+     * event log and is NEVER written to the real client. The LLM optimisation report reads it to
+     * populate per-call upstream latency.
+     */
+    public static final String RESPONSE_TIME_HEADER = "x-mockserver-response-time-ms";
 
     private final Configuration configuration;
     private final HttpState httpStateHandler;
@@ -86,12 +97,22 @@ public class HttpActionHandler {
     private HttpWebSocketResponseActionHandler httpWebSocketResponseActionHandler;
     private GrpcStreamResponseActionHandler grpcStreamResponseActionHandler;
     private HttpErrorActionHandler httpErrorActionHandler;
+    private org.mockserver.templates.engine.DelayTemplateResolver delayTemplateResolver;
 
     // forwarding
     private NettyHttpClient httpClient;
     private HopByHopHeaderFilter hopByHopHeaderFilter = new HopByHopHeaderFilter();
     private HttpRequestToCurlSerializer httpRequestToCurlSerializer;
     private final org.mockserver.metrics.Metrics metrics;
+
+    /**
+     * @return the shared {@link Scheduler}. Exposed to the (same-package) local object-callback handlers
+     * so they can dispatch a potentially-blocking LOCAL callback off the server worker event loop via
+     * {@link Scheduler#scheduleLocalCallback} (the root fix for the pool-on-by-default self-deadlock).
+     */
+    Scheduler getScheduler() {
+        return scheduler;
+    }
 
     public HttpActionHandler(Configuration configuration, EventLoopGroup eventLoopGroup, HttpState httpStateHandler, List<ProxyConfiguration> proxyConfigurations, NettySslContextFactory nettySslContextFactory) {
         this.configuration = configuration;
@@ -126,6 +147,10 @@ public class HttpActionHandler {
             }
         };
 
+        // declarative capture (WS2.2): extract request value(s) into scenario state for early-matched
+        // expectations too (header/query/cookie/path sources; body-based sources are typically empty here)
+        org.mockserver.mock.CaptureProcessor.process(expectation.getCapture(), request);
+
         final Action action = expectation.getAction();
         switch (action.getType()) {
             case RESPONSE -> {
@@ -133,27 +158,19 @@ public class HttpActionHandler {
                 final int capturedMatchCount = expectation.getMatchCount();
                 // chaos: gate by the time-based outage window + apply degradation ramp (see effectiveChaos)
                 final HttpChaosProfile effectiveChaos = effectiveChaos(expectation);
+                final RateLimit rateLimit = expectation.getRateLimit();
+                // recovery: apply the same fail-then-succeed selection as the main RESPONSE path (RecoverAfter)
+                final HttpResponse selectedResponse = selectRecoveryResponse((HttpResponse) action, expectation, request, capturedMatchCount);
                 scheduler.schedule(() -> handleAnyException(request, earlyResponseWriter, synchronous, action, () -> {
-                    final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
+                    final HttpResponse response = getHttpResponseActionHandler().handle(selectedResponse, request, expectation.getHttpRequest());
                     // chaos: inject HTTP chaos faults on early mocked responses
-                    writeResponseActionResponse(response, earlyResponseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
+                    writeResponseActionResponse(response, earlyResponseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx, rateLimit);
                 }, expectationPostProcessor), synchronous);
             }
             case ERROR -> scheduler.schedule(() -> handleAnyException(request, earlyResponseWriter, synchronous, action, () -> {
-                getHttpErrorActionHandler().handle((HttpError) action, ctx);
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setType(EXPECTATION_RESPONSE)
-                        .setLogLevel(Level.INFO)
-                        .setCorrelationId(request.getLogCorrelationId())
-                        .setHttpRequest(request)
-                        .setHttpError((HttpError) action)
-                        .setExpectationId(action.getExpectationId())
-                        .setMessageFormat("returning error:{}for request:{}for action:{}from expectation:{}")
-                        .setArguments(action, request, action, action.getExpectationId())
-                );
+                dispatchErrorAction((HttpError) action, request, earlyResponseWriter, ctx);
                 expectationPostProcessor.run();
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(getDelayTemplateResolver().resolve(action.getDelay(), request)));
             default ->
                 // Other action types are rejected at expectation-add time; nothing to dispatch here.
                 expectationPostProcessor.run();
@@ -273,7 +290,13 @@ public class HttpActionHandler {
 
         } else {
 
-            returnNotFound(responseWriter, request, null);
+            // breakpoint: REQUEST-phase pause on the unmatched-404 path — lets a registered matcher
+            // pause / modify / abort even though nothing matched and the server is not proxying.
+            if (attemptRequestBreakpoint(request, synchronous, responseWriter, null,
+                req -> returnNotFound(responseWriter, req, null, synchronous))) {
+                return;
+            }
+            returnNotFound(responseWriter, request, null, synchronous);
 
         }
     }
@@ -298,6 +321,78 @@ public class HttpActionHandler {
      * action-type switch and secondary-action fan-out live here.
      */
     private void dispatchPrimaryAction(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter, final ChannelHandlerContext ctx, final boolean synchronous, final Runnable expectationPostProcessor) {
+        // opt-in (ADV6): when the matched expectation is OpenAPI-backed and request validation is enabled,
+        // validate the incoming request against the spec before dispatching the action. On violation reject
+        // with a 400 instead of serving the mock response. The validate-then-dispatch is wrapped in
+        // scheduler.submit so the (potentially cold-cache) OpenAPI parse / JSON-schema validation runs off the
+        // Netty event loop, mirroring the validation-proxy request path. When the flag is off (the default) or
+        // the expectation is not OpenAPI-backed, behaviour is byte-for-byte unchanged.
+        if (Boolean.TRUE.equals(configuration.validateRequestsAgainstOpenApiSpec())
+            && expectation.getHttpRequest() instanceof OpenAPIDefinition openAPIDefinition
+            && isNotBlank(openAPIDefinition.getSpecUrlOrPayload())) {
+            scheduler.submit(() -> {
+                HttpResponse rejectResponse = validateMockRequest(openAPIDefinition, request);
+                if (rejectResponse != null) {
+                    responseWriter.writeResponse(request, rejectResponse, false);
+                    expectationPostProcessor.run();
+                } else {
+                    dispatchPrimaryActionInternal(expectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+                }
+            }, synchronous);
+            return;
+        }
+        dispatchPrimaryActionInternal(expectation, request, responseWriter, ctx, synchronous, expectationPostProcessor);
+    }
+
+    /**
+     * Validates an incoming request matched by an OpenAPI-backed mock expectation against its spec.
+     * Violations are logged as {@code OPENAPI_REQUEST_VALIDATION_FAILED} and a 400 response describing
+     * the violations is returned to short-circuit dispatch. Returns {@code null} when the request is
+     * valid (or validation could not run) so dispatch proceeds normally.
+     *
+     * <p>This method may perform an expensive cold-cache OpenAPI parse / JSON-schema validation, so
+     * callers MUST invoke it off the Netty event loop (inside a {@code scheduler.submit} block).</p>
+     */
+    private HttpResponse validateMockRequest(final OpenAPIDefinition openAPIDefinition, final HttpRequest request) {
+        try {
+            List<String> requestErrors = OpenAPIRequestValidator.validate(openAPIDefinition.getSpecUrlOrPayload(), request, mockServerLogger);
+            if (!requestErrors.isEmpty()) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(OPENAPI_REQUEST_VALIDATION_FAILED)
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setMessageFormat("request matched by OpenAPI-backed expectation does not conform to OpenAPI spec{}errors:{}")
+                        .setArguments(request, String.join("; ", requestErrors))
+                );
+                return response()
+                    .withStatusCode(400)
+                    .withBody("OpenAPI request validation failed: " + String.join("; ", requestErrors));
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.WARN)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setMessageFormat("failed to validate request against OpenAPI-backed expectation spec{}due to:{}")
+                        .setArguments(request, e.getMessage())
+                );
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Dispatches the matched expectation's primary action to the appropriate per-type handler. Extracted
+     * from {@link #dispatchPrimaryAction} so the optional OpenAPI request-validation pre-flight can short-circuit
+     * dispatch without restructuring the action-type switch.
+     */
+    private void dispatchPrimaryActionInternal(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter, final ChannelHandlerContext ctx, final boolean synchronous, final Runnable expectationPostProcessor) {
+        // declarative capture (WS2.2): extract value(s) from the matched request into scenario
+        // state BEFORE the response is built, so a response template can read them via scenario.get(name)
+        org.mockserver.mock.CaptureProcessor.process(expectation.getCapture(), request);
         // fire cross-protocol scenario transitions when this expectation has them
         fireCrossProtocolEvents(expectation, request);
         final Action action = expectation.getAction();
@@ -315,56 +410,97 @@ public class HttpActionHandler {
         final HttpChaosProfile forwardChaos = (effectiveChaos == null && expectation.getChaos() == null && action.getType().name().startsWith("FORWARD"))
             ? ServiceChaosRegistry.getInstance().get(request.getFirstHeader("host"))
             : effectiveChaos;
+        // rate limit (declarative, protocol-agnostic): threaded into the RESPONSE / RESPONSE_TEMPLATE /
+        // RESPONSE_CLASS_CALLBACK and FORWARD-family write paths so the over-limit 429 is produced once
+        // per matched request. Null (no clause) leaves the normal response byte-for-byte unchanged.
+        final RateLimit rateLimit = expectation.getRateLimit();
+        // WS2.3: resolve an opt-in template delay (duration computed from the request) into a concrete
+        // millisecond delay here, where the request is in scope, so it applies to every action type's
+        // scheduled delay below. Non-template (static/distribution) delays resolve to themselves, so
+        // existing behaviour is byte-for-byte preserved. For the static RESPONSE action the response's own
+        // delay (which may differ from the action delay) is additionally resolved in writeResponseActionResponse.
+        final Delay actionDelay = getDelayTemplateResolver().resolve(action.getDelay(), request);
         switch (action.getType()) {
-            case RESPONSE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpResponse response = getHttpResponseActionHandler().handle((HttpResponse) action);
-                // chaos: inject HTTP chaos faults on mocked responses
-                writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous);
-            case RESPONSE_TEMPLATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpResponse response = getHttpResponseTemplateActionHandler().handle((HttpTemplate) action, request);
-                // chaos: inject HTTP chaos faults on mocked responses
-                writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, action.getDelay());
-            case RESPONSE_CLASS_CALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpResponse response = getHttpResponseClassCallbackActionHandler().handle((HttpClassCallback) action, request);
-                // chaos: inject HTTP chaos faults on mocked responses
-                writeResponseActionResponse(response, responseWriter, request, action, synchronous, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, action.getDelay());
+            // breakpoint: REQUEST-phase pause gates each mock-response dispatch; chaos faults and the
+            // RESPONSE-phase breakpoint are applied inside writeResponseActionResponse. MODIFY feeds the
+            // modified request into template/class-callback generation; logging keys off the original request.
+            case RESPONSE -> {
+                // recovery: serve the failure response for the first K matches, then the configured
+                // success response (RecoverAfter). Selection is per-expectation off capturedMatchCount,
+                // or per-(expectationId, idempotency-key) when an idempotencyHeader is configured.
+                final HttpResponse selectedResponse = selectRecoveryResponse((HttpResponse) action, expectation, request, capturedMatchCount);
+                scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () ->
+                    dispatchMockResponseWithBreakpoint(request, action, synchronous, responseWriter, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx, rateLimit,
+                        req -> getHttpResponseActionHandler().handle(selectedResponse, req, expectation.getHttpRequest())), expectationPostProcessor), synchronous);
+            }
+            case RESPONSE_TEMPLATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () ->
+                dispatchMockResponseWithBreakpoint(request, action, synchronous, responseWriter, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpResponseTemplateActionHandler().handle((HttpTemplate) action, req)), expectationPostProcessor), synchronous, actionDelay);
+            // RESPONSE_CLASS_CALLBACK is always a LOCAL (in-JVM, reflection-invoked) callback whose user
+            // code may make a BLOCKING loopback call back to this server. Dispatch via scheduleLocalCallback
+            // so it runs off the server worker event loop (on the dedicated unbounded local-callback pool)
+            // in asynchronous mode, and inline in synchronous mode — the root fix for the pool-on-by-default
+            // self-deadlock. The breakpoint/chaos/rate-limit wrapping and the action delay are unchanged.
+            case RESPONSE_CLASS_CALLBACK -> scheduler.scheduleLocalCallback(() -> handleAnyException(request, responseWriter, synchronous, action, () ->
+                dispatchMockResponseWithBreakpoint(request, action, synchronous, responseWriter, expectation.getHttpRequest(), expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpResponseClassCallbackActionHandler().handle((HttpClassCallback) action, req)), expectationPostProcessor), synchronous, actionDelay);
             case RESPONSE_OBJECT_CALLBACK -> scheduler.schedule(() ->
                     getHttpResponseObjectCallbackActionHandler().handle(HttpActionHandler.this, (HttpObjectCallback) action, request, responseWriter, synchronous, expectationPostProcessor),
-                synchronous, action.getDelay());
+                synchronous, actionDelay);
             // chaos: inject HTTP chaos faults on expectation-based forwarded responses (FORWARD, FORWARD_TEMPLATE,
             // FORWARD_CLASS_CALLBACK, FORWARD_REPLACE, FORWARD_VALIDATE). Deferred: FORWARD_OBJECT_CALLBACK has
             // its own write path and the unmatched/anonymous proxy-pass path.
             case FORWARD -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpForwardActionResult responseFuture = getHttpForwardActionHandler().handle((HttpForward) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+                if (blockIfLlmCostBudgetExceeded(request, action, responseWriter, expectationPostProcessor)) {
+                    return;
+                }
+                // breakpoint: REQUEST-phase pause gates the forward; MODIFY feeds the modified request into the forward handler
+                dispatchForwardWithBreakpoint(request, action, synchronous, responseWriter, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpForwardActionHandler().handle((HttpForward) action, req));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
             case FORWARD_TEMPLATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpForwardActionResult responseFuture = getHttpForwardTemplateActionHandler().handle((HttpTemplate) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
-            case FORWARD_CLASS_CALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpForwardActionResult responseFuture = getHttpForwardClassCallbackActionHandler().handle((HttpClassCallback) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
-            // deferred: FORWARD_OBJECT_CALLBACK chaos injection — uses its own write path
+                if (blockIfLlmCostBudgetExceeded(request, action, responseWriter, expectationPostProcessor)) {
+                    return;
+                }
+                dispatchForwardWithBreakpoint(request, action, synchronous, responseWriter, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpForwardTemplateActionHandler().handle((HttpTemplate) action, req));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
+            // FORWARD_CLASS_CALLBACK is always a LOCAL (in-JVM, reflection-invoked) callback whose user code
+            // may make a BLOCKING loopback call back to this server. Dispatch via scheduleLocalCallback so it
+            // runs off the server worker event loop in asynchronous mode (and inline in synchronous mode) —
+            // the root fix for the pool-on-by-default self-deadlock. Wrapping and the action delay are unchanged.
+            case FORWARD_CLASS_CALLBACK -> scheduler.scheduleLocalCallback(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
+                if (blockIfLlmCostBudgetExceeded(request, action, responseWriter, expectationPostProcessor)) {
+                    return;
+                }
+                dispatchForwardWithBreakpoint(request, action, synchronous, responseWriter, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpForwardClassCallbackActionHandler().handle((HttpClassCallback) action, req));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
+            // deferred: FORWARD_OBJECT_CALLBACK chaos injection and REQUEST breakpoint — uses its own write path
             case FORWARD_OBJECT_CALLBACK -> scheduler.schedule(() ->
                     getHttpForwardObjectCallbackActionHandler().handle(HttpActionHandler.this, (HttpObjectCallback) action, request, responseWriter, synchronous, expectationPostProcessor),
-                synchronous, combineWithGlobalDelay(action.getDelay()));
+                synchronous, combineWithGlobalDelay(actionDelay));
             case FORWARD_REPLACE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpForwardActionResult responseFuture = getHttpOverrideForwardedRequestCallbackActionHandler().handle((HttpOverrideForwardedRequest) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+                if (blockIfLlmCostBudgetExceeded(request, action, responseWriter, expectationPostProcessor)) {
+                    return;
+                }
+                dispatchForwardWithBreakpoint(request, action, synchronous, responseWriter, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpOverrideForwardedRequestCallbackActionHandler().handle((HttpOverrideForwardedRequest) action, req));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
             case FORWARD_VALIDATE -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpForwardActionResult responseFuture = getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+                if (blockIfLlmCostBudgetExceeded(request, action, responseWriter, expectationPostProcessor)) {
+                    return;
+                }
+                dispatchForwardWithBreakpoint(request, action, synchronous, responseWriter, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpForwardValidateActionHandler().handle((HttpForwardValidateAction) action, req));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
             case FORWARD_WITH_FALLBACK -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                final HttpForwardActionResult responseFuture = getHttpForwardWithFallbackActionHandler().handle((HttpForwardWithFallback) action, request);
-                writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx);
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+                if (blockIfLlmCostBudgetExceeded(request, action, responseWriter, expectationPostProcessor)) {
+                    return;
+                }
+                dispatchForwardWithBreakpoint(request, action, synchronous, responseWriter, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit,
+                    req -> getHttpForwardWithFallbackActionHandler().handle((HttpForwardWithFallback) action, req));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
             case SSE_RESPONSE -> {
                 if (ctx == null) {
                     writeResponseActionResponse(
@@ -401,7 +537,7 @@ public class HttpActionHandler {
                         } finally {
                             expectationPostProcessor.run();
                         }
-                    }, synchronous, combineWithGlobalDelay(action.getDelay()));
+                    }, synchronous, combineWithGlobalDelay(actionDelay));
                 }
             }
             case LLM_RESPONSE -> {
@@ -409,7 +545,15 @@ public class HttpActionHandler {
                 // Chaos: a probabilistic provider error short-circuits to a normal
                 // (non-streaming) HTTP error response, even for a would-be stream.
                 final HttpResponse chaosErrorResponse = getHttpLlmResponseActionHandler().chaosErrorResponseOrNull(llmAction);
-                boolean isStreaming = chaosErrorResponse == null && llmAction.getCompletion() != null && Boolean.TRUE.equals(llmAction.getCompletion().getStreaming());
+                // Strict structured-output enforcement: when enabled and the configured body
+                // does not conform to the declared schema, fail loudly with a provider-correct
+                // error (also a non-streaming response, so a strict stream never begins). Chaos
+                // takes priority — it models a transport-level failure independent of the body.
+                final HttpResponse enforcementErrorResponse = chaosErrorResponse == null
+                    ? getHttpLlmResponseActionHandler().enforcementErrorResponseOrNull(llmAction, request)
+                    : null;
+                final HttpResponse preEmptiveErrorResponse = chaosErrorResponse != null ? chaosErrorResponse : enforcementErrorResponse;
+                boolean isStreaming = preEmptiveErrorResponse == null && llmAction.getCompletion() != null && Boolean.TRUE.equals(llmAction.getCompletion().getStreaming());
                 if (isStreaming) {
                     if (ctx == null) {
                         writeResponseActionResponse(
@@ -471,7 +615,7 @@ public class HttpActionHandler {
                             } finally {
                                 expectationPostProcessor.run();
                             }
-                        }, synchronous, combineWithGlobalDelay(action.getDelay()));
+                        }, synchronous, combineWithGlobalDelay(actionDelay));
                     }
                 } else {
                     scheduler.schedule(() -> {
@@ -486,8 +630,8 @@ public class HttpActionHandler {
                                     .setMessageFormat("returning LLM response for request:{}for action:{}from expectation:{}")
                                     .setArguments(request, action, action.getExpectationId())
                             );
-                            HttpResponse llmResponse = chaosErrorResponse != null
-                                ? chaosErrorResponse
+                            HttpResponse llmResponse = preEmptiveErrorResponse != null
+                                ? preEmptiveErrorResponse
                                 : getHttpLlmResponseActionHandler().handle(llmAction, request);
                             if (chaosErrorResponse != null) {
                                 metrics.increment(org.mockserver.metrics.Metrics.Name.LLM_CHAOS_INJECTED_COUNT);
@@ -507,7 +651,7 @@ public class HttpActionHandler {
                             }
                             expectationPostProcessor.run();
                         }
-                    }, synchronous, combineWithGlobalDelay(action.getDelay()));
+                    }, synchronous, combineWithGlobalDelay(actionDelay));
                 }
             }
             case WEBSOCKET_RESPONSE -> {
@@ -546,7 +690,7 @@ public class HttpActionHandler {
                         } finally {
                             expectationPostProcessor.run();
                         }
-                    }, synchronous, combineWithGlobalDelay(action.getDelay()));
+                    }, synchronous, combineWithGlobalDelay(actionDelay));
                 }
             }
             case GRPC_STREAM_RESPONSE -> {
@@ -587,7 +731,7 @@ public class HttpActionHandler {
                         } finally {
                             expectationPostProcessor.run();
                         }
-                    }, synchronous, combineWithGlobalDelay(action.getDelay()));
+                    }, synchronous, combineWithGlobalDelay(actionDelay));
                 } else {
                     scheduler.schedule(() -> {
                         try {
@@ -618,7 +762,7 @@ public class HttpActionHandler {
                         } finally {
                             expectationPostProcessor.run();
                         }
-                    }, synchronous, combineWithGlobalDelay(action.getDelay()));
+                    }, synchronous, combineWithGlobalDelay(actionDelay));
                 }
             }
             case GRPC_BIDI_RESPONSE -> {
@@ -638,20 +782,9 @@ public class HttpActionHandler {
                 }
             }
             case ERROR -> scheduler.schedule(() -> handleAnyException(request, responseWriter, synchronous, action, () -> {
-                getHttpErrorActionHandler().handle((HttpError) action, ctx);
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setType(EXPECTATION_RESPONSE)
-                        .setLogLevel(Level.INFO)
-                        .setCorrelationId(request.getLogCorrelationId())
-                        .setHttpRequest(request)
-                        .setHttpError((HttpError) action)
-                        .setExpectationId(action.getExpectationId())
-                        .setMessageFormat("returning error:{}for request:{}for action:{}from expectation:{}")
-                        .setArguments(action, request, action, action.getExpectationId())
-                );
+                dispatchErrorAction((HttpError) action, request, responseWriter, ctx);
                 expectationPostProcessor.run();
-            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(action.getDelay()));
+            }, expectationPostProcessor), synchronous, combineWithGlobalDelay(actionDelay));
         }
 
         final List<Action> secondaryActions = expectation.getSecondaryActions();
@@ -679,7 +812,7 @@ public class HttpActionHandler {
                         .setArguments(request)
                 );
             }
-            returnNotFound(responseWriter, request, null);
+            returnNotFound(responseWriter, request, null, synchronous);
 
         } else {
 
@@ -725,67 +858,91 @@ public class HttpActionHandler {
                             }
                         }
 
+                        // LLM cost-budget circuit-breaker: if the request targets an LLM provider
+                        // and the cumulative cost exceeds the budget, return 429 immediately.
+                        HttpResponse costBudgetResponse = checkLlmCostBudget(request);
+                        if (costBudgetResponse != null) {
+                            responseWriter.writeResponse(request, costBudgetResponse, false);
+                            return;
+                        }
+
                         // breakpoint intercept: pause the request if breakpoints are enabled (async mode only).
                         // IMPORTANT: does NOT block any thread — the decision future's continuation runs
                         // asynchronously on the scheduler executor when the control-plane resolves it (or
                         // when the timeout auto-completes it). This avoids exhausting the scheduler pool
                         // and, via CallerRunsPolicy, the Netty event loop.
-                        if (!synchronous && Boolean.TRUE.equals(configuration.breakpointEnabled())) {
-                            org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
-                            org.mockserver.mock.breakpoint.PausedExchange pausedExchange = breakpointRegistry.pause(
-                                request.getLogCorrelationId(), request, null, configuration
-                            );
-                            if (pausedExchange != null) {
-                                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                                    mockServerLogger.logEvent(
-                                        new LogEntry()
-                                            .setLogLevel(Level.INFO)
-                                            .setCorrelationId(request.getLogCorrelationId())
-                                            .setHttpRequest(request)
-                                            .setMessageFormat("request paused at breakpoint, awaiting resolution for:{}")
-                                            .setArguments(request)
-                                    );
-                                }
-                                // Chain the forward-and-respond continuation onto the decision future
-                                // asynchronously. The current scheduler worker thread returns immediately.
+                        {
+                            org.mockserver.mock.breakpoint.BreakpointMatcher requestBreakpoint =
+                                !synchronous ? org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().findMatch(request, org.mockserver.mock.breakpoint.BreakpointPhase.REQUEST) : null;
+                            if (requestBreakpoint != null) {
                                 java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                                     ? scheduler.getExecutorService()
                                     : Runnable::run;
-                                pausedExchange.getDecisionFuture().thenAcceptAsync(decision -> {
-                                    try {
-                                        switch (decision.getAction()) {
-                                            case ABORT:
-                                                HttpResponse abortResponse = decision.getAbortResponse();
-                                                if (abortResponse == null) {
-                                                    abortResponse = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
-                                                }
-                                                responseWriter.writeResponse(request, abortResponse, false);
-                                                return;
-                                            case MODIFY:
-                                                HttpRequest modified = decision.getModifiedRequest();
-                                                HttpRequest modifiedToForward = hopByHopHeaderFilter.onRequest(modified)
-                                                    .withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
-                                                adjustHostHeaderForUnmatchedRequest(modifiedToForward, remoteAddress);
-                                                executeUnmatchedForward(modifiedToForward, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
-                                                return;
-                                            case CONTINUE:
-                                            default:
-                                                executeUnmatchedForward(clonedRequest, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
-                                                return;
-                                        }
-                                    } catch (SocketCommunicationException sce) {
-                                        returnBadGateway(responseWriter, request, sce.getMessage());
-                                    } catch (Throwable throwable) {
-                                        returnBadGateway(responseWriter, request, "breakpoint continuation failed: " + throwable.getMessage());
+
+                                // WS-callback dispatch (clientId is always present — required since 7b)
+                                java.util.concurrent.CompletableFuture<org.mockserver.mock.breakpoint.BreakpointDecision> decisionFuture =
+                                    org.mockserver.mock.breakpoint.BreakpointCallbackDispatcher.getInstance().dispatchRequest(
+                                        requestBreakpoint.getClientId(), requestBreakpoint.getId(), request,
+                                        httpStateHandler.getWebSocketClientRegistry(),
+                                        configuration, mockServerLogger
+                                    );
+                                // null means cap reached or client disconnected — fall through to normal forward
+
+                                if (decisionFuture != null) {
+                                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                        mockServerLogger.logEvent(
+                                            new LogEntry()
+                                                .setLogLevel(Level.INFO)
+                                                .setCorrelationId(request.getLogCorrelationId())
+                                                .setHttpRequest(request)
+                                                .setMessageFormat("request paused at breakpoint, awaiting resolution for:{}")
+                                                .setArguments(request)
+                                        );
                                     }
-                                }, continuationExecutor);
-                                // Return immediately — do NOT block the scheduler worker thread
-                                return;
+                                    // Chain the forward-and-respond continuation onto the decision future
+                                    // asynchronously. The current scheduler worker thread returns immediately.
+                                    decisionFuture.thenAcceptAsync(decision -> {
+                                        try {
+                                            switch (decision.getAction()) {
+                                                case ABORT:
+                                                    HttpResponse abortResponse = decision.getAbortResponse();
+                                                    if (abortResponse == null) {
+                                                        abortResponse = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                                                    }
+                                                    responseWriter.writeResponse(request, abortResponse, false);
+                                                    return;
+                                                case MODIFY:
+                                                    HttpRequest modified = decision.getModifiedRequest();
+                                                    if (modified != null) {
+                                                        HttpRequest modifiedToForward = hopByHopHeaderFilter.onRequest(modified)
+                                                            .withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
+                                                        adjustHostHeaderForUnmatchedRequest(modifiedToForward, remoteAddress);
+                                                        executeUnmatchedForward(modifiedToForward, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                    } else {
+                                                        executeUnmatchedForward(clonedRequest, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                    }
+                                                    return;
+                                                case CONTINUE:
+                                                default:
+                                                    executeUnmatchedForward(clonedRequest, request, remoteAddress, potentiallyHttpProxy, validationEnabled, responseWriter);
+                                                    return;
+                                            }
+                                        } catch (SocketCommunicationException sce) {
+                                            returnBadGateway(responseWriter, request, sce.getMessage());
+                                        } catch (Throwable throwable) {
+                                            returnBadGateway(responseWriter, request, "breakpoint continuation failed: " + throwable.getMessage());
+                                        }
+                                    }, continuationExecutor);
+                                    // Return immediately — do NOT block the scheduler worker thread
+                                    return;
+                                }
                             }
                         }
 
+                        long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
                         final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), null, remoteAddress);
                         HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+                        long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
                         if (response == null) {
                             response = badGatewayResponse();
                         }
@@ -810,12 +967,19 @@ public class HttpActionHandler {
                             // Note: enforce mode cannot replace a streaming response since the body
                             // has already been written to the client — violations are logged (report-only).
                             final HttpResponse streamingResponse = response;
+                            // OpenTelemetry: emit SERVER span for the unmatched streaming forward path
+                            emitRequestSpan(request, streamingResponse, null, ctx, responseTimeMs, remoteAddress);
+                            // Metrics: per-upstream forward latency + status for the unmatched proxy path
+                            recordForwardMetrics(null, streamingResponse, remoteAddress, responseTimeMs);
                             responseWriter.writeResponse(request, streamingResponse, false);
+                            final long streamForwardStartNanos = forwardStartNanos;
                             streamingResponse.getStreamingBody().addCompletionListener(() -> {
                                 HttpResponse logResponse = streamingResponse.clone();
                                 byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                 setCapturedStreamingBody(logResponse, captured);
                                 attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                                long streamResponseTimeMs = (org.mockserver.time.TimeService.nanoTime() - streamForwardStartNanos) / 1_000_000;
+                                logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(streamResponseTimeMs));
                                 // validation proxy: validate completed streaming response (report-only)
                                 if (validationEnabled) {
                                     validateProxyResponse(request, logResponse, true);
@@ -831,62 +995,62 @@ public class HttpActionHandler {
                                         .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
                                         .setArguments(logResponse, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
                                 );
+                                // OpenTelemetry: emit GenAI span for the unmatched streaming forward path
+                                // after the stream completes and the full body is available
+                                emitForwardGenAiSpan(clonedRequest, logResponse);
                             });
                         } else {
                             // validation proxy: validate non-streaming response (enforce mode returns 502)
                             if (validationEnabled) {
                                 response = validateProxyResponse(request, response, false);
                             }
+                            // OpenTelemetry: emit SERVER + GenAI spans for the unmatched non-streaming forward path
+                            emitRequestSpan(request, response, null, ctx, responseTimeMs, remoteAddress);
+                            // Metrics: per-upstream forward latency + status for the unmatched proxy path
+                            recordForwardMetrics(null, response, remoteAddress, responseTimeMs);
+                            emitForwardGenAiSpan(clonedRequest, response);
                             // Response breakpoint: hold non-streaming unmatched proxy responses before writing
-                            if (!synchronous && Boolean.TRUE.equals(configuration.breakpointResponseEnabled())) {
-                                org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
-                                org.mockserver.mock.breakpoint.PausedExchange responsePaused = breakpointRegistry.pauseResponse(
-                                    request.getLogCorrelationId(), request, response, null, configuration
-                                );
-                                if (responsePaused != null) {
-                                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                                        mockServerLogger.logEvent(
-                                            new LogEntry()
-                                                .setLogLevel(Level.INFO)
-                                                .setCorrelationId(request.getLogCorrelationId())
-                                                .setHttpRequest(request)
-                                                .setHttpResponse(response)
-                                                .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
-                                                .setArguments(request, response)
-                                        );
-                                    }
-                                    final HttpResponse capturedResponse = response;
+                            {
+                                org.mockserver.mock.breakpoint.BreakpointMatcher responseBreakpoint =
+                                    !synchronous ? org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().findResponseMatch(request, response, org.mockserver.mock.breakpoint.BreakpointPhase.RESPONSE) : null;
+                                if (responseBreakpoint != null) {
                                     java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                                         ? scheduler.getExecutorService()
                                         : Runnable::run;
-                                    chainResponseBreakpointContinuation(responsePaused, request, capturedResponse, responseWriter, continuationExecutor, responseToWrite -> {
+                                    final long breakpointResponseTimeMs = effectiveForwardLatencyMs(response, responseTimeMs);
+                                    if (attemptResponseBreakpoint(responseBreakpoint, request, response, null, responseWriter, continuationExecutor, responseToWrite -> {
+                                        HttpResponse logResponse = responseToWrite.clone();
+                                        logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(breakpointResponseTimeMs));
                                         mockServerLogger.logEvent(
                                             new LogEntry()
                                                 .setType(FORWARDED_REQUEST)
                                                 .setLogLevel(Level.INFO)
                                                 .setCorrelationId(request.getLogCorrelationId())
                                                 .setHttpRequest(request)
-                                                .setHttpResponse(responseToWrite)
-                                                .setExpectation(request, responseToWrite)
+                                                .setHttpResponse(logResponse)
+                                                .setExpectation(request, logResponse)
                                                 .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                                .setArguments(responseToWrite, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                                                .setArguments(logResponse, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
                                         );
                                         responseWriter.writeResponse(request, responseToWrite, false);
-                                    }, null);
-                                    return; // do NOT block — continuation is async
+                                    }, null)) {
+                                        return; // do NOT block — continuation is async
+                                    }
+                                    // cap reached — fall through to normal write
                                 }
-                                // cap reached — fall through to normal write
                             }
+                            HttpResponse logResponse = response.clone();
+                            logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(effectiveForwardLatencyMs(response, responseTimeMs)));
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setType(FORWARDED_REQUEST)
                                     .setLogLevel(Level.INFO)
                                     .setCorrelationId(request.getLogCorrelationId())
                                     .setHttpRequest(request)
-                                    .setHttpResponse(response)
-                                    .setExpectation(request, response)
+                                    .setHttpResponse(logResponse)
+                                    .setExpectation(request, logResponse)
                                     .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                    .setArguments(response, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
+                                    .setArguments(logResponse, request, httpRequestToCurlSerializer.toCurl(request, remoteAddress))
                             );
                             responseWriter.writeResponse(request, response, false);
                         }
@@ -953,6 +1117,15 @@ public class HttpActionHandler {
                                          InetSocketAddress remoteAddress, boolean potentiallyHttpProxy,
                                          boolean validationEnabled, ResponseWriter responseWriter) {
         try {
+            // LLM cost-budget circuit-breaker: re-check after breakpoint resolution
+            // because the request may have been modified to target a different host.
+            HttpResponse costBudgetResponse = checkLlmCostBudget(requestToForward);
+            if (costBudgetResponse != null) {
+                responseWriter.writeResponse(originalRequest, costBudgetResponse, false);
+                return;
+            }
+
+            long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
             final HttpForwardActionResult responseFuture = new HttpForwardActionResult(
                 requestToForward,
                 httpClient.sendRequest(requestToForward, remoteAddress,
@@ -960,6 +1133,7 @@ public class HttpActionHandler {
                 null, remoteAddress
             );
             HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+            long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
             if (response == null) {
                 response = badGatewayResponse();
             }
@@ -980,12 +1154,17 @@ public class HttpActionHandler {
                 responseWriter.writeResponse(originalRequest, response, false);
             } else if (response.getStreamingBody() != null) {
                 final HttpResponse streamingResponse = response;
+                // OpenTelemetry: emit SERVER span for the breakpoint-continuation streaming forward path
+                emitRequestSpan(originalRequest, streamingResponse, null, null, responseTimeMs);
                 responseWriter.writeResponse(originalRequest, streamingResponse, false);
+                final long streamForwardStartNanos = forwardStartNanos;
                 streamingResponse.getStreamingBody().addCompletionListener(() -> {
                     HttpResponse logResponse = streamingResponse.clone();
                     byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                     setCapturedStreamingBody(logResponse, captured);
                     attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                    long streamResponseTimeMs = (org.mockserver.time.TimeService.nanoTime() - streamForwardStartNanos) / 1_000_000;
+                    logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(streamResponseTimeMs));
                     if (validationEnabled) {
                         validateProxyResponse(originalRequest, logResponse, true);
                     }
@@ -1000,61 +1179,58 @@ public class HttpActionHandler {
                             .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
                             .setArguments(logResponse, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
                     );
+                    // OpenTelemetry: emit GenAI span after stream completes and full body is available
+                    emitForwardGenAiSpan(requestToForward, logResponse);
                 });
             } else {
                 if (validationEnabled) {
                     response = validateProxyResponse(originalRequest, response, false);
                 }
+                // OpenTelemetry: emit SERVER + GenAI spans for the breakpoint-continuation non-streaming forward path
+                emitRequestSpan(originalRequest, response, null, null, responseTimeMs);
+                emitForwardGenAiSpan(requestToForward, response);
                 // Response breakpoint: hold non-streaming unmatched proxy responses before writing
-                if (Boolean.TRUE.equals(configuration.breakpointResponseEnabled())) {
-                    org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
-                    org.mockserver.mock.breakpoint.PausedExchange responsePaused = breakpointRegistry.pauseResponse(
-                        originalRequest.getLogCorrelationId(), originalRequest, response, null, configuration
-                    );
-                    if (responsePaused != null) {
-                        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                            mockServerLogger.logEvent(
-                                new LogEntry()
-                                    .setLogLevel(Level.INFO)
-                                    .setCorrelationId(originalRequest.getLogCorrelationId())
-                                    .setHttpRequest(originalRequest)
-                                    .setHttpResponse(response)
-                                    .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
-                                    .setArguments(originalRequest, response)
-                            );
-                        }
-                        final HttpResponse capturedResponse = response;
+                {
+                    org.mockserver.mock.breakpoint.BreakpointMatcher responseBreakpoint2 =
+                        org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().findResponseMatch(originalRequest, response, org.mockserver.mock.breakpoint.BreakpointPhase.RESPONSE);
+                    if (responseBreakpoint2 != null) {
                         java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                             ? scheduler.getExecutorService()
                             : Runnable::run;
-                        chainResponseBreakpointContinuation(responsePaused, originalRequest, capturedResponse, responseWriter, continuationExecutor, responseToWrite -> {
+                        final long breakpointResponseTimeMs = effectiveForwardLatencyMs(response, responseTimeMs);
+                        if (attemptResponseBreakpoint(responseBreakpoint2, originalRequest, response, null, responseWriter, continuationExecutor, responseToWrite -> {
+                            HttpResponse logResponse = responseToWrite.clone();
+                            logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(breakpointResponseTimeMs));
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setType(FORWARDED_REQUEST)
                                     .setLogLevel(Level.INFO)
                                     .setCorrelationId(originalRequest.getLogCorrelationId())
                                     .setHttpRequest(originalRequest)
-                                    .setHttpResponse(responseToWrite)
-                                    .setExpectation(originalRequest, responseToWrite)
+                                    .setHttpResponse(logResponse)
+                                    .setExpectation(originalRequest, logResponse)
                                     .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                    .setArguments(responseToWrite, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                                    .setArguments(logResponse, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
                             );
                             responseWriter.writeResponse(originalRequest, responseToWrite, false);
-                        }, null);
-                        return; // do NOT block — continuation is async
+                        }, null)) {
+                            return; // do NOT block — continuation is async
+                        }
+                        // cap reached — fall through to normal write
                     }
-                    // cap reached — fall through to normal write
                 }
+                HttpResponse logResponse = response.clone();
+                logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(effectiveForwardLatencyMs(response, responseTimeMs)));
                 mockServerLogger.logEvent(
                     new LogEntry()
                         .setType(FORWARDED_REQUEST)
                         .setLogLevel(Level.INFO)
                         .setCorrelationId(originalRequest.getLogCorrelationId())
                         .setHttpRequest(originalRequest)
-                        .setHttpResponse(response)
-                        .setExpectation(originalRequest, response)
+                        .setHttpResponse(logResponse)
+                        .setExpectation(originalRequest, logResponse)
                         .setMessageFormat("returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                        .setArguments(response, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
+                        .setArguments(logResponse, originalRequest, httpRequestToCurlSerializer.toCurl(originalRequest, remoteAddress))
                 );
                 responseWriter.writeResponse(originalRequest, response, false);
             }
@@ -1147,21 +1323,35 @@ public class HttpActionHandler {
                             }
                         }
 
+                        // LLM cost-budget circuit-breaker: check before upstream send
+                        HttpResponse costBudgetResponse = checkLlmCostBudgetByHost(mapping.getTargetHost(), clonedRequest);
+                        if (costBudgetResponse != null) {
+                            responseWriter.writeResponse(request, costBudgetResponse, false);
+                            return;
+                        }
+
+                        long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
                         final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, targetAddress), null, targetAddress);
                         HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+                        long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
                         if (response == null) {
                             response = badGatewayResponse();
                         }
+                        // Metrics: per-upstream forward latency + status for the proxy-pass reverse-proxy route
+                        recordForwardMetrics(null, response, targetAddress, responseTimeMs);
                         if (response.getStreamingBody() != null) {
                             // Note: enforce mode cannot replace a streaming response since the body
                             // has already been written to the client — violations are logged (report-only).
                             final HttpResponse streamingResponse = response;
                             responseWriter.writeResponse(request, streamingResponse, false);
+                            final long streamForwardStartNanos = forwardStartNanos;
                             streamingResponse.getStreamingBody().addCompletionListener(() -> {
                                 HttpResponse logResponse = streamingResponse.clone();
                                 byte[] captured = streamingResponse.getStreamingBody().capturedBytes();
                                 setCapturedStreamingBody(logResponse, captured);
                                 attachStreamingHeaders(logResponse, streamingResponse.getStreamingBody());
+                                long streamResponseTimeMs = (org.mockserver.time.TimeService.nanoTime() - streamForwardStartNanos) / 1_000_000;
+                                logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(streamResponseTimeMs));
                                 // validation proxy: validate completed streaming response (report-only)
                                 if (validationEnabled) {
                                     validateProxyResponse(request, logResponse, true);
@@ -1183,16 +1373,18 @@ public class HttpActionHandler {
                             if (validationEnabled) {
                                 response = validateProxyResponse(request, response, false);
                             }
+                            HttpResponse logResponse = response.clone();
+                            logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(effectiveForwardLatencyMs(response, responseTimeMs)));
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setType(FORWARDED_REQUEST)
                                     .setLogLevel(Level.INFO)
                                     .setCorrelationId(request.getLogCorrelationId())
                                     .setHttpRequest(request)
-                                    .setHttpResponse(response)
-                                    .setExpectation(request, response)
+                                    .setHttpResponse(logResponse)
+                                    .setExpectation(request, logResponse)
                                     .setMessageFormat("returning response:{}for proxy pass forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}")
-                                    .setArguments(response, request, httpRequestToCurlSerializer.toCurl(request, targetAddress))
+                                    .setArguments(logResponse, request, httpRequestToCurlSerializer.toCurl(request, targetAddress))
                             );
                             responseWriter.writeResponse(request, response, false);
                         }
@@ -1241,7 +1433,7 @@ public class HttpActionHandler {
         scheduler.submitAsync(() -> {
             try {
                 switch (secondaryAction.getType()) {
-                    case RESPONSE -> getHttpResponseActionHandler().handle((HttpResponse) secondaryAction);
+                    case RESPONSE -> getHttpResponseActionHandler().handle((HttpResponse) secondaryAction, request);
                     case RESPONSE_TEMPLATE -> getHttpResponseTemplateActionHandler().handle((HttpTemplate) secondaryAction, request);
                     case RESPONSE_CLASS_CALLBACK -> getHttpResponseClassCallbackActionHandler().handle((HttpClassCallback) secondaryAction, request);
                     case RESPONSE_OBJECT_CALLBACK -> {
@@ -1674,6 +1866,50 @@ public class HttpActionHandler {
     }
 
     /**
+     * Applies the {@link RecoverAfter} retry/backoff recovery primitive: returns the failure
+     * response for the first {@code failTimes} matches, otherwise the configured success response.
+     *
+     * <p>The configured response is returned unchanged (identity) when {@code recoverAfter} is
+     * {@code null}, {@code failTimes} is {@code null} or {@code <= 0} — so a response without the
+     * recovery clause behaves byte-for-byte as before, with no new state touched.
+     *
+     * <p>Counting is 1-based (attempt {@code n}). By default {@code n} is the per-expectation
+     * {@code capturedMatchCount}. When an {@code idempotencyHeader} is configured AND present on the
+     * request, {@code n} is instead the per-{@code (expectationId, header-value)} attempt from the
+     * node-local {@link RecoveryAttemptRegistry} (so each idempotency key gets its own window). When
+     * the header is configured but absent, it falls back to {@code capturedMatchCount}. The keyed
+     * counter increments ONLY on the keyed path, so the default path adds zero overhead.
+     *
+     * <p>When {@code n <= failTimes} the failure response is served — the configured
+     * {@code failResponse}, or a default {@code 503 Service Unavailable} when none is configured.
+     */
+    HttpResponse selectRecoveryResponse(final HttpResponse action, final Expectation expectation, final HttpRequest request, final int capturedMatchCount) {
+        final RecoverAfter recoverAfter = action.getRecoverAfter();
+        if (recoverAfter == null || recoverAfter.getFailTimes() == null || recoverAfter.getFailTimes() <= 0) {
+            return action;
+        }
+        final int failTimes = recoverAfter.getFailTimes();
+        final String idempotencyHeader = recoverAfter.getIdempotencyHeader();
+        final int attempt;
+        if (isNotBlank(idempotencyHeader)) {
+            final String keyValue = request.getFirstHeader(idempotencyHeader);
+            if (isNotBlank(keyValue)) {
+                attempt = RecoveryAttemptRegistry.getInstance().nextAttempt(expectation.getId(), keyValue);
+            } else {
+                // header configured but absent on this request: fall back to the per-expectation count
+                attempt = capturedMatchCount;
+            }
+        } else {
+            attempt = capturedMatchCount;
+        }
+        if (attempt <= failTimes) {
+            final HttpResponse failResponse = recoverAfter.getFailResponse();
+            return failResponse != null ? failResponse : response().withStatusCode(SERVICE_UNAVAILABLE_503.code()).withReasonPhrase(SERVICE_UNAVAILABLE_503.reasonPhrase());
+        }
+        return action;
+    }
+
+    /**
      * Builds the synthetic quota-exceeded response when the chaos profile's stateful
      * request quota ({@code quotaName} + {@code quotaLimit} + {@code quotaWindowMillis})
      * is exceeded for the current fixed window, or returns {@code null} when the quota
@@ -1702,6 +1938,48 @@ public class HttpActionHandler {
         if (chaos.getRetryAfter() != null && !chaos.getRetryAfter().isEmpty()) {
             errorResponse.withHeader("Retry-After", chaos.getRetryAfter());
         }
+        return errorResponse;
+    }
+
+    /**
+     * Builds the synthetic rate-limit-exceeded response when the matched expectation's
+     * {@link RateLimit} clause is over-limit for the current window, or returns
+     * {@code null} when there is no rate limit, the limit is misconfigured, or the
+     * request is within the limit (in which case the normal response is returned
+     * untouched). Records exactly one acquire against the shared
+     * {@link org.mockserver.ratelimit.RateLimitRegistry} — this method must be called
+     * from the single write path so each matched request is counted once.
+     *
+     * <p>On the over-limit response only, sets {@code Retry-After} (literal override
+     * else {@code max(1, reset - now)} seconds) and the {@code X-RateLimit-Limit} /
+     * {@code X-RateLimit-Remaining} (0) / {@code X-RateLimit-Reset} (unix seconds)
+     * headers. Allowed responses are never decorated.
+     *
+     * @param rateLimit    the declarative rate limit (may be null)
+     * @param expectationId the matched expectation id, used as the counter key when {@code rateLimit.getName()} is null
+     */
+    HttpResponse rateLimitResponseOrNull(final RateLimit rateLimit, final String expectationId) {
+        if (rateLimit == null) {
+            return null;
+        }
+        org.mockserver.ratelimit.RateLimitRegistry.Decision decision =
+            org.mockserver.ratelimit.RateLimitRegistry.getInstance().tryAcquire(rateLimit, expectationId);
+        if (decision.allowed) {
+            return null;
+        }
+        int status = rateLimit.getErrorStatus() != null ? rateLimit.getErrorStatus() : 429;
+        long nowEpochSecond = org.mockserver.time.TimeService.currentTimeMillis() / 1000L;
+        HttpResponse errorResponse = response()
+            .withStatusCode(status)
+            .withHeader("content-type", "application/json")
+            .withHeader("X-RateLimit-Limit", String.valueOf(decision.limit))
+            .withHeader("X-RateLimit-Remaining", "0")
+            .withHeader("X-RateLimit-Reset", String.valueOf(decision.resetEpochSecond))
+            .withBody("{\"error\":{\"type\":\"rate_limit_exceeded\",\"message\":\"request rate limit exceeded\"}}");
+        String retryAfter = (rateLimit.getRetryAfter() != null && !rateLimit.getRetryAfter().isEmpty())
+            ? rateLimit.getRetryAfter()
+            : String.valueOf(Math.max(1L, decision.resetEpochSecond - nowEpochSecond));
+        errorResponse.withHeader("Retry-After", retryAfter);
         return errorResponse;
     }
 
@@ -1881,6 +2159,10 @@ public class HttpActionHandler {
     }
 
     void writeResponseActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final RequestDefinition requestDefinition, final Runnable postProcessor, final HttpChaosProfile chaos, int matchCount, final ChannelHandlerContext ctx) {
+        writeResponseActionResponse(response, responseWriter, request, action, synchronous, requestDefinition, postProcessor, chaos, matchCount, ctx, null);
+    }
+
+    void writeResponseActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final RequestDefinition requestDefinition, final Runnable postProcessor, final HttpChaosProfile chaos, int matchCount, final ChannelHandlerContext ctx, final RateLimit rateLimit) {
         // Chaos: drop connection takes priority over error and latency
         if (shouldDropConnection(chaos, matchCount)) {
             org.mockserver.metrics.Metrics.incrementHttpChaosInjected("drop");
@@ -1893,15 +2175,21 @@ public class HttpActionHandler {
             return;
         }
 
+        // Rate limit (declarative, protocol-agnostic) takes precedence over the chaos quota and the
+        // probabilistic chaos error. tryAcquire mutates registry state, so it is invoked exactly once
+        // here in the single write path.
+        HttpResponse rateLimitError = rateLimitResponseOrNull(rateLimit, action.getExpectationId());
         // Chaos: the deterministic quota (rate limit) takes priority over the probabilistic error
-        HttpResponse quotaError = quotaErrorResponseOrNull(chaos, matchCount);
-        HttpResponse chaosError = quotaError != null ? quotaError : chaosErrorResponseOrNull(chaos, matchCount);
+        HttpResponse quotaError = rateLimitError != null ? null : quotaErrorResponseOrNull(chaos, matchCount);
+        HttpResponse chaosError = rateLimitError != null ? rateLimitError : (quotaError != null ? quotaError : chaosErrorResponseOrNull(chaos, matchCount));
         final HttpResponse effectiveResponse = chaosError != null ? chaosError : applyResponseChaos(response, chaos, matchCount);
         // Gate latency by the same count window as error injection
         final Delay chaosLatency = chaos != null && chaos.countWindowEligible(matchCount) ? chaos.getLatency() : null;
 
         // Metrics: record chaos faults only when they actually fire
-        if (quotaError != null) {
+        if (rateLimitError != null) {
+            org.mockserver.metrics.Metrics.incrementHttpChaosInjected("rateLimit");
+        } else if (quotaError != null) {
             org.mockserver.metrics.Metrics.incrementHttpChaosInjected("quota");
         } else if (chaosError != null) {
             org.mockserver.metrics.Metrics.incrementHttpChaosInjected("error");
@@ -1910,8 +2198,44 @@ public class HttpActionHandler {
             org.mockserver.metrics.Metrics.incrementHttpChaosInjected("latency");
         }
 
-        Delay[] delays = combineWithChaosAndGlobalDelay(effectiveResponse.getDelay(), chaosLatency);
+        // WS2.3: resolve an opt-in template delay (duration computed from the request) into a concrete
+        // millisecond delay while the request is in scope. Non-template (static/distribution) delays are
+        // returned unchanged, so existing behaviour is byte-for-byte preserved.
+        Delay resolvedActionDelay = getDelayTemplateResolver().resolve(effectiveResponse.getDelay(), request);
+        Delay[] delays = combineWithChaosAndGlobalDelay(resolvedActionDelay, chaosLatency);
         scheduler.schedule(() -> {
+            // breakpoint: RESPONSE-phase pause for matched mock responses (RESPONSE / RESPONSE_TEMPLATE /
+            // RESPONSE_CLASS_CALLBACK only — scoped by action type so the protocol-specific write paths that
+            // share this writer, e.g. LLM / gRPC / WebSocket / SSE fall-backs, are NOT intercepted). Holds the
+            // post-chaos response before writing; chaos is not re-applied after manual resolution.
+            if (!synchronous && isMockResponseBreakpointEligible(action)) {
+                final org.mockserver.mock.breakpoint.BreakpointMatcher responseBreakpoint =
+                    org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance()
+                        .findResponseMatch(request, effectiveResponse, org.mockserver.mock.breakpoint.BreakpointPhase.RESPONSE);
+                if (responseBreakpoint != null) {
+                    final java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                        ? scheduler.getExecutorService() : Runnable::run;
+                    if (attemptResponseBreakpoint(responseBreakpoint, request, effectiveResponse, action.getExpectationId(), responseWriter, continuationExecutor, responseToWrite -> {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setType(EXPECTATION_RESPONSE)
+                                .setLogLevel(Level.INFO)
+                                .setCorrelationId(request.getLogCorrelationId())
+                                .setHttpRequest(request)
+                                .setHttpResponse(responseToWrite)
+                                .setExpectationId(action.getExpectationId())
+                                .setMessageFormat("returning response:{}for request:{}for action:{}from expectation:{}")
+                                .setArguments(responseToWrite, request, action, action.getExpectationId())
+                        );
+                        HttpResponse validatedResponse = validateOpenAPIResponse(responseToWrite, request, action, requestDefinition);
+                        responseWriter.writeResponse(request, validatedResponse, false);
+                        emitRequestSpan(request, validatedResponse, action, ctx, 0);
+                    }, postProcessor)) {
+                        return; // async — postProcessor runs in the breakpoint continuation
+                    }
+                    // cap reached — fall through to normal write
+                }
+            }
             try {
                 mockServerLogger.logEvent(
                     new LogEntry()
@@ -1924,15 +2248,41 @@ public class HttpActionHandler {
                         .setMessageFormat("returning response:{}for request:{}for action:{}from expectation:{}")
                         .setArguments(effectiveResponse, request, action, action.getExpectationId())
                 );
-                validateOpenAPIResponse(effectiveResponse, request, action, requestDefinition);
-                responseWriter.writeResponse(request, effectiveResponse, false);
-                emitRequestSpan(request, effectiveResponse, action, ctx, 0);
+                HttpResponse validatedResponse = validateOpenAPIResponse(effectiveResponse, request, action, requestDefinition);
+                responseWriter.writeResponse(request, validatedResponse, false);
+                emitRequestSpan(request, validatedResponse, action, ctx, 0);
             } finally {
                 if (postProcessor != null) {
                     postProcessor.run();
                 }
             }
         }, synchronous, delays);
+    }
+
+    /**
+     * Whether a matched mock-response action is eligible for the RESPONSE-phase breakpoint. Scoped to the
+     * buffered mock-response action types so the protocol-specific paths (LLM, gRPC, WebSocket, SSE) that
+     * share {@link #writeResponseActionResponse} are not intercepted.
+     */
+    private static boolean isMockResponseBreakpointEligible(final Action action) {
+        if (action == null || action.getType() == null) {
+            return false;
+        }
+        switch (action.getType()) {
+            case RESPONSE:
+            case RESPONSE_TEMPLATE:
+            case RESPONSE_CLASS_CALLBACK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private org.mockserver.templates.engine.DelayTemplateResolver getDelayTemplateResolver() {
+        if (delayTemplateResolver == null) {
+            delayTemplateResolver = new org.mockserver.templates.engine.DelayTemplateResolver(mockServerLogger, configuration);
+        }
+        return delayTemplateResolver;
     }
 
     private Delay[] combineWithGlobalDelay(Delay actionDelay) {
@@ -1965,7 +2315,18 @@ public class HttpActionHandler {
         return combined;
     }
 
-    private void validateOpenAPIResponse(final HttpResponse response, final HttpRequest request, final Action action, final RequestDefinition requestDefinition) {
+    /**
+     * Validates a mock response against the OpenAPI spec it was generated from when
+     * {@code openAPIResponseValidation} is enabled.
+     * <p>
+     * By default validation is advisory only — violations are logged and the original response is
+     * returned unchanged. When {@code enforceResponseValidationForMocks} is also enabled a response
+     * that fails validation is replaced with a 502 describing the violations, matching the
+     * validation-proxy path's {@code validateProxyEnforce} behaviour.
+     *
+     * @return the original response (valid, validation disabled, or report-only) or a 502 replacement (enforce mode + violations)
+     */
+    private HttpResponse validateOpenAPIResponse(final HttpResponse response, final HttpRequest request, final Action action, final RequestDefinition requestDefinition) {
         if (configuration.openAPIResponseValidation() && requestDefinition instanceof OpenAPIDefinition openAPIDefinition) {
             if (isNotBlank(openAPIDefinition.getSpecUrlOrPayload()) && isNotBlank(openAPIDefinition.getOperationId())) {
                 List<String> validationErrors = OpenAPIResponseValidator.validate(
@@ -1986,9 +2347,15 @@ public class HttpActionHandler {
                             .setMessageFormat("OpenAPI response validation failed for operation " + openAPIDefinition.getOperationId() + ":{}for request:{}for response:{}")
                             .setArguments(String.join(NEW_LINE, validationErrors), request, response)
                     );
+                    if (Boolean.TRUE.equals(configuration.enforceResponseValidationForMocks())) {
+                        return response()
+                            .withStatusCode(502)
+                            .withBody("OpenAPI response validation failed: " + String.join("; ", validationErrors));
+                    }
                 }
             }
         }
+        return response;
     }
 
     void executeAfterForwardActionResponse(final HttpForwardActionResult responseFuture, final BiConsumer<HttpResponse, Throwable> command, final boolean synchronous) {
@@ -2019,11 +2386,15 @@ public class HttpActionHandler {
     }
 
     void writeForwardActionResponse(final HttpForwardActionResult responseFuture, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final Runnable postProcessor, final HttpChaosProfile chaos, int matchCount, final ChannelHandlerContext ctx) {
+        writeForwardActionResponse(responseFuture, responseWriter, request, action, synchronous, postProcessor, chaos, matchCount, ctx, null);
+    }
+
+    void writeForwardActionResponse(final HttpForwardActionResult responseFuture, final ResponseWriter responseWriter, final HttpRequest request, final Action action, boolean synchronous, final Runnable postProcessor, final HttpChaosProfile chaos, int matchCount, final ChannelHandlerContext ctx, final RateLimit rateLimit) {
         scheduler.submit(responseFuture, () -> {
             try {
-                long forwardStartNanos = System.nanoTime();
+                long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
                 HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
-                long responseTimeMs = (System.nanoTime() - forwardStartNanos) / 1_000_000;
+                long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
 
                 // chaos: drop connection takes priority over error and latency
                 if (shouldDropConnection(chaos, matchCount)) {
@@ -2037,16 +2408,21 @@ public class HttpActionHandler {
                     return;
                 }
 
+                // Rate limit (declarative, protocol-agnostic) takes precedence over the chaos quota and the
+                // probabilistic chaos error. tryAcquire mutates registry state, so it is invoked exactly once here.
+                HttpResponse rateLimitError = rateLimitResponseOrNull(rateLimit, action.getExpectationId());
                 // chaos: quota (deterministic rate limit) then probabilistic error injection on forwarded responses — replaces the upstream response
-                HttpResponse quotaError = quotaErrorResponseOrNull(chaos, matchCount);
-                HttpResponse chaosError = quotaError != null ? quotaError : chaosErrorResponseOrNull(chaos, matchCount);
+                HttpResponse quotaError = rateLimitError != null ? null : quotaErrorResponseOrNull(chaos, matchCount);
+                HttpResponse chaosError = rateLimitError != null ? rateLimitError : (quotaError != null ? quotaError : chaosErrorResponseOrNull(chaos, matchCount));
                 final HttpResponse effectiveResponse = chaosError != null ? chaosError : applyResponseChaos(response, chaos, matchCount);
                 // Gate latency by the same count window as error injection
                 final Delay chaosLatency = chaos != null && chaos.countWindowEligible(matchCount) ? chaos.getLatency() : null;
                 final boolean chaosErrorInjected = chaosError != null;
 
                 // Metrics: record chaos faults only when they actually fire
-                if (quotaError != null) {
+                if (rateLimitError != null) {
+                    org.mockserver.metrics.Metrics.incrementHttpChaosInjected("rateLimit");
+                } else if (quotaError != null) {
                     org.mockserver.metrics.Metrics.incrementHttpChaosInjected("quota");
                 } else if (chaosErrorInjected) {
                     org.mockserver.metrics.Metrics.incrementHttpChaosInjected("error");
@@ -2061,38 +2437,40 @@ public class HttpActionHandler {
                 analyseDrift(request, response, responseTimeMs);
 
                 // OpenTelemetry: emit a request-level span for the forwarded request
-                emitRequestSpan(request, effectiveResponse, action, ctx, responseTimeMs);
+                emitRequestSpan(request, effectiveResponse, action, ctx, responseTimeMs, responseFuture.getRemoteAddress());
+                // Metrics: per-upstream forward latency + status (uses the precise Timing
+                // from the real upstream response, before any chaos replacement)
+                recordForwardMetrics(action, response, responseFuture.getRemoteAddress(), responseTimeMs);
+
+                // Determine streaming BEFORE the breakpoint check so GenAI span can
+                // be emitted for non-streaming responses ahead of a possible early return.
+                boolean isStreaming = !chaosErrorInjected && effectiveResponse != null && effectiveResponse.getStreamingBody() != null;
+
+                // OpenTelemetry: emit GenAI span for non-streaming responses BEFORE the
+                // breakpoint check — a breakpoint-held response must still get a GenAI span
+                // capturing the original upstream response (mirrors unmatched-proxy path).
+                // Streaming GenAI spans are deferred to writeStreamingForwardActionResponse.
+                if (!isStreaming) {
+                    emitForwardGenAiSpan(responseFuture.getHttpRequest(), response);
+                }
 
                 // Response breakpoint: hold non-streaming responses before writing to client.
                 // IMPORTANT: does NOT block any thread — chains the client write onto the
                 // decision future via thenAcceptAsync (same pattern as request breakpoints).
-                boolean isStreaming = !chaosErrorInjected && effectiveResponse != null && effectiveResponse.getStreamingBody() != null;
-                if (!synchronous && !isStreaming && Boolean.TRUE.equals(configuration.breakpointResponseEnabled())) {
-                    org.mockserver.mock.breakpoint.BreakpointRegistry breakpointRegistry = org.mockserver.mock.breakpoint.BreakpointRegistry.getInstance();
-                    org.mockserver.mock.breakpoint.PausedExchange responsePaused = breakpointRegistry.pauseResponse(
-                        request.getLogCorrelationId(), request, effectiveResponse,
-                        action != null ? action.getExpectationId() : null, configuration
-                    );
-                    if (responsePaused != null) {
-                        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                            mockServerLogger.logEvent(
-                                new LogEntry()
-                                    .setLogLevel(Level.INFO)
-                                    .setCorrelationId(request.getLogCorrelationId())
-                                    .setHttpRequest(request)
-                                    .setHttpResponse(effectiveResponse)
-                                    .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
-                                    .setArguments(request, effectiveResponse)
-                            );
-                        }
-                        // Chain the write onto the decision future asynchronously
+                {
+                    org.mockserver.mock.breakpoint.BreakpointMatcher responseBreakpoint3 =
+                        (!synchronous && !isStreaming) ? org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance().findResponseMatch(request, effectiveResponse, org.mockserver.mock.breakpoint.BreakpointPhase.RESPONSE) : null;
+                    if (responseBreakpoint3 != null) {
                         java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                             ? scheduler.getExecutorService()
                             : Runnable::run;
-                        final HttpResponse capturedEffective = effectiveResponse;
                         final boolean capturedChaosErrorInjected = chaosErrorInjected;
-                        chainResponseBreakpointContinuation(responsePaused, request, capturedEffective, responseWriter, continuationExecutor, responseToWrite -> {
+                        final long breakpointResponseTimeMs = effectiveForwardLatencyMs(response, responseTimeMs);
+                        if (attemptResponseBreakpoint(responseBreakpoint3, request, effectiveResponse,
+                            action != null ? action.getExpectationId() : null, responseWriter, continuationExecutor, responseToWrite -> {
                             responseWriter.writeResponse(request, responseToWrite, false);
+                            HttpResponse logResponse = responseToWrite.clone();
+                            logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(breakpointResponseTimeMs));
                             String logMessageFormat = capturedChaosErrorInjected
                                 ? "returning chaos-injected error response:{}replacing forwarded response" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}"
                                 : "returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}";
@@ -2102,27 +2480,35 @@ public class HttpActionHandler {
                                     .setLogLevel(Level.INFO)
                                     .setCorrelationId(request.getLogCorrelationId())
                                     .setHttpRequest(request)
-                                    .setHttpResponse(responseToWrite)
-                                    .setExpectation(request, responseToWrite)
+                                    .setHttpResponse(logResponse)
+                                    .setExpectation(request, logResponse)
                                     .setExpectationId(action != null ? action.getExpectationId() : null)
                                     .setMessageFormat(logMessageFormat)
-                                    .setArguments(responseToWrite, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action != null ? action.getExpectationId() : null)
+                                    .setArguments(logResponse, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action != null ? action.getExpectationId() : null)
                             );
-                        }, postProcessor);
-                        // Return immediately — do NOT block the scheduler worker thread
-                        return;
+                        }, postProcessor)) {
+                            // Return immediately — do NOT block the scheduler worker thread
+                            return;
+                        }
+                        // If cap reached, fall through to normal write
                     }
-                    // If pauseResponse returned null (cap reached), fall through to normal write
                 }
 
                 // Factor the write (streaming vs non-streaming) into a single command so
                 // it can be dispatched either directly or via the non-blocking scheduler.
                 final Runnable writeCommand;
+                final long capturedForwardStartNanos = forwardStartNanos;
                 if (isStreaming) {
-                    writeCommand = () -> writeStreamingForwardActionResponse(effectiveResponse, responseWriter, request, action, responseFuture, postProcessor);
+                    // Streaming path: GenAI span is deferred to the completion listener
+                    // inside writeStreamingForwardActionResponse where the full body is available
+                    writeCommand = () -> writeStreamingForwardActionResponse(effectiveResponse, responseWriter, request, action, responseFuture, postProcessor, capturedForwardStartNanos);
                 } else {
+                    // Non-streaming path: GenAI span already emitted above (before breakpoint check)
+                    final long nonStreamingResponseTimeMs = effectiveForwardLatencyMs(response, responseTimeMs);
                     writeCommand = () -> {
                         responseWriter.writeResponse(request, effectiveResponse, false);
+                        HttpResponse logResponse = effectiveResponse.clone();
+                        logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(nonStreamingResponseTimeMs));
                         String logMessageFormat = chaosErrorInjected
                             ? "returning chaos-injected error response:{}replacing forwarded response" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}"
                             : "returning response:{}for forwarded request" + NEW_LINE + NEW_LINE + " in json:{}" + NEW_LINE + NEW_LINE + " in curl:{}for action:{}from expectation:{}";
@@ -2132,11 +2518,11 @@ public class HttpActionHandler {
                                 .setLogLevel(Level.INFO)
                                 .setCorrelationId(request.getLogCorrelationId())
                                 .setHttpRequest(request)
-                                .setHttpResponse(effectiveResponse)
-                                .setExpectation(request, effectiveResponse)
+                                .setHttpResponse(logResponse)
+                                .setExpectation(request, logResponse)
                                 .setExpectationId(action.getExpectationId())
                                 .setMessageFormat(logMessageFormat)
-                                .setArguments(effectiveResponse, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action.getExpectationId())
+                                .setArguments(logResponse, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress()), action, action.getExpectationId())
                         );
                         if (postProcessor != null) {
                             postProcessor.run();
@@ -2148,7 +2534,7 @@ public class HttpActionHandler {
                 // blocking Thread.sleep — avoids starving the bounded scheduler thread pool.
                 // Only chaos latency is scheduled here because the forward path's action +
                 // global delay was already applied when the forward handler was dispatched
-                // (see combineWithGlobalDelay(action.getDelay()) in the processAction switch).
+                // (see combineWithGlobalDelay(actionDelay) in the processAction switch).
                 if (chaosLatency != null) {
                     scheduler.schedule(writeCommand, synchronous, chaosLatency);
                 } else {
@@ -2163,7 +2549,7 @@ public class HttpActionHandler {
         }, synchronous, throwable -> true);
     }
 
-    private void writeStreamingForwardActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, final HttpForwardActionResult responseFuture, final Runnable postProcessor) {
+    private void writeStreamingForwardActionResponse(final HttpResponse response, final ResponseWriter responseWriter, final HttpRequest request, final Action action, final HttpForwardActionResult responseFuture, final Runnable postProcessor, final long forwardStartNanos) {
         final StreamingBody streamingBody = response.getStreamingBody();
 
         // Write the response head through the response writer (which will subscribe to the streaming body)
@@ -2177,6 +2563,8 @@ public class HttpActionHandler {
                 byte[] captured = streamingBody.capturedBytes();
                 setCapturedStreamingBody(logResponse, captured);
                 attachStreamingHeaders(logResponse, streamingBody);
+                long streamResponseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
+                logResponse.withHeader(RESPONSE_TIME_HEADER, String.valueOf(streamResponseTimeMs));
                 mockServerLogger.logEvent(
                     new LogEntry()
                         .setType(FORWARDED_REQUEST)
@@ -2192,6 +2580,8 @@ public class HttpActionHandler {
                             : new Object[]{logResponse, responseFuture.getHttpRequest(), httpRequestToCurlSerializer.toCurl(responseFuture.getHttpRequest(), responseFuture.getRemoteAddress())}
                         )
                 );
+                // OpenTelemetry: emit GenAI span after stream completes and full body is available
+                emitForwardGenAiSpan(responseFuture.getHttpRequest(), logResponse);
             } catch (Throwable throwable) {
                 if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
                     mockServerLogger.logEvent(
@@ -2281,62 +2671,217 @@ public class HttpActionHandler {
     }
 
     /**
-     * Shared continuation for response breakpoints. Chains the CONTINUE/MODIFY/ABORT
-     * decision handling onto the paused exchange's future, executing asynchronously on
-     * the given executor. On the success path the caller-supplied {@code onResolved}
-     * callback receives the resolved response (to log + write in the caller's preferred
-     * order). On failure a 502 Bad Gateway is ALWAYS written to the client — this
-     * prevents the client connection from hanging on a continuation error.
+     * Attempts to hold a non-streaming response at a breakpoint (RESPONSE phase).
+     * Dispatches over the callback WebSocket to the owning client.
      *
-     * @param responsePaused       the paused response-phase exchange
-     * @param request              the original inbound request (for error responses)
-     * @param capturedResponse     the upstream response held at the breakpoint
-     * @param responseWriter       writer for the client channel
-     * @param continuationExecutor executor for the async continuation
-     * @param onResolved           callback receiving the resolved response (log + write)
-     * @param postProcessor        optional post-processing (e.g. chaos-latency scheduling); always invoked
+     * @param breakpoint          the matched breakpoint (non-null; clientId always present)
+     * @param request             the original request
+     * @param response            the upstream response to hold
+     * @param expectationId       matched expectation id, or null
+     * @param responseWriter      writer for the client channel
+     * @param continuationExecutor executor for async continuation
+     * @param onResolved          callback receiving the resolved response
+     * @param postProcessor       optional post-processing
+     * @return true if the breakpoint was activated (caller should return); false if cap reached (fall through)
      */
-    private void chainResponseBreakpointContinuation(
-        org.mockserver.mock.breakpoint.PausedExchange responsePaused,
+    private boolean attemptResponseBreakpoint(
+        org.mockserver.mock.breakpoint.BreakpointMatcher breakpoint,
         HttpRequest request,
-        HttpResponse capturedResponse,
+        HttpResponse response,
+        String expectationId,
         ResponseWriter responseWriter,
         java.util.concurrent.Executor continuationExecutor,
-        Consumer<HttpResponse> onResolved,
+        java.util.function.Consumer<HttpResponse> onResolved,
         Runnable postProcessor
     ) {
-        responsePaused.getDecisionFuture().thenAcceptAsync(decision -> {
+        // WS-callback dispatch (clientId is always present — required since 7b)
+        java.util.concurrent.CompletableFuture<org.mockserver.mock.breakpoint.BreakpointDecision> decisionFuture =
+            org.mockserver.mock.breakpoint.BreakpointCallbackDispatcher.getInstance().dispatchResponse(
+                breakpoint.getClientId(), breakpoint.getId(), request, response,
+                httpStateHandler.getWebSocketClientRegistry(),
+                configuration, mockServerLogger
+            );
+        // null means cap reached or client disconnected — fall through
+
+        if (decisionFuture != null) {
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.INFO)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setHttpResponse(response)
+                        .setMessageFormat("upstream response paused at breakpoint, awaiting resolution for request:{}response:{}")
+                        .setArguments(request, response)
+                );
+            }
+            // Chain the CONTINUE/MODIFY/ABORT decision onto the continuation executor.
+            final HttpResponse capturedResponse = response;
+            decisionFuture.thenAcceptAsync(decision -> {
+                try {
+                    HttpResponse responseToWrite;
+                    switch (decision.getAction()) {
+                        case ABORT:
+                            responseToWrite = decision.getAbortResponse();
+                            if (responseToWrite == null) {
+                                responseToWrite = org.mockserver.model.HttpResponse.response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                            }
+                            break;
+                        case MODIFY:
+                            responseToWrite = decision.getModifiedResponse();
+                            if (responseToWrite == null) {
+                                responseToWrite = capturedResponse;
+                            }
+                            break;
+                        case CONTINUE:
+                        default:
+                            responseToWrite = capturedResponse;
+                            break;
+                    }
+                    onResolved.accept(responseToWrite);
+                    if (postProcessor != null) {
+                        postProcessor.run();
+                    }
+                } catch (Throwable t) {
+                    returnBadGateway(responseWriter, request, "response breakpoint continuation failed: " + t.getMessage());
+                    if (postProcessor != null) {
+                        postProcessor.run();
+                    }
+                }
+            }, continuationExecutor);
+            return true; // breakpoint activated
+        }
+
+        return false; // cap reached, fall through
+    }
+
+    /**
+     * REQUEST-phase breakpoint gate shared by matched forwards, matched mock responses, and the
+     * unmatched-404 path. Mirrors the unmatched-proxy REQUEST breakpoint in {@link #handleUnmatchedProxyForward}:
+     * if a REQUEST breakpoint matches and dispatch to a connected callback client succeeds, the request is
+     * paused and, on resolution, {@code onProceed} is invoked with the original request (CONTINUE) or the
+     * modified request (MODIFY), or an abort response is written (ABORT); this returns {@code true} and the
+     * caller MUST NOT proceed synchronously. Returns {@code false} when synchronous, when no breakpoint
+     * matches, or when the cap was reached / client disconnected — the caller then proceeds normally.
+     * Non-blocking: the continuation runs asynchronously on the scheduler executor.
+     */
+    private boolean attemptRequestBreakpoint(
+        final HttpRequest request,
+        final boolean synchronous,
+        final ResponseWriter responseWriter,
+        final Runnable postProcessor,
+        final java.util.function.Consumer<HttpRequest> onProceed
+    ) {
+        if (synchronous) {
+            return false;
+        }
+        final org.mockserver.mock.breakpoint.BreakpointMatcher requestBreakpoint =
+            org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance()
+                .findMatch(request, org.mockserver.mock.breakpoint.BreakpointPhase.REQUEST);
+        if (requestBreakpoint == null) {
+            return false;
+        }
+        final java.util.concurrent.CompletableFuture<org.mockserver.mock.breakpoint.BreakpointDecision> decisionFuture =
+            org.mockserver.mock.breakpoint.BreakpointCallbackDispatcher.getInstance().dispatchRequest(
+                requestBreakpoint.getClientId(), requestBreakpoint.getId(), request,
+                httpStateHandler.getWebSocketClientRegistry(), configuration, mockServerLogger
+            );
+        if (decisionFuture == null) {
+            // cap reached or client disconnected — fall through to normal handling
+            return false;
+        }
+        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.INFO)
+                    .setCorrelationId(request.getLogCorrelationId())
+                    .setHttpRequest(request)
+                    .setMessageFormat("request paused at breakpoint, awaiting resolution for:{}")
+                    .setArguments(request)
+            );
+        }
+        final java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+            ? scheduler.getExecutorService()
+            : Runnable::run;
+        decisionFuture.thenAcceptAsync(decision -> {
             try {
-                HttpResponse responseToWrite;
                 switch (decision.getAction()) {
                     case ABORT:
-                        responseToWrite = decision.getAbortResponse();
-                        if (responseToWrite == null) {
-                            responseToWrite = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
+                        HttpResponse abortResponse = decision.getAbortResponse();
+                        if (abortResponse == null) {
+                            abortResponse = response().withStatusCode(503).withReasonPhrase("Breakpoint Aborted");
                         }
-                        break;
+                        responseWriter.writeResponse(request, abortResponse, false);
+                        if (postProcessor != null) {
+                            postProcessor.run();
+                        }
+                        return;
                     case MODIFY:
-                        responseToWrite = decision.getModifiedResponse();
-                        if (responseToWrite == null) {
-                            responseToWrite = capturedResponse;
-                        }
-                        break;
+                        onProceed.accept(decision.getModifiedRequest() != null ? decision.getModifiedRequest() : request);
+                        return;
                     case CONTINUE:
                     default:
-                        responseToWrite = capturedResponse;
-                        break;
+                        onProceed.accept(request);
                 }
-                onResolved.accept(responseToWrite);
-                if (postProcessor != null) {
-                    postProcessor.run();
-                }
-            } catch (Throwable t) {
-                returnBadGateway(responseWriter, request, "response breakpoint continuation failed: " + t.getMessage());
+            } catch (Throwable throwable) {
+                returnBadGateway(responseWriter, request, "breakpoint continuation failed: " + throwable.getMessage());
                 if (postProcessor != null) {
                     postProcessor.run();
                 }
             }
         }, continuationExecutor);
+        return true;
+    }
+
+    /**
+     * Dispatches a matched forward expectation through the REQUEST-phase breakpoint gate. {@code forwarder}
+     * computes the {@link HttpForwardActionResult} from the (possibly modified) request; the RESPONSE-phase
+     * breakpoint and logging continue to key off the original {@code request} (mirroring the unmatched-proxy
+     * MODIFY semantics). When no REQUEST breakpoint applies, the forward proceeds normally.
+     */
+    private void dispatchForwardWithBreakpoint(
+        final HttpRequest request,
+        final Action action,
+        final boolean synchronous,
+        final ResponseWriter responseWriter,
+        final Runnable expectationPostProcessor,
+        final HttpChaosProfile forwardChaos,
+        final int capturedMatchCount,
+        final ChannelHandlerContext ctx,
+        final RateLimit rateLimit,
+        final java.util.function.Function<HttpRequest, HttpForwardActionResult> forwarder
+    ) {
+        if (attemptRequestBreakpoint(request, synchronous, responseWriter, expectationPostProcessor,
+            req -> writeForwardActionResponse(forwarder.apply(req), responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit))) {
+            return;
+        }
+        writeForwardActionResponse(forwarder.apply(request), responseWriter, request, action, synchronous, expectationPostProcessor, forwardChaos, capturedMatchCount, ctx, rateLimit);
+    }
+
+    /**
+     * Dispatches a matched mock-response expectation through the REQUEST-phase breakpoint gate. {@code responder}
+     * generates the {@link HttpResponse} from the (possibly modified) request (so templates/class-callbacks see
+     * the modified request); the response is then written via {@link #writeResponseActionResponse}, where the
+     * RESPONSE-phase breakpoint is applied. Logging/response-phase matching key off the original {@code request}.
+     */
+    private void dispatchMockResponseWithBreakpoint(
+        final HttpRequest request,
+        final Action action,
+        final boolean synchronous,
+        final ResponseWriter responseWriter,
+        final RequestDefinition requestDefinition,
+        final Runnable expectationPostProcessor,
+        final HttpChaosProfile effectiveChaos,
+        final int capturedMatchCount,
+        final ChannelHandlerContext ctx,
+        final RateLimit rateLimit,
+        final java.util.function.Function<HttpRequest, HttpResponse> responder
+    ) {
+        if (attemptRequestBreakpoint(request, synchronous, responseWriter, expectationPostProcessor,
+            req -> writeResponseActionResponse(responder.apply(req), responseWriter, request, action, synchronous, requestDefinition, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx, rateLimit))) {
+            return;
+        }
+        writeResponseActionResponse(responder.apply(request), responseWriter, request, action, synchronous, requestDefinition, expectationPostProcessor, effectiveChaos, capturedMatchCount, ctx, rateLimit);
     }
 
     private void returnBadGateway(ResponseWriter responseWriter, HttpRequest request, String error) {
@@ -2371,7 +2916,7 @@ public class HttpActionHandler {
         responseWriter.writeResponse(request, response, false);
     }
 
-    private void returnNotFound(ResponseWriter responseWriter, HttpRequest request, String error) {
+    private void returnNotFound(ResponseWriter responseWriter, HttpRequest request, String error, boolean synchronous) {
         HttpResponse response = notFoundResponse();
         if (request.getHeaders() != null && request.getHeaders().containsEntry(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue())) {
             response.withHeader(httpStateHandler.getUniqueLoopPreventionHeaderName(), httpStateHandler.getUniqueLoopPreventionHeaderValue());
@@ -2441,6 +2986,23 @@ public class HttpActionHandler {
         }
         if (configuration.attachMismatchDiagnosticToResponse()) {
             attachMismatchDiagnostic(request, response);
+        }
+        // breakpoint: RESPONSE-phase pause on the unmatched-404 before writing — lets a registered
+        // matcher inspect / modify / abort the not-found response.
+        if (!synchronous) {
+            final org.mockserver.mock.breakpoint.BreakpointMatcher responseBreakpoint =
+                org.mockserver.mock.breakpoint.BreakpointMatcherRegistry.getInstance()
+                    .findResponseMatch(request, response, org.mockserver.mock.breakpoint.BreakpointPhase.RESPONSE);
+            if (responseBreakpoint != null) {
+                final java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
+                    ? scheduler.getExecutorService() : Runnable::run;
+                final HttpResponse notFound = response;
+                if (attemptResponseBreakpoint(responseBreakpoint, request, notFound, null, responseWriter, continuationExecutor,
+                    responseToWrite -> responseWriter.writeResponse(request, responseToWrite, false), null)) {
+                    return; // async — continuation writes the resolved response
+                }
+                // cap reached — fall through to normal write
+            }
         }
         responseWriter.writeResponse(request, response, false);
     }
@@ -2539,7 +3101,7 @@ public class HttpActionHandler {
 
     private HttpResponseActionHandler getHttpResponseActionHandler() {
         if (httpResponseActionHandler == null) {
-            httpResponseActionHandler = new HttpResponseActionHandler();
+            httpResponseActionHandler = new HttpResponseActionHandler(mockServerLogger, configuration);
         }
         return httpResponseActionHandler;
     }
@@ -2630,14 +3192,14 @@ public class HttpActionHandler {
 
     private HttpWebSocketResponseActionHandler getHttpWebSocketResponseActionHandler() {
         if (httpWebSocketResponseActionHandler == null) {
-            httpWebSocketResponseActionHandler = new HttpWebSocketResponseActionHandler(mockServerLogger, scheduler);
+            httpWebSocketResponseActionHandler = new HttpWebSocketResponseActionHandler(mockServerLogger, scheduler, configuration, httpStateHandler.getWebSocketClientRegistry());
         }
         return httpWebSocketResponseActionHandler;
     }
 
     private GrpcStreamResponseActionHandler getGrpcStreamResponseActionHandler() {
         if (grpcStreamResponseActionHandler == null) {
-            grpcStreamResponseActionHandler = new GrpcStreamResponseActionHandler(mockServerLogger, scheduler, httpStateHandler.getGrpcDescriptorStore());
+            grpcStreamResponseActionHandler = new GrpcStreamResponseActionHandler(mockServerLogger, scheduler, httpStateHandler.getGrpcDescriptorStore(), configuration, httpStateHandler.getWebSocketClientRegistry());
         }
         return grpcStreamResponseActionHandler;
     }
@@ -2647,6 +3209,31 @@ public class HttpActionHandler {
             httpErrorActionHandler = new HttpErrorActionHandler();
         }
         return httpErrorActionHandler;
+    }
+
+    /**
+     * Apply an {@link HttpError} action and emit its expectation-response log entry. When the error
+     * carries a stream error and the active {@link ResponseWriter} can reset its own transport stream
+     * (HTTP/3 via {@link StreamErrorWriter}), the reset is delegated to it; otherwise the netty
+     * {@link HttpErrorActionHandler} resets the HTTP/2 stream (or drops the connection on HTTP/1.1).
+     */
+    private void dispatchErrorAction(final HttpError httpError, final HttpRequest request, final ResponseWriter responseWriter, final ChannelHandlerContext ctx) {
+        if (httpError.getStreamError() != null && responseWriter instanceof StreamErrorWriter) {
+            ((StreamErrorWriter) responseWriter).writeStreamError(httpError.getStreamError());
+        } else {
+            getHttpErrorActionHandler().handle(httpError, request, ctx);
+        }
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setType(EXPECTATION_RESPONSE)
+                .setLogLevel(Level.INFO)
+                .setCorrelationId(request.getLogCorrelationId())
+                .setHttpRequest(request)
+                .setHttpError(httpError)
+                .setExpectationId(httpError.getExpectationId())
+                .setMessageFormat("returning error:{}for request:{}for action:{}from expectation:{}")
+                .setArguments(httpError, request, httpError, httpError.getExpectationId())
+        );
     }
 
     public NettyHttpClient getHttpClient() {
@@ -2895,6 +3482,234 @@ public class HttpActionHandler {
     }
 
     /**
+     * Check the LLM cost budget before forwarding. If the outbound request targets
+     * an LLM provider (detected by {@link org.mockserver.llm.client.LlmProviderSniffer})
+     * and the cumulative cost exceeds the configured budget, return a 429 response.
+     * Otherwise return {@code null} (request should proceed). Fail-open on misconfig
+     * or detection failure.
+     */
+    private HttpResponse checkLlmCostBudget(HttpRequest request) {
+        return checkLlmCostBudgetByHost(null, request);
+    }
+
+    /**
+     * Check the LLM cost budget before a matched FORWARD action. Resolves the
+     * forward target host from the action (if available) so the sniffer checks
+     * the upstream host, not the inbound request host. Falls back to the request
+     * host when the action type doesn't carry an explicit host (e.g.
+     * FORWARD_TEMPLATE, FORWARD_CLASS_CALLBACK). Fail-open on misconfig or
+     * detection failure.
+     *
+     * @param request the inbound HTTP request
+     * @param action  the matched forward action
+     * @return a 429 response if the budget is exceeded, or {@code null} to proceed
+     */
+    private HttpResponse checkLlmCostBudgetForForward(HttpRequest request, Action action) {
+        String forwardHost = resolveForwardTargetHost(action);
+        return checkLlmCostBudgetByHost(forwardHost, request);
+    }
+
+    /**
+     * Single-call helper used by each matched FORWARD case arm. Checks the LLM
+     * cost budget; if exceeded, writes the 429 response, runs the expectation
+     * post-processor, and returns {@code true} (caller should {@code return}).
+     * Returns {@code false} when the request should proceed. Fail-open: any
+     * exception or misconfiguration returns {@code false}.
+     */
+    private boolean blockIfLlmCostBudgetExceeded(HttpRequest request, Action action,
+                                                 ResponseWriter responseWriter,
+                                                 Runnable expectationPostProcessor) {
+        HttpResponse costBudgetResponse = checkLlmCostBudgetForForward(request, action);
+        if (costBudgetResponse != null) {
+            responseWriter.writeResponse(request, costBudgetResponse, false);
+            expectationPostProcessor.run();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Shared LLM cost-budget guard. If {@code explicitHost} is non-null, sniffs
+     * it (with the request path for the configured-provider fallback gate);
+     * otherwise falls back to sniffing the request. Fail-open: a negative/unset
+     * budget, a non-LLM target, or any exception returns {@code null} (proceed).
+     */
+    private HttpResponse checkLlmCostBudgetByHost(String explicitHost, HttpRequest request) {
+        try {
+            if (org.mockserver.configuration.ConfigurationProperties.llmCostBudgetUsd() <= 0) {
+                return null; // budget not configured — pass through
+            }
+            java.util.Optional<Provider> providerOpt;
+            if (explicitHost != null) {
+                String path = request != null && request.getPath() != null
+                    ? request.getPath().getValue() : null;
+                providerOpt = org.mockserver.llm.client.LlmProviderSniffer.sniffByHostAndPath(explicitHost, path);
+            } else {
+                providerOpt = org.mockserver.llm.client.LlmProviderSniffer.sniff(request);
+            }
+            if (providerOpt.isEmpty()) {
+                return null; // not LLM traffic
+            }
+            return LlmCostBudgetMonitor.getInstance().checkBudgetOrNull();
+        } catch (Exception e) {
+            // fail-open: never block traffic on a detection/config error
+            return null;
+        }
+    }
+
+    /**
+     * Resolve the forward target host from a matched FORWARD action. Returns
+     * the explicit host when the action type carries one, or {@code null} to
+     * fall back to request-based sniffing.
+     */
+    private String resolveForwardTargetHost(Action action) {
+        if (action == null) {
+            return null;
+        }
+        switch (action.getType()) {
+            case FORWARD:
+                HttpForward fwd = (HttpForward) action;
+                return fwd.getHost();
+            case FORWARD_VALIDATE:
+                HttpForwardValidateAction fva = (HttpForwardValidateAction) action;
+                return fva.getHost();
+            case FORWARD_WITH_FALLBACK:
+                HttpForwardWithFallback fwf = (HttpForwardWithFallback) action;
+                if (fwf.getHttpForward() != null) {
+                    return fwf.getHttpForward().getHost();
+                }
+                return null;
+            case FORWARD_REPLACE:
+                HttpOverrideForwardedRequest ofr = (HttpOverrideForwardedRequest) action;
+                if (ofr.getRequestOverride() != null) {
+                    // Check socket address first, then Host header
+                    HttpRequest override = ofr.getRequestOverride();
+                    if (override.getSocketAddress() != null
+                        && override.getSocketAddress().getHost() != null
+                        && !override.getSocketAddress().getHost().isEmpty()) {
+                        return override.getSocketAddress().getHost();
+                    }
+                    String hostHeader = override.getFirstHeader("Host");
+                    if (hostHeader != null && !hostHeader.isEmpty()) {
+                        return stripPortFromHost(hostHeader);
+                    }
+                }
+                return null;
+            default:
+                // FORWARD_TEMPLATE, FORWARD_CLASS_CALLBACK, FORWARD_OBJECT_CALLBACK:
+                // target determined at runtime — fall back to request-based sniffing
+                return null;
+        }
+    }
+
+    /**
+     * Strip the port portion from a Host header value, handling both IPv4/DNS
+     * hosts ({@code example.com:443}) and bracketed IPv6 addresses
+     * ({@code [::1]:8080}). Fail-open: returns the input unchanged on any
+     * unexpected format.
+     *
+     * @param hostHeader the raw Host header value (non-null, non-empty)
+     * @return the hostname without the port suffix
+     */
+    static String stripPortFromHost(String hostHeader) {
+        if (hostHeader.startsWith("[")) {
+            // Bracketed IPv6: [addr]:port or [addr]
+            int closeBracket = hostHeader.indexOf(']');
+            if (closeBracket < 0) {
+                return hostHeader; // malformed — fail-open
+            }
+            // Return the address inside the brackets
+            return hostHeader.substring(1, closeBracket);
+        }
+        // Non-bracketed: only strip ":port" when there's exactly one colon
+        // (a bare IPv6 like "::1" has multiple colons — don't truncate it)
+        int firstColon = hostHeader.indexOf(':');
+        if (firstColon >= 0 && firstColon == hostHeader.lastIndexOf(':')) {
+            return hostHeader.substring(0, firstColon);
+        }
+        return hostHeader;
+    }
+
+    /**
+     * Process a forwarded LLM response: emit a GenAI span, increment token/cost
+     * metrics, record cost against the budget monitor, and annotate the response
+     * with usage headers for dashboard display. Fail-soft: telemetry and metrics
+     * must never affect the served response.
+     * <p>
+     * The gate is widened beyond just {@code GenAiSpans.isEnabled()} — the parse
+     * also runs when LLM metrics are enabled or a cost budget is configured, so
+     * token/cost tracking works without requiring full OTLP tracing.
+     */
+    private void emitForwardGenAiSpan(HttpRequest forwardedRequest, HttpResponse upstreamResponse) {
+        boolean spanEnabled = GenAiSpans.isEnabled();
+        boolean metricsEnabled = org.mockserver.metrics.Metrics.isLlmMetricsActive();
+        boolean budgetEnabled = org.mockserver.configuration.ConfigurationProperties.llmCostBudgetUsd() > 0;
+        if (!spanEnabled && !metricsEnabled && !budgetEnabled) {
+            return;
+        }
+        try {
+            java.util.Optional<Provider> providerOpt =
+                org.mockserver.llm.client.LlmProviderSniffer.sniff(forwardedRequest);
+            if (providerOpt.isEmpty()) {
+                return;
+            }
+            Provider provider = providerOpt.get();
+            java.util.Optional<org.mockserver.llm.client.LlmClient> clientOpt =
+                org.mockserver.llm.client.LlmClientRegistry.getInstance().lookup(provider);
+            if (clientOpt.isEmpty()) {
+                return;
+            }
+            // Parse the upstream response body into a Completion (extracts model from
+            // the already-parsed JSON — no second parse needed for the model)
+            Completion completion = clientOpt.get().parseCompletionResponse(upstreamResponse);
+            // Prefer the model from the parsed completion; fall back to the request body
+            String model = completion.getModel();
+            if (model == null) {
+                model = org.mockserver.llm.client.LlmProviderSniffer.extractModelFromRequest(forwardedRequest);
+            }
+            if (spanEnabled) {
+                GenAiSpans.recordCompletion(provider, model, completion);
+            }
+            // Increment LLM token/cost metrics and record against the budget monitor
+            recordLlmUsageMetrics(provider, model, completion);
+        } catch (Exception e) {
+            // fail-soft: telemetry must never affect the served response
+            if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.TRACE)
+                        .setMessageFormat("exception emitting forward-path GenAI span:{}")
+                        .setArguments(e.getMessage())
+                        .setThrowable(e)
+                );
+            }
+        }
+    }
+
+    /**
+     * Increment LLM token/cost Prometheus counters and record cost against the
+     * cost-budget circuit-breaker. Shared by both the forward path and the mock
+     * path (via {@link HttpLlmResponseActionHandler}). Fail-soft.
+     */
+    public static void recordLlmUsageMetrics(Provider provider, String model, Completion completion) {
+        if (completion == null) {
+            return;
+        }
+        try {
+            Usage usage = completion.getUsage();
+            long inputTokens = usage != null && usage.getInputTokens() != null ? usage.getInputTokens().longValue() : 0L;
+            long outputTokens = usage != null && usage.getOutputTokens() != null ? usage.getOutputTokens().longValue() : 0L;
+            String providerName = provider != null ? provider.name() : "unknown";
+            Double costUsd = org.mockserver.llm.cost.LlmPricing.estimateCostUsd(
+                provider, model, inputTokens, outputTokens);
+            org.mockserver.metrics.Metrics.incrementLlmTokens(providerName, model, inputTokens, outputTokens, costUsd);
+            LlmCostBudgetMonitor.getInstance().recordCost(costUsd);
+        } catch (Exception ignored) {
+            // fail-soft: metrics must never affect the served response
+        }
+    }
+
+    /**
      * Emit an OpenTelemetry SERVER span for a served HTTP request when
      * {@link RequestSpans} is enabled. Fail-soft: telemetry must never
      * affect the served response. The span is parented to the inbound
@@ -2902,6 +3717,16 @@ public class HttpActionHandler {
      */
     private void emitRequestSpan(HttpRequest request, HttpResponse response, Action action,
                                  ChannelHandlerContext ctx, long responseTimeMs) {
+        emitRequestSpan(request, response, action, ctx, responseTimeMs, null);
+    }
+
+    /**
+     * Emit a request-level SERVER span, additionally carrying the resolved
+     * upstream {@code server.address}/{@code server.port} for forward/proxy paths.
+     */
+    private void emitRequestSpan(HttpRequest request, HttpResponse response, Action action,
+                                 ChannelHandlerContext ctx, long responseTimeMs,
+                                 InetSocketAddress upstreamAddress) {
         if (!RequestSpans.isEnabled()) {
             return;
         }
@@ -2914,9 +3739,82 @@ public class HttpActionHandler {
             if (ctx != null) {
                 parentContext = ctx.channel().attr(TraceContextAttributes.TRACE_CONTEXT).get();
             }
-            RequestSpans.recordRequest(method, path, statusCode, expectationId, responseTimeMs, parentContext);
+            String serverAddress = resolveUpstreamHost(action, upstreamAddress);
+            Integer serverPort = upstreamAddress != null && upstreamAddress.getPort() > 0 ? upstreamAddress.getPort() : null;
+            RequestSpans.recordRequest(method, path, statusCode, expectationId, responseTimeMs, parentContext, serverAddress, serverPort);
         } catch (Exception e) {
             // fail-soft: telemetry must never affect the served response
         }
+    }
+
+    /**
+     * Record per-upstream forward/proxy observability metrics for a completed
+     * forward. No-op unless metrics are enabled (the underlying recorder is a
+     * static no-op then). Labels by upstream host only (never the full URL/path)
+     * to keep Prometheus cardinality bounded. Fail-soft.
+     *
+     * @param action          the matched forward action, or null on the unmatched proxy path
+     * @param response        the upstream response (carries the Timing for latency), or null
+     * @param upstreamAddress the resolved upstream socket address
+     * @param responseTimeMs  fallback wall-clock latency when the response carries no Timing
+     */
+    /**
+     * Effective upstream round-trip latency in milliseconds for the LOGGED forwarded response.
+     * Prefers the precise {@code Timing} measured by {@link NettyHttpClient} (total round-trip),
+     * falling back to the supplied wall-clock delta when no Timing is attached. Used to populate
+     * {@link #RESPONSE_TIME_HEADER} on the event-log clone (see {@link #recordForwardMetrics} which
+     * applies the same precedence for metrics).
+     */
+    private static long effectiveForwardLatencyMs(HttpResponse response, long fallbackMs) {
+        if (response != null && response.getTiming() != null && response.getTiming().getTotalTimeInMillis() != null) {
+            return response.getTiming().getTotalTimeInMillis();
+        }
+        return fallbackMs;
+    }
+
+    private void recordForwardMetrics(Action action, HttpResponse response,
+                                      InetSocketAddress upstreamAddress, long responseTimeMs) {
+        try {
+            String host = resolveUpstreamHost(action, upstreamAddress);
+            Integer statusCode = response != null ? response.getStatusCode() : null;
+            // Prefer the precise Timing measured by NettyHttpClient (total round-trip);
+            // fall back to the coarse wall-clock delta when no Timing is attached.
+            long latencyMillis = responseTimeMs;
+            if (response != null && response.getTiming() != null && response.getTiming().getTotalTimeInMillis() != null) {
+                latencyMillis = response.getTiming().getTotalTimeInMillis();
+            }
+            // SLO sample tracking is independent of the metrics feature: it has its
+            // own sloTrackingEnabled gate (a no-op inside record(...) when off), so
+            // it must run even when forward metrics are inactive.
+            org.mockserver.slo.SloSampleStore.getInstance().record(
+                org.mockserver.time.TimeService.currentTimeMillis(),
+                latencyMillis,
+                statusCode == null || statusCode >= 500,
+                org.mockserver.slo.Scope.FORWARD,
+                host
+            );
+            if (org.mockserver.metrics.Metrics.isForwardMetricsActive()) {
+                org.mockserver.metrics.Metrics.observeForwardRequest(host, statusCode, latencyMillis / 1000.0);
+            }
+        } catch (Exception e) {
+            // fail-soft: metrics must never affect the served response
+        }
+    }
+
+    /**
+     * Resolve the upstream host label for forward observability: prefer the
+     * explicit host from a matched forward action (the real upstream even behind
+     * an HTTP forward-proxy), else fall back to the resolved socket address host.
+     * Returns null when neither is available.
+     */
+    private String resolveUpstreamHost(Action action, InetSocketAddress upstreamAddress) {
+        String host = resolveForwardTargetHost(action);
+        if (host != null && !host.isEmpty()) {
+            return host;
+        }
+        if (upstreamAddress != null) {
+            return upstreamAddress.getHostString();
+        }
+        return null;
     }
 }

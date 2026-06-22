@@ -1,5 +1,6 @@
 package org.mockserver.serialization.java;
 
+import org.apache.commons.text.StringEscapeUtils;
 import org.mockserver.model.Delay;
 import org.mockserver.model.DelayDistribution;
 
@@ -13,7 +14,10 @@ public class DelayToJavaSerializer implements ToJavaSerializer<Delay> {
         StringBuilder output = new StringBuilder();
         if (delay != null) {
             DelayDistribution distribution = delay.getDistribution();
-            if (distribution != null && distribution.getType() != null) {
+            if (delay.hasTemplate()) {
+                output.append("Delay.template(HttpTemplate.TemplateType.").append(delay.getTemplateType().name())
+                    .append(", \"").append(StringEscapeUtils.escapeJava(delay.getTemplate())).append("\")");
+            } else if (distribution != null && distribution.getType() != null) {
                 switch (distribution.getType()) {
                     case UNIFORM:
                         output.append("Delay.uniform(TimeUnit.").append(delay.getTimeUnit().name())

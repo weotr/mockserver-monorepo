@@ -270,24 +270,38 @@ else
 fi
 
 # ---- Wait for Maven Central sync ------------------------------------------
+# This is the automated gate the downstream publishes depend on (there is no
+# manual "approve downstream publish" step in the pipeline). Confirm the main
+# MockServer artifacts have synced to repo1 before this step completes. Every
+# module publishes in the SAME Central deployment and syncs together, so this
+# representative set stands in for the whole release — no need to enumerate all
+# ~20 modules (mockserver-maven-plugin is released by a separate pipeline and
+# is intentionally excluded). The timeout is deliberately generous: far better
+# to wait too long than to fail a real release because a sync lagged.
 if is_dry_run; then
   log_dry "skip: wait for Maven Central sync"
 else
-  log_info "Waiting for Maven Central sync of $RELEASE_VERSION"
-  url="https://repo1.maven.org/maven2/org/mock-server/mockserver-netty/$RELEASE_VERSION/mockserver-netty-$RELEASE_VERSION.pom"
+  SYNC_ARTIFACTS=(mockserver-netty mockserver-client-java mockserver-core mockserver-junit-jupiter)
+  log_info "Waiting for Maven Central sync of $RELEASE_VERSION (artifacts: ${SYNC_ARTIFACTS[*]})"
   SYNC_TIMEOUT_ITERATIONS=120  # 120 × 60s = 2 hours
   synced=false
+  missing=()
   for i in $(seq 1 "$SYNC_TIMEOUT_ITERATIONS"); do
-    if curl -sf -o /dev/null -I "$url"; then
-      log_info "Synced ($RELEASE_VERSION found at $url)"
+    missing=()
+    for artifact in "${SYNC_ARTIFACTS[@]}"; do
+      url="https://repo1.maven.org/maven2/org/mock-server/$artifact/$RELEASE_VERSION/$artifact-$RELEASE_VERSION.pom"
+      curl -sf --max-time 30 -o /dev/null -I "$url" || missing+=("$artifact")
+    done
+    if [[ ${#missing[@]} -eq 0 ]]; then
+      log_info "Synced — all ${#SYNC_ARTIFACTS[@]} main artifacts for $RELEASE_VERSION are live on Maven Central"
       synced=true
       break
     fi
-    log_info "  attempt $i: not yet visible"
+    log_info "  attempt $i/$SYNC_TIMEOUT_ITERATIONS: ${#missing[@]} not yet visible: ${missing[*]}"
     sleep 60
   done
   if ! $synced; then
-    log_error "Maven Central sync timed out after $((SYNC_TIMEOUT_ITERATIONS * 60))s for $url"
+    log_error "Maven Central sync timed out after $((SYNC_TIMEOUT_ITERATIONS * 60))s; still missing: ${missing[*]}"
     exit 1
   fi
 fi

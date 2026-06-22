@@ -1,0 +1,17 @@
+meta {
+  name: list registered cassettes
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/mockserver/cassettes
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns all registered cassettes held in the in-memory cassette registry
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

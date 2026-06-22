@@ -34,4 +34,15 @@ public class HttpErrorToJavaSerializerTest {
                 "                .withResponseBytes(new Base64Converter().base64StringToBytes(\"" + base64Converter.bytesToBase64String("example_bytes".getBytes(UTF_8)) + "\"))"));
     }
 
+    @Test
+    public void shouldSerializeStreamErrorAsJava() {
+        assertThat(
+            new HttpErrorToJavaSerializer().serialize(1,
+                new HttpError().withStreamError(HttpError.StreamErrorCode.REFUSED_STREAM)
+            )
+        , is(NEW_LINE +
+                "        error()" + NEW_LINE +
+                "                .withStreamError(7L)"));
+    }
+
 }

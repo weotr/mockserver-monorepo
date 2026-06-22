@@ -4,7 +4,7 @@ import IconButton from '@mui/material/IconButton';
 import Collapse from '@mui/material/Collapse';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import { becauseColors } from '../theme';
+import { becauseColors, monospaceFontFamily } from '../theme';
 
 interface BecauseSectionProps {
   reasons: string[];
@@ -25,11 +25,11 @@ export default function BecauseSection({ reasons }: BecauseSectionProps) {
 
   return (
     <Box sx={{ pl: 1 }}>
-      <IconButton size="small" onClick={() => setOpen(!open)} sx={{ color: 'rgb(222, 147, 95)' }}>
+      <IconButton size="small" onClick={() => setOpen(!open)} aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} sx={{ color: 'rgb(222, 147, 95)' }}>
         {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
       </IconButton>
       {!open && (
-        <Box component="span" sx={{ color: 'rgb(222, 147, 95)', fontFamily: 'monospace' }}>
+        <Box component="span" sx={{ color: 'rgb(222, 147, 95)', fontFamily: monospaceFontFamily }}>
           ...
         </Box>
       )}
@@ -44,7 +44,7 @@ export default function BecauseSection({ reasons }: BecauseSectionProps) {
               whiteSpace: 'pre',
               pl: 3,
               pb: 1,
-              fontFamily: 'monospace',
+              fontFamily: monospaceFontFamily,
             }}
           >
             {reason}

@@ -1,0 +1,20 @@
+[
+  {
+    "httpRequest": { "method": "GET", "path": "/events" },
+    "httpResponse": { "statusCode": 200, "body": "event-stream" },
+    "crossProtocolScenarios": [
+      {
+        "trigger": "HTTP_REQUEST",
+        "matchPattern": "/events",
+        "scenarioName": "ConnFlow",
+        "targetState": "Connected"
+      }
+    ]
+  },
+  {
+    "httpRequest": { "method": "GET", "path": "/api/conn-status" },
+    "httpResponse": { "statusCode": 200, "body": "connected" },
+    "scenarioName": "ConnFlow",
+    "scenarioState": "Connected"
+  }
+]

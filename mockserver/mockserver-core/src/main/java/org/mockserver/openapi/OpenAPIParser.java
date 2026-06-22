@@ -15,8 +15,10 @@ import org.mockserver.cache.LRUCache;
 import org.mockserver.logging.MockServerLogger;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static io.swagger.v3.parser.OpenAPIV3Parser.getExtensions;
@@ -90,24 +92,95 @@ public class OpenAPIParser {
                     throw new IllegalArgumentException(OPEN_API_LOAD_ERROR);
                 }
             }
-            addMissingOperationIds(openAPI);
+            addMissingOperationIds(openAPI, mockServerLogger);
             openAPILRUCache.put(specUrlOrPayload, openAPI);
         }
         return openAPI;
     }
 
-    private static void addMissingOperationIds(OpenAPI openAPI) {
-        openAPI.getPaths().forEach(
-            (path, pathItem) -> {
-                mapOperations(pathItem).forEach(
-                    stringOperationPair -> {
-                        if (isBlank(stringOperationPair.getRight().getOperationId())) {
-                            stringOperationPair.getRight().setOperationId(stringOperationPair.getLeft() + " " + path);
-                        }
-                    }
-                );
+    /**
+     * Ensures every operation has a non-blank, globally-unique operationId.
+     *
+     * <p>Operation ids key the converter's selection maps (and the stable expectation ids), so a
+     * collision silently conflates two distinct operations. We therefore enforce global uniqueness
+     * across <em>all</em> paths and webhooks in a single pass:
+     * <ol>
+     *   <li>author-supplied operationIds are reserved first so synthesized ids never steal one;</li>
+     *   <li>blank operationIds are synthesized as {@code "<METHOD> <path>"} (paths) or
+     *       {@code "<METHOD> webhook:<name>"} (webhooks);</li>
+     *   <li>any id (author-supplied duplicate or colliding synthesized id) that has already been
+     *       seen is disambiguated deterministically by appending {@code " (2)"}, {@code " (3)"}, …,
+     *       and a WARN is logged for genuine duplicates so the conflation is visible.</li>
+     * </ol>
+     * A unique author-supplied operationId is always left unchanged.
+     */
+    private static void addMissingOperationIds(OpenAPI openAPI, MockServerLogger mockServerLogger) {
+        Set<String> seenOperationIds = new HashSet<>();
+        // First pass: reserve all author-supplied (non-blank) operationIds so that synthesized ids
+        // are never allowed to collide with an id the author explicitly chose. A genuine duplicate
+        // among author-supplied ids is disambiguated (and warned) in this pass too.
+        reserveAuthoredOperationIds(openAPI.getPaths() != null ? openAPI.getPaths().values() : null, seenOperationIds, mockServerLogger);
+        if (openAPI.getWebhooks() != null) {
+            reserveAuthoredOperationIds(openAPI.getWebhooks().values(), seenOperationIds, mockServerLogger);
+        }
+        // Second pass: synthesize ids for operations with a blank operationId, disambiguating against
+        // everything reserved/synthesized so far.
+        if (openAPI.getPaths() != null) {
+            openAPI.getPaths().forEach((path, pathItem) -> synthesizeOperationIds(pathItem, path, false, seenOperationIds, mockServerLogger));
+        }
+        if (openAPI.getWebhooks() != null) {
+            openAPI.getWebhooks().forEach((webhookName, pathItem) -> synthesizeOperationIds(pathItem, webhookName, true, seenOperationIds, mockServerLogger));
+        }
+    }
+
+    private static void reserveAuthoredOperationIds(java.util.Collection<PathItem> pathItems, Set<String> seenOperationIds, MockServerLogger mockServerLogger) {
+        if (pathItems == null) {
+            return;
+        }
+        for (PathItem pathItem : pathItems) {
+            for (Pair<String, Operation> stringOperationPair : mapOperations(pathItem)) {
+                Operation operation = stringOperationPair.getRight();
+                String operationId = operation.getOperationId();
+                if (isNotBlank(operationId)) {
+                    operation.setOperationId(ensureUnique(operationId, seenOperationIds, mockServerLogger));
+                }
             }
-        );
+        }
+    }
+
+    private static void synthesizeOperationIds(PathItem pathItem, String name, boolean webhook, Set<String> seenOperationIds, MockServerLogger mockServerLogger) {
+        for (Pair<String, Operation> stringOperationPair : mapOperations(pathItem)) {
+            Operation operation = stringOperationPair.getRight();
+            if (isBlank(operation.getOperationId())) {
+                String synthesized = stringOperationPair.getLeft() + (webhook ? " webhook:" + name : " " + name);
+                operation.setOperationId(ensureUnique(synthesized, seenOperationIds, mockServerLogger));
+            }
+        }
+    }
+
+    /**
+     * Returns {@code candidate} if unseen, otherwise the first {@code "candidate (n)"} (n>=2) not yet
+     * seen, registering the chosen id in {@code seenOperationIds}. A collision is logged at WARN.
+     */
+    private static String ensureUnique(String candidate, Set<String> seenOperationIds, MockServerLogger mockServerLogger) {
+        if (seenOperationIds.add(candidate)) {
+            return candidate;
+        }
+        int suffix = 2;
+        String disambiguated;
+        do {
+            disambiguated = candidate + " (" + suffix + ")";
+            suffix++;
+        } while (!seenOperationIds.add(disambiguated));
+        if (mockServerLogger != null) {
+            mockServerLogger.logEvent(
+                new org.mockserver.log.model.LogEntry()
+                    .setLogLevel(org.slf4j.event.Level.WARN)
+                    .setMessageFormat("duplicate OpenAPI operationId {} - disambiguating to {} to avoid conflating distinct operations")
+                    .setArguments(candidate, disambiguated)
+            );
+        }
+        return disambiguated;
     }
 
     public static List<Pair<String, Operation>> mapOperations(PathItem pathItem) {

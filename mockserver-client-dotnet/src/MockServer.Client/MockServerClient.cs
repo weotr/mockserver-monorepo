@@ -27,6 +27,7 @@ public sealed class MockServerClient : IDisposable
     private readonly HttpClient _httpClient;
     private readonly string _baseUrl;
     private readonly bool _ownsHttpClient;
+    private Func<string>? _controlPlaneBearerTokenSupplier;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -62,6 +63,81 @@ public sealed class MockServerClient : IDisposable
         _baseUrl = baseUrl.TrimEnd('/');
         _httpClient = httpClient;
         _ownsHttpClient = false;
+    }
+
+    /// <summary>
+    /// Internal constructor used by <see cref="MockServerClientBuilder"/> to construct a
+    /// client around a pre-built (possibly TLS-configured) HttpClient with a bearer-token supplier.
+    /// </summary>
+    private MockServerClient(
+        string baseUrl, HttpClient httpClient, bool ownsHttpClient, Func<string>? controlPlaneBearerTokenSupplier)
+    {
+        _baseUrl = baseUrl.TrimEnd('/');
+        _httpClient = httpClient;
+        _ownsHttpClient = ownsHttpClient;
+        _controlPlaneBearerTokenSupplier = controlPlaneBearerTokenSupplier;
+    }
+
+    /// <summary>
+    /// Begin building a client with control-plane authentication and/or custom TLS.
+    /// </summary>
+    /// <param name="host">MockServer host (e.g., "localhost").</param>
+    /// <param name="port">MockServer port (default 1080).</param>
+    public static MockServerClientBuilder Builder(string host, int port = 1080)
+        => new MockServerClientBuilder(host, port);
+
+    internal static MockServerClient CreateConfigured(
+        string host, int port, string contextPath, bool secure,
+        HttpClient httpClient, bool ownsHttpClient, Func<string>? controlPlaneBearerTokenSupplier)
+    {
+        var scheme = secure ? "https" : "http";
+        var ctxPath = string.IsNullOrEmpty(contextPath)
+            ? ""
+            : (contextPath.StartsWith("/") ? contextPath : "/" + contextPath);
+        var baseUrl = $"{scheme}://{host}:{port}{ctxPath}";
+        return new MockServerClient(baseUrl, httpClient, ownsHttpClient, controlPlaneBearerTokenSupplier);
+    }
+
+    // -------------------------------------------------------------------
+    // Control-plane authentication
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Attach <c>Authorization: Bearer &lt;token&gt;</c> to every control-plane request this
+    /// client sends. The client only ever issues control-plane requests, so all of its
+    /// requests carry the header. Returns this client for chaining.
+    /// </summary>
+    public MockServerClient WithControlPlaneBearerToken(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            throw new ArgumentException("token is required", nameof(token));
+        _controlPlaneBearerTokenSupplier = () => token;
+        return this;
+    }
+
+    /// <summary>
+    /// Attach <c>Authorization: Bearer &lt;token&gt;</c> to every control-plane request,
+    /// evaluating <paramref name="tokenSupplier"/> per request (e.g., for rotating tokens).
+    /// Returns this client for chaining.
+    /// </summary>
+    public MockServerClient WithControlPlaneBearerToken(Func<string> tokenSupplier)
+    {
+        _controlPlaneBearerTokenSupplier = tokenSupplier ?? throw new ArgumentNullException(nameof(tokenSupplier));
+        return this;
+    }
+
+    /// <summary>
+    /// Apply the configured control-plane bearer token (if any) to an outgoing request.
+    /// Evaluated per request so a supplier can return a rotating token.
+    /// </summary>
+    private void ApplyControlPlaneAuth(HttpRequestMessage request)
+    {
+        var supplier = _controlPlaneBearerTokenSupplier;
+        if (supplier == null) return;
+        var token = supplier();
+        if (string.IsNullOrEmpty(token)) return;
+        request.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
     }
 
     // -------------------------------------------------------------------
@@ -115,6 +191,40 @@ public sealed class MockServerClient : IDisposable
     }
 
     /// <summary>
+    /// Register expectations from an OpenAPI v3 specification.
+    /// </summary>
+    /// <param name="expectation">The OpenAPI spec (URL/classpath/inline payload) and optional operation-to-response map.</param>
+    public void OpenApiExpectation(OpenApiExpectation expectation)
+        => OpenApiExpectationAsync(expectation).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register expectations from an OpenAPI v3 specification (async).
+    /// </summary>
+    public async Task OpenApiExpectationAsync(OpenApiExpectation expectation)
+    {
+        if (expectation == null) throw new ArgumentNullException(nameof(expectation));
+        var json = JsonSerializer.Serialize(expectation, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/openapi", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid OpenAPI expectation: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to create OpenAPI expectation (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Register expectations from an OpenAPI v3 spec given by URL, classpath, or inline payload.
+    /// </summary>
+    public void OpenApiExpectation(string specUrlOrPayload)
+        => OpenApiExpectation(Models.OpenApiExpectation.Of(specUrlOrPayload));
+
+    /// <summary>
+    /// Register expectations from an OpenAPI v3 spec given by URL, classpath, or inline payload (async).
+    /// </summary>
+    public Task OpenApiExpectationAsync(string specUrlOrPayload)
+        => OpenApiExpectationAsync(Models.OpenApiExpectation.Of(specUrlOrPayload));
+
+    /// <summary>
     /// Verify that a request has been received a specific number of times.
     /// </summary>
     /// <exception cref="VerificationException">If the verification fails (HTTP 406).</exception>
@@ -137,6 +247,46 @@ public sealed class MockServerClient : IDisposable
     }
 
     /// <summary>
+    /// Verify that a request-response pair was recorded (proxied/forwarded).
+    /// When <paramref name="response"/> is provided, verification switches from
+    /// "request received" to "response received" mode.
+    /// </summary>
+    /// <param name="request">Optional request matcher. Null to verify response only.</param>
+    /// <param name="response">Response matcher to verify against recorded responses.</param>
+    /// <param name="times">Optional number of times the response should have been recorded.</param>
+    /// <exception cref="VerificationException">If the verification fails (HTTP 406).</exception>
+    public void Verify(HttpRequest? request, HttpResponse response, VerificationTimes? times = null)
+        => VerifyAsync(request, response, times).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Verify that a request-response pair was recorded (async).
+    /// </summary>
+    public async Task VerifyAsync(HttpRequest? request, HttpResponse response, VerificationTimes? times = null)
+    {
+        var verification = new Verification { HttpRequest = request, HttpResponse = response, Times = times };
+        var json = JsonSerializer.Serialize(verification, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/verify", json).ConfigureAwait(false);
+
+        if (statusCode == 406)
+            throw new VerificationException(body ?? "Verification failed");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to verify (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Verify that MockServer received no requests at all.
+    /// </summary>
+    /// <exception cref="VerificationException">If any request was received (HTTP 406).</exception>
+    public void VerifyZeroInteractions()
+        => VerifyZeroInteractionsAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Verify that MockServer received no requests at all (async).
+    /// </summary>
+    public Task VerifyZeroInteractionsAsync()
+        => VerifyAsync(HttpRequest.Request().Build(), VerificationTimes.AtMostTimes(0));
+
+    /// <summary>
     /// Verify that requests were received in a specific sequence.
     /// </summary>
     /// <exception cref="VerificationException">If the verification fails (HTTP 406).</exception>
@@ -149,6 +299,36 @@ public sealed class MockServerClient : IDisposable
     public async Task VerifySequenceAsync(params HttpRequest[] requests)
     {
         var verification = new VerificationSequence { HttpRequests = new List<HttpRequest>(requests) };
+        var json = JsonSerializer.Serialize(verification, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/verifySequence", json).ConfigureAwait(false);
+
+        if (statusCode == 406)
+            throw new VerificationException(body ?? "Verification sequence failed");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to verify sequence (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Verify that request-response pairs were recorded in a specific sequence.
+    /// Requests and responses are index-aligned — the request at position i is
+    /// paired with the response at position i.
+    /// </summary>
+    /// <param name="requests">Request matchers for the sequence.</param>
+    /// <param name="responses">Response matchers index-aligned with <paramref name="requests"/>.</param>
+    /// <exception cref="VerificationException">If the verification fails (HTTP 406).</exception>
+    public void VerifySequence(IList<HttpRequest> requests, IList<HttpResponse> responses)
+        => VerifySequenceAsync(requests, responses).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Verify that request-response pairs were recorded in a specific sequence (async).
+    /// </summary>
+    public async Task VerifySequenceAsync(IList<HttpRequest> requests, IList<HttpResponse> responses)
+    {
+        var verification = new VerificationSequence
+        {
+            HttpRequests = new List<HttpRequest>(requests),
+            HttpResponses = new List<HttpResponse>(responses)
+        };
         var json = JsonSerializer.Serialize(verification, JsonOptions);
         var (statusCode, body) = await PutAsync("/mockserver/verifySequence", json).ConfigureAwait(false);
 
@@ -296,6 +476,61 @@ public sealed class MockServerClient : IDisposable
     }
 
     /// <summary>
+    /// Retrieve the active expectations as MockServer SDK setup code (the builder
+    /// code that recreates the expectations) in the requested language.
+    /// </summary>
+    /// <param name="format">the code-generation language, one of "java", "javascript",
+    /// "python", "go", "csharp", "ruby", "rust" or "php" (case-insensitive)</param>
+    /// <param name="filter">an optional request filter</param>
+    public string RetrieveExpectationsAsCode(string format = "java", HttpRequest? filter = null)
+        => RetrieveExpectationsAsCodeAsync(format, filter).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Retrieve the active expectations as MockServer SDK setup code in the
+    /// requested language (async).
+    /// </summary>
+    public async Task<string> RetrieveExpectationsAsCodeAsync(string format = "java", HttpRequest? filter = null)
+    {
+        var json = filter != null ? JsonSerializer.Serialize(filter, JsonOptions) : "";
+        var (statusCode, body) = await PutAsync(
+            "/mockserver/retrieve?type=active_expectations&format=" + Uri.EscapeDataString(format.ToUpperInvariant()),
+            json).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to retrieve expectations as code (HTTP {statusCode}): {body}");
+
+        return body ?? "";
+    }
+
+    /// <summary>
+    /// Retrieve the recorded (proxied) request/response pairs as MockServer SDK
+    /// setup code (the builder code that recreates the expectations) in the
+    /// requested language.
+    /// </summary>
+    /// <param name="format">the code-generation language, one of "java", "javascript",
+    /// "python", "go", "csharp", "ruby", "rust" or "php" (case-insensitive)</param>
+    /// <param name="filter">an optional request filter</param>
+    public string RetrieveRecordedExpectationsAsCode(string format = "java", HttpRequest? filter = null)
+        => RetrieveRecordedExpectationsAsCodeAsync(format, filter).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Retrieve the recorded request/response pairs as MockServer SDK setup code
+    /// in the requested language (async).
+    /// </summary>
+    public async Task<string> RetrieveRecordedExpectationsAsCodeAsync(string format = "java", HttpRequest? filter = null)
+    {
+        var json = filter != null ? JsonSerializer.Serialize(filter, JsonOptions) : "";
+        var (statusCode, body) = await PutAsync(
+            "/mockserver/retrieve?type=recorded_expectations&format=" + Uri.EscapeDataString(format.ToUpperInvariant()),
+            json).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to retrieve recorded expectations as code (HTTP {statusCode}): {body}");
+
+        return body ?? "";
+    }
+
+    /// <summary>
     /// Retrieve log messages matching an optional filter.
     /// </summary>
     public List<string> RetrieveLogMessages(HttpRequest? filter = null)
@@ -411,6 +646,856 @@ public sealed class MockServerClient : IDisposable
     }
 
     // -------------------------------------------------------------------
+    // Breakpoints
+    // -------------------------------------------------------------------
+
+    private BreakpointWebSocketClient? _breakpointWs;
+    private readonly SemaphoreSlim _breakpointWsLock = new(1, 1);
+
+    /// <summary>
+    /// Register a breakpoint matcher with the given phases and handlers.
+    /// Returns the server-assigned breakpoint id.
+    /// </summary>
+    public string AddBreakpoint(
+        HttpRequest matcher,
+        IEnumerable<string> phases,
+        BreakpointRequestHandler? requestHandler = null,
+        BreakpointResponseHandler? responseHandler = null,
+        BreakpointStreamFrameHandler? streamFrameHandler = null)
+        => AddBreakpointAsync(matcher, phases, requestHandler, responseHandler, streamFrameHandler)
+            .GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register a breakpoint matcher (async).
+    /// </summary>
+    public async Task<string> AddBreakpointAsync(
+        HttpRequest matcher,
+        IEnumerable<string> phases,
+        BreakpointRequestHandler? requestHandler = null,
+        BreakpointResponseHandler? responseHandler = null,
+        BreakpointStreamFrameHandler? streamFrameHandler = null)
+    {
+        if (matcher == null) throw new ArgumentNullException(nameof(matcher));
+        var phaseList = phases?.ToList() ?? throw new ArgumentNullException(nameof(phases));
+        if (phaseList.Count == 0) throw new ArgumentException("At least one phase is required", nameof(phases));
+
+        await EnsureBreakpointWsAsync().ConfigureAwait(false);
+
+        var reg = new BreakpointMatcherRegistration
+        {
+            HttpRequest = matcher,
+            Phases = phaseList,
+            ClientId = _breakpointWs!.ClientId
+        };
+
+        var json = JsonSerializer.Serialize(reg, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/breakpoint/matcher", json).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new Exceptions.MockServerClientException($"Failed to register breakpoint (HTTP {statusCode}): {body}");
+
+        var result = JsonSerializer.Deserialize<BreakpointMatcherResponse>(body, JsonOptions);
+        var id = result?.Id ?? throw new Exceptions.MockServerClientException("No breakpoint id in response");
+
+        if (requestHandler != null) _breakpointWs.SetRequestHandler(id, requestHandler);
+        if (responseHandler != null) _breakpointWs.SetResponseHandler(id, responseHandler);
+        if (streamFrameHandler != null) _breakpointWs.SetStreamFrameHandler(id, streamFrameHandler);
+
+        return id;
+    }
+
+    /// <summary>
+    /// Convenience: register a REQUEST-only breakpoint.
+    /// </summary>
+    public string AddRequestBreakpoint(HttpRequest matcher, BreakpointRequestHandler handler)
+        => AddBreakpoint(matcher, new[] { BreakpointPhase.Request }, requestHandler: handler);
+
+    /// <summary>
+    /// Convenience: register a REQUEST + RESPONSE breakpoint.
+    /// </summary>
+    public string AddRequestResponseBreakpoint(
+        HttpRequest matcher,
+        BreakpointRequestHandler requestHandler,
+        BreakpointResponseHandler responseHandler)
+        => AddBreakpoint(matcher, new[] { BreakpointPhase.Request, BreakpointPhase.Response },
+            requestHandler: requestHandler, responseHandler: responseHandler);
+
+    /// <summary>
+    /// Convenience: register a streaming-phase breakpoint.
+    /// </summary>
+    public string AddStreamBreakpoint(HttpRequest matcher, IEnumerable<string> phases, BreakpointStreamFrameHandler handler)
+        => AddBreakpoint(matcher, phases, streamFrameHandler: handler);
+
+    /// <summary>
+    /// List all registered breakpoint matchers.
+    /// </summary>
+    public BreakpointMatcherList ListBreakpointMatchers()
+        => ListBreakpointMatchersAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// List all registered breakpoint matchers (async).
+    /// </summary>
+    public async Task<BreakpointMatcherList> ListBreakpointMatchersAsync()
+    {
+        var (statusCode, body) = await GetAsync("/mockserver/breakpoint/matchers").ConfigureAwait(false);
+        if (statusCode >= 400)
+            throw new Exceptions.MockServerClientException($"Failed to list breakpoint matchers (HTTP {statusCode}): {body}");
+
+        return JsonSerializer.Deserialize<BreakpointMatcherList>(body, JsonOptions) ?? new BreakpointMatcherList();
+    }
+
+    /// <summary>
+    /// Remove a breakpoint matcher by id.
+    /// </summary>
+    public void RemoveBreakpointMatcher(string id) => RemoveBreakpointMatcherAsync(id).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Remove a breakpoint matcher by id (async).
+    /// </summary>
+    public async Task RemoveBreakpointMatcherAsync(string id)
+    {
+        var json = JsonSerializer.Serialize(new { id }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/breakpoint/matcher/remove", json).ConfigureAwait(false);
+
+        if (statusCode == 404)
+            throw new Exceptions.MockServerClientException($"Breakpoint matcher not found: {id}");
+        if (statusCode >= 400)
+            throw new Exceptions.MockServerClientException($"Failed to remove breakpoint matcher (HTTP {statusCode}): {body}");
+
+        _breakpointWs?.RemoveHandlers(id);
+    }
+
+    /// <summary>
+    /// Remove all registered breakpoint matchers.
+    /// </summary>
+    public void ClearBreakpointMatchers() => ClearBreakpointMatchersAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Remove all registered breakpoint matchers (async).
+    /// </summary>
+    public async Task ClearBreakpointMatchersAsync()
+    {
+        var (statusCode, body) = await PutAsync("/mockserver/breakpoint/matcher/clear", "").ConfigureAwait(false);
+        if (statusCode >= 400)
+            throw new Exceptions.MockServerClientException($"Failed to clear breakpoint matchers (HTTP {statusCode}): {body}");
+
+        _breakpointWs?.ClearHandlers();
+    }
+
+    private async Task EnsureBreakpointWsAsync()
+    {
+        if (_breakpointWs != null && !_breakpointWs.IsDead) return;
+        await _breakpointWsLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_breakpointWs != null && !_breakpointWs.IsDead) return;
+            // Dispose old dead connection if present
+            _breakpointWs?.Dispose();
+            var ws = new BreakpointWebSocketClient();
+            await ws.ConnectAsync(_baseUrl).ConfigureAwait(false);
+            _breakpointWs = ws;
+        }
+        finally
+        {
+            _breakpointWsLock.Release();
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Object (closure) callbacks
+    //
+    // Reuses the single callback WebSocket shared with breakpoints (one socket
+    // per client). On a match the server dispatches the request over the WS; the
+    // registered closure produces the response (or request to forward).
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Register a request matcher whose response is produced by a closure (object callback).
+    /// Opens (or reuses) the shared callback WebSocket, registers <paramref name="handler"/>,
+    /// then creates an expectation with an <c>httpResponseObjectCallback</c> bound to this
+    /// client's WebSocket id. On each match the server sends the request over the WebSocket
+    /// and replies with the closure's response.
+    /// </summary>
+    /// <param name="request">The request matcher.</param>
+    /// <param name="handler">A closure mapping the matched request to a response.</param>
+    /// <param name="times">Optional number of times the expectation should match.</param>
+    /// <param name="timeToLive">Optional time-to-live for the expectation.</param>
+    /// <returns>The created expectation(s).</returns>
+    public List<Expectation> MockWithCallback(
+        HttpRequest request, Func<HttpRequest, HttpResponse> handler, Times? times = null, TimeToLive? timeToLive = null)
+        => MockWithCallbackAsync(request, handler, times, timeToLive).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register a request matcher whose response is produced by a closure (async).
+    /// See <see cref="MockWithCallback(HttpRequest, Func{HttpRequest, HttpResponse}, Times, TimeToLive)"/>.
+    /// </summary>
+    public async Task<List<Expectation>> MockWithCallbackAsync(
+        HttpRequest request, Func<HttpRequest, HttpResponse> handler, Times? times = null, TimeToLive? timeToLive = null)
+    {
+        if (request == null) throw new ArgumentNullException(nameof(request));
+        if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+        await EnsureBreakpointWsAsync().ConfigureAwait(false);
+        var clientId = _breakpointWs!.ClientId
+            ?? throw new MockServerClientException("Callback WebSocket has no clientId");
+
+        _breakpointWs.SetObjectResponseHandler(requestNode =>
+        {
+            var req = DeserializeNode<HttpRequest>(requestNode) ?? new HttpRequest();
+            var resp = handler(req) ?? new HttpResponse { StatusCode = 200 };
+            return SerializeToNode(resp);
+        });
+
+        var expectation = new Expectation
+        {
+            HttpRequest = request,
+            HttpResponseObjectCallback = new HttpObjectCallback { ClientId = clientId },
+            Times = times,
+            TimeToLive = timeToLive
+        };
+        return await UpsertAsync(expectation).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Register a request matcher whose request-to-forward is produced by a closure
+    /// (forward object callback). Mirrors <see cref="MockWithCallback(HttpRequest, Func{HttpRequest, HttpResponse}, Times, TimeToLive)"/>
+    /// but the closure returns the (possibly modified) <see cref="HttpRequest"/> to forward.
+    /// </summary>
+    public List<Expectation> MockWithForwardCallback(
+        HttpRequest request, Func<HttpRequest, HttpRequest> handler, Times? times = null, TimeToLive? timeToLive = null)
+        => MockWithForwardCallbackAsync(request, handler, times, timeToLive).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register a forward object callback (async). See <see cref="MockWithForwardCallback"/>.
+    /// </summary>
+    public async Task<List<Expectation>> MockWithForwardCallbackAsync(
+        HttpRequest request, Func<HttpRequest, HttpRequest> handler, Times? times = null, TimeToLive? timeToLive = null)
+    {
+        if (request == null) throw new ArgumentNullException(nameof(request));
+        if (handler == null) throw new ArgumentNullException(nameof(handler));
+
+        await EnsureBreakpointWsAsync().ConfigureAwait(false);
+        var clientId = _breakpointWs!.ClientId
+            ?? throw new MockServerClientException("Callback WebSocket has no clientId");
+
+        _breakpointWs.SetObjectForwardHandler(requestNode =>
+        {
+            var req = DeserializeNode<HttpRequest>(requestNode) ?? new HttpRequest();
+            var forward = handler(req) ?? req;
+            return SerializeToNode(forward);
+        });
+
+        var expectation = new Expectation
+        {
+            HttpRequest = request,
+            HttpForwardObjectCallback = new HttpObjectCallback { ClientId = clientId },
+            Times = times,
+            TimeToLive = timeToLive
+        };
+        return await UpsertAsync(expectation).ConfigureAwait(false);
+    }
+
+    private static System.Text.Json.Nodes.JsonObject SerializeToNode<T>(T value)
+    {
+        var json = JsonSerializer.Serialize(value, JsonOptions);
+        return System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
+    }
+
+    private static T? DeserializeNode<T>(System.Text.Json.Nodes.JsonObject node)
+        => JsonSerializer.Deserialize<T>(node.ToJsonString(), JsonOptions);
+
+    // -------------------------------------------------------------------
+    // gRPC descriptor management
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Upload a compiled protobuf descriptor set so gRPC requests can be matched.
+    /// </summary>
+    /// <param name="descriptor">
+    /// The raw bytes of a <c>FileDescriptorSet</c> (e.g. the output of
+    /// <c>protoc --descriptor_set_out=... --include_imports</c>). The bytes are
+    /// sent verbatim as <c>application/octet-stream</c> — not base64-encoded.
+    /// </param>
+    public void UploadGrpcDescriptor(byte[] descriptor)
+        => UploadGrpcDescriptorAsync(descriptor).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Upload a compiled protobuf descriptor set (async). See <see cref="UploadGrpcDescriptor"/>.
+    /// </summary>
+    public async Task UploadGrpcDescriptorAsync(byte[] descriptor)
+    {
+        if (descriptor == null) throw new ArgumentNullException(nameof(descriptor));
+        if (descriptor.Length == 0)
+            throw new ArgumentException("Descriptor set bytes must not be empty", nameof(descriptor));
+
+        var (statusCode, body) = await PutBytesAsync("/mockserver/grpc/descriptors", descriptor).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to upload gRPC descriptor (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Retrieve the gRPC services registered from uploaded descriptor sets.
+    /// </summary>
+    public GrpcService[] RetrieveGrpcServices()
+        => RetrieveGrpcServicesAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Retrieve the gRPC services registered from uploaded descriptor sets (async).
+    /// </summary>
+    public async Task<GrpcService[]> RetrieveGrpcServicesAsync()
+    {
+        var (statusCode, body) = await PutAsync("/mockserver/grpc/services", "").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to retrieve gRPC services (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<GrpcService[]>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return Array.Empty<GrpcService>();
+    }
+
+    /// <summary>
+    /// Clear all uploaded gRPC descriptor sets and registered services.
+    /// </summary>
+    public void ClearGrpcDescriptors()
+        => ClearGrpcDescriptorsAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Clear all uploaded gRPC descriptor sets and registered services (async).
+    /// </summary>
+    public async Task ClearGrpcDescriptorsAsync()
+    {
+        var (statusCode, body) = await PutAsync("/mockserver/grpc/clear", "").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to clear gRPC descriptors (HTTP {statusCode}): {body}");
+    }
+
+    // -------------------------------------------------------------------
+    // SRE control plane: load-scenario registry
+    //
+    // Scenarios are registered (loaded) under a unique name without running,
+    // then started and stopped by name. Registration is always allowed;
+    // only starting requires the server's loadGenerationEnabled=true.
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Register (load) a load scenario under its unique name (PUT /mockserver/loadScenario).
+    /// Registration does not start the scenario and is allowed even when load generation is
+    /// disabled; start it later with <see cref="StartLoadScenarios"/>.
+    /// </summary>
+    /// <exception cref="MockServerClientException">If the scenario is invalid (HTTP 400).</exception>
+    public LoadScenarioRef LoadScenario(LoadScenario scenario)
+        => LoadScenarioAsync(scenario).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register (load) a load scenario (async). See <see cref="LoadScenario(MockServer.Client.Models.LoadScenario)"/>.
+    /// </summary>
+    public async Task<LoadScenarioRef> LoadScenarioAsync(LoadScenario scenario)
+    {
+        if (scenario == null) throw new ArgumentNullException(nameof(scenario));
+        var json = JsonSerializer.Serialize(scenario, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/loadScenario", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid load scenario: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to register load scenario (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioRef>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioRef { Name = scenario.Name };
+    }
+
+    /// <summary>
+    /// List all registered load scenarios (GET /mockserver/loadScenario).
+    /// </summary>
+    public LoadScenarioList LoadScenarios()
+        => LoadScenariosAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// List all registered load scenarios (async). See <see cref="LoadScenarios"/>.
+    /// </summary>
+    public async Task<LoadScenarioList> LoadScenariosAsync()
+    {
+        var (statusCode, body) = await GetAsync("/mockserver/loadScenario").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to list load scenarios (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioList>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioList();
+    }
+
+    /// <summary>
+    /// Fetch a single registered load scenario by name (GET /mockserver/loadScenario/{name}).
+    /// </summary>
+    /// <exception cref="MockServerClientException">If no scenario is registered under that name (HTTP 404).</exception>
+    public LoadScenarioEntry GetLoadScenario(string name)
+        => GetLoadScenarioAsync(name).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Fetch a single registered load scenario by name (async). See <see cref="GetLoadScenario"/>.
+    /// </summary>
+    public async Task<LoadScenarioEntry> GetLoadScenarioAsync(string name)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        var (statusCode, body) = await GetAsync($"/mockserver/loadScenario/{Uri.EscapeDataString(name)}").ConfigureAwait(false);
+
+        if (statusCode == 404)
+            throw new MockServerClientException($"No load scenario registered with name '{name}' (HTTP 404): {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to get load scenario '{name}' (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioEntry>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioEntry { Name = name };
+    }
+
+    /// <summary>
+    /// Remove a single registered load scenario by name (DELETE /mockserver/loadScenario/{name}).
+    /// </summary>
+    public void DeleteLoadScenario(string name)
+        => DeleteLoadScenarioAsync(name).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Remove a single registered load scenario by name (async). See <see cref="DeleteLoadScenario"/>.
+    /// </summary>
+    public async Task DeleteLoadScenarioAsync(string name)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        var (statusCode, body) = await DeleteAsync($"/mockserver/loadScenario/{Uri.EscapeDataString(name)}").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to delete load scenario '{name}' (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Clear all registered load scenarios (DELETE /mockserver/loadScenario). Idempotent.
+    /// </summary>
+    public void ClearLoadScenarios()
+        => ClearLoadScenariosAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Clear all registered load scenarios (async). See <see cref="ClearLoadScenarios"/>.
+    /// </summary>
+    public async Task ClearLoadScenariosAsync()
+    {
+        var (statusCode, body) = await DeleteAsync("/mockserver/loadScenario").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to clear load scenarios (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Start one or more registered load scenarios by name (PUT /mockserver/loadScenario/start).
+    /// Honours each scenario's startDelayMillis. Requires the server to be started with
+    /// loadGenerationEnabled=true.
+    /// </summary>
+    /// <exception cref="MockServerClientException">
+    /// If load generation is disabled (HTTP 403 — start MockServer with loadGenerationEnabled=true)
+    /// or a named scenario is not registered (HTTP 404).
+    /// </exception>
+    public LoadScenarioStartResult StartLoadScenarios(params string[] names)
+        => StartLoadScenariosAsync(names).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Start one or more registered load scenarios by name (async). See <see cref="StartLoadScenarios"/>.
+    /// </summary>
+    public async Task<LoadScenarioStartResult> StartLoadScenariosAsync(params string[] names)
+    {
+        if (names == null || names.Length == 0)
+            throw new ArgumentException("At least one scenario name must be provided to start.", nameof(names));
+
+        var json = JsonSerializer.Serialize(new Dictionary<string, object> { ["names"] = names }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/loadScenario/start", json).ConfigureAwait(false);
+
+        if (statusCode == 403)
+            throw new MockServerClientException(
+                "Failed to start load scenario: load generation is disabled " +
+                $"(start MockServer with loadGenerationEnabled=true) (HTTP 403): {body}");
+        if (statusCode == 404)
+            throw new MockServerClientException($"Failed to start load scenario: unknown scenario name (HTTP 404): {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to start load scenario (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioStartResult>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioStartResult();
+    }
+
+    /// <summary>
+    /// Stop running load scenarios (PUT /mockserver/loadScenario/stop). Pass one or more names to
+    /// stop those scenarios, or pass no names to stop every running scenario. Idempotent.
+    /// </summary>
+    public LoadScenarioStopResult StopLoadScenarios(params string[] names)
+        => StopLoadScenariosAsync(names).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Stop running load scenarios (async). See <see cref="StopLoadScenarios"/>.
+    /// </summary>
+    public async Task<LoadScenarioStopResult> StopLoadScenariosAsync(params string[] names)
+    {
+        // No names => stop all (empty body); named => {"names":[...]}.
+        var json = names == null || names.Length == 0
+            ? ""
+            : JsonSerializer.Serialize(new Dictionary<string, object> { ["names"] = names }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/loadScenario/stop", json).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to stop load scenario (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioStopResult>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioStopResult();
+    }
+
+    /// <summary>
+    /// Convenience helper: register a load scenario and immediately start it. Equivalent to
+    /// <see cref="LoadScenario(MockServer.Client.Models.LoadScenario)"/> followed by
+    /// <see cref="StartLoadScenarios"/> for that scenario's name. Requires the server to be started
+    /// with loadGenerationEnabled=true.
+    /// </summary>
+    public LoadScenarioStartResult RunLoadScenario(LoadScenario scenario)
+        => RunLoadScenarioAsync(scenario).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register a load scenario and immediately start it (async). See <see cref="RunLoadScenario"/>.
+    /// </summary>
+    public async Task<LoadScenarioStartResult> RunLoadScenarioAsync(LoadScenario scenario)
+    {
+        if (scenario == null) throw new ArgumentNullException(nameof(scenario));
+        var registered = await LoadScenarioAsync(scenario).ConfigureAwait(false);
+        var name = registered.Name ?? scenario.Name
+            ?? throw new MockServerClientException("Cannot start load scenario: the scenario has no name.");
+        return await StartLoadScenariosAsync(name).ConfigureAwait(false);
+    }
+
+    // -------------------------------------------------------------------
+    // SRE control plane: service chaos
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Register a service-scoped HTTP chaos profile for a downstream <paramref name="host"/>
+    /// (PUT /mockserver/serviceChaos). The profile applies to matched forward expectations to
+    /// that host that do not define their own chaos.
+    /// </summary>
+    /// <param name="host">Downstream host the chaos profile applies to.</param>
+    /// <param name="profile">The HTTP chaos profile to register.</param>
+    /// <param name="ttlMillis">Optional time-to-live after which the registration auto-reverts (dead-man's switch).</param>
+    public void SetServiceChaos(string host, ServiceChaosProfile profile, long? ttlMillis = null)
+        => SetServiceChaosAsync(host, profile, ttlMillis).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Register a service-scoped HTTP chaos profile (async). See <see cref="SetServiceChaos"/>.
+    /// </summary>
+    public async Task SetServiceChaosAsync(string host, ServiceChaosProfile profile, long? ttlMillis = null)
+    {
+        if (string.IsNullOrEmpty(host)) throw new ArgumentException("host is required", nameof(host));
+        if (profile == null) throw new ArgumentNullException(nameof(profile));
+
+        var payload = new Dictionary<string, object?> { ["host"] = host, ["chaos"] = profile };
+        if (ttlMillis.HasValue) payload["ttlMillis"] = ttlMillis.Value;
+
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/serviceChaos", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid service chaos profile: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to set service chaos (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Remove the service-scoped chaos profile registered for <paramref name="host"/>
+    /// (PUT /mockserver/serviceChaos with remove:true).
+    /// </summary>
+    public void RemoveServiceChaos(string host) => RemoveServiceChaosAsync(host).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Remove the service-scoped chaos profile for a host (async).
+    /// </summary>
+    public async Task RemoveServiceChaosAsync(string host)
+    {
+        if (string.IsNullOrEmpty(host)) throw new ArgumentException("host is required", nameof(host));
+        var json = JsonSerializer.Serialize(new { host, remove = true }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/serviceChaos", json).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to remove service chaos (HTTP {statusCode}): {body}");
+    }
+
+    /// <summary>
+    /// Clear all service-scoped chaos profiles (PUT /mockserver/serviceChaos with clear:true).
+    /// </summary>
+    public void ClearServiceChaos() => ClearServiceChaosAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Clear all service-scoped chaos profiles (async).
+    /// </summary>
+    public async Task ClearServiceChaosAsync()
+    {
+        var json = JsonSerializer.Serialize(new { clear = true }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/serviceChaos", json).ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to clear service chaos (HTTP {statusCode}): {body}");
+    }
+
+    // -------------------------------------------------------------------
+    // SRE control plane: SLO verdicts
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Evaluate a set of service-level objectives over a window and return the verdict
+    /// (PUT /mockserver/verifySLO). The HTTP status encodes the verdict: 200 = PASS or
+    /// INCONCLUSIVE, 406 = FAIL.
+    /// </summary>
+    /// <returns>The <see cref="SloVerdict"/> for a PASS, INCONCLUSIVE or FAIL outcome.</returns>
+    /// <exception cref="MockServerClientException">
+    /// If the criteria are malformed or SLO tracking is disabled (HTTP 400 —
+    /// start MockServer with sloTrackingEnabled=true).
+    /// </exception>
+    public SloVerdict VerifySlo(SloCriteria criteria)
+        => VerifySloAsync(criteria).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Evaluate an SLO criteria and return the verdict (async). See <see cref="VerifySlo"/>.
+    /// </summary>
+    public async Task<SloVerdict> VerifySloAsync(SloCriteria criteria)
+    {
+        if (criteria == null) throw new ArgumentNullException(nameof(criteria));
+        var json = JsonSerializer.Serialize(criteria, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/verifySLO", json).ConfigureAwait(false);
+
+        // 200 = PASS or INCONCLUSIVE, 406 = FAIL — both carry an SloVerdict body.
+        if (statusCode == 200 || statusCode == 406)
+        {
+            if (!string.IsNullOrEmpty(body))
+            {
+                var verdict = JsonSerializer.Deserialize<SloVerdict>(body, JsonOptions);
+                if (verdict != null) return verdict;
+            }
+            return new SloVerdict();
+        }
+
+        if (statusCode == 400)
+            throw new MockServerClientException(
+                "Failed to verify SLO: malformed criteria, or SLO tracking is disabled " +
+                $"(start MockServer with sloTrackingEnabled=true) (HTTP 400): {body}");
+        throw new MockServerClientException($"Failed to verify SLO (HTTP {statusCode}): {body}");
+    }
+
+    // -------------------------------------------------------------------
+    // SRE control plane: preemption simulation
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Cordon and drain the server (PUT /mockserver/preemption). A null
+    /// <paramref name="request"/> uses server defaults (mode "both", drain from stopDrainMillis, no TTL).
+    /// </summary>
+    /// <returns>The resulting <see cref="PreemptionStatus"/>.</returns>
+    public PreemptionStatus SetPreemption(PreemptionRequest? request = null)
+        => SetPreemptionAsync(request).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Cordon and drain the server (async). See <see cref="SetPreemption"/>.
+    /// </summary>
+    public async Task<PreemptionStatus> SetPreemptionAsync(PreemptionRequest? request = null)
+    {
+        var json = request != null ? JsonSerializer.Serialize(request, JsonOptions) : "";
+        var (statusCode, body) = await PutAsync("/mockserver/preemption", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid preemption request: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to set preemption (HTTP {statusCode}): {body}");
+
+        return DeserializePreemptionStatus(body);
+    }
+
+    /// <summary>
+    /// Retrieve the current preemption status (GET /mockserver/preemption).
+    /// </summary>
+    public PreemptionStatus PreemptionStatus()
+        => PreemptionStatusAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Retrieve the current preemption status (async).
+    /// </summary>
+    public async Task<PreemptionStatus> PreemptionStatusAsync()
+    {
+        var (statusCode, body) = await GetAsync("/mockserver/preemption").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to get preemption status (HTTP {statusCode}): {body}");
+
+        return DeserializePreemptionStatus(body);
+    }
+
+    /// <summary>
+    /// Uncordon the server, clearing any active preemption (DELETE /mockserver/preemption). Idempotent.
+    /// </summary>
+    public void ClearPreemption() => ClearPreemptionAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Uncordon the server (async).
+    /// </summary>
+    public async Task ClearPreemptionAsync()
+    {
+        var (statusCode, body) = await DeleteAsync("/mockserver/preemption").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to clear preemption (HTTP {statusCode}): {body}");
+    }
+
+    private static PreemptionStatus DeserializePreemptionStatus(string body)
+    {
+        if (!string.IsNullOrEmpty(body))
+        {
+            var status = JsonSerializer.Deserialize<PreemptionStatus>(body, JsonOptions);
+            if (status != null) return status;
+        }
+        return new PreemptionStatus();
+    }
+
+    // -------------------------------------------------------------------
+    // SRE control plane: scheduled chaos experiment
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Start a scheduled multi-stage chaos experiment (PUT /mockserver/chaosExperiment).
+    /// Only one experiment may be active at a time; starting a new one stops the previous one.
+    /// </summary>
+    public void StartChaosExperiment(ChaosExperiment experiment)
+        => StartChaosExperimentAsync(experiment).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Start a scheduled chaos experiment (async). See <see cref="StartChaosExperiment"/>.
+    /// </summary>
+    public async Task StartChaosExperimentAsync(ChaosExperiment experiment)
+    {
+        if (experiment == null) throw new ArgumentNullException(nameof(experiment));
+        var json = JsonSerializer.Serialize(experiment, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/chaosExperiment", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid chaos experiment: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to start chaos experiment (HTTP {statusCode}): {body}");
+    }
+
+    // -------------------------------------------------------------------
+    // Stateful scenarios
+    // -------------------------------------------------------------------
+
+    /// <summary>
+    /// Begin interacting with a named scenario state-machine. The returned handle exposes
+    /// <see cref="ScenarioHandle.State"/>, <see cref="ScenarioHandle.Set(string)"/>,
+    /// <see cref="ScenarioHandle.Set(string, long, string)"/> and <see cref="ScenarioHandle.Trigger"/>.
+    /// </summary>
+    /// <param name="name">The scenario name.</param>
+    public ScenarioHandle Scenario(string name)
+    {
+        if (string.IsNullOrEmpty(name)) throw new ArgumentException("name is required", nameof(name));
+        return new ScenarioHandle(this, name);
+    }
+
+    /// <summary>
+    /// List all known scenarios and their current states (GET /mockserver/scenario).
+    /// </summary>
+    public List<ScenarioState> Scenarios()
+        => ScenariosAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// List all known scenarios and their current states (async).
+    /// </summary>
+    public async Task<List<ScenarioState>> ScenariosAsync()
+    {
+        var (statusCode, body) = await GetAsync("/mockserver/scenario").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to list scenarios (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<ScenarioList>(body, JsonOptions);
+            if (result?.Scenarios != null) return result.Scenarios;
+        }
+        return new List<ScenarioState>();
+    }
+
+    internal async Task<ScenarioState> ScenarioStateAsync(string name)
+    {
+        var (statusCode, body) = await GetAsync($"/mockserver/scenario/{Uri.EscapeDataString(name)}").ConfigureAwait(false);
+
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to get scenario '{name}' (HTTP {statusCode}): {body}");
+
+        return DeserializeScenarioState(body);
+    }
+
+    internal async Task<ScenarioState> ScenarioSetAsync(string name, string state, long? transitionAfterMs, string? nextState)
+    {
+        var payload = new Dictionary<string, object?> { ["state"] = state };
+        if (transitionAfterMs.HasValue) payload["transitionAfterMs"] = transitionAfterMs.Value;
+        if (nextState != null) payload["nextState"] = nextState;
+
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
+        var (statusCode, body) = await PutAsync($"/mockserver/scenario/{Uri.EscapeDataString(name)}", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid scenario state: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to set scenario '{name}' (HTTP {statusCode}): {body}");
+
+        return DeserializeScenarioState(body);
+    }
+
+    internal async Task<ScenarioState> ScenarioTriggerAsync(string name, string newState)
+    {
+        var json = JsonSerializer.Serialize(new { newState }, JsonOptions);
+        var (statusCode, body) = await PutAsync($"/mockserver/scenario/{Uri.EscapeDataString(name)}/trigger", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid scenario trigger: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to trigger scenario '{name}' (HTTP {statusCode}): {body}");
+
+        return DeserializeScenarioState(body);
+    }
+
+    private static ScenarioState DeserializeScenarioState(string body)
+    {
+        if (!string.IsNullOrEmpty(body))
+        {
+            var state = JsonSerializer.Deserialize<ScenarioState>(body, JsonOptions);
+            if (state != null) return state;
+        }
+        return new ScenarioState();
+    }
+
+    // -------------------------------------------------------------------
     // Internal: called by ForwardChainExpectation
     // -------------------------------------------------------------------
 
@@ -424,17 +1509,44 @@ public sealed class MockServerClient : IDisposable
     // HTTP transport
     // -------------------------------------------------------------------
 
-    private async Task<(int StatusCode, string Body)> PutAsync(string path, string jsonBody)
+    private async Task<(int StatusCode, string Body)> SendAsync(HttpRequestMessage request)
     {
-        var url = _baseUrl + path;
-        using var content = new StringContent(jsonBody ?? "", Encoding.UTF8, "application/json");
-        using var response = await _httpClient.PutAsync(url, content).ConfigureAwait(false);
-        var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-        return ((int)response.StatusCode, responseBody);
+        ApplyControlPlaneAuth(request);
+        using (request)
+        {
+            using var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
+            var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            return ((int)response.StatusCode, responseBody);
+        }
     }
+
+    private Task<(int StatusCode, string Body)> PutAsync(string path, string jsonBody)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, _baseUrl + path)
+        {
+            Content = new StringContent(jsonBody ?? "", Encoding.UTF8, "application/json")
+        };
+        return SendAsync(request);
+    }
+
+    private Task<(int StatusCode, string Body)> PutBytesAsync(string path, byte[] bytes)
+    {
+        var content = new ByteArrayContent(bytes);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        var request = new HttpRequestMessage(HttpMethod.Put, _baseUrl + path) { Content = content };
+        return SendAsync(request);
+    }
+
+    private Task<(int StatusCode, string Body)> GetAsync(string path)
+        => SendAsync(new HttpRequestMessage(HttpMethod.Get, _baseUrl + path));
+
+    private Task<(int StatusCode, string Body)> DeleteAsync(string path)
+        => SendAsync(new HttpRequestMessage(HttpMethod.Delete, _baseUrl + path));
 
     public void Dispose()
     {
+        _breakpointWs?.Dispose();
+        _breakpointWsLock.Dispose();
         if (_ownsHttpClient)
             _httpClient.Dispose();
     }

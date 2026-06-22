@@ -49,7 +49,7 @@ public class BookServiceGoogleHttpClient implements BookService {
                 @Override
                 public void connectFailed(URI uri, SocketAddress sa, IOException ioe) {
                     System.out.println("Connection could not be established to proxy at socket [" + sa + "]");
-                    ioe.printStackTrace();
+                    ioe.printStackTrace(System.err);
                 }
             });
             HttpRequestFactory requestFactory = new NetHttpTransport().createRequestFactory();

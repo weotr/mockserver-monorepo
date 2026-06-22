@@ -28,6 +28,11 @@ vi.mock('../lib/conversationCodegen', () => ({
 const params = { host: '127.0.0.1', port: '1080', secure: false };
 
 function renderComposer() {
+  // These tests exercise the full ("Advanced") form — the kind selector, action
+  // radios, existing-mocks list, and cross-cutting panels. The composer now
+  // defaults to a minimal "Quick mock" view, so seed the session preference to
+  // Advanced (read by getInitialMode on mount) before rendering.
+  try { globalThis.sessionStorage?.setItem('mockserver-composer-mode', 'advanced'); } catch { /* noop */ }
   return render(
     <ThemeProvider theme={buildTheme('dark')}>
       <ComposerView connectionParams={params} />

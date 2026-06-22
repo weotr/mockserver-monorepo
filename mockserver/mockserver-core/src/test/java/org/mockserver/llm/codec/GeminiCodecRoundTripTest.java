@@ -268,9 +268,13 @@ public class GeminiCodecRoundTripTest {
         assertThat(lastChunk.get("usageMetadata").get("totalTokenCount").asInt(), is(15));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldThrowUnsupportedForEmbeddings() {
-        codec.encodeEmbedding(EmbeddingResponse.embedding(), "test");
+    @Test
+    public void shouldEncodeEmbeddingInGeminiShape() throws Exception {
+        HttpResponse response = codec.encodeEmbedding(
+            EmbeddingResponse.embedding().withDimensions(4).withDeterministicFromInput(true), "test");
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode values = OBJECT_MAPPER.readTree(response.getBodyAsString()).get("embedding").get("values");
+        assertThat(values.size(), is(4));
     }
 
     @Test

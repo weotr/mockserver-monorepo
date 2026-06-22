@@ -160,6 +160,73 @@ public class InMemoryExpectationKeyValueStoreTest {
         assertTrue(small.get("e4").isPresent());
     }
 
+    /**
+     * Core leak proof: registering far more than maxSize entries must NOT
+     * grow the internal versions map without bound. Before the eviction-
+     * listener fix, every overflow-evicted key leaked its AtomicLong version
+     * entry forever; the versions map must now stay bounded by maxSize.
+     */
+    @Test
+    public void shouldNotLeakVersionsForOverflowEvictedEntries() throws Exception {
+        int maxSize = 4;
+        InMemoryExpectationKeyValueStore small = new InMemoryExpectationKeyValueStore(maxSize);
+
+        // register 200 distinct entries through a maxSize-4 store
+        for (int i = 0; i < 200; i++) {
+            String id = "e" + i;
+            small.put(id, new ExpectationEntry(expectation(id, 0)));
+        }
+
+        // the live queue is capped
+        assertThat(small.size(), is(maxSize));
+        // and the versions map must be bounded too (no leak of evicted keys)
+        assertThat(versionsSize(small), is(maxSize));
+        // and it must contain EXACTLY the last maxSize inserted ids — proving
+        // eviction pruned the right (oldest) versions entries, not just that
+        // the count happens to equal maxSize
+        assertThat(versionsKeys(small), containsInAnyOrder("e196", "e197", "e198", "e199"));
+
+        // also via putIfAbsent churn the map stays bounded
+        for (int i = 200; i < 400; i++) {
+            String id = "e" + i;
+            small.putIfAbsent(id, new ExpectationEntry(expectation(id, 0)));
+        }
+        assertThat(small.size(), is(maxSize));
+        assertThat(versionsSize(small), is(maxSize));
+        assertThat(versionsKeys(small), containsInAnyOrder("e396", "e397", "e398", "e399"));
+    }
+
+    /**
+     * Explicit remove must still prune the versions entry (regression guard:
+     * the eviction listener only handles overflow, not explicit remove).
+     */
+    @Test
+    public void shouldPruneVersionsOnExplicitRemove() throws Exception {
+        store.put("e1", new ExpectationEntry(expectation("e1", 0)));
+        store.put("e2", new ExpectationEntry(expectation("e2", 0)));
+        assertThat(versionsSize(store), is(2));
+        store.remove("e1");
+        assertThat(versionsSize(store), is(1));
+    }
+
+    private static int versionsSize(InMemoryExpectationKeyValueStore target) throws Exception {
+        return versionsMap(target).size();
+    }
+
+    private static java.util.Set<String> versionsKeys(InMemoryExpectationKeyValueStore target) throws Exception {
+        return new java.util.HashSet<>(versionsMap(target).keySet());
+    }
+
+    // White-box access to the internal versions map to prove the eviction
+    // leak fix. The field name "versions" must stay in sync with the
+    // InMemoryExpectationKeyValueStore field if it is ever renamed.
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, ?> versionsMap(InMemoryExpectationKeyValueStore target) throws Exception {
+        java.lang.reflect.Field field = InMemoryExpectationKeyValueStore.class.getDeclaredField("versions");
+        field.setAccessible(true);
+        return (java.util.Map<String, ?>) field.get(target);
+    }
+
     @Test
     public void shouldClearAllEntries() {
         store.put("e1", new ExpectationEntry(expectation("e1", 0)));

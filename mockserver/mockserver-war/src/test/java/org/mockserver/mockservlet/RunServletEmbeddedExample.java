@@ -27,7 +27,7 @@ public class RunServletEmbeddedExample {
         System.out.println("SERVER_HTTP_PORT = " + SERVER_HTTP_PORT);
         System.out.println("SERVER_HTTPS_PORT = " + SERVER_HTTPS_PORT);
 
-        ConfigurationProperties.initializationJsonPath("/Users/jamesbloom/git/mockserver/mockserver/mockserverInitialization.json");
+        ConfigurationProperties.initializationJsonPath(System.getProperty("user.home") + "/git/mockserver-monorepo/mockserver/mockserverInitialization.json");
         ConfigurationProperties.watchInitializationJson(true);
 
         Tomcat tomcat = new Tomcat();

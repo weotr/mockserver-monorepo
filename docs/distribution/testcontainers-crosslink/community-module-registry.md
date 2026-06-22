@@ -87,7 +87,7 @@ description: Officially maintained Testcontainers module for MockServer — star
 language: dotnet
 homepage: https://www.mock-server.com
 source: https://github.com/mock-server/mockserver/tree/master/mockserver-testcontainers/dotnet
-package: https://www.nuget.org/packages/Testcontainers.MockServer/
+package: https://www.nuget.org/packages/MockServer.Testcontainers/
 maintainer: official
 ---
 ```
@@ -128,7 +128,7 @@ maintainer: official
 |----------|---------|
 | Node | `npm install --save-dev @mockserver/testcontainers` |
 | Python | `pip install testcontainers-mockserver` |
-| .NET | `dotnet add package Testcontainers.MockServer` |
+| .NET | `dotnet add package MockServer.Testcontainers` |
 | Go | `go get github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go` |
 | Rust | `testcontainers-mockserver = "7.0"` in `[dev-dependencies]` |
 

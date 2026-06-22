@@ -108,12 +108,35 @@ public class GrpcToHttpResponseHandler extends MessageToMessageEncoder<HttpRespo
 
         String bodyString = response.getBodyAsString();
         if (bodyString == null || bodyString.isEmpty()) {
-            return response.clone()
-                .withStatusCode(200)
-                .withHeader("content-type", GrpcStatusMapper.GRPC_CONTENT_TYPE)
-                .withHeader(GrpcStatusMapper.GRPC_STATUS_HEADER, String.valueOf(statusCode.getCode()))
-                .removeHeader("x-grpc-service")
-                .removeHeader("x-grpc-method");
+            // No hand-authored response body: for a successful (OK) response, synthesize a
+            // schema-valid example message from the loaded descriptor's output type so the
+            // client receives a well-formed, type-correct protobuf message rather than an
+            // empty frame. Non-OK statuses keep the empty-body behaviour (the status is the
+            // payload). If synthesis fails for any reason, fall back to an empty response.
+            if (statusCode == GrpcStatusMapper.GrpcStatusCode.OK) {
+                try {
+                    String synthesized = descriptorStore.getExampleSynthesizer()
+                        .synthesizeJson(methodDescriptor.getOutputType(), descriptorStore.getConverter());
+                    if (synthesized != null && !synthesized.isEmpty()) {
+                        bodyString = synthesized;
+                    }
+                } catch (Exception e) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.WARN)
+                            .setMessageFormat("failed to synthesize gRPC example response for {}/{}:{}")
+                            .setArguments(serviceName, methodName, e.getMessage())
+                    );
+                }
+            }
+            if (bodyString == null || bodyString.isEmpty()) {
+                return response.clone()
+                    .withStatusCode(200)
+                    .withHeader("content-type", GrpcStatusMapper.GRPC_CONTENT_TYPE)
+                    .withHeader(GrpcStatusMapper.GRPC_STATUS_HEADER, String.valueOf(statusCode.getCode()))
+                    .removeHeader("x-grpc-service")
+                    .removeHeader("x-grpc-method");
+            }
         }
 
         GrpcJsonMessageConverter converter = descriptorStore.getConverter();

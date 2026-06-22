@@ -608,6 +608,68 @@ public class ExpectationDTOTest {
     }
 
     @Test
+    public void shouldRoundTripWeightedResponseModeAndWeights() {
+        HttpResponse r1 = new HttpResponse().withStatusCode(200);
+        HttpResponse r2 = new HttpResponse().withStatusCode(500);
+        Expectation original = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
+            .thenRespond(Arrays.asList(r1, r2))
+            .withResponseMode(ResponseMode.WEIGHTED)
+            .withResponseWeights(Arrays.asList(90, 10));
+
+        ExpectationDTO dto = new ExpectationDTO(original);
+        assertThat(dto.getResponseMode(), is(ResponseMode.WEIGHTED));
+        assertThat(dto.getResponseWeights(), is(Arrays.asList(90, 10)));
+
+        Expectation rebuilt = dto.buildObject();
+        assertThat(rebuilt.getResponseMode(), is(ResponseMode.WEIGHTED));
+        assertThat(rebuilt.getResponseWeights(), is(Arrays.asList(90, 10)));
+    }
+
+    @Test
+    public void shouldRoundTripSwitchResponseModeAndSwitchAfter() {
+        HttpResponse r1 = new HttpResponse().withStatusCode(200);
+        HttpResponse r2 = new HttpResponse().withStatusCode(503);
+        Expectation original = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
+            .thenRespond(Arrays.asList(r1, r2))
+            .withResponseMode(ResponseMode.SWITCH)
+            .withSwitchAfter(3);
+
+        ExpectationDTO dto = new ExpectationDTO(original);
+        assertThat(dto.getResponseMode(), is(ResponseMode.SWITCH));
+        assertThat(dto.getSwitchAfter(), is(3));
+
+        Expectation rebuilt = dto.buildObject();
+        assertThat(rebuilt.getResponseMode(), is(ResponseMode.SWITCH));
+        assertThat(rebuilt.getSwitchAfter(), is(3));
+    }
+
+    @Test
+    public void shouldRoundTripNullSwitchAfter() {
+        Expectation original = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
+            .thenRespond(Arrays.asList(new HttpResponse().withBody("one"), new HttpResponse().withBody("two")))
+            .withResponseMode(ResponseMode.SWITCH);
+
+        ExpectationDTO dto = new ExpectationDTO(original);
+        assertThat(dto.getSwitchAfter(), is(nullValue()));
+
+        Expectation rebuilt = dto.buildObject();
+        assertThat(rebuilt.getSwitchAfter(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldRoundTripNullResponseWeights() {
+        Expectation original = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
+            .thenRespond(Arrays.asList(new HttpResponse().withBody("one"), new HttpResponse().withBody("two")))
+            .withResponseMode(ResponseMode.WEIGHTED);
+
+        ExpectationDTO dto = new ExpectationDTO(original);
+        assertThat(dto.getResponseWeights(), is(nullValue()));
+
+        Expectation rebuilt = dto.buildObject();
+        assertThat(rebuilt.getResponseWeights(), is(nullValue()));
+    }
+
+    @Test
     public void shouldRoundTripNullHttpResponses() {
         Expectation original = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
             .thenRespond(new HttpResponse().withBody("single"));
@@ -638,5 +700,28 @@ public class ExpectationDTOTest {
         assertThat(rebuilt.getScenarioName(), is("TestScenario"));
         assertThat(rebuilt.getScenarioState(), is("Started"));
         assertThat(rebuilt.getNewScenarioState(), is("Step2"));
+    }
+
+    @Test
+    public void shouldRoundTripCaptureRules() {
+        Expectation original = new Expectation(request(), Times.unlimited(), TimeToLive.unlimited(), 0)
+            .thenRespond(new HttpResponse().withBody("response"))
+            .withCapture(
+                CaptureRule.capture(CaptureRule.Source.jsonPath, "$.userId", "user"),
+                CaptureRule.capture(CaptureRule.Source.header, "X-Tenant", "tenant")
+            );
+
+        ExpectationDTO dto = new ExpectationDTO(original);
+        assertThat(dto.getCapture().size(), is(2));
+        assertThat(dto.getCapture().get(0).getSource(), is(CaptureRule.Source.jsonPath));
+        assertThat(dto.getCapture().get(0).getExpression(), is("$.userId"));
+        assertThat(dto.getCapture().get(0).getInto(), is("user"));
+
+        Expectation rebuilt = dto.buildObject();
+        assertThat(rebuilt.getCapture().size(), is(2));
+        assertThat(rebuilt.getCapture().get(1).getSource(), is(CaptureRule.Source.header));
+        assertThat(rebuilt.getCapture().get(1).getExpression(), is("X-Tenant"));
+        assertThat(rebuilt.getCapture().get(1).getInto(), is("tenant"));
+        assertThat(rebuilt, is(original));
     }
 }

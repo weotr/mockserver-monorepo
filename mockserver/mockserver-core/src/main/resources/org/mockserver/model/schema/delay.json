@@ -17,6 +17,18 @@
     "value": {
       "type": "integer"
     },
+    "template": {
+      "type": "string",
+      "description": "opt-in template rendered against the request whose output is parsed as a millisecond delay (e.g. respond more slowly for larger payloads); falls back to value/timeUnit on a non-numeric or blank result"
+    },
+    "templateType": {
+      "type": "string",
+      "description": "template engine used to evaluate the delay template; only VELOCITY and MUSTACHE are supported",
+      "enum": [
+        "VELOCITY",
+        "MUSTACHE"
+      ]
+    },
     "distribution": {
       "type": "object",
       "additionalProperties": false,

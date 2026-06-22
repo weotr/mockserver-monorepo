@@ -48,15 +48,15 @@ describe('CompareRunsDialog', () => {
     expect(screen.queryByText('Compare Runs')).not.toBeInTheDocument();
   });
 
-  it('shows empty state when no sessions are selected', () => {
+  it('shows empty state when no traces are selected', () => {
     renderDialog();
-    expect(screen.getByText('Choose two captured sessions to compare.')).toBeInTheDocument();
+    expect(screen.getByText('Choose two captured traces to compare.')).toBeInTheDocument();
   });
 
-  it('shows Run A and Run B selectors', () => {
+  it('shows Trace A and Trace B selectors', () => {
     renderDialog();
-    expect(screen.getByLabelText('Run A')).toBeInTheDocument();
-    expect(screen.getByLabelText('Run B')).toBeInTheDocument();
+    expect(screen.getByLabelText('Trace A')).toBeInTheDocument();
+    expect(screen.getByLabelText('Trace B')).toBeInTheDocument();
   });
 
   it('shows Close button', () => {

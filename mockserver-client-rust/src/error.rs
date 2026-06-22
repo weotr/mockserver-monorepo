@@ -10,6 +10,15 @@ pub enum Error {
     VerificationFailure(String),
     /// The server returned an invalid request error (HTTP 400).
     InvalidRequest(String),
+    /// The requested feature is disabled on the server (e.g. HTTP 403 from an
+    /// SRE control-plane endpoint such as load generation or SLO tracking).
+    ///
+    /// Enable it via the corresponding server property (e.g.
+    /// `loadGenerationEnabled=true`, `sloTrackingEnabled=true`).
+    FeatureDisabled(String),
+    /// A named resource was not found (HTTP 404), e.g. starting or fetching a
+    /// load scenario whose `name` is not registered.
+    NotFound(String),
     /// An unexpected HTTP status was returned.
     UnexpectedStatus { status: u16, body: String },
     /// A network or transport error from reqwest.
@@ -23,6 +32,10 @@ impl fmt::Display for Error {
         match self {
             Error::VerificationFailure(msg) => write!(f, "verification failed: {msg}"),
             Error::InvalidRequest(msg) => write!(f, "invalid request (400): {msg}"),
+            Error::FeatureDisabled(msg) => {
+                write!(f, "feature disabled on server (403): {msg}")
+            }
+            Error::NotFound(msg) => write!(f, "not found (404): {msg}"),
             Error::UnexpectedStatus { status, body } => {
                 write!(f, "unexpected HTTP {status}: {body}")
             }

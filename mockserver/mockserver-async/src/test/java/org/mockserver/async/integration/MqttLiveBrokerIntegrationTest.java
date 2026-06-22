@@ -17,6 +17,7 @@ import org.mockserver.async.AsyncApiMockOrchestrator;
 import org.mockserver.async.MessageExampleGenerator;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
+import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.DockerImageName;
 
 import java.nio.charset.StandardCharsets;
@@ -52,9 +53,16 @@ public class MqttLiveBrokerIntegrationTest {
         }
         Assume.assumeTrue("Docker is not available — skipping MQTT integration tests", dockerAvailable);
 
-        mosquitto = new GenericContainer<>(DockerImageName.parse("eclipse-mosquitto:2.0"))
+        // mosquitto 2.0 changed secure defaults: with no config (or `-c /dev/null`, which 2.0.22
+        // rejects outright as "not a file") it binds loopback-only and disables anonymous access,
+        // so connections from the host would be refused. Supply a minimal valid config that opens a
+        // listener reachable from the host and enables anonymous access, then run the image's
+        // default `mosquitto -c <conf>` command against it.
+        String mosquittoConfig = "listener " + MQTT_PORT + "\nallow_anonymous true\n";
+        mosquitto = new GenericContainer<>(DockerImageName.parse("eclipse-mosquitto:2.0.22"))
             .withExposedPorts(MQTT_PORT)
-            .withCommand("mosquitto", "-c", "/dev/null", "-p", String.valueOf(MQTT_PORT), "-v")
+            .withCopyToContainer(Transferable.of(mosquittoConfig), "/mosquitto/config/mosquitto.conf")
+            .withCommand("mosquitto", "-c", "/mosquitto/config/mosquitto.conf")
             .waitingFor(Wait.forLogMessage(".*mosquitto.*running.*", 1)
                 .withStartupTimeout(java.time.Duration.ofSeconds(30)));
         mosquitto.start();

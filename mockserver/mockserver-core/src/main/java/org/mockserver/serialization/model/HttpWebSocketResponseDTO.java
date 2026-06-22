@@ -1,7 +1,6 @@
 package org.mockserver.serialization.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import org.mockserver.model.GraphQLBody;
 import org.mockserver.model.HttpWebSocketResponse;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 

@@ -1,0 +1,15 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/embeddings"
+  },
+  "httpLlmResponse": {
+    "provider": "OPENAI",
+    "model": "text-embedding-3-small",
+    "embedding": {
+      "dimensions": 1536,
+      "deterministicFromInput": true,
+      "seed": 42
+    }
+  }
+}

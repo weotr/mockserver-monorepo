@@ -297,9 +297,37 @@ public class GeminiCodecTest {
         assertThat(parsed.getMessages(), is(empty()));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldThrowForEmbeddings() {
-        codec.encodeEmbedding(EmbeddingResponse.embedding(), "test input");
+    @Test
+    public void shouldEncodeEmbeddingInGeminiShape() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding()
+            .withDimensions(8)
+            .withDeterministicFromInput(true)
+            .withSeed(7L);
+
+        // when — Gemini embedContent shape: {"embedding":{"values":[...]}}
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input");
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getFirstHeader("content-type"), is("application/json"));
+        JsonNode root = OBJECT_MAPPER.readTree(response.getBodyAsString());
+        JsonNode values = root.get("embedding").get("values");
+        assertThat(values.isArray(), is(true));
+        assertThat(values.size(), is(8));
+    }
+
+    @Test
+    public void shouldDefaultGeminiEmbeddingDimensionsTo768() throws Exception {
+        // given
+        EmbeddingResponse embedding = EmbeddingResponse.embedding().withDeterministicFromInput(true);
+
+        // when
+        HttpResponse response = codec.encodeEmbedding(embedding, "test input");
+
+        // then
+        JsonNode values = OBJECT_MAPPER.readTree(response.getBodyAsString()).get("embedding").get("values");
+        assertThat(values.size(), is(768));
     }
 
     @Test

@@ -68,6 +68,21 @@ public class HttpRequestSerializerTest {
     }
 
     @Test
+    public void shouldSerializeHttp3Protocol() throws JsonProcessingException {
+        assertThat(objectMapper.writeValueAsString(
+                request()
+                    .withMethod("GET")
+                    .withPath("/some/path")
+                    .withProtocol(Protocol.HTTP_3)
+            ),
+            is("{" + NEW_LINE +
+                "  \"method\" : \"GET\"," + NEW_LINE +
+                "  \"path\" : \"/some/path\"," + NEW_LINE +
+                "  \"protocol\" : \"HTTP_3\"" + NEW_LINE +
+                "}"));
+    }
+
+    @Test
     public void shouldReturnJsontWithJsonBodyInToString() throws JsonProcessingException {
         assertThat(objectMapper.writeValueAsString(request()
                 .withMethod("GET")

@@ -1,0 +1,32 @@
+meta {
+  name: cordon and drain the server (preemption simulation)
+  type: http
+  seq: 13
+}
+
+put {
+  url: {{baseUrl}}/mockserver/preemption
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "mode": "both",
+    "drainMillis": 10000,
+    "ttlMillis": 60000,
+    "lastStreamId": 3
+  }
+}
+
+docs {
+  Simulates a connection-lifecycle preemption (e.g. a Kubernetes node drain or spot reclamation). While cordoned, new exchanges are signalled to back off — by a 503 + Connection: close, an HTTP/2 GOAWAY frame, or both — while in-flight requests are allowed to drain. The simulation is server-scoped and does not stop the JVM. An empty body uses defaults (mode "both", drainMillis from stopDrainMillis, no TTL). drainMillis and ttlMillis are clamped to preemptionSimulationMaxDrainMillis.
+  
+  preemption simulation parameters (all fields optional)
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

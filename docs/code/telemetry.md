@@ -8,16 +8,55 @@ MockServer integrates with OpenTelemetry (OTEL) for both metrics export and trac
 
 ### GenAI Span Export (`GenAiSpans`, `GenAiSpanExporter`)
 
-Emits explicit OpenTelemetry GenAI semantic-convention spans for LLM completions MockServer serves. Each span carries provider (`gen_ai.system`), model, token usage, and finish reason. Controlled by `mockserver.otelTracesEnabled`.
+Emits explicit OpenTelemetry GenAI semantic-convention spans for LLM completions MockServer serves **or forwards**. Each span carries provider (`gen_ai.system`), model, token usage, and finish reason. Controlled by `mockserver.otelTracesEnabled`.
 
 - **`GenAiSpans`** — static emit point; no-op unless a tracer is installed by `GenAiSpanExporter`
 - **`GenAiSpanExporter`** — configures the OTel trace SDK (OTLP HTTP/protobuf, JDK sender) and installs the tracer
 
+GenAI spans fire on two paths:
+1. **Mock action path** — `HttpLlmResponseActionHandler` calls `GenAiSpans.recordCompletion()` for mocked LLM responses (streaming and non-streaming).
+2. **Forward/proxy path** — `HttpActionHandler.emitForwardGenAiSpan()` detects LLM traffic via `LlmProviderSniffer`, parses the upstream response using the provider's `LlmClient`, and records a completion span. Covers matched-expectation forwards and unmatched proxy-pass. Streaming forward paths emit the GenAI span in the completion listener after the full SSE body is captured.
+
+### LLM Provider Sniffer (`LlmProviderSniffer`)
+
+Maps a forwarded request's target host to an LLM `Provider` for forward-path GenAI observability. Detection order:
+
+1. Well-known hosts: `api.openai.com` (OPENAI), `*.openai.azure.com` (AZURE_OPENAI), `api.anthropic.com` (ANTHROPIC), `generativelanguage.googleapis.com` (GEMINI), `bedrock*.amazonaws.com` (BEDROCK)
+2. Configured `mockserver.llmBaseUrl` host match (OLLAMA)
+3. Fallback to configured `mockserver.llmProvider` — **path-gated**: only applies when the request path looks like an LLM endpoint (case-insensitive contains any of `/chat/completions`, `/messages`, `/completions`, `/responses`, `/embeddings`, `/v1/`, `:generatecontent`, `/api/generate`, `/api/chat`). This prevents a forward to e.g. `example.com/api/users` from being misclassified as LLM traffic when a provider is configured.
+4. Empty Optional (not LLM traffic — skip GenAI span)
+
+Located at `mockserver-core/src/main/java/org/mockserver/llm/client/LlmProviderSniffer.java`. Pure, stateless, and unit-tested.
+
 ### Metrics Export (`OtelMetricsExporter`)
 
-Pushes MockServer's explicitly-defined metrics (request counts, expectation-match counts, action counts) to OTLP as observable gauges. Controlled by `mockserver.otelMetricsEnabled`.
+Pushes MockServer's explicitly-defined metrics to OTLP. Controlled by `mockserver.otelMetricsEnabled`.
 
 Located in `mockserver-core/src/main/java/org/mockserver/metrics/OtelMetricsExporter.java`.
+
+**What is exported:**
+- All `Metrics.Name` enum gauges (request counts, action counts, WebSocket counts) as OTLP observable gauges.
+- JVM memory, thread, and GC gauges (`jvm_memory_used_bytes`, `jvm_threads_current`, etc.).
+- Chaos-related counters and gauges.
+- The full `mock_server_load_*` family — **load-run metrics are exported via OTLP** (this is the first metric family produced by MockServer that is also pushed over OTLP in addition to the Prometheus scrape endpoint).
+
+**Load-run OTLP instruments:**
+
+| OTEL instrument name | OTEL type | Unit |
+|----------------------|-----------|------|
+| `mock_server_load_request_duration_seconds` | DoubleHistogram | `s` |
+| `mock_server_load_requests` | LongCounter | — |
+| `mock_server_load_request_bytes` | LongCounter | `By` |
+| `mock_server_load_response_bytes` | LongCounter | `By` |
+| `mock_server_load_iterations` | LongCounter | — |
+| `mock_server_load_throttled` | LongCounter | — |
+| `mock_server_load_errors` | LongCounter | — |
+| `mock_server_load_active_vus` | Observable gauge | — |
+| `mock_server_load_inflight_requests` | Observable gauge | — |
+
+Custom labels from scenario/step `labels` maps are passed as OTEL `Attributes` on every instrument record call. Unlike Prometheus, the OTEL path does not require an allowlist — all key/value pairs are forwarded.
+
+**Exemplars on the load histogram:** `mock_server_load_request_duration_seconds` attaches a `trace_id` exemplar to each histogram observation when the upstream response carries a W3C `traceparent` header. This allows a latency spike in an OTEL-connected backend (e.g. Grafana Tempo) to be pivoted directly to the trace that produced it.
 
 ### OTLP Endpoint Resolution (`OtelEndpoints`)
 
@@ -113,10 +152,23 @@ Span attributes (OpenTelemetry semantic conventions where applicable):
 | `http.response.status_code` | response status code |
 | `mockserver.expectation_id` | matched expectation id (when an expectation matched) |
 | `mockserver.response_time_ms` | forward path response time (omitted on mocked path) |
+| `server.address` | resolved upstream host on the forward/proxy path (omitted on the mocked path) |
+| `server.port` | resolved upstream port on the forward/proxy path (omitted when unknown or on the mocked path) |
+
+On the forward/proxy paths, `server.address`/`server.port` are populated from the resolved upstream
+(the matched forward action's host where available — the real upstream even behind an HTTP
+forward-proxy — else the resolved socket address), giving per-upstream visibility in traces. They are
+omitted on the mocked-response path. The same forward paths also feed two Prometheus metrics
+(`mock_server_forward_request_duration_seconds`, `mock_server_forward_requests`) labelled by upstream
+host — see [metrics.md](metrics.md).
 
 The span parent is taken from the inbound W3C trace context when present. The
 `AttributeKey<W3CTraceContext>` is defined once in `org.mockserver.telemetry.TraceContextAttributes`
 (in `mockserver-core`) so both the core `HttpActionHandler` (which reads the channel attribute
 to find the parent context) and the netty `TraceContextHandler` (which sets it) share one key
 without `mockserver-core` depending on `mockserver-netty`. Emission happens at the mocked-response
-and forwarded-response write points in `HttpActionHandler`, each guarded by `RequestSpans.isEnabled()`.
+and **all** forwarded-response write points in `HttpActionHandler`, each guarded by `RequestSpans.isEnabled()`:
+
+- Mocked response path (`writeResponseActionResponse`)
+- Matched-expectation forward path (`writeForwardActionResponse` — both streaming and non-streaming)
+- Unmatched proxy-pass path (`handleUnmatchedProxyForward` — both streaming and non-streaming)

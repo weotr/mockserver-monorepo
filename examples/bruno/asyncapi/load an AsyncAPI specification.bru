@@ -1,0 +1,29 @@
+meta {
+  name: load an AsyncAPI specification
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/asyncapi
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "spec": "asyncapi: 2.6.0\ninfo:\n  title: Test Service\n  version: 1.0.0\nchannels:\n  user/signedup:\n    publish:\n      message:\n        payload:\n          type: object\n          properties:\n            userId:\n              type: string"
+  }
+}
+
+docs {
+  Loads an AsyncAPI specification (JSON or YAML), or a { spec, brokerConfig } document, to mock the described message broker. Requires the mockserver-async module on the classpath.
+  
+  AsyncAPI specification or spec plus broker configuration
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

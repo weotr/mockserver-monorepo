@@ -1,7 +1,6 @@
 package org.mockserver.mock.action.http;
 
 import io.netty.buffer.Unpooled;
-import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.*;
 import org.mockserver.llm.StreamingFormat;
@@ -16,7 +15,6 @@ import org.slf4j.event.Level;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import static org.mockserver.log.model.LogEntry.LogMessageType.EXPECTATION_RESPONSE;
 

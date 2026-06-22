@@ -224,4 +224,25 @@ public class ExampleBuilderRealisticValuesTest {
         assertThat(value, is(notNullValue()));
         assertThat(value, containsString(":"));
     }
+
+    // --- JSON-Schema constraints honoured when flag ON ---
+
+    @Test
+    public void shouldGeneratePatternMatchingStringWhenFlagOn() {
+        ConfigurationProperties.generateRealisticExampleValues(true);
+        StringSchema schema = new StringSchema();
+        schema.setPattern("SKU-[0-9]{6}");
+        Example result = fromSchema(schema, new HashMap<>());
+        assertThat(((StringExample) result).getValue(), matchesPattern("SKU-[0-9]{6}"));
+    }
+
+    @Test
+    public void shouldEmitMinItemsArrayItemsWhenFlagOn() {
+        ConfigurationProperties.generateRealisticExampleValues(true);
+        io.swagger.v3.oas.models.media.ArraySchema schema = new io.swagger.v3.oas.models.media.ArraySchema();
+        schema.setItems(new StringSchema());
+        schema.setMinItems(3);
+        Example result = fromSchema(schema, new HashMap<>());
+        assertThat(((ArrayExample) result).getItems(), hasSize(3));
+    }
 }

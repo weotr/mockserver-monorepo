@@ -1,6 +1,6 @@
 [package]
 name = "mockserver-client"
-version = "7.0.0"
+version = "7.1.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["James D Bloom <jamesdbloom@gmail.com>"]
@@ -14,8 +14,15 @@ categories = ["development-tools::testing", "web-programming::http-client"]
 readme = "README.md"
 
 [dependencies]
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.12", features = ["blocking", "json", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+dirs = "6"
+tungstenite = "0.24"
+base64 = "0.22"
+url = "2"
+percent-encoding = "2"
 
 [dev-dependencies]
+tiny_http = "0.12"

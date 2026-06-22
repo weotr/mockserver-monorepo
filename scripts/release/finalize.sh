@@ -31,6 +31,35 @@ skip_unless_release_type "finalize" full,maven-only,post-maven
 log_step "Finalize release $RELEASE_VERSION (dry-run=$DRY_RUN)"
 sync_to_origin_master
 
+# ---- Idempotent re-run guard -----------------------------------------------
+# A prior finalize (e.g. an earlier post-maven build) may have already bumped the
+# committed pom to NEXT_VERSION, deployed the SNAPSHOT and pushed. The commit is
+# the LAST step here (after `mvn deploy`), so a pom at NEXT_VERSION on master
+# means the deploy already succeeded. Without this guard, a re-run calls
+# update_pom_versions looking for <version>RELEASE_VERSION</version>, finds none,
+# and hard-fails ("no pom.xml contained <version>X</version>"). Detect the
+# already-finalized state (no RELEASE_VERSION left, NEXT_VERSION present) and
+# treat it as success.
+#
+# Safety notes:
+#  - sync_to_origin_master above has reset local disk to origin/master, so the
+#    guard reads COMMITTED master state, not transient local edits. A partial run
+#    that deployed but died before the push leaves RELEASE_VERSION on master, so
+#    the guard does NOT fire and the re-run correctly redoes the work.
+#  - poms_contain_version is a whole-file substring match for the exact tag
+#    <version>X</version>, mirroring update_pom_versions. It is NOT scoped to the
+#    <project><version> element, so it would false-positive if some pom ever
+#    carried NEXT_VERSION in a <dependency>/<plugin> block before finalize ran.
+#    No repo pom does today (the reactor poms only ever reference the in-tree
+#    version as the project version); revisit this guard if that changes.
+if ! is_dry_run \
+   && ! poms_contain_version "$REPO_ROOT" "$RELEASE_VERSION" \
+   && poms_contain_version "$REPO_ROOT" "$NEXT_VERSION"; then
+  log_info "pom.xml already at $NEXT_VERSION — finalize previously applied; skipping bump, SNAPSHOT deploy and commit (idempotent no-op)"
+  log_info "Finalize complete"
+  exit 0
+fi
+
 # ---- Deploy next SNAPSHOT to Sonatype --------------------------------------
 log_info "Bump pom.xml: $RELEASE_VERSION -> $NEXT_VERSION"
 if is_dry_run; then

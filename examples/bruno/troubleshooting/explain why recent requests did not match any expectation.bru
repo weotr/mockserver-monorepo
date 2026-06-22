@@ -1,0 +1,29 @@
+meta {
+  name: explain why recent requests did not match any expectation
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/explainUnmatched
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "limit": 5
+  }
+}
+
+docs {
+  Returns a diagnostic report for recently recorded unmatched requests, including the closest-matching expectations and the per-field differences that prevented a match. An optional 'limit' in the body bounds how many unmatched requests are analysed (default 10).
+  
+  optional limit on the number of unmatched requests to analyse
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -4,6 +4,7 @@ import io.netty.handler.codec.http2.Http2SecurityUtil;
 import io.netty.handler.ssl.*;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.file.FileReader;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.slf4j.event.Level;
@@ -25,7 +26,7 @@ import java.util.function.UnaryOperator;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.socket.tls.KeyAndCertificateFactoryFactory.createKeyAndCertificateFactory;
-import static org.mockserver.socket.tls.PEMToFile.privateKeyFromPEMFile;
+import static org.mockserver.socket.tls.PEMToFile.x509ChainFromPEM;
 import static org.mockserver.socket.tls.PEMToFile.x509ChainFromPEMFile;
 
 /**
@@ -50,6 +51,10 @@ public class NettySslContextFactory {
     private final MockServerLogger mockServerLogger;
     private final KeyAndCertificateFactory keyAndCertificateFactory;
     private final Map<String, SslContext> clientSslContexts = new ConcurrentHashMap<>();
+    // Parsed forward-proxy PEM material cached by its configuration value (file path or inline PEM)
+    // so an unchanged forward-proxy key/chain is not re-parsed on every TLS context (re)build.
+    private final Map<String, PrivateKey> forwardProxyPrivateKeyCache = new ConcurrentHashMap<>();
+    private final Map<String, X509Certificate[]> forwardProxyCertificateChainCache = new ConcurrentHashMap<>();
     private volatile SslContext serverSslContext;
     private final Object sslContextLock = new Object();
     private Function<SslContextBuilder, SslContext> instanceClientSslContextBuilderFunction = clientSslContextBuilderFunction;
@@ -202,16 +207,27 @@ public class NettySslContextFactory {
     }
 
     private PrivateKey forwardProxyPrivateKey() {
-        if (isNotBlank(configuration.forwardProxyPrivateKey())) {
-            return privateKeyFromPEMFile(configuration.forwardProxyPrivateKey());
+        String forwardProxyPrivateKey = configuration.forwardProxyPrivateKey();
+        if (isNotBlank(forwardProxyPrivateKey)) {
+            // Cache the parsed key by the PEM *contents* (not the file path) so an unchanged PEM is
+            // parsed only once while a rotated key file (same path, new contents) is re-parsed.
+            String pem = FileReader.readFileFromClassPathOrPath(forwardProxyPrivateKey);
+            return forwardProxyPrivateKeyCache.computeIfAbsent(pem, PEMToFile::privateKeyFromPEM);
         } else {
             return keyAndCertificateFactory.privateKey();
         }
     }
 
     private X509Certificate[] forwardProxyCertificateChain() {
-        if (isNotBlank(configuration.forwardProxyCertificateChain())) {
-            return x509ChainFromPEMFile(configuration.forwardProxyCertificateChain()).toArray(new X509Certificate[0]);
+        String forwardProxyCertificateChain = configuration.forwardProxyCertificateChain();
+        if (isNotBlank(forwardProxyCertificateChain)) {
+            // Cache the parsed chain by the PEM *contents* (not the file path) so an unchanged PEM
+            // chain is parsed only once while a rotated file is re-parsed. A clone is returned so
+            // callers cannot mutate the cached array.
+            String pem = FileReader.readFileFromClassPathOrPath(forwardProxyCertificateChain);
+            return forwardProxyCertificateChainCache
+                .computeIfAbsent(pem, chain -> x509ChainFromPEM(chain).toArray(new X509Certificate[0]))
+                .clone();
         } else {
             return keyAndCertificateFactory.certificateChain().toArray(new X509Certificate[0]);
         }

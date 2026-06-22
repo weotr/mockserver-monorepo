@@ -1,0 +1,49 @@
+---
+openapi: 3.1.0
+info:
+  version: 1.0.0
+  title: OperationId Collision
+paths:
+  /foo:
+    get:
+      # author operationId deliberately equal to the synthesized id of GET /bar below
+      operationId: "GET /bar"
+      responses:
+        '200':
+          description: foo response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source:
+                    type: string
+                    example: foo
+  /bar:
+    get:
+      # no operationId - synthesized as "GET /bar", colliding with /foo's author id
+      responses:
+        '201':
+          description: bar response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source:
+                    type: string
+                    example: bar
+  /widget:
+    post:
+      # author operationId deliberately equal to the synthesized id of the webhook below
+      operationId: "POST webhook:itemEvent"
+      responses:
+        '202':
+          description: widget response
+webhooks:
+  itemEvent:
+    post:
+      # no operationId - synthesized as "POST webhook:itemEvent", colliding with /widget above
+      responses:
+        '200':
+          description: webhook response

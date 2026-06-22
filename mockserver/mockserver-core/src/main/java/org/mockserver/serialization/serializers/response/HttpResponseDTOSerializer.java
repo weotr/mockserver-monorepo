@@ -23,11 +23,17 @@ public class HttpResponseDTOSerializer extends StdSerializer<HttpResponseDTO> {
         if (httpResponseDTO.getStatusCode() != null) {
             jgen.writeObjectField("statusCode", httpResponseDTO.getStatusCode());
         }
+        if (httpResponseDTO.getStatusCodeRange() != null) {
+            jgen.writeObjectField("statusCodeRange", httpResponseDTO.getStatusCodeRange());
+        }
         if (httpResponseDTO.getReasonPhrase() != null) {
             jgen.writeObjectField("reasonPhrase", httpResponseDTO.getReasonPhrase());
         }
         if (httpResponseDTO.getHeaders() != null && !httpResponseDTO.getHeaders().isEmpty()) {
             jgen.writeObjectField("headers", httpResponseDTO.getHeaders());
+        }
+        if (httpResponseDTO.getTrailers() != null && !httpResponseDTO.getTrailers().isEmpty()) {
+            jgen.writeObjectField("trailers", httpResponseDTO.getTrailers());
         }
         if (httpResponseDTO.getCookies() != null && !httpResponseDTO.getCookies().isEmpty()) {
             jgen.writeObjectField("cookies", httpResponseDTO.getCookies());
@@ -46,11 +52,17 @@ public class HttpResponseDTOSerializer extends StdSerializer<HttpResponseDTO> {
                 jgen.writeObjectField("body", body);
             }
         }
+        if (httpResponseDTO.getGenerateFromSchema() != null) {
+            jgen.writeObjectField("generateFromSchema", httpResponseDTO.getGenerateFromSchema());
+        }
         if (httpResponseDTO.getDelay() != null) {
             jgen.writeObjectField("delay", httpResponseDTO.getDelay());
         }
         if (httpResponseDTO.getConnectionOptions() != null) {
             jgen.writeObjectField("connectionOptions", httpResponseDTO.getConnectionOptions());
+        }
+        if (httpResponseDTO.getRecoverAfter() != null) {
+            jgen.writeObjectField("recoverAfter", httpResponseDTO.getRecoverAfter());
         }
         jgen.writeEndObject();
     }

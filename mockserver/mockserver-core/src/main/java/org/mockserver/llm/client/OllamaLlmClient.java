@@ -46,6 +46,9 @@ public class OllamaLlmClient extends AbstractLlmClient {
     public Completion parseCompletionResponse(HttpResponse response) {
         JsonNode root = readBody(response);
         Completion completion = Completion.completion();
+        if (root.hasNonNull("model")) {
+            completion.withModel(root.path("model").asText());
+        }
         JsonNode message = root.path("message");
         if (message.hasNonNull("content")) {
             completion.withText(message.path("content").asText());

@@ -148,9 +148,15 @@ export function useWebSocket(params: ConnectionParams) {
           setError(`Clear failed: ${response.status} ${response.statusText}`);
           return;
         }
-        useDashboardStore.getState().clearUI();
         if (type === 'all') {
+          useDashboardStore.getState().clearUI();
           connect(lastFilterRef.current);
+        } else if (type === 'log') {
+          // Only clear the log list locally — expectations and recorded requests
+          // still exist server-side and should remain visible.
+          useDashboardStore.setState({ logMessages: [] });
+        } else if (type === 'expectations') {
+          useDashboardStore.setState({ activeExpectations: [] });
         }
         const what = type === 'all' ? 'Server reset — all expectations, logs and recorded traffic cleared' : type === 'log' ? 'Server logs cleared' : 'Expectations cleared';
         useDashboardStore.getState().setNotification({ message: what, severity: 'success' });

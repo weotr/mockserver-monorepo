@@ -1,0 +1,11 @@
+{
+  "name": "scenario_examples",
+  "version": "1.0.0",
+  "description": "Stateful-scenario examples for the MockServer Node client",
+  "main": "scenario.js",
+  "author": "James D Bloom",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "mockserver-client": "file:../../../mockserver-client-node"
+  }
+}

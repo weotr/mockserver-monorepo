@@ -104,6 +104,7 @@ public class OtelMetricsExporter {
         registerChaosCounter(meter);
         registerActiveServiceChaosGauge(meter);
         registerRequestDurationHistogram(meter);
+        registerLoadMetrics(meter);
         return new OtelMetricsExporter(provider);
     }
 
@@ -215,10 +216,62 @@ public class OtelMetricsExporter {
     }
 
     /**
+     * Mirror the entire {@code mock_server_load_*} family to OTLP: histogram→Histogram,
+     * counters→Counter, the two live gauges→ObservableGauge. The per-measurement attributes (the
+     * structured labels plus arbitrary custom labels) are attached by {@link Metrics} at record
+     * time. First-class — gated only by the existing OTEL enablement, not an extra flag.
+     */
+    private static void registerLoadMetrics(Meter meter) {
+        io.opentelemetry.api.metrics.DoubleHistogram duration = meter.histogramBuilder("mock_server_load_request_duration_seconds")
+            .setDescription("Load-scenario request duration in seconds")
+            .setUnit("s")
+            .build();
+        io.opentelemetry.api.metrics.LongCounter requests = meter.counterBuilder("mock_server_load_requests")
+            .setDescription("Total load-scenario requests")
+            .build();
+        io.opentelemetry.api.metrics.LongCounter requestBytes = meter.counterBuilder("mock_server_load_request_bytes")
+            .setDescription("Total load-scenario request body bytes")
+            .setUnit("By")
+            .build();
+        io.opentelemetry.api.metrics.LongCounter responseBytes = meter.counterBuilder("mock_server_load_response_bytes")
+            .setDescription("Total load-scenario response body bytes")
+            .setUnit("By")
+            .build();
+        io.opentelemetry.api.metrics.LongCounter iterations = meter.counterBuilder("mock_server_load_iterations")
+            .setDescription("Total completed load-scenario iterations")
+            .build();
+        io.opentelemetry.api.metrics.LongCounter throttled = meter.counterBuilder("mock_server_load_throttled")
+            .setDescription("Total load-scenario dispatches throttled by the self-load guard")
+            .build();
+        io.opentelemetry.api.metrics.LongCounter errors = meter.counterBuilder("mock_server_load_errors")
+            .setDescription("Total load-scenario request errors by kind")
+            .build();
+        Metrics.registerOtelLoadInstruments(duration, requests, requestBytes, responseBytes, iterations, throttled, errors);
+
+        meter.gaugeBuilder("mock_server_load_active_vus")
+            .setDescription("Number of active virtual users in the running load scenario")
+            .ofLongs()
+            .buildWithCallback(m ->
+                Metrics.getLoadActiveVus().forEach((key, count) ->
+                    m.record(count, Attributes.of(
+                        AttributeKey.stringKey("scenario"), key.scenario,
+                        AttributeKey.stringKey("run_id"), key.runId))));
+        meter.gaugeBuilder("mock_server_load_inflight_requests")
+            .setDescription("Number of in-flight load-scenario requests")
+            .ofLongs()
+            .buildWithCallback(m ->
+                Metrics.getLoadInflightRequests().forEach((key, count) ->
+                    m.record(count, Attributes.of(
+                        AttributeKey.stringKey("scenario"), key.scenario,
+                        AttributeKey.stringKey("run_id"), key.runId))));
+    }
+
+    /**
      * Stop exporting and release resources. Safe to call once.
      */
     public void stop() {
         Metrics.registerOtelRequestDurationHistogram(null);
+        Metrics.registerOtelLoadInstruments(null, null, null, null, null, null, null);
         try {
             meterProvider.shutdown().join(2, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception e) {

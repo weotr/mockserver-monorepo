@@ -1,0 +1,22 @@
+meta {
+  name: retrieve recorded mock drift
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/mockserver/drift
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~expectationId: 
+  ~limit: 50
+}
+
+docs {
+  Returns recorded drift records (differences between expectations and observed responses), optionally filtered by expectation id and limited in count.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

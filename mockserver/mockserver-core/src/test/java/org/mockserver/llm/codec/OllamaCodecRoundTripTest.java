@@ -227,9 +227,14 @@ public class OllamaCodecRoundTripTest {
         assertThat(root.get("eval_count").asInt(), is(0));
     }
 
-    @Test(expected = UnsupportedOperationException.class)
-    public void shouldThrowUnsupportedForEmbeddings() {
-        codec.encodeEmbedding(EmbeddingResponse.embedding(), "test");
+    @Test
+    public void shouldEncodeEmbeddingInOllamaEmbedShape() throws Exception {
+        HttpResponse response = codec.encodeEmbedding(
+            EmbeddingResponse.embedding().withDimensions(4).withDeterministicFromInput(true), "test");
+        assertThat(response.getStatusCode(), is(200));
+        JsonNode embeddings = OBJECT_MAPPER.readTree(response.getBodyAsString()).get("embeddings");
+        assertThat(embeddings.size(), is(1));
+        assertThat(embeddings.get(0).size(), is(4));
     }
 
     @Test

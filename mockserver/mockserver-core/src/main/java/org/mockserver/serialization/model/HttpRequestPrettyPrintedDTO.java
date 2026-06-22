@@ -22,6 +22,7 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
     private final Map<String, List<String>> headers = new HashMap<>();
     private Boolean keepAlive = null;
     private Boolean secure = null;
+    private Protocol protocol = null;
 
     public HttpRequestPrettyPrintedDTO(HttpRequest httpRequest) {
         if (httpRequest != null) {
@@ -40,6 +41,7 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
             originalBody = httpRequest.getOriginalBody();
             keepAlive = httpRequest.isKeepAlive();
             secure = httpRequest.isSecure();
+            protocol = httpRequest.getProtocol();
             setNot(httpRequest.getNot());
         }
     }
@@ -80,6 +82,10 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
         return secure;
     }
 
+    public Protocol getProtocol() {
+        return protocol;
+    }
+
     public HttpRequestPrettyPrintedDTO shallowClone() {
         return this;
     }
@@ -106,13 +112,14 @@ public class HttpRequestPrettyPrintedDTO extends RequestDefinition {
             Objects.equals(cookies, that.cookies) &&
             Objects.equals(headers, that.headers) &&
             Objects.equals(keepAlive, that.keepAlive) &&
-            Objects.equals(secure, that.secure);
+            Objects.equals(secure, that.secure) &&
+            Objects.equals(protocol, that.protocol);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), method, path, queryStringParameters, body, cookies, headers, keepAlive, secure);
+            hashCode = Objects.hash(super.hashCode(), method, path, queryStringParameters, body, cookies, headers, keepAlive, secure, protocol);
         }
         return hashCode;
     }

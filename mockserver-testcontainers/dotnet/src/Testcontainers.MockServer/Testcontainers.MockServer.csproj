@@ -7,8 +7,14 @@
     <RootNamespace>Testcontainers.MockServer</RootNamespace>
     <AssemblyName>Testcontainers.MockServer</AssemblyName>
 
-    <!-- NuGet package metadata -->
-    <PackageId>Testcontainers.MockServer</PackageId>
+    <!-- NuGet package metadata.
+         PackageId is MockServer.Testcontainers, NOT Testcontainers.MockServer:
+         `Testcontainers.*` is a reserved NuGet ID prefix owned by the
+         Testcontainers org, so NuGet rejects a push under it with 403 (build #53).
+         The assembly/namespace stay Testcontainers.MockServer so consumer code is
+         unchanged — `using Testcontainers.MockServer;` after
+         `dotnet add package MockServer.Testcontainers`. -->
+    <PackageId>MockServer.Testcontainers</PackageId>
     <Version>$(MockServerVersion)</Version>
     <Authors>MockServer Contributors</Authors>
     <Description>Testcontainers module for MockServer — starts a mockserver/mockserver Docker container, waits for readiness, and exposes connection helpers.</Description>

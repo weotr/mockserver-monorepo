@@ -145,29 +145,26 @@ This file acts as the agent's "onboarding document" — everything a new enginee
 
 ## Building Block 2: Model Strategy
 
-Different tasks have different cognitive demands. Using a premium model for test execution wastes money; using a cheap model for security auditing misses vulnerabilities. MockServer uses 5 model tiers:
+Different tasks have different cognitive demands *and* different needs for determinism. Because the orchestrator delegates almost all execution — implementation *and* investigation — to subagents (see `docs/operations/ai-sdlc-integration-spec.md` §5.5/§7 and `.opencode/rules/subagent-routing.md`), the per-agent configuration is **where inference cost and determinism are actually managed**. Three decision variables are set explicitly per agent — **model** (capability/cost), **temperature** (determinism vs creativity, opencode side), and **reasoning effort** (reasoning budget, Claude Code side) — and all are recorded so the routing is auditable (see §9). Agents are grouped into model tiers:
 
 ```mermaid
 flowchart LR
-    subgraph Premium["Premium Tier"]
+    subgraph Reasoning["Reasoning Tier"]
+        RF["review-final"]
+        SA["security-auditor"]
+        DB["debugger"]
         IMP["implementer"]
+    end
+
+    subgraph Premium["Premium Tier"]
         SIM["simplifier"]
+        PI["pipeline-investigator"]
     end
 
     subgraph Standard["Standard Tier"]
         CR["code-reviewer"]
-        SA["security-auditor"]
         DW["docs-writer"]
         TA["taskify-agent"]
-    end
-
-    subgraph Premium2["Premium Tier (cont.)"]
-        RF["review-final"]
-        DB["debugger"]
-        PI["pipeline-investigator"]
-    end
-
-    subgraph Standard2["Standard Tier (cont.)"]
         RC["review-cheap"]
     end
 
@@ -176,24 +173,44 @@ flowchart LR
         CS["council-seat"]
     end
 
+    style Reasoning fill:#f3e8fd,stroke:#7a00cc
     style Premium fill:#fde8ec,stroke:#e4002b
     style Standard fill:#e8f0fa,stroke:#00539f
-    style Premium2 fill:#fde8ec,stroke:#e4002b
-    style Standard2 fill:#e8f0fa,stroke:#00539f
     style Fast fill:#e8f8f0,stroke:#00a651
 ```
 
-| Tier | Model | Agents | Rationale |
-|------|-------|--------|-----------|
-| **Premium** | `openai/o3` | implementer, simplifier, review-final, debugger, pipeline-investigator | Highest capability for production code, complex refactoring, and authoritative review |
-| **Standard** | `openai/gpt-4o` | code-reviewer, security-auditor, docs-writer, taskify-agent, review-cheap | Strong analysis and writing at moderate cost |
-| **Fast** | `openai/gpt-4o-mini` | test-runner, council-seat | Rote operations (run tests, emit short verdicts) — speed over depth |
+| Tier | opencode (OpenAI) | Claude Code (Anthropic) | Agents | Rationale |
+|------|-------------------|--------------------------|--------|-----------|
+| **Reasoning** | `openai/gpt-5` | `claude-opus-4-8` + `effort: high` | review-final, security-auditor, debugger, implementer | Highest-stakes reasoning — authoritative binding review, security audit, hard debugging, and production code |
+| **Premium** | `openai/gpt-4o` | `claude-opus-4-8` + `effort: high` | simplifier, pipeline-investigator | Strong reasoning for refactoring and CI investigation — deep enough to warrant a high reasoning budget at moderate model cost |
+| **Standard** | `openai/gpt-4o` | `claude-sonnet-4-6` + `effort: medium` | code-reviewer, docs-writer, taskify-agent, review-cheap | Strong analysis and writing at moderate cost and reasoning budget |
+| **Fast** | `openai/gpt-4o-mini` | `claude-haiku-4-5-20251001` + `effort: low–medium` | test-runner (`low`), council-seat (`medium`) | Rote test execution (`low`) vs short exploratory debate seats (`medium`) — speed over depth |
+
+This gives the review escalation a genuine **capability gradient** on both harnesses: `review-cheap` (gpt-4o / sonnet + `effort: medium`) → `review-final` (gpt-5 / opus + `effort: high`), so the binding gate is a stronger second brain, not a same-model re-run. **`effort` is now set explicitly on every Claude agent** (not just the high-stakes lanes) so the reasoning budget is an intentional, auditable choice that tracks each task's reasoning depth — `high` for hard implementation/review/audit/investigation, `medium` for standard analysis and writing, `low` for mechanical work. `implementer` is deliberately on the Reasoning tier alongside the reviewers: generating production code has equal or higher blast radius than reviewing it, so it warrants the same model capability and reasoning budget.
+
+**Caveat — reasoning models and `temperature`:** OpenAI reasoning models may reject or ignore a custom sampling `temperature` (only the default is accepted). The Reasoning-tier agents retain their low `temperature` entries for documentation/auditability, but if the provider rejects them, drop the `temperature` field for those four agents and rely on the model's native low-variance reasoning. Re-verify against the OpenAI API behaviour for `gpt-5` after provisioning.
+
+### Temperature (opencode)
+
+opencode sets an explicit per-agent `temperature` (deterministic/high-risk work low, ideation higher). **Claude Code does not support a per-subagent sampling `temperature`** (the field is silently ignored — verified against the Claude Code subagent docs, 2026-06; re-check release notes before adding a `temperature` frontmatter field), so on the Claude side determinism is governed by model choice and the supported `effort` lever, not temperature.
+
+| Temp | Agents | Why |
+|:----:|--------|-----|
+| **0** | test-runner | Rote execution — fully deterministic |
+| **0.1** | review-cheap, review-final, code-reviewer, security-auditor, simplifier | Review/verify and high-risk work — low variance |
+| **0.2** | implementer, debugger, pipeline-investigator | Mostly deterministic with a little hypothesis search |
+| **0.3–0.4** | taskify-agent (0.3), docs-writer (0.4) | Structuring and prose benefit from mild latitude |
+| **0.7** | council-seat | Design debate / ideation — creativity wanted |
+
+For work that benefits from exploration before convergence, stage these
+temperatures as a descending **multi-pass pipeline** (explore → refine → validate)
+rather than a single pass — see `.opencode/rules/multi-pass-temperature.md`.
 
 ### Provider Strategy
 
 opencode uses OpenAI models exclusively. Claude Code (`.claude/`) uses Anthropic models exclusively. Independence between the implementation and review agents is achieved at two levels:
 
-1. **Model tier**: `review-cheap` (`gpt-4o`) and `review-final` (`o3`) run on different model tiers than `implementer` (`o3`), but more importantly they run with a **fresh context** — the reviewer never sees the implementing agent's reasoning, only the diff.
+1. **Model & temperature**: `review-cheap` and `review-final` run with their own model and temperature settings (see the tables above) and — more importantly — with a **fresh context**: the reviewer never sees the implementing agent's reasoning, only the diff.
 2. **Cross-tool independence**: When switching between tools, a Claude Code session reviews OpenAI-generated work and vice versa, providing genuine cross-provider independence at the workflow level.
 
 ---
@@ -206,15 +223,15 @@ Each sub-agent is a configured AI persona with a specific model, system prompt, 
 
 | Agent | Model Tier | Role | Write | Edit | Bash | Skill |
 |-------|-----------|------|:-----:|:----:|:----:|:-----:|
-| **implementer** | Premium | Writes production code and tests | Y | Y | Y | Y |
+| **implementer** | Reasoning | Writes production code and tests | Y | Y | Y | Y |
 | **simplifier** | Premium | Reduces code to smallest correct form | Y | Y | Y | Y |
 | **docs-writer** | Standard | Architecture docs, ADRs, READMEs | Y | Y | Y | Y |
 | **taskify-agent** | Standard | Breaks specs into structured task graphs | Y | Y | Y | Y |
 | **code-reviewer** | Standard | Pre-commit correctness, security, conventions | - | - | Y | - |
-| **security-auditor** | Standard | Security-focused Java/Netty audits | - | - | Y | - |
-| **review-final** | Premium | Authoritative binding PASS/BLOCK verdict | - | - | Y | Y |
+| **security-auditor** | Reasoning | Security-focused Java/Netty audits | - | - | Y | - |
+| **review-final** | Reasoning | Authoritative binding PASS/BLOCK verdict | - | - | Y | Y |
 | **review-cheap** | Standard | Non-authoritative intermediate review | - | - | Y | Y |
-| **debugger** | Premium | Investigates issues using logs, CI, AWS | - | - | Y | Y |
+| **debugger** | Reasoning | Investigates issues using logs, CI, AWS | - | - | Y | Y |
 | **pipeline-investigator** | Premium | Buildkite pipeline failure analysis | - | - | Y | Y |
 | **test-runner** | Fast | Runs Maven tests, reports results | - | - | Y | - |
 | **council-seat** | Fast | Design council parallel debate seat | - | - | - | - |
@@ -340,7 +357,7 @@ different model)"]
     style N fill:#e8f8f0,stroke:#00a651
 ```
 
-The adversarial review (Step 3) is critical: the `review-cheap` agent (`gpt-4o`) runs with a fresh context, specifically scanning for LLM-generated issues — hallucinated names, plausible but wrong logic, missing error handling, and accidentally committed secrets. The `review-final` agent (`o3`) provides the binding verdict.
+The adversarial review (Step 3) is critical: the `review-cheap` agent runs with a fresh context, specifically scanning for LLM-generated issues — hallucinated names, plausible but wrong logic, missing error handling, and accidentally committed secrets. The `review-final` agent provides the binding verdict.
 
 Skip conditions exist for speed: `"skip tests"` skips validation, `"skip review"` skips the adversarial review, `"just commit"` skips both. These are used when the user is confident in the change.
 

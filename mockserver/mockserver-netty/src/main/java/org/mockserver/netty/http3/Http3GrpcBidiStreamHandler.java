@@ -6,24 +6,33 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http3.DefaultHttp3DataFrame;
 import io.netty.handler.codec.http3.DefaultHttp3HeadersFrame;
 import io.netty.handler.codec.quic.QuicStreamChannel;
+import org.mockserver.closurecallback.websocketregistry.WebSocketClientRegistry;
+import org.mockserver.configuration.Configuration;
 import org.mockserver.grpc.GrpcBidiRuleMatcher;
 import org.mockserver.grpc.GrpcException;
 import org.mockserver.grpc.GrpcFrameCodec;
 import org.mockserver.grpc.GrpcJsonMessageConverter;
 import org.mockserver.grpc.GrpcStatusMapper;
+import org.mockserver.grpc.GrpcStreamMessageTemplateRenderer;
 import org.mockserver.grpc.IncrementalGrpcFrameDecoder;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.mock.breakpoint.BreakpointPhase;
+import org.mockserver.mock.breakpoint.PausedStreamFrame;
+import org.mockserver.mock.breakpoint.StreamFrameBreakpointRegistry;
+import org.mockserver.mock.breakpoint.StreamFrameCallbackDispatcher;
+import org.mockserver.mock.breakpoint.StreamFrameDecision;
 import org.mockserver.model.Delay;
 import org.mockserver.model.GrpcBidiResponse;
 import org.mockserver.model.GrpcBidiRule;
 import org.mockserver.model.GrpcStreamMessage;
 import org.mockserver.model.Header;
-import org.mockserver.model.Headers;
 import org.mockserver.model.NottableString;
 import org.slf4j.event.Level;
 
+import java.util.ArrayDeque;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -55,6 +64,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * counter that orders the trailing HEADERS after all (possibly delayed) response writes needs
  * no synchronization. The completion callback is guarded by an {@link AtomicBoolean} so it runs
  * exactly once across every terminal path.
+ * <p>
+ * <strong>Inbound (client-to-server) breakpoints.</strong> When an {@code INBOUND_STREAM}
+ * breakpoint matcher matches this bidi stream at stream onset, the driver passes a non-null
+ * {@code inboundStreamId} (plus the matched breakpoint's clientId/id and the WS registry). Each
+ * inbound gRPC DATA frame is then parked in the {@link StreamFrameBreakpointRegistry} /
+ * {@link StreamFrameCallbackDispatcher} before being decoded, and resumed (CONTINUE / MODIFY /
+ * DROP / INJECT / CLOSE) by a dashboard or callback client. This is the HTTP/3 analogue of the
+ * inbound interception in {@link org.mockserver.netty.grpc.GrpcBidiStreamHandler}.
+ * <p>
+ * <strong>Ordering &amp; flow control.</strong> The QUIC driver
+ * ({@link Http3MockServerHandler}) copies each DATA frame's bytes to a {@code byte[]} and
+ * releases the {@code Http3DataFrame} <em>before</em> calling {@link #onData(byte[])}, so no
+ * {@code ByteBuf} is retained across a hold and the QUIC stream/connection flow-control window is
+ * never pinned by a parked frame. To preserve per-frame ordering while a frame is parked, at most
+ * one inbound frame is dispatched at a time; any frames the client sends while a frame is held are
+ * buffered in {@link #heldInboundFrames} and drained in order when the held frame resolves. That
+ * buffer is bounded by the driver's existing {@code maxRequestBodySize} enforcement (the driver
+ * caps total accumulated inbound bytes before calling {@code onData}). When inbound breakpoints
+ * are inactive the frame takes a byte-for-byte-identical default path with zero added work.
  */
 public class Http3GrpcBidiStreamHandler {
 
@@ -65,6 +93,9 @@ public class Http3GrpcBidiStreamHandler {
     private final Runnable completionCallback;
     private final MockServerLogger mockServerLogger;
     private final IncrementalGrpcFrameDecoder decoder = new IncrementalGrpcFrameDecoder();
+    // Renders bidi response messages, applying optional per-message response templating against
+    // the matched inbound message. Static (no templateType) messages pass through unchanged.
+    private final GrpcStreamMessageTemplateRenderer templateRenderer;
 
     private boolean finished;
     private boolean inputClosed;
@@ -74,6 +105,23 @@ public class Http3GrpcBidiStreamHandler {
     private int activeChains;
     private final AtomicBoolean callbackInvoked = new AtomicBoolean(false);
 
+    // --- Inbound breakpoint state (all null/false when inbound breakpoints are disabled) ---
+    private final Configuration configuration;
+    private final String inboundStreamId;
+    private final String inboundBreakpointClientId;
+    private final String inboundBreakpointId;
+    private final WebSocketClientRegistry webSocketClientRegistry;
+    private final boolean inboundBreakpointsActive;
+    // Inbound frames received while an earlier frame is parked at a breakpoint; drained in
+    // order when the held frame resolves so per-frame ordering is preserved. Bounded by the
+    // driver's maxRequestBodySize enforcement.
+    private final ArrayDeque<byte[]> heldInboundFrames = new ArrayDeque<>();
+    // True while exactly one inbound frame is parked awaiting a breakpoint decision.
+    private boolean inboundFrameInFlight;
+
+    /**
+     * Constructs a bidi handler without inbound breakpoint support (default path).
+     */
     public Http3GrpcBidiStreamHandler(
         ChannelHandlerContext ctx,
         Descriptors.MethodDescriptor methodDescriptor,
@@ -82,12 +130,49 @@ public class Http3GrpcBidiStreamHandler {
         Runnable completionCallback,
         MockServerLogger mockServerLogger
     ) {
+        this(ctx, methodDescriptor, converter, config, completionCallback, mockServerLogger,
+            null, null, null, null, null);
+    }
+
+    /**
+     * Constructs a bidi handler with optional inbound (client-to-server) breakpoint support.
+     * Inbound breakpoints are active only when {@code inboundStreamId},
+     * {@code inboundBreakpointClientId} and {@code webSocketClientRegistry} are all non-null
+     * (i.e. an {@code INBOUND_STREAM} breakpoint matcher matched this stream at onset).
+     *
+     * @param configuration             active server configuration (timeout / max-held rails); nullable
+     * @param inboundStreamId           unique stream id for inbound frame parking; null disables inbound breakpoints
+     * @param inboundBreakpointClientId the matched inbound breakpoint's owning callback clientId; nullable
+     * @param inboundBreakpointId       the matched inbound breakpoint's id; nullable
+     * @param webSocketClientRegistry   per-server WS registry for callback dispatch; null disables inbound breakpoints
+     */
+    public Http3GrpcBidiStreamHandler(
+        ChannelHandlerContext ctx,
+        Descriptors.MethodDescriptor methodDescriptor,
+        GrpcJsonMessageConverter converter,
+        GrpcBidiResponse config,
+        Runnable completionCallback,
+        MockServerLogger mockServerLogger,
+        Configuration configuration,
+        String inboundStreamId,
+        String inboundBreakpointClientId,
+        String inboundBreakpointId,
+        WebSocketClientRegistry webSocketClientRegistry
+    ) {
         this.ctx = ctx;
         this.methodDescriptor = methodDescriptor;
         this.converter = converter;
         this.config = config;
         this.completionCallback = completionCallback;
         this.mockServerLogger = mockServerLogger;
+        this.configuration = configuration;
+        this.templateRenderer = new GrpcStreamMessageTemplateRenderer(mockServerLogger, configuration);
+        this.inboundStreamId = inboundStreamId;
+        this.inboundBreakpointClientId = inboundBreakpointClientId;
+        this.inboundBreakpointId = inboundBreakpointId;
+        this.webSocketClientRegistry = webSocketClientRegistry;
+        this.inboundBreakpointsActive =
+            inboundStreamId != null && inboundBreakpointClientId != null && webSocketClientRegistry != null;
     }
 
     /**
@@ -100,25 +185,59 @@ public class Http3GrpcBidiStreamHandler {
 
         long actionDelayMillis = (config.getDelay() != null) ? config.getDelay().sampleValueMillis() : 0;
         activeChains++; // startup (eager) chain in progress
-        Runnable emitEager = () -> emitSequential(config.getMessages(), 0, () -> {
+        // Eager messages have no matched inbound message, so templating (if enabled on an eager
+        // message) renders against an empty request body.
+        Runnable emitEager = () -> emitSequential(config.getMessages(), 0, null, () -> {
             activeChains--;
             maybeFinish();
         });
         if (actionDelayMillis > 0) {
-            ctx.executor().schedule(emitEager, actionDelayMillis, TimeUnit.MILLISECONDS);
+            // A scheduled task's exception is NOT routed to exceptionCaught by Netty, so guard the
+            // scheduled eager emit: on failure write an INTERNAL trailer and still run the chain
+            // bookkeeping (activeChains--) so the stream terminates instead of hanging.
+            ctx.executor().schedule(() -> {
+                try {
+                    emitEager.run();
+                } catch (Exception e) {
+                    writeErrorTrailer(GrpcStatusMapper.GrpcStatusCode.INTERNAL,
+                        e.getMessage() != null ? e.getMessage() : "internal error");
+                    activeChains--;
+                    maybeFinish();
+                }
+            }, actionDelayMillis, TimeUnit.MILLISECONDS);
         } else {
             emitEager.run();
         }
     }
 
     /**
-     * Feed inbound request bytes: decode complete gRPC frames, convert each to JSON,
-     * and emit the first matching rule's responses.
+     * Feed inbound request bytes. When inbound breakpoints are inactive this decodes complete
+     * gRPC frames and emits matching rule responses immediately (byte-for-byte default path).
+     * When active, the frame is parked at a breakpoint first (see class javadoc); frames that
+     * arrive while one is held are buffered in order.
      */
     public void onData(byte[] bytes) {
         if (finished) {
             return;
         }
+        if (!inboundBreakpointsActive) {
+            processInboundBytes(bytes);
+            return;
+        }
+        // Inbound breakpoints active: dispatch one frame at a time, buffering the rest in order.
+        if (inboundFrameInFlight) {
+            heldInboundFrames.add(bytes);
+            return;
+        }
+        pumpInbound(bytes);
+    }
+
+    /**
+     * Decode complete gRPC frames from {@code bytes}, convert each to JSON, and emit the first
+     * matching rule's responses. Extracted so it can be invoked from both the default path and
+     * the breakpoint-resume path.
+     */
+    private void processInboundBytes(byte[] bytes) {
         try {
             List<byte[]> completedMessages = decoder.feed(bytes);
             for (byte[] message : completedMessages) {
@@ -126,7 +245,7 @@ public class Http3GrpcBidiStreamHandler {
                 List<GrpcStreamMessage> responses = firstMatchingResponses(inboundJson);
                 if (responses != null && !responses.isEmpty()) {
                     activeChains++;
-                    emitSequential(responses, 0, () -> {
+                    emitSequential(responses, 0, inboundJson, () -> {
                         activeChains--;
                         maybeFinish();
                     });
@@ -144,6 +263,114 @@ public class Http3GrpcBidiStreamHandler {
     }
 
     /**
+     * Park {@code first} at an inbound breakpoint, then keep draining {@link #heldInboundFrames}
+     * synchronously for as long as the dispatcher declines to park (cap reached / client not
+     * connected). The first frame the client actually holds parks asynchronously; its decision
+     * resumes via {@link #handleInboundDecision}. Looping (rather than recursing) on the decline
+     * path keeps the call stack bounded even if the whole queue is processed inline.
+     */
+    private void pumpInbound(byte[] first) {
+        byte[] current = first;
+        while (current != null) {
+            if (finished || !ctx.channel().isActive()) {
+                heldInboundFrames.clear();
+                StreamFrameBreakpointRegistry.getInstance().evictStream(inboundStreamId);
+                return;
+            }
+            int seq = StreamFrameBreakpointRegistry.getInstance().nextSequenceNumber(inboundStreamId);
+            CompletableFuture<StreamFrameDecision> decisionFuture =
+                StreamFrameCallbackDispatcher.getInstance().dispatchFrame(
+                    inboundBreakpointClientId, inboundBreakpointId, inboundStreamId, seq,
+                    PausedStreamFrame.Direction.INBOUND, BreakpointPhase.INBOUND_STREAM,
+                    current, "GRPC-INBOUND", methodDescriptor.getFullName(),
+                    webSocketClientRegistry, configuration, null);
+            if (decisionFuture == null) {
+                // Not parked (cap reached or client not connected): process inline, keep draining.
+                processInboundBytes(current);
+                if (finished) {
+                    heldInboundFrames.clear();
+                    return;
+                }
+                current = heldInboundFrames.poll();
+                continue;
+            }
+            // Parked: resolve asynchronously on the QUIC stream's event loop.
+            inboundFrameInFlight = true;
+            final byte[] parked = current;
+            decisionFuture
+                .thenAccept(decision -> ctx.executor().execute(() -> handleInboundDecision(decision, parked)))
+                .exceptionally(ex -> {
+                    ctx.executor().execute(() -> {
+                        inboundFrameInFlight = false;
+                        if (!finished && ctx.channel().isActive()) {
+                            processInboundBytes(parked);
+                        }
+                        resumeNextInboundOrFinish();
+                    });
+                    return null;
+                });
+            return;
+        }
+        // Whole queue drained inline with nothing parked.
+        maybeFinish();
+    }
+
+    /**
+     * Apply a resolved inbound breakpoint decision to the parked frame, then drain the next
+     * buffered frame (if any). Runs on the QUIC stream's event-loop thread.
+     */
+    private void handleInboundDecision(StreamFrameDecision decision, byte[] originalBytes) {
+        inboundFrameInFlight = false;
+        if (finished || !ctx.channel().isActive()) {
+            heldInboundFrames.clear();
+            StreamFrameBreakpointRegistry.getInstance().evictStream(inboundStreamId);
+            return;
+        }
+        try {
+            switch (decision.getAction()) {
+                case CONTINUE -> processInboundBytes(originalBytes);
+                case MODIFY -> processInboundBytes(decision.getReplacementBody());
+                case DROP -> {
+                    // Discard this frame entirely.
+                }
+                case INJECT -> {
+                    processInboundBytes(originalBytes);
+                    processInboundBytes(decision.getInjectedBody());
+                }
+                case CLOSE -> {
+                    heldInboundFrames.clear();
+                    StreamFrameBreakpointRegistry.getInstance().evictStream(inboundStreamId);
+                    writeErrorTrailer(GrpcStatusMapper.GrpcStatusCode.CANCELLED, "stream closed by breakpoint");
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            writeErrorTrailer(GrpcStatusMapper.GrpcStatusCode.INTERNAL,
+                e.getMessage() != null ? e.getMessage() : "breakpoint resume error");
+            return;
+        }
+        resumeNextInboundOrFinish();
+    }
+
+    /**
+     * Drain the next buffered inbound frame through the breakpoint pump, or — if the buffer is
+     * empty — re-check whether the stream can now finish (the client may have half-closed while
+     * frames were parked).
+     */
+    private void resumeNextInboundOrFinish() {
+        if (finished) {
+            heldInboundFrames.clear();
+            return;
+        }
+        byte[] next = heldInboundFrames.poll();
+        if (next != null) {
+            pumpInbound(next);
+        } else {
+            maybeFinish();
+        }
+    }
+
+    /**
      * The client half-closed (END_STREAM). Finish once all scheduled responses have drained.
      */
     public void onInputClosed() {
@@ -152,10 +379,16 @@ public class Http3GrpcBidiStreamHandler {
     }
 
     /**
-     * The QUIC stream / connection was torn down. Clear responseInProgress so a times-limited
-     * expectation is not left stuck when a bidi stream is abandoned without a clean END_STREAM.
+     * The QUIC stream / connection was torn down. Evict any held inbound breakpoint frames
+     * (releasing their futures and the per-stream registry entry) and clear responseInProgress
+     * so a times-limited expectation is not left stuck when a bidi stream is abandoned without
+     * a clean END_STREAM.
      */
     public void onChannelInactive() {
+        if (inboundStreamId != null) {
+            StreamFrameBreakpointRegistry.getInstance().evictStream(inboundStreamId);
+        }
+        heldInboundFrames.clear();
         invokeCompletionCallback();
     }
 
@@ -188,7 +421,7 @@ public class Http3GrpcBidiStreamHandler {
      * Emit a list of messages sequentially, honouring per-message {@link Delay}, then run
      * {@code onDone}. Chaining preserves ordering even when delays differ.
      */
-    private void emitSequential(List<GrpcStreamMessage> messages, int index, Runnable onDone) {
+    private void emitSequential(List<GrpcStreamMessage> messages, int index, String inboundJson, Runnable onDone) {
         if (messages == null || index >= messages.size() || !ctx.channel().isActive()) {
             onDone.run();
             return;
@@ -196,11 +429,24 @@ public class Http3GrpcBidiStreamHandler {
         GrpcStreamMessage message = messages.get(index);
         long delayMillis = (message.getDelay() != null) ? message.getDelay().sampleValueMillis() : 0;
         Runnable writeNext = () -> {
-            writeResponseMessage(message.getJson());
-            emitSequential(messages, index + 1, onDone);
+            writeResponseMessage(templateRenderer.render(message, inboundJson));
+            emitSequential(messages, index + 1, inboundJson, onDone);
         };
         if (delayMillis > 0) {
-            ctx.executor().schedule(writeNext, delayMillis, TimeUnit.MILLISECONDS);
+            // Netty does NOT route exceptions thrown by a scheduled task to exceptionCaught,
+            // so a render/toProtobuf failure here would otherwise escape silently and leave the
+            // stream hanging with no grpc-status trailer (and with activeChains never decremented).
+            // Wrap the scheduled body so any failure writes an INTERNAL trailer and still runs the
+            // chain bookkeeping (onDone -> activeChains--), terminating the stream cleanly.
+            ctx.executor().schedule(() -> {
+                try {
+                    writeNext.run();
+                } catch (Exception e) {
+                    writeErrorTrailer(GrpcStatusMapper.GrpcStatusCode.INTERNAL,
+                        e.getMessage() != null ? e.getMessage() : "internal error");
+                    onDone.run();
+                }
+            }, delayMillis, TimeUnit.MILLISECONDS);
         } else {
             writeNext.run();
         }
@@ -213,7 +459,11 @@ public class Http3GrpcBidiStreamHandler {
     }
 
     private void maybeFinish() {
-        if (inputClosed && activeChains == 0 && !finished) {
+        // Do not finish while an inbound frame is parked at a breakpoint or buffered behind one:
+        // the trailing HEADERS must come after every (possibly held) inbound frame is resolved
+        // and its responses drained.
+        if (inputClosed && activeChains == 0 && !finished
+            && !inboundFrameInFlight && heldInboundFrames.isEmpty()) {
             finish();
         }
     }

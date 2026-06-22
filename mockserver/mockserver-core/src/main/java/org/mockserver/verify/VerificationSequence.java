@@ -1,6 +1,7 @@
 package org.mockserver.verify;
 
 import org.mockserver.model.ExpectationId;
+import org.mockserver.model.HttpResponse;
 import org.mockserver.model.ObjectWithJsonToString;
 import org.mockserver.model.RequestDefinition;
 
@@ -13,6 +14,7 @@ import java.util.List;
  */
 public class VerificationSequence extends ObjectWithJsonToString {
     private List<RequestDefinition> httpRequests = new ArrayList<>();
+    private List<HttpResponse> httpResponses = new ArrayList<>();
     private List<ExpectationId> expectationIds = new ArrayList<>();
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
 
@@ -32,6 +34,20 @@ public class VerificationSequence extends ObjectWithJsonToString {
 
     public List<RequestDefinition> getHttpRequests() {
         return httpRequests;
+    }
+
+    public VerificationSequence withResponses(HttpResponse... httpResponses) {
+        Collections.addAll(this.httpResponses, httpResponses);
+        return this;
+    }
+
+    public VerificationSequence withResponses(List<HttpResponse> httpResponses) {
+        this.httpResponses = httpResponses;
+        return this;
+    }
+
+    public List<HttpResponse> getHttpResponses() {
+        return httpResponses;
     }
 
     public VerificationSequence withExpectationIds(ExpectationId... expectationIds) {

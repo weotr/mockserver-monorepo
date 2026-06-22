@@ -4,7 +4,6 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.socksx.v5.*;
-import io.netty.handler.ssl.SslHandler;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.lifecycle.LifeCycle;
 import org.mockserver.log.model.LogEntry;

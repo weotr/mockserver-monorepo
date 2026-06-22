@@ -11,15 +11,18 @@ import Switch from '@mui/material/Switch';
 import Tabs from '@mui/material/Tabs';
 import Tab from '@mui/material/Tab';
 import Box from '@mui/material/Box';
-import Alert from '@mui/material/Alert';
-import Snackbar from '@mui/material/Snackbar';
 import IconButton from '@mui/material/IconButton';
 import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import Typography from '@mui/material/Typography';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { useTheme } from '@mui/material/styles';
+import { monospaceFontFamily } from '../theme';
+import { useDashboardStore } from '../store';
 import type { ParsedTraffic } from '../lib/llmTraffic';
 import {
   PROVIDERS,
@@ -39,7 +42,10 @@ import {
   expectationToJsonObject,
 } from '../lib/llmExpectationCodegen';
 import { callMcpTool, buildBaseUrl } from '../lib/mcpClient';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
 import CopyButton from './CopyButton';
+import HumanErrorAlert from './HumanErrorAlert';
+import JsonDiffViewer from './JsonDiffViewer';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -89,20 +95,35 @@ export default function CaptureAsMockDialog({
     [parsed, path, itemValue],
   );
 
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'));
+  const setNotification = useDashboardStore((s) => s.setNotification);
+  const editExpectation = useDashboardStore((s) => s.editExpectation);
+
   // Editable state
   const [draft, setDraft] = useState<ExpectationDraft>(defaultDraft);
   const [tab, setTab] = useState(0);
   const [registering, setRegistering] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [snackOpen, setSnackOpen] = useState(false);
+  const [error, setError] = useState<HumanError | null>(null);
 
-  // Reset state when dialog opens with new data
+  // Reset all transient state (draft edits, error/details, registering flag,
+  // snackbar) whenever the captured path changes OR the dialog transitions from
+  // closed to open. Resetting on the open transition is what makes reopening the
+  // SAME captured item start clean: without it, a failed register would leave
+  // the stale error Alert and prior edits visible the next time it opened.
+  // This is the React-idiomatic "reset state on prop change" pattern (a
+  // synchronous setState during render), not an effect, so no cascading render.
   const [prevPath, setPrevPath] = useState(path);
-  if (path !== prevPath) {
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (path !== prevPath || (open && !prevOpen)) {
     setPrevPath(path);
+    setPrevOpen(open);
     setDraft(defaultDraft);
     setTab(0);
     setError(null);
+    setRegistering(false);
+  } else if (open !== prevOpen) {
+    setPrevOpen(open);
   }
 
   // ---- LLM draft helpers ----
@@ -175,14 +196,14 @@ export default function CaptureAsMockDialog({
         const args = expectationToMcpArgs(draft);
         const result = await callMcpTool(baseUrl, 'mock_llm_completion', args);
         if (result.ok) {
-          setSnackOpen(true);
+          setNotification({ message: 'Mock expectation registered successfully', severity: 'success' });
           onClose();
         } else {
-          setError(
+          const raw =
             typeof result.error === 'string'
               ? result.error
-              : JSON.stringify(result.error, null, 2),
-          );
+              : JSON.stringify(result.error, null, 2);
+          setError(humanizeError(new Error(raw)));
         }
       } else {
         // Generic HTTP: use PUT /mockserver/expectation
@@ -193,19 +214,31 @@ export default function CaptureAsMockDialog({
           body,
         });
         if (response.ok) {
-          setSnackOpen(true);
+          setNotification({ message: 'Mock expectation registered successfully', severity: 'success' });
           onClose();
         } else {
           const text = await response.text();
-          setError(`Registration failed (${response.status}): ${text}`);
+          // Use the `MockServer returned <status>: <body>` shape so humanizeError
+          // can map the status to a friendly message and keep the raw body.
+          setError(humanizeError(new Error(`MockServer returned ${response.status}: ${text}`)));
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(humanizeError(err));
     } finally {
       setRegistering(false);
     }
-  }, [connectionParams, draft, onClose]);
+  }, [connectionParams, draft, onClose, setNotification]);
+
+  // Hand the captured expectation off to the Composer for refinement instead of
+  // registering it directly here — this makes Capture and Composer one coherent
+  // creation flow rather than two divergent engines. Only the generic HTTP draft
+  // maps cleanly onto the Composer's expectation form.
+  const handleRefineInComposer = useCallback(() => {
+    if (draft.kind !== 'generic') return;
+    editExpectation(expectationToJsonObject(draft) as Record<string, unknown>);
+    onClose();
+  }, [draft, editExpectation, onClose]);
 
   // Determine if Register button should be disabled
   const registerDisabled = useMemo(() => {
@@ -214,7 +247,7 @@ export default function CaptureAsMockDialog({
     return !draft.path;
   }, [registering, draft]);
 
-  const tabLabels = ['Edit', 'Copy as JSON', 'Copy as Java'];
+  const tabLabels = ['Edit', 'Preview diff', 'Copy as JSON', 'Copy as Java'];
 
   return (
     <>
@@ -223,6 +256,7 @@ export default function CaptureAsMockDialog({
         onClose={onClose}
         maxWidth="md"
         fullWidth
+        fullScreen={fullScreen}
         aria-labelledby="capture-as-mock-title"
       >
         <DialogTitle id="capture-as-mock-title">Capture as Mock</DialogTitle>
@@ -230,7 +264,7 @@ export default function CaptureAsMockDialog({
           <Tabs
             value={tab}
             onChange={(_, v: number) => setTab(v)}
-            sx={{ mb: 2, minHeight: 32, '& .MuiTab-root': { minHeight: 32, py: 0.5, fontSize: '0.8rem' } }}
+            sx={{ mb: 2, minHeight: 32, '& .MuiTab-root': { minHeight: 32, py: 0.5, typography: 'body2' } }}
           >
             {tabLabels.map((label) => (
               <Tab key={label} label={label} />
@@ -308,7 +342,7 @@ export default function CaptureAsMockDialog({
                       onClick={() => removeToolCall(i)}
                       aria-label="Remove tool call"
                     >
-                      <DeleteIcon fontSize="small" />
+                      <DeleteOutlineIcon fontSize="small" />
                     </IconButton>
                   </Box>
                 ))}
@@ -381,7 +415,7 @@ export default function CaptureAsMockDialog({
                   onChange={(e) => updateGenericDraft({ path: e.target.value })}
                 />
               </Box>
-              {draft.matcherPrecision !== 'loose' && draft.body && (
+              {draft.matcherPrecision !== 'loose' && (
                 <TextField
                   label="Request Body"
                   size="small"
@@ -389,8 +423,13 @@ export default function CaptureAsMockDialog({
                   multiline
                   minRows={2}
                   maxRows={6}
-                  value={draft.body}
+                  value={draft.body ?? ''}
                   onChange={(e) => updateGenericDraft({ body: e.target.value })}
+                  helperText={
+                    !draft.body
+                      ? 'No body was captured — add one to match on the request body.'
+                      : undefined
+                  }
                 />
               )}
 
@@ -417,8 +456,26 @@ export default function CaptureAsMockDialog({
             </Box>
           )}
 
-          {/* Tab 1: JSON */}
+          {/* Tab 1: Preview diff — shows exactly what mock will be created from
+              the captured request. Capture is a creation, so the "before" is an
+              empty object and the diff highlights every field being added. */}
           {tab === 1 && (
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                The mock below will be created from this captured request. Lines added on
+                the right are the expectation that will be registered.
+              </Typography>
+              <JsonDiffViewer
+                ariaLabel="Mock to be created"
+                original="{}"
+                modified={jsonOutput}
+                height={400}
+              />
+            </Box>
+          )}
+
+          {/* Tab 2: JSON */}
+          {tab === 2 && (
             <Box sx={{ position: 'relative' }}>
               <Box sx={{ position: 'absolute', top: 0, right: 0 }}>
                 <CopyButton text={jsonOutput} />
@@ -426,7 +483,7 @@ export default function CaptureAsMockDialog({
               <Box
                 component="pre"
                 sx={{
-                  fontFamily: 'monospace',
+                  fontFamily: monospaceFontFamily,
                   fontSize: '0.75rem',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-all',
@@ -443,8 +500,8 @@ export default function CaptureAsMockDialog({
             </Box>
           )}
 
-          {/* Tab 2: Java */}
-          {tab === 2 && (
+          {/* Tab 3: Java */}
+          {tab === 3 && (
             <Box sx={{ position: 'relative' }}>
               <Box sx={{ position: 'absolute', top: 0, right: 0 }}>
                 <CopyButton text={javaOutput} />
@@ -452,7 +509,7 @@ export default function CaptureAsMockDialog({
               <Box
                 component="pre"
                 sx={{
-                  fontFamily: 'monospace',
+                  fontFamily: monospaceFontFamily,
                   fontSize: '0.75rem',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-all',
@@ -470,18 +527,20 @@ export default function CaptureAsMockDialog({
           )}
 
           {error && (
-            <Alert severity="error" sx={{ mt: 2 }}>
-              <Box
-                component="pre"
-                sx={{ fontFamily: 'monospace', fontSize: '0.7rem', whiteSpace: 'pre-wrap', m: 0 }}
-              >
-                {error}
-              </Box>
-            </Alert>
+            <HumanErrorAlert error={error} sx={{ mt: 2 }} />
           )}
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
+          {draft.kind === 'generic' && (
+            <Button
+              onClick={handleRefineInComposer}
+              startIcon={<EditOutlinedIcon sx={{ fontSize: '0.875rem' }} />}
+              disabled={registering || !draft.path}
+            >
+              Refine in Composer
+            </Button>
+          )}
           <Button
             variant="contained"
             onClick={() => void handleRegister()}
@@ -491,13 +550,6 @@ export default function CaptureAsMockDialog({
           </Button>
         </DialogActions>
       </Dialog>
-
-      <Snackbar
-        open={snackOpen}
-        autoHideDuration={3000}
-        onClose={() => setSnackOpen(false)}
-        message="Mock expectation registered successfully"
-      />
     </>
   );
 }

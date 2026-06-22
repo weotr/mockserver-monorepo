@@ -1,0 +1,32 @@
+{
+  "httpRequest": {
+    "method": "GET",
+    "path": "/.well-known/agent.json"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": ["application/json"]
+    },
+    "body": {
+      "name": "TranslationAgent",
+      "description": "Translates text between languages",
+      "version": "1.0.0",
+      "url": "http://localhost:1080/a2a",
+      "capabilities": {
+        "streaming": false,
+        "pushNotifications": false,
+        "stateTransitionHistory": false
+      },
+      "skills": [
+        {
+          "id": "translate",
+          "name": "Translation",
+          "description": "Translates text between languages",
+          "tags": ["nlp"],
+          "examples": ["Translate hello to Spanish"]
+        }
+      ]
+    }
+  }
+}

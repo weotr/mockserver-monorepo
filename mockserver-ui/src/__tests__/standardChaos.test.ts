@@ -4,6 +4,9 @@ import {
   buildChaosJson,
   chaosFromExpectation,
   standardToJava,
+  standardChaosErrorStatusError,
+  standardChaosErrorProbabilityError,
+  hasStandardChaosRangeErrors,
   type StandardMatcher,
   type StandardActionPayload,
   type StandardChaosDraft,
@@ -366,5 +369,103 @@ describe('standardToJava with chaos', () => {
     expect(java).toContain('.withSeed(12345L)');
     expect(java).toContain('.withSucceedFirst(0)');
     expect(java).toContain('.withFailRequestCount(5)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Standard chaos range validation (bounds from HttpChaosProfile.java)
+// ---------------------------------------------------------------------------
+
+describe('standardChaosErrorStatusError', () => {
+  it('returns undefined for undefined input', () => {
+    expect(standardChaosErrorStatusError(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for in-range status (100)', () => {
+    expect(standardChaosErrorStatusError(100)).toBeUndefined();
+  });
+
+  it('returns undefined for in-range status (599)', () => {
+    expect(standardChaosErrorStatusError(599)).toBeUndefined();
+  });
+
+  it('returns error for status below 100', () => {
+    expect(standardChaosErrorStatusError(99)).toBe('100–599');
+  });
+
+  it('returns error for status above 599', () => {
+    expect(standardChaosErrorStatusError(600)).toBe('100–599');
+  });
+
+  it('returns error for non-integer status', () => {
+    expect(standardChaosErrorStatusError(500.5)).toBe('100–599');
+  });
+
+  it('returns error for NaN', () => {
+    expect(standardChaosErrorStatusError(NaN)).toBe('100–599');
+  });
+});
+
+describe('standardChaosErrorProbabilityError', () => {
+  it('returns undefined for undefined input', () => {
+    expect(standardChaosErrorProbabilityError(undefined)).toBeUndefined();
+  });
+
+  it('returns undefined for 0.0', () => {
+    expect(standardChaosErrorProbabilityError(0.0)).toBeUndefined();
+  });
+
+  it('returns undefined for 1.0', () => {
+    expect(standardChaosErrorProbabilityError(1.0)).toBeUndefined();
+  });
+
+  it('returns undefined for fractional in range', () => {
+    expect(standardChaosErrorProbabilityError(0.5)).toBeUndefined();
+  });
+
+  it('returns error for negative probability', () => {
+    expect(standardChaosErrorProbabilityError(-0.1)).toBe('0.0–1.0');
+  });
+
+  it('returns error for probability above 1.0', () => {
+    expect(standardChaosErrorProbabilityError(1.1)).toBe('0.0–1.0');
+  });
+
+  it('returns error for NaN', () => {
+    expect(standardChaosErrorProbabilityError(NaN)).toBe('0.0–1.0');
+  });
+});
+
+describe('hasStandardChaosRangeErrors', () => {
+  it('returns false for empty draft', () => {
+    expect(hasStandardChaosRangeErrors({})).toBe(false);
+  });
+
+  it('returns false when both fields are in range', () => {
+    expect(hasStandardChaosRangeErrors({ errorStatus: 500, errorProbability: 0.5 })).toBe(false);
+  });
+
+  it('returns true when errorStatus is out of range', () => {
+    expect(hasStandardChaosRangeErrors({ errorStatus: 99, errorProbability: 0.5 })).toBe(true);
+  });
+
+  it('returns true when errorProbability is out of range', () => {
+    expect(hasStandardChaosRangeErrors({ errorStatus: 500, errorProbability: 1.5 })).toBe(true);
+  });
+
+  it('returns true when only errorStatus is set and out of range', () => {
+    expect(hasStandardChaosRangeErrors({ errorStatus: 600 })).toBe(true);
+  });
+
+  it('returns false when only unvalidated fields are set (latency, seed, etc.)', () => {
+    expect(hasStandardChaosRangeErrors({ latencyValue: 5000, seed: 42 })).toBe(false);
+  });
+
+  it('returns true for NaN errorStatus', () => {
+    expect(hasStandardChaosRangeErrors({ errorStatus: NaN })).toBe(true);
+  });
+
+  it('returns true for NaN errorProbability', () => {
+    expect(hasStandardChaosRangeErrors({ errorProbability: NaN })).toBe(true);
   });
 });

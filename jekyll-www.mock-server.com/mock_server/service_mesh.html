@@ -15,6 +15,40 @@ keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirec
 
 <p>MockServer can run as a <strong>Kubernetes sidecar</strong> with transparent HTTP proxy interception. This enables service mesh integration patterns where MockServer intercepts traffic destined for external services without any application code changes.</p>
 
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>How MockServer intercepts traffic transparently, the resolver strategies it uses to find the original destination, and how to deploy it automatically:</p>
+
+<table class="comparison_table">
+    <thead>
+        <tr>
+            <th>Setup &amp; interception</th>
+            <th>Resolution &amp; deployment</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#transparent_proxy_mode">Transparent Proxy Mode</a> &mdash; how it works, configuration, iptables init container</li>
+                    <li><a href="#admission_webhook">Automatic Sidecar Injection</a> &mdash; MutatingAdmissionWebhook, Helm values, pod annotation</li>
+                </ul>
+            </td>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#original_destination_resolution">Original Destination Resolution</a> &mdash; PROXY protocol, TPROXY, eBPF, SO_ORIGINAL_DST, conntrack, DNS-intent, Host header</li>
+                    <li><a href="#deployment_contexts">Deployment Contexts</a> &mdash; resolver strategy by context (sidecar, NLB, OS, cloud)</li>
+                    <li><a href="#limitations">Limitations</a> &mdash; conntrack cap, Linux-only constraints, webhook requirement</li>
+                </ul>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
+<a id="transparent_proxy_mode" class="anchor" href="#transparent_proxy_mode">&nbsp;</a>
+
 <h2>Transparent Proxy Mode</h2>
 
 <p>When <code class="inline code">transparentProxyEnabled</code> is set to <code class="inline code">true</code>, MockServer treats all incoming HTTP connections as proxy requests. Instead of requiring clients to send explicit HTTP CONNECT requests or configure proxy settings, it uses the <code class="inline code">Host</code> header from each request to determine the forwarding target.</p>
@@ -132,7 +166,7 @@ cd mockserver && ./mvnw package -pl mockserver-k8s-webhook -DskipTests && cd ..
 # Copy the jar into the Docker build context and build
 cp mockserver/mockserver-k8s-webhook/target/mockserver-k8s-webhook-*-jar-with-dependencies.jar \
   docker/webhook/mockserver-webhook.jar
-docker build -t mockserver/mockserver-webhook:6.1.1-SNAPSHOT docker/webhook</code></pre>
+docker build -t mockserver/mockserver-webhook:{{ site.mockserver_snapshot_version }} docker/webhook</code></pre>
 
 <h3>Annotating pods</h3>
 
@@ -227,6 +261,8 @@ PROXY UNKNOWN\r\n</code></pre>
 
 <p>If no other strategy resolves the destination, MockServer reads the <code class="inline code">Host</code> header from the HTTP request. This always works but requires a valid Host header.</p>
 
+<a id="deployment_contexts" class="anchor" href="#deployment_contexts">&nbsp;</a>
+
 <h2>Deployment Contexts</h2>
 
 <p>The resolver chain supports multiple deployment patterns. For a full catalogue of every mechanism that can deliver traffic to MockServer for transparent interception — including OS firewall rules, DNS steering, cloud route tables, browser proxy, and CI networks — see <a href="/mock_server/transparent_interception_recipes.html">Transparent Interception Recipes</a>.</p>
@@ -242,6 +278,8 @@ PROXY UNKNOWN\r\n</code></pre>
         <tr><td>Cloud route-based interception</td><td>Host header fallback</td><td>When original-dst is not available</td></tr>
     </tbody>
 </table>
+
+<a id="limitations" class="anchor" href="#limitations">&nbsp;</a>
 
 <h2>Limitations</h2>
 

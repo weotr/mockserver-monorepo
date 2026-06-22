@@ -18,18 +18,16 @@ import org.mockserver.verify.VerificationTimes;
 import org.slf4j.event.Level;
 
 import java.util.Arrays;
-import java.util.UUID;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static junit.framework.TestCase.assertEquals;
-import static junit.framework.TestCase.fail;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;
 import static org.hamcrest.core.StringStartsWith.startsWith;
-import static org.junit.Assert.assertThrows;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.matchers.Times.*;
 import static org.mockserver.mock.Expectation.when;
@@ -54,7 +52,6 @@ import static org.mockserver.model.Parameter.schemaParam;
 import static org.mockserver.model.RegexBody.regex;
 import static org.mockserver.model.StringBody.exact;
 import static org.mockserver.model.XmlBody.xml;
-import static org.mockserver.validator.jsonschema.JsonSchemaValidator.OPEN_API_SPECIFICATION_URL;
 
 /**
  * @author jamesdbloom
@@ -749,20 +746,15 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
                 .withStatusCode(OK_200.code())
                 .withReasonPhrase(OK_200.reasonPhrase())
                 .withHeader("content-type", "application/xml")
-                .withBody(xml("[ {" + NEW_LINE +
-                    "  \"id\" : 10," + NEW_LINE +
-                    "  \"name\" : \"doggie\"," + NEW_LINE +
-                    "  \"category\" : {" + NEW_LINE +
-                    "    \"id\" : 1," + NEW_LINE +
-                    "    \"name\" : \"Dogs\"" + NEW_LINE +
-                    "  }," + NEW_LINE +
-                    "  \"photoUrls\" : [ \"some_string_value\" ]," + NEW_LINE +
-                    "  \"tags\" : [ {" + NEW_LINE +
-                    "    \"id\" : 0," + NEW_LINE +
-                    "    \"name\" : \"some_string_value\"" + NEW_LINE +
-                    "  } ]," + NEW_LINE +
-                    "  \"status\" : \"available\"" + NEW_LINE +
-                    "} ]", MediaType.APPLICATION_XML)),
+                .withBody(xml("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+                    "<pet>" +
+                    "<id>10</id>" +
+                    "<name>doggie</name>" +
+                    "<category><id>1</id><name>Dogs</name></category>" +
+                    "<photoUrls><photoUrl>some_string_value</photoUrl></photoUrls>" +
+                    "<tags><tag><id>0</id><name>some_string_value</name></tag></tags>" +
+                    "<status>available</status>" +
+                    "</pet>", MediaType.APPLICATION_XML)),
             makeRequest(
                 request()
                     .withMethod("GET")
@@ -781,20 +773,15 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
                     response()
                         .withStatusCode(200)
                         .withHeader("content-type", "application/xml")
-                        .withBody("[ {" + NEW_LINE +
-                            "  \"id\" : 10," + NEW_LINE +
-                            "  \"name\" : \"doggie\"," + NEW_LINE +
-                            "  \"category\" : {" + NEW_LINE +
-                            "    \"id\" : 1," + NEW_LINE +
-                            "    \"name\" : \"Dogs\"" + NEW_LINE +
-                            "  }," + NEW_LINE +
-                            "  \"photoUrls\" : [ \"some_string_value\" ]," + NEW_LINE +
-                            "  \"tags\" : [ {" + NEW_LINE +
-                            "    \"id\" : 0," + NEW_LINE +
-                            "    \"name\" : \"some_string_value\"" + NEW_LINE +
-                            "  } ]," + NEW_LINE +
-                            "  \"status\" : \"available\"" + NEW_LINE +
-                            "} ]")
+                        .withBody("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
+                            "<pet>" +
+                            "<id>10</id>" +
+                            "<name>doggie</name>" +
+                            "<category><id>1</id><name>Dogs</name></category>" +
+                            "<photoUrls><photoUrl>some_string_value</photoUrl></photoUrls>" +
+                            "<tags><tag><id>0</id><name>some_string_value</name></tag></tags>" +
+                            "<status>available</status>" +
+                            "</pet>")
                 )
         ));
     }

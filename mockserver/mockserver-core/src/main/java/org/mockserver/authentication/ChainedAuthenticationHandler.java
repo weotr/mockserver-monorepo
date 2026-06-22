@@ -2,6 +2,9 @@ package org.mockserver.authentication;
 
 import org.mockserver.model.HttpRequest;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 public class ChainedAuthenticationHandler implements AuthenticationHandler {
 
     private final AuthenticationHandler[] authenticationHandlers;
@@ -18,6 +21,38 @@ public class ChainedAuthenticationHandler implements AuthenticationHandler {
             }
         }
         return true;
+    }
+
+    /**
+     * Runs every delegate's {@link AuthenticationHandler#authenticate} (preserving the
+     * AND semantics: any unauthenticated delegate fails the whole chain). When all
+     * delegates authenticate, returns a combined result that takes the FIRST verified
+     * principal (so an OIDC/JWT delegate's principal wins over an mTLS-only delegate
+     * that has a null principal) and unions every delegate's scopes.
+     */
+    @Override
+    public AuthenticationResult authenticate(HttpRequest request) {
+        AuthenticationResult principalResult = null;
+        Set<String> unionedScopes = new LinkedHashSet<>();
+        for (AuthenticationHandler authenticationHandler : authenticationHandlers) {
+            AuthenticationResult result = authenticationHandler.authenticate(request);
+            if (!result.isAuthenticated()) {
+                return AuthenticationResult.unauthenticated();
+            }
+            unionedScopes.addAll(result.getScopes());
+            if (principalResult == null && result.getPrincipal() != null) {
+                principalResult = result;
+            }
+        }
+        if (principalResult != null) {
+            return AuthenticationResult.authenticated(
+                principalResult.getPrincipal(),
+                principalResult.getPrincipalSource(),
+                principalResult.getClaims(),
+                unionedScopes
+            );
+        }
+        return AuthenticationResult.authenticated(null, "none", java.util.Map.of(), unionedScopes);
     }
 
 }

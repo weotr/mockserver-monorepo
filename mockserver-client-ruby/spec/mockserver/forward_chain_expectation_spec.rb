@@ -270,6 +270,33 @@ RSpec.describe MockServer::ForwardChainExpectation do
   end
 
   # -------------------------------------------------------------------
+  # respond_with_class_callback
+  # -------------------------------------------------------------------
+  describe '#respond_with_class_callback' do
+    it 'sets http_response_class_callback from an HttpClassCallback and upserts' do
+      callback = MockServer::HttpClassCallback.new(callback_class: 'com.example.MyResponseCallback')
+      chain.respond_with_class_callback(callback)
+
+      expect(expectation.http_response_class_callback).to eq(callback)
+      expect(mock_client).to have_received(:upsert).with(expectation)
+    end
+
+    it 'wraps a class-name String into an HttpClassCallback' do
+      chain.respond_with_class_callback('com.example.MyResponseCallback')
+
+      cb = expectation.http_response_class_callback
+      expect(cb).to be_a(MockServer::HttpClassCallback)
+      expect(cb.callback_class).to eq('com.example.MyResponseCallback')
+      expect(expectation.to_h['httpResponseClassCallback']).to eq({ 'callbackClass' => 'com.example.MyResponseCallback' })
+    end
+
+    it 'raises TypeError for an unsupported type' do
+      expect { chain.respond_with_class_callback(123) }
+        .to raise_error(TypeError, /class-name String or HttpClassCallback/)
+    end
+  end
+
+  # -------------------------------------------------------------------
   # forward_with_class_callback
   # -------------------------------------------------------------------
   describe '#forward_with_class_callback' do
@@ -281,8 +308,18 @@ RSpec.describe MockServer::ForwardChainExpectation do
       expect(mock_client).to have_received(:upsert).with(expectation)
     end
 
-    it 'raises TypeError for invalid types' do
-      expect { chain.forward_with_class_callback('invalid') }.to raise_error(TypeError, /Expected HttpClassCallback/)
+    it 'wraps a class-name String into an HttpClassCallback' do
+      chain.forward_with_class_callback('com.example.MyForwardCallback')
+
+      cb = expectation.http_forward_class_callback
+      expect(cb).to be_a(MockServer::HttpClassCallback)
+      expect(cb.callback_class).to eq('com.example.MyForwardCallback')
+      expect(expectation.to_h['httpForwardClassCallback']).to eq({ 'callbackClass' => 'com.example.MyForwardCallback' })
+    end
+
+    it 'raises TypeError for an unsupported type' do
+      expect { chain.forward_with_class_callback(123) }
+        .to raise_error(TypeError, /class-name String or HttpClassCallback/)
     end
   end
 

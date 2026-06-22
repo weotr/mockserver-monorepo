@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import Box from '@mui/material/Box';
 import Collapse from '@mui/material/Collapse';
 import Paper from '@mui/material/Paper';
@@ -67,6 +67,36 @@ import {
   EMPTY_GRPC_CHAOS_FORM,
   type GrpcChaosFormState,
 } from '../lib/grpcChaosForm';
+import {
+  startChaosExperiment,
+  getChaosExperimentStatus,
+  stopChaosExperiment,
+  listChaosProfiles,
+  saveChaosProfile,
+  applyChaosProfile,
+  deleteChaosProfile,
+  formatDuration,
+  type ExperimentDefinitionDTO,
+  type ExperimentStageDTO,
+  type ExperimentStatusDTO,
+} from '../lib/chaosExperiment';
+import AddIcon from '@mui/icons-material/Add';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopIcon from '@mui/icons-material/Stop';
+import LinearProgress from '@mui/material/LinearProgress';
+import { getConfiguration, updateConfiguration, type Configuration } from '../lib/configuration';
+import ConfirmDialog from './ConfirmDialog';
+import HumanErrorAlert from './HumanErrorAlert';
+import { humanizeError, type HumanError } from '../lib/errorMessage';
+
+// Responsive width helper for fixed-px form fields: full-width on a phone (xs),
+// the original fixed pixel width from `sm` up so the desktop layout is unchanged.
+const responsiveWidth = (px: number) => ({ width: { xs: '100%', sm: px } });
+
+// Responsive grid layout for chaos field rows — fields fill available width
+// and wrap uniformly via CSS Grid auto-fit instead of fixed pixel widths.
+const CHAOS_GRID = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 1, alignItems: 'start' } as const;
+const CHAOS_GRID_WIDE = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 1, alignItems: 'start' } as const;
 
 interface ServiceChaosPanelProps {
   connectionParams: ConnectionParams;
@@ -411,7 +441,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [polledAt, setPolledAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<HumanError | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -447,13 +477,74 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   // TCP chaos state
   const [tcpExpanded, setTcpExpanded] = useState(false);
   const [tcpData, setTcpData] = useState<TcpChaosResponse>({ hosts: {} });
+  // Poll timestamp for the TCP dataset specifically. The TTL countdown must be
+  // decremented against the time *this* dataset was fetched, not the HTTP
+  // `polledAt` (a different poll loop that keeps advancing while this section is
+  // collapsed and its data is frozen).
+  const [tcpPolledAt, setTcpPolledAt] = useState(0);
   const [tcpForm, setTcpForm] = useState<TcpFormState>(EMPTY_TCP_FORM);
 
   // gRPC fault injection chaos state
   const [grpcChaosData, setGrpcChaosData] = useState<GrpcChaosResponse>({ services: {} });
+  const [grpcChaosPolledAt, setGrpcChaosPolledAt] = useState(0);
   const [grpcChaosForm, setGrpcChaosForm] = useState<GrpcChaosFormState>(EMPTY_GRPC_CHAOS_FORM);
 
+  // --- Auto-halt state (effects below, after `refresh` is declared) ---
+  const [autoHaltEnabled, setAutoHaltEnabled] = useState<boolean | null>(null);
+  const [autoHaltThreshold, setAutoHaltThreshold] = useState<string>('');
+  const [autoHaltWindow, setAutoHaltWindow] = useState<string>('');
+
+  // --- Chaos Experiments state ---
+  const [experimentsExpanded, setExperimentsExpanded] = useState(false);
+  const [experimentStatus, setExperimentStatus] = useState<ExperimentStatusDTO | null>(null);
+  const experimentStatusRef = useRef<ExperimentStatusDTO | null>(null);
+  const [expName, setExpName] = useState('');
+  const [expLoop, setExpLoop] = useState(false);
+  const stageIdCounter = useRef(1);
+  const [expStages, setExpStages] = useState<Array<{
+    id: number;
+    durationMs: string;
+    host: string;
+    errorStatus: string;
+    errorProbability: string;
+    latencyMs: string;
+    dropProbability: string;
+  }>>([{
+    id: 0, durationMs: '10000', host: '', errorStatus: '', errorProbability: '',
+    latencyMs: '', dropProbability: '',
+  }]);
+
+  // --- ADV3: saved chaos profile library state ---
+  const [savedProfiles, setSavedProfiles] = useState<string[]>([]);
+  const [profilesTick, setProfilesTick] = useState(0);
+  const refreshProfiles = useCallback(() => setProfilesTick((t) => t + 1), []);
+
   const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
+
+  // --- Auto-halt configuration fetch + apply ---
+  useEffect(() => {
+    const controller = new AbortController();
+    void getConfiguration(connectionParams, controller.signal)
+      .then((config) => {
+        if (!controller.signal.aborted) {
+          setAutoHaltEnabled(config['chaosAutoHaltEnabled'] === true);
+          if (typeof config['chaosAutoHaltErrorThreshold'] === 'number') setAutoHaltThreshold(String(config['chaosAutoHaltErrorThreshold']));
+          if (typeof config['chaosAutoHaltWindowMillis'] === 'number') setAutoHaltWindow(String(config['chaosAutoHaltWindowMillis']));
+        }
+      })
+      .catch(() => { /* config endpoint unavailable */ });
+    return () => controller.abort();
+  }, [connectionParams, refreshTick]);
+
+  const applyAutoHaltConfig = useCallback(async (partial: Configuration) => {
+    setActionError(null);
+    try {
+      await updateConfiguration(connectionParams, partial);
+      refresh();
+    } catch (e) {
+      setActionError(humanizeError(e));
+    }
+  }, [connectionParams, refresh]);
 
   // Poll the registry on an interval.
   useEffect(() => {
@@ -484,11 +575,31 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     };
   }, [connectionParams, refreshTick]);
 
-  // Tick once a second so TTL countdowns update between polls.
+  // Whether any active registration (HTTP service, TCP host, or gRPC service)
+  // actually carries a TTL/expiry to count down. The `ttlRemainingMillis` maps
+  // are populated by the backend only for registrations that were given a TTL;
+  // a registration with no TTL has no entry. When none exist there is nothing to
+  // tick down, so the 1s interval below stays off and the panel does not
+  // re-render every second.
+  const hasAnyTtl = useMemo(() => {
+    const anyEntry = (map: Record<string, number> | undefined) =>
+      map != null && Object.keys(map).length > 0;
+    return (
+      anyEntry(data.ttlRemainingMillis) ||
+      anyEntry(tcpData.ttlRemainingMillis) ||
+      anyEntry(grpcChaosData.ttlRemainingMillis)
+    );
+  }, [data.ttlRemainingMillis, tcpData.ttlRemainingMillis, grpcChaosData.ttlRemainingMillis]);
+
+  // Tick once a second so TTL countdowns update between polls — but only while at
+  // least one registration has a TTL to count down. With zero TTL-bearing
+  // registrations the interval would otherwise re-render the whole panel every
+  // second for no visible change.
   useEffect(() => {
+    if (!hasAnyTtl) return;
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [hasAnyTtl]);
 
   // Fetch gRPC health on mount (so the collapsed header chip shows the real count),
   // then keep polling only while the gRPC panel + health sub-section are expanded.
@@ -526,7 +637,10 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     async function poll(): Promise<void> {
       try {
         const result = await fetchTcpChaos(connectionParams, controller.signal);
-        if (!cancelled) setTcpData(result);
+        if (!cancelled) {
+          setTcpData(result);
+          setTcpPolledAt(Date.now());
+        }
       } catch {
         // ignore
       } finally {
@@ -552,7 +666,10 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     async function poll(): Promise<void> {
       try {
         const result = await fetchGrpcChaos(connectionParams, controller.signal);
-        if (!cancelled) setGrpcChaosData(result);
+        if (!cancelled) {
+          setGrpcChaosData(result);
+          setGrpcChaosPolledAt(Date.now());
+        }
       } catch {
         // ignore
       } finally {
@@ -567,6 +684,59 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       if (timer) clearTimeout(timer);
     };
   }, [connectionParams, grpcPanelExpanded, grpcFaultExpanded, refreshTick]);
+
+  // Poll chaos experiment status on mount and while the experiments section is
+  // expanded. Poll more frequently (2s) while a running experiment is active.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll(): Promise<void> {
+      try {
+        const status = await getChaosExperimentStatus(connectionParams, controller.signal);
+        if (!cancelled) {
+          experimentStatusRef.current = status;
+          setExperimentStatus(status);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (!cancelled) {
+          const latest = experimentStatusRef.current;
+          const isRunning = latest?.status === 'running' || latest?.status === 'starting';
+          const interval = isRunning ? 2000 : POLL_INTERVAL_MS;
+          timer = setTimeout(() => void poll(), experimentsExpanded ? interval : 10000);
+        }
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [connectionParams, experimentsExpanded, refreshTick]);
+
+  // ADV3: load saved chaos profile names while the experiments section is open.
+  useEffect(() => {
+    if (!experimentsExpanded) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    void (async () => {
+      try {
+        const names = await listChaosProfiles(connectionParams, controller.signal);
+        if (!cancelled) setSavedProfiles(names);
+      } catch {
+        // ignore — saved-profile library is best-effort in the UI
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [connectionParams, experimentsExpanded, profilesTick]);
 
   const hosts = useMemo(() => Object.keys(data.services).sort(), [data.services]);
 
@@ -585,7 +755,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
         await action();
         refresh();
       } catch (e) {
-        setActionError(e instanceof Error ? e.message : String(e));
+        setActionError(humanizeError(e));
       } finally {
         setBusy(false);
       }
@@ -596,7 +766,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const handleRegister = useCallback(() => {
     const validationError = validateForm(form);
     if (validationError !== null) {
-      setActionError(validationError);
+      setActionError({ message: validationError });
       return;
     }
     const host = form.host.trim();
@@ -738,12 +908,12 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const grpcServices = useMemo(() => Object.keys(grpcHealth ?? {}).sort(), [grpcHealth]);
 
   // TCP chaos helpers
-  const tcpHosts = useMemo(() => Object.keys(tcpData?.hosts ?? {}).sort(), [tcpData?.hosts]);
+  const tcpHosts = useMemo(() => Object.keys(tcpData?.hosts ?? {}).sort(), [tcpData]);
 
   const tcpRemainingTtl = (host: string): number | undefined => {
     const atPoll = tcpData.ttlRemainingMillis?.[host];
     if (atPoll == null) return undefined;
-    return Math.max(0, atPoll - (now - polledAt));
+    return Math.max(0, atPoll - (now - tcpPolledAt));
   };
 
   const setTcpField = (field: keyof TcpFormState) => (e: ChangeEvent<HTMLInputElement>) =>
@@ -755,7 +925,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const handleRegisterTcp = useCallback(() => {
     const validationError = validateTcpForm(tcpForm);
     if (validationError !== null) {
-      setActionError(validationError);
+      setActionError({ message: validationError });
       return;
     }
     const host = tcpForm.host.trim();
@@ -768,12 +938,12 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   }, [connectionParams, tcpForm, runAction]);
 
   // gRPC fault injection chaos helpers
-  const grpcChaosServices = useMemo(() => Object.keys(grpcChaosData?.services ?? {}).sort(), [grpcChaosData?.services]);
+  const grpcChaosServices = useMemo(() => Object.keys(grpcChaosData?.services ?? {}).sort(), [grpcChaosData]);
 
   const grpcChaosRemainingTtl = (service: string): number | undefined => {
     const atPoll = grpcChaosData.ttlRemainingMillis?.[service];
     if (atPoll == null) return undefined;
-    return Math.max(0, atPoll - (now - polledAt));
+    return Math.max(0, atPoll - (now - grpcChaosPolledAt));
   };
 
   const setGrpcChaosField = (field: keyof GrpcChaosFormState) => (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -785,7 +955,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const handleRegisterGrpcChaos = useCallback(() => {
     const validationError = validateGrpcChaosForm(grpcChaosForm);
     if (validationError !== null) {
-      setActionError(validationError);
+      setActionError({ message: validationError });
       return;
     }
     const service = grpcChaosForm.service.trim();
@@ -797,6 +967,137 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     });
   }, [connectionParams, grpcChaosForm, runAction]);
 
+  // --- Chaos Experiment handlers ---
+
+  const addExpStage = useCallback(() => {
+    const id = stageIdCounter.current++;
+    setExpStages((prev) => [...prev, {
+      id, durationMs: '10000', host: '', errorStatus: '', errorProbability: '',
+      latencyMs: '', dropProbability: '',
+    }]);
+  }, []);
+
+  const removeExpStage = useCallback((index: number) => {
+    setExpStages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const setExpStageField = (index: number, field: string) =>
+    (e: ChangeEvent<HTMLInputElement>) =>
+      setExpStages((prev) =>
+        prev.map((s, i) => i === index ? { ...s, [field]: e.target.value } : s),
+      );
+
+  // Validate the editor rows and build an ExperimentDefinitionDTO, or set an
+  // action error and return null. Shared by Start Experiment and Save Profile.
+  const buildDefinitionFromEditor = useCallback((): ExperimentDefinitionDTO | null => {
+    if (!expName.trim()) {
+      setActionError({ message: 'Experiment name is required' });
+      return null;
+    }
+    if (expStages.length === 0) {
+      setActionError({ message: 'At least one stage is required' });
+      return null;
+    }
+    const stages: ExperimentStageDTO[] = [];
+    for (let i = 0; i < expStages.length; i++) {
+      const s = expStages[i]!;
+      const durationMillis = num(s.durationMs);
+      if (durationMillis == null || durationMillis <= 0) {
+        setActionError({ message: `Stage ${i + 1}: duration must be > 0` });
+        return null;
+      }
+      if (!s.host.trim()) {
+        setActionError({ message: `Stage ${i + 1}: host is required` });
+        return null;
+      }
+      const profile: HttpChaosProfileDTO = {};
+      const errorStatus = num(s.errorStatus);
+      if (errorStatus != null) {
+        profile.errorStatus = errorStatus;
+        const ep = num(s.errorProbability);
+        if (ep != null) profile.errorProbability = ep;
+      }
+      const latMs = num(s.latencyMs);
+      if (latMs != null) profile.latency = { timeUnit: 'MILLISECONDS', value: latMs };
+      const dp = num(s.dropProbability);
+      if (dp != null) profile.dropConnectionProbability = dp;
+      if (summarizeChaosProfile(profile).length === 0) {
+        setActionError({ message: `Stage ${i + 1}: set at least one fault (error, latency, or drop)` });
+        return null;
+      }
+      stages.push({ durationMillis, profiles: { [s.host.trim()]: profile } });
+    }
+    return { name: expName.trim(), loop: expLoop, stages };
+  }, [expName, expLoop, expStages]);
+
+  const handleStartExperiment = useCallback(() => {
+    const definition = buildDefinitionFromEditor();
+    if (!definition) return;
+    void runAction(async () => {
+      await startChaosExperiment(connectionParams, definition);
+    });
+  }, [connectionParams, buildDefinitionFromEditor, runAction]);
+
+  const handleStopExperiment = useCallback(() => {
+    void runAction(async () => {
+      await stopChaosExperiment(connectionParams);
+    });
+  }, [connectionParams, runAction]);
+
+  // ADV3: save the current editor definition as a named profile.
+  const handleSaveProfile = useCallback(() => {
+    const definition = buildDefinitionFromEditor();
+    if (!definition) return;
+    void runAction(async () => {
+      await saveChaosProfile(connectionParams, definition.name, definition);
+      refreshProfiles();
+    });
+  }, [connectionParams, buildDefinitionFromEditor, runAction, refreshProfiles]);
+
+  const handleApplyProfile = useCallback((name: string) => {
+    void runAction(async () => {
+      await applyChaosProfile(connectionParams, name);
+    });
+  }, [connectionParams, runAction]);
+
+  const handleDeleteProfile = useCallback((name: string) => {
+    void runAction(async () => {
+      await deleteChaosProfile(connectionParams, name);
+      refreshProfiles();
+    });
+  }, [connectionParams, runAction, refreshProfiles]);
+
+  // Load the running (or last-known) experiment definition into the editor so the
+  // user can tweak it and re-start. Reverses the editor -> DTO mapping in
+  // handleStartExperiment: one editor row per (stage, host) pair, each with a
+  // fresh id from the same counter addExpStage uses.
+  const loadExperimentIntoEditor = useCallback((definition: ExperimentDefinitionDTO) => {
+    setExpName(definition.name);
+    setExpLoop(!!definition.loop);
+    const rows = definition.stages.flatMap((stage) =>
+      Object.entries(stage.profiles).map(([host, profile]) => ({
+        id: stageIdCounter.current++,
+        durationMs: String(stage.durationMillis),
+        host,
+        errorStatus: profile.errorStatus != null ? String(profile.errorStatus) : '',
+        errorProbability: profile.errorProbability != null ? String(profile.errorProbability) : '',
+        latencyMs: profile.latency?.value != null ? String(profile.latency.value) : '',
+        dropProbability: profile.dropConnectionProbability != null ? String(profile.dropConnectionProbability) : '',
+      })),
+    );
+    // Keep at least one (empty) stage row so the editor never collapses to nothing.
+    setExpStages(rows.length > 0 ? rows : [{
+      id: stageIdCounter.current++, durationMs: '10000', host: '', errorStatus: '',
+      errorProbability: '', latencyMs: '', dropProbability: '',
+    }]);
+    setActionError(null);
+  }, []);
+
+  const isExperimentActive = experimentStatus?.status === 'running' || experimentStatus?.status === 'starting';
+
+  // Confirmation dialog for destructive clear-all actions
+  const [confirm, setConfirm] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
+
   // Real gRPC health overrides: a named service, or the default if it is no longer SERVING.
   // The GET always returns a "_default" SERVING entry, which is not an override on its own.
   const grpcHealthOverrides = useMemo(
@@ -807,7 +1108,22 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const grpcCombinedActiveCount = grpcHealthOverrides.length + grpcChaosServices.length;
 
   return (
-    <Box sx={{ flex: 1, overflow: 'auto', p: 1.5 }}>
+    <Box
+      sx={{
+        flex: 1,
+        overflow: 'auto',
+        p: 1.5,
+        // MUI's FormControlLabel defaults to a negative outer margin (-11px) which
+        // pulls switch/checkbox toggles past the container's left edge so they look
+        // cramped (e.g. "GraphQL errors", "Omit grpc-status", "Down", "Loop").
+        // Neutralise that overhang so the toggle has proper left spacing, and keep a
+        // clear gap between the indicator and its label.
+        '& .MuiFormControlLabel-labelPlacementEnd': { ml: 0 },
+        '& .MuiFormControlLabel-labelPlacementStart': { mr: 0 },
+        '& .MuiFormControlLabel-labelPlacementEnd .MuiFormControlLabel-label': { ml: 1 },
+        '& .MuiFormControlLabel-labelPlacementStart .MuiFormControlLabel-label': { mr: 1 },
+      }}
+    >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
           Service Chaos
@@ -821,18 +1137,87 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       </Box>
 
       {loadError && (
-        <Alert severity="error" sx={{ mb: 1.5 }} action={
-          <IconButton color="inherit" size="small" onClick={refresh} aria-label="Retry"><RefreshIcon fontSize="small" /></IconButton>
-        }>
-          <AlertTitle>Could not load service chaos</AlertTitle>
-          {loadError}
+        <Alert
+          severity={loadError.includes('404') || loadError.includes('Not Found') ? 'info' : 'error'}
+          sx={{ mb: 1.5 }}
+          action={
+            <IconButton color="inherit" size="small" onClick={refresh} aria-label="Retry"><RefreshIcon fontSize="small" /></IconButton>
+          }
+        >
+          <AlertTitle>
+            {loadError.includes('404') || loadError.includes('Not Found')
+              ? 'Service chaos not available'
+              : 'Could not load service chaos'}
+          </AlertTitle>
+          {loadError.includes('404') || loadError.includes('Not Found')
+            ? 'The connected server does not support service chaos. This feature requires a newer version of MockServer.'
+            : loadError}
         </Alert>
       )}
 
       {actionError && (
-        <Alert severity="error" sx={{ mb: 1.5 }} onClose={() => setActionError(null)}>
-          {actionError}
-        </Alert>
+        <HumanErrorAlert
+          error={actionError}
+          sx={{ mb: 1.5 }}
+          onClose={() => setActionError(null)}
+        />
+      )}
+
+      {/* Auto-halt controls (inline) */}
+      {autoHaltEnabled !== null && (
+        <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+              Auto-halt
+            </Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={autoHaltEnabled}
+                  onChange={(e) => {
+                    setAutoHaltEnabled(e.target.checked);
+                    void applyAutoHaltConfig({ chaosAutoHaltEnabled: e.target.checked });
+                  }}
+                />
+              }
+              label={<Typography variant="caption">{autoHaltEnabled ? 'Armed' : 'Off'}</Typography>}
+            />
+            <TextField
+              size="small"
+              label="Error threshold"
+              type="number"
+              value={autoHaltThreshold}
+              disabled={!autoHaltEnabled}
+              error={autoHaltThreshold.trim() !== '' && (isNaN(parseInt(autoHaltThreshold, 10)) || parseInt(autoHaltThreshold, 10) <= 0)}
+              helperText={autoHaltThreshold.trim() !== '' && (isNaN(parseInt(autoHaltThreshold, 10)) || parseInt(autoHaltThreshold, 10) <= 0) ? '> 0' : undefined}
+              onChange={(e) => setAutoHaltThreshold(e.target.value)}
+              onBlur={() => {
+                const v = parseInt(autoHaltThreshold, 10);
+                if (!isNaN(v) && v > 0) void applyAutoHaltConfig({ chaosAutoHaltErrorThreshold: v });
+              }}
+              sx={responsiveWidth(130)}
+            />
+            <TextField
+              size="small"
+              label="Window (ms)"
+              type="number"
+              value={autoHaltWindow}
+              disabled={!autoHaltEnabled}
+              error={autoHaltWindow.trim() !== '' && (isNaN(parseInt(autoHaltWindow, 10)) || parseInt(autoHaltWindow, 10) <= 0)}
+              helperText={autoHaltWindow.trim() !== '' && (isNaN(parseInt(autoHaltWindow, 10)) || parseInt(autoHaltWindow, 10) <= 0) ? '> 0' : undefined}
+              onChange={(e) => setAutoHaltWindow(e.target.value)}
+              onBlur={() => {
+                const v = parseInt(autoHaltWindow, 10);
+                if (!isNaN(v) && v > 0) void applyAutoHaltConfig({ chaosAutoHaltWindowMillis: v });
+              }}
+              sx={responsiveWidth(130)}
+            />
+            <Typography variant="caption" color="text.secondary">
+              Automatically halt chaos when errors exceed the threshold within the window.
+            </Typography>
+          </Box>
+        </Paper>
       )}
 
       {/* HTTP Service Chaos */}
@@ -855,7 +1240,12 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                 disabled={busy || hosts.length === 0}
                 onClick={(e) => {
                   e.stopPropagation();
-                  void runAction(() => clearServiceChaos(connectionParams));
+                  setConfirm({
+                    title: 'Clear all HTTP chaos?',
+                    message: `This removes chaos profiles for all ${hosts.length} registered host${hosts.length === 1 ? '' : 's'}. Live traffic will no longer be faulted. This cannot be undone.`,
+                    confirmLabel: 'Clear HTTP chaos',
+                    onConfirm: () => void runAction(() => clearServiceChaos(connectionParams)),
+                  });
                 }}
               >
                 Clear HTTP
@@ -877,58 +1267,62 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
             <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
               <Typography variant="caption" color="text.secondary">Register chaos for a host</Typography>
               {/* Row 1: host + core fault fields */}
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Host" placeholder="upstream.svc" value={form.host} onChange={setField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegister(); }} sx={{ minWidth: 180 }} />
-                <TextField size="small" label="Error status" placeholder="503" value={form.errorStatus} onChange={setField('errorStatus')} sx={{ width: 110 }} />
-                <TextField size="small" label="Error prob (0–1)" placeholder="0.5" value={form.errorProbability} onChange={setField('errorProbability')} sx={{ width: 100 }} />
-                <TextField size="small" label="Retry-After" placeholder="120" value={form.retryAfter} onChange={setField('retryAfter')} sx={{ width: 110 }} />
-                <TextField size="small" label="Drop prob (0–1)" placeholder="0.2" value={form.dropProbability} onChange={setField('dropProbability')} sx={{ width: 100 }} />
-                <TextField size="small" label="Latency ms" placeholder="250" value={form.latencyMs} onChange={setField('latencyMs')} sx={{ width: 100 }} />
-                <TextField size="small" label="TTL ms" placeholder="60000" value={form.ttlMs} onChange={setField('ttlMs')} sx={{ width: 110 }} />
+              <Box sx={{ ...CHAOS_GRID, mt: 0.75 }}>
+                <TextField size="small" label="Host" placeholder="upstream.svc" value={form.host} onChange={setField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegister(); }} fullWidth />
+                <TextField size="small" label="Error status" placeholder="503" value={form.errorStatus} onChange={setField('errorStatus')} fullWidth />
+                <TextField size="small" label="Error prob (0–1)" placeholder="0.5" value={form.errorProbability} onChange={setField('errorProbability')} fullWidth />
+                <TextField size="small" label="Retry-After" placeholder="120" value={form.retryAfter} onChange={setField('retryAfter')} fullWidth />
+                <TextField size="small" label="Drop prob (0–1)" placeholder="0.2" value={form.dropProbability} onChange={setField('dropProbability')} fullWidth />
+                <TextField size="small" label="Latency ms" placeholder="250" value={form.latencyMs} onChange={setField('latencyMs')} fullWidth />
+                <TextField size="small" label="TTL ms" placeholder="60000" value={form.ttlMs} onChange={setField('ttlMs')} fullWidth />
               </Box>
               {/* Row 2: body corruption + slow response */}
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-                <TextField size="small" label="Truncate body (0–1)" placeholder="0.5" value={form.truncateBodyAtFraction} onChange={setField('truncateBodyAtFraction')} sx={{ width: 130 }} />
-                <FormControlLabel
-                  control={<Switch size="small" checked={form.malformedBody} onChange={setFormToggle('malformedBody')} />}
-                  label="Malformed body"
-                />
-                <TextField size="small" label="Slow chunk bytes" placeholder="64" value={form.slowResponseChunkSize} onChange={setField('slowResponseChunkSize')} sx={{ width: 120 }} />
-                <TextField size="small" label="Slow chunk delay ms" placeholder="500" value={form.slowResponseChunkDelayMs} onChange={setField('slowResponseChunkDelayMs')} sx={{ width: 140 }} />
+              <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                <TextField size="small" label="Truncate body (0–1)" placeholder="0.5" value={form.truncateBodyAtFraction} onChange={setField('truncateBodyAtFraction')} fullWidth />
+                <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', pl: 1 }}>
+                  <FormControlLabel
+                    control={<Switch size="small" checked={form.malformedBody} onChange={setFormToggle('malformedBody')} />}
+                    label="Malformed body"
+                  />
+                </Box>
+                <TextField size="small" label="Slow chunk bytes" placeholder="64" value={form.slowResponseChunkSize} onChange={setField('slowResponseChunkSize')} fullWidth />
+                <TextField size="small" label="Slow chunk delay ms" placeholder="500" value={form.slowResponseChunkDelayMs} onChange={setField('slowResponseChunkDelayMs')} fullWidth />
               </Box>
               {/* Row 3: quota (rate limit) */}
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Quota name" placeholder="api-quota" value={form.quotaName} onChange={setField('quotaName')} sx={{ width: 140 }} />
-                <TextField size="small" label="Quota limit" placeholder="100" value={form.quotaLimit} onChange={setField('quotaLimit')} sx={{ width: 100 }} />
-                <TextField size="small" label="Quota window ms" placeholder="60000" value={form.quotaWindowMillis} onChange={setField('quotaWindowMillis')} sx={{ width: 130 }} />
-                <TextField size="small" label="Quota error status" placeholder="429" value={form.quotaErrorStatus} onChange={setField('quotaErrorStatus')} sx={{ width: 130 }} />
+              <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                <TextField size="small" label="Quota name" placeholder="api-quota" value={form.quotaName} onChange={setField('quotaName')} fullWidth />
+                <TextField size="small" label="Quota limit" placeholder="100" value={form.quotaLimit} onChange={setField('quotaLimit')} fullWidth />
+                <TextField size="small" label="Quota window ms" placeholder="60000" value={form.quotaWindowMillis} onChange={setField('quotaWindowMillis')} fullWidth />
+                <TextField size="small" label="Quota error status" placeholder="429" value={form.quotaErrorStatus} onChange={setField('quotaErrorStatus')} fullWidth />
               </Box>
               {/* Row 4: count/time windows + degradation + seed */}
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Seed" placeholder="42" value={form.seed} onChange={setField('seed')} sx={{ width: 90 }} />
-                <TextField size="small" label="Succeed first" placeholder="5" value={form.succeedFirst} onChange={setField('succeedFirst')} sx={{ width: 110 }} />
-                <TextField size="small" label="Fail count" placeholder="10" value={form.failRequestCount} onChange={setField('failRequestCount')} sx={{ width: 100 }} />
-                <TextField size="small" label="Outage after ms" placeholder="5000" value={form.outageAfterMillis} onChange={setField('outageAfterMillis')} sx={{ width: 120 }} />
-                <TextField size="small" label="Outage duration ms" placeholder="30000" value={form.outageDurationMillis} onChange={setField('outageDurationMillis')} sx={{ width: 140 }} />
-                <TextField size="small" label="Degradation ramp ms" placeholder="60000" value={form.degradationRampMillis} onChange={setField('degradationRampMillis')} sx={{ width: 150 }} />
+              <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                <TextField size="small" label="Seed" placeholder="42" value={form.seed} onChange={setField('seed')} fullWidth />
+                <TextField size="small" label="Succeed first" placeholder="5" value={form.succeedFirst} onChange={setField('succeedFirst')} fullWidth />
+                <TextField size="small" label="Fail count" placeholder="10" value={form.failRequestCount} onChange={setField('failRequestCount')} fullWidth />
+                <TextField size="small" label="Outage after ms" placeholder="5000" value={form.outageAfterMillis} onChange={setField('outageAfterMillis')} fullWidth />
+                <TextField size="small" label="Outage duration ms" placeholder="30000" value={form.outageDurationMillis} onChange={setField('outageDurationMillis')} fullWidth />
+                <TextField size="small" label="Degradation ramp ms" placeholder="60000" value={form.degradationRampMillis} onChange={setField('degradationRampMillis')} fullWidth />
               </Box>
-              {/* Row 5: GraphQL + register */}
-              <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+              {/* Row 5: GraphQL */}
+              <Box sx={{ ...CHAOS_GRID, mt: 0.5 }}>
                 <FormControlLabel
                   control={<Switch size="small" checked={form.graphqlErrors} onChange={setFormToggle('graphqlErrors')} />}
                   label="GraphQL errors"
                 />
                 {form.graphqlErrors && (
                   <>
-                    <TextField size="small" label="Error message" placeholder="Internal error" value={form.graphqlErrorMessage} onChange={setField('graphqlErrorMessage')} sx={{ width: 160 }} />
-                    <TextField size="small" label="Error code" placeholder="INTERNAL_ERROR" value={form.graphqlErrorCode} onChange={setField('graphqlErrorCode')} sx={{ width: 160 }} />
+                    <TextField size="small" label="Error message" placeholder="Internal error" value={form.graphqlErrorMessage} onChange={setField('graphqlErrorMessage')} fullWidth />
+                    <TextField size="small" label="Error code" placeholder="INTERNAL_ERROR" value={form.graphqlErrorCode} onChange={setField('graphqlErrorCode')} fullWidth />
                     <FormControlLabel
                       control={<Switch size="small" checked={form.graphqlNullifyData} onChange={setFormToggle('graphqlNullifyData')} />}
                       label="Nullify data"
                     />
                   </>
                 )}
-                <Button variant="contained" size="small" disabled={busy} onClick={handleRegister} sx={{ ml: 'auto', mt: 0.25 }}>
+              </Box>
+              <Box sx={{ display: 'flex', mt: 0.5 }}>
+                <Button variant="contained" size="small" disabled={busy} onClick={handleRegister} sx={{ ml: 'auto' }}>
                   Register
                 </Button>
               </Box>
@@ -947,8 +1341,10 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                   return (
                     <Box key={host}>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap' }}>
-                        <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 160 }}>{host}</Typography>
-                        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1 }}>
+                        <Tooltip title={host}>
+                          <Typography variant="body2" noWrap sx={{ fontWeight: 600, minWidth: 160, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{host}</Typography>
+                        </Tooltip>
+                        <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
                           {summarizeChaosProfile(data.services[host] ?? {}).map((part) => (
                             <Chip key={part} size="small" label={part} variant="outlined" />
                           ))}
@@ -984,55 +1380,59 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                       {isEditing && (
                         <Box sx={{ py: 0.75, pl: 2, bgcolor: 'action.hover', borderBottom: '1px solid', borderColor: 'divider' }}>
                           {/* Edit row 1: core fault fields */}
-                          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                            <TextField size="small" label="Error status" value={editForm.errorStatus} onChange={setEditField('errorStatus')} sx={{ width: 110 }} />
-                            <TextField size="small" label="Error prob (0–1)" value={editForm.errorProbability} onChange={setEditField('errorProbability')} sx={{ width: 100 }} />
-                            <TextField size="small" label="Retry-After" value={editForm.retryAfter} onChange={setEditField('retryAfter')} sx={{ width: 110 }} />
-                            <TextField size="small" label="Drop prob (0–1)" value={editForm.dropProbability} onChange={setEditField('dropProbability')} sx={{ width: 100 }} />
-                            <TextField size="small" label="Latency ms" value={editForm.latencyMs} onChange={setEditField('latencyMs')} sx={{ width: 100 }} />
+                          <Box sx={CHAOS_GRID}>
+                            <TextField size="small" label="Error status" value={editForm.errorStatus} onChange={setEditField('errorStatus')} fullWidth />
+                            <TextField size="small" label="Error prob (0–1)" value={editForm.errorProbability} onChange={setEditField('errorProbability')} fullWidth />
+                            <TextField size="small" label="Retry-After" value={editForm.retryAfter} onChange={setEditField('retryAfter')} fullWidth />
+                            <TextField size="small" label="Drop prob (0–1)" value={editForm.dropProbability} onChange={setEditField('dropProbability')} fullWidth />
+                            <TextField size="small" label="Latency ms" value={editForm.latencyMs} onChange={setEditField('latencyMs')} fullWidth />
                           </Box>
                           {/* Edit row 2: body corruption + slow response */}
-                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
-                            <TextField size="small" label="Truncate body (0–1)" value={editForm.truncateBodyAtFraction} onChange={setEditField('truncateBodyAtFraction')} sx={{ width: 130 }} />
-                            <FormControlLabel
-                              control={<Switch size="small" checked={editForm.malformedBody} onChange={setEditToggle('malformedBody')} />}
-                              label="Malformed body"
-                            />
-                            <TextField size="small" label="Slow chunk bytes" value={editForm.slowResponseChunkSize} onChange={setEditField('slowResponseChunkSize')} sx={{ width: 120 }} />
-                            <TextField size="small" label="Slow chunk delay ms" value={editForm.slowResponseChunkDelayMs} onChange={setEditField('slowResponseChunkDelayMs')} sx={{ width: 140 }} />
+                          <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                            <TextField size="small" label="Truncate body (0–1)" value={editForm.truncateBodyAtFraction} onChange={setEditField('truncateBodyAtFraction')} fullWidth />
+                            <Box sx={{ width: '100%', display: 'flex', alignItems: 'center', pl: 1 }}>
+                              <FormControlLabel
+                                control={<Switch size="small" checked={editForm.malformedBody} onChange={setEditToggle('malformedBody')} />}
+                                label="Malformed body"
+                              />
+                            </Box>
+                            <TextField size="small" label="Slow chunk bytes" value={editForm.slowResponseChunkSize} onChange={setEditField('slowResponseChunkSize')} fullWidth />
+                            <TextField size="small" label="Slow chunk delay ms" value={editForm.slowResponseChunkDelayMs} onChange={setEditField('slowResponseChunkDelayMs')} fullWidth />
                           </Box>
                           {/* Edit row 3: quota */}
-                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                            <TextField size="small" label="Quota name" value={editForm.quotaName} onChange={setEditField('quotaName')} sx={{ width: 140 }} />
-                            <TextField size="small" label="Quota limit" value={editForm.quotaLimit} onChange={setEditField('quotaLimit')} sx={{ width: 100 }} />
-                            <TextField size="small" label="Quota window ms" value={editForm.quotaWindowMillis} onChange={setEditField('quotaWindowMillis')} sx={{ width: 130 }} />
-                            <TextField size="small" label="Quota error status" value={editForm.quotaErrorStatus} onChange={setEditField('quotaErrorStatus')} sx={{ width: 130 }} />
+                          <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                            <TextField size="small" label="Quota name" value={editForm.quotaName} onChange={setEditField('quotaName')} fullWidth />
+                            <TextField size="small" label="Quota limit" value={editForm.quotaLimit} onChange={setEditField('quotaLimit')} fullWidth />
+                            <TextField size="small" label="Quota window ms" value={editForm.quotaWindowMillis} onChange={setEditField('quotaWindowMillis')} fullWidth />
+                            <TextField size="small" label="Quota error status" value={editForm.quotaErrorStatus} onChange={setEditField('quotaErrorStatus')} fullWidth />
                           </Box>
                           {/* Edit row 4: count/time windows + degradation + seed */}
-                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                            <TextField size="small" label="Seed" value={editForm.seed} onChange={setEditField('seed')} sx={{ width: 90 }} />
-                            <TextField size="small" label="Succeed first" value={editForm.succeedFirst} onChange={setEditField('succeedFirst')} sx={{ width: 110 }} />
-                            <TextField size="small" label="Fail count" value={editForm.failRequestCount} onChange={setEditField('failRequestCount')} sx={{ width: 100 }} />
-                            <TextField size="small" label="Outage after ms" value={editForm.outageAfterMillis} onChange={setEditField('outageAfterMillis')} sx={{ width: 120 }} />
-                            <TextField size="small" label="Outage duration ms" value={editForm.outageDurationMillis} onChange={setEditField('outageDurationMillis')} sx={{ width: 140 }} />
-                            <TextField size="small" label="Degradation ramp ms" value={editForm.degradationRampMillis} onChange={setEditField('degradationRampMillis')} sx={{ width: 150 }} />
+                          <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                            <TextField size="small" label="Seed" value={editForm.seed} onChange={setEditField('seed')} fullWidth />
+                            <TextField size="small" label="Succeed first" value={editForm.succeedFirst} onChange={setEditField('succeedFirst')} fullWidth />
+                            <TextField size="small" label="Fail count" value={editForm.failRequestCount} onChange={setEditField('failRequestCount')} fullWidth />
+                            <TextField size="small" label="Outage after ms" value={editForm.outageAfterMillis} onChange={setEditField('outageAfterMillis')} fullWidth />
+                            <TextField size="small" label="Outage duration ms" value={editForm.outageDurationMillis} onChange={setEditField('outageDurationMillis')} fullWidth />
+                            <TextField size="small" label="Degradation ramp ms" value={editForm.degradationRampMillis} onChange={setEditField('degradationRampMillis')} fullWidth />
                           </Box>
-                          {/* Edit row 5: GraphQL + apply/cancel */}
-                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {/* Edit row 5: GraphQL */}
+                          <Box sx={{ ...CHAOS_GRID, mt: 0.5 }}>
                             <FormControlLabel
                               control={<Switch size="small" checked={editForm.graphqlErrors} onChange={setEditToggle('graphqlErrors')} />}
                               label="GraphQL errors"
                             />
                             {editForm.graphqlErrors && (
                               <>
-                                <TextField size="small" label="Error message" value={editForm.graphqlErrorMessage} onChange={setEditField('graphqlErrorMessage')} sx={{ width: 160 }} />
-                                <TextField size="small" label="Error code" value={editForm.graphqlErrorCode} onChange={setEditField('graphqlErrorCode')} sx={{ width: 160 }} />
+                                <TextField size="small" label="Error message" value={editForm.graphqlErrorMessage} onChange={setEditField('graphqlErrorMessage')} fullWidth />
+                                <TextField size="small" label="Error code" value={editForm.graphqlErrorCode} onChange={setEditField('graphqlErrorCode')} fullWidth />
                                 <FormControlLabel
                                   control={<Switch size="small" checked={editForm.graphqlNullifyData} onChange={setEditToggle('graphqlNullifyData')} />}
                                   label="Nullify data"
                                 />
                               </>
                             )}
+                          </Box>
+                          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
                             <Button size="small" variant="contained" disabled={busy} onClick={handleApplyEdit}>Apply</Button>
                             <Button size="small" onClick={handleCancelEdit}>Cancel</Button>
                           </Box>
@@ -1067,13 +1467,20 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                 disabled={busy || grpcCombinedActiveCount === 0}
                 onClick={(e) => {
                   e.stopPropagation();
-                  // Clear both fault injection and health overrides so the section fully empties
-                  // (parity with the HTTP/TCP panels); otherwise the "active" badge stays non-zero.
-                  void runAction(async () => {
-                    await clearGrpcChaos(connectionParams);
-                    for (const svc of grpcHealthOverrides) {
-                      await resetGrpcHealth(connectionParams, svc === '_default' ? '' : svc);
-                    }
+                  setConfirm({
+                    title: 'Clear all gRPC chaos?',
+                    message: `This removes all gRPC fault injection profiles and health-status overrides (${grpcCombinedActiveCount} active). This cannot be undone.`,
+                    confirmLabel: 'Clear gRPC chaos',
+                    onConfirm: () => {
+                      // Clear both fault injection and health overrides so the section fully empties
+                      // (parity with the HTTP/TCP panels); otherwise the "active" badge stays non-zero.
+                      void runAction(async () => {
+                        await clearGrpcChaos(connectionParams);
+                        for (const svc of grpcHealthOverrides) {
+                          await resetGrpcHealth(connectionParams, svc === '_default' ? '' : svc);
+                        }
+                      });
+                    },
                   });
                 }}
               >
@@ -1160,7 +1567,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                                   size="small"
                                   label={grpcHealth[svc]}
                                   color={servingStatusColor(grpcHealth[svc]!)}
-                                  sx={{ height: 20, fontSize: '0.65rem' }}
+                                  sx={{ height: 20 }}
                                 />
                               </TableCell>
                               <TableCell align="right">
@@ -1213,40 +1620,40 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                   <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
                     <Typography variant="caption" color="text.secondary">Register gRPC chaos for a service</Typography>
                     {/* Row 1: core fields */}
-                    <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                      <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegisterGrpcChaos(); }} sx={{ minWidth: 200 }} />
+                    <Box sx={{ ...CHAOS_GRID, mt: 0.75 }}>
+                      <TextField size="small" label="Service" placeholder="my.grpc.Service" value={grpcChaosForm.service} onChange={setGrpcChaosField('service')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegisterGrpcChaos(); }} fullWidth />
                       <Select
                         size="small"
                         value={grpcChaosForm.errorStatusCode}
                         onChange={(e) => setGrpcChaosForm((prev) => ({ ...prev, errorStatusCode: e.target.value }))}
-                        sx={{ minWidth: 180 }}
+                        fullWidth
                       >
                         {GRPC_STATUS_CODES.map((code) => (
                           <MenuItem key={code} value={code}>{code}</MenuItem>
                         ))}
                       </Select>
-                      <TextField size="small" label="Error prob (0–1)" placeholder="0.5" value={grpcChaosForm.errorProbability} onChange={setGrpcChaosField('errorProbability')} sx={{ width: 100 }} />
-                      <TextField size="small" label="Error message" placeholder="service unavailable" value={grpcChaosForm.errorMessage} onChange={setGrpcChaosField('errorMessage')} sx={{ width: 160 }} />
-                      <TextField size="small" label="Latency ms" placeholder="200" value={grpcChaosForm.latencyMs} onChange={setGrpcChaosField('latencyMs')} sx={{ width: 100 }} />
-                      <TextField size="small" label="TTL ms" placeholder="60000" value={grpcChaosForm.ttlMs} onChange={setGrpcChaosField('ttlMs')} sx={{ width: 110 }} />
+                      <TextField size="small" label="Error prob (0–1)" placeholder="0.5" value={grpcChaosForm.errorProbability} onChange={setGrpcChaosField('errorProbability')} fullWidth />
+                      <TextField size="small" label="Error message" placeholder="service unavailable" value={grpcChaosForm.errorMessage} onChange={setGrpcChaosField('errorMessage')} fullWidth />
+                      <TextField size="small" label="Latency ms" placeholder="200" value={grpcChaosForm.latencyMs} onChange={setGrpcChaosField('latencyMs')} fullWidth />
+                      <TextField size="small" label="TTL ms" placeholder="60000" value={grpcChaosForm.ttlMs} onChange={setGrpcChaosField('ttlMs')} fullWidth />
                     </Box>
                     {/* Row 2: quota + count-window + seed */}
-                    <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                      <TextField size="small" label="Quota name" placeholder="rpc-quota" value={grpcChaosForm.quotaName} onChange={setGrpcChaosField('quotaName')} sx={{ width: 140 }} />
-                      <TextField size="small" label="Quota limit" placeholder="100" value={grpcChaosForm.quotaLimit} onChange={setGrpcChaosField('quotaLimit')} sx={{ width: 100 }} />
-                      <TextField size="small" label="Quota window ms" placeholder="60000" value={grpcChaosForm.quotaWindowMillis} onChange={setGrpcChaosField('quotaWindowMillis')} sx={{ width: 130 }} />
-                      <TextField size="small" label="Seed" placeholder="42" value={grpcChaosForm.seed} onChange={setGrpcChaosField('seed')} sx={{ width: 90 }} />
-                      <TextField size="small" label="Succeed first" placeholder="5" value={grpcChaosForm.succeedFirst} onChange={setGrpcChaosField('succeedFirst')} sx={{ width: 110 }} />
-                      <TextField size="small" label="Fail count" placeholder="10" value={grpcChaosForm.failRequestCount} onChange={setGrpcChaosField('failRequestCount')} sx={{ width: 100 }} />
+                    <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
+                      <TextField size="small" label="Quota name" placeholder="rpc-quota" value={grpcChaosForm.quotaName} onChange={setGrpcChaosField('quotaName')} fullWidth />
+                      <TextField size="small" label="Quota limit" placeholder="100" value={grpcChaosForm.quotaLimit} onChange={setGrpcChaosField('quotaLimit')} fullWidth />
+                      <TextField size="small" label="Quota window ms" placeholder="60000" value={grpcChaosForm.quotaWindowMillis} onChange={setGrpcChaosField('quotaWindowMillis')} fullWidth />
+                      <TextField size="small" label="Seed" placeholder="42" value={grpcChaosForm.seed} onChange={setGrpcChaosField('seed')} fullWidth />
+                      <TextField size="small" label="Succeed first" placeholder="5" value={grpcChaosForm.succeedFirst} onChange={setGrpcChaosField('succeedFirst')} fullWidth />
+                      <TextField size="small" label="Fail count" placeholder="10" value={grpcChaosForm.failRequestCount} onChange={setGrpcChaosField('failRequestCount')} fullWidth />
                     </Box>
                     {/* Row 3: streaming/trailer faults */}
-                    <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <Box sx={{ ...CHAOS_GRID_WIDE, mt: 0.5 }}>
                       <FormControlLabel control={<Switch size="small" checked={grpcChaosForm.omitGrpcStatus} onChange={setGrpcChaosToggle('omitGrpcStatus')} />} label="Omit grpc-status" />
                       <FormControlLabel control={<Switch size="small" checked={grpcChaosForm.corruptGrpcStatus} onChange={setGrpcChaosToggle('corruptGrpcStatus')} />} label="Corrupt grpc-status" />
-                      <TextField size="small" label="Abort after N msgs" placeholder="3" value={grpcChaosForm.abortAfterMessages} onChange={setGrpcChaosField('abortAfterMessages')} sx={{ width: 140 }} />
+                      <TextField size="small" label="Abort after N msgs" placeholder="3" value={grpcChaosForm.abortAfterMessages} onChange={setGrpcChaosField('abortAfterMessages')} fullWidth />
                     </Box>
-                    {/* Row 4: custom trailers textarea + register button */}
-                    <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    {/* Row 4: custom trailers textarea */}
+                    <Box sx={{ mt: 0.5 }}>
                       <TextField
                         size="small"
                         label="Custom trailers (key=value per line)"
@@ -1256,9 +1663,11 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                         multiline
                         minRows={2}
                         maxRows={4}
-                        sx={{ minWidth: 280, flex: 1 }}
+                        fullWidth
                       />
-                      <Button variant="contained" size="small" disabled={busy} onClick={handleRegisterGrpcChaos} sx={{ ml: 'auto', mt: 0.25 }}>
+                    </Box>
+                    <Box sx={{ display: 'flex', mt: 0.5 }}>
+                      <Button variant="contained" size="small" disabled={busy} onClick={handleRegisterGrpcChaos} sx={{ ml: 'auto' }}>
                         Register
                       </Button>
                     </Box>
@@ -1314,7 +1723,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       </Paper>
 
       {/* TCP-Layer Chaos */}
-      <Paper variant="outlined" sx={{ p: 1.25 }}>
+      <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
         <Box
           sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
           onClick={() => setTcpExpanded((v) => !v)}
@@ -1333,7 +1742,12 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                 disabled={busy || tcpHosts.length === 0}
                 onClick={(e) => {
                   e.stopPropagation();
-                  void runAction(() => clearTcpChaos(connectionParams));
+                  setConfirm({
+                    title: 'Clear all TCP chaos?',
+                    message: `This removes TCP chaos profiles for all ${tcpHosts.length} registered host${tcpHosts.length === 1 ? '' : 's'}. This cannot be undone.`,
+                    confirmLabel: 'Clear TCP chaos',
+                    onConfirm: () => void runAction(() => clearTcpChaos(connectionParams)),
+                  });
                 }}
               >
                 Clear TCP
@@ -1354,19 +1768,21 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
             {/* TCP Register form */}
             <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
               <Typography variant="caption" color="text.secondary">Register TCP chaos for a host</Typography>
-              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                <TextField size="small" label="Host" placeholder="upstream.svc" value={tcpForm.host} onChange={setTcpField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegisterTcp(); }} sx={{ minWidth: 160 }} />
-                <TextField size="small" label="Latency ms" placeholder="200" value={tcpForm.latencyMs} onChange={setTcpField('latencyMs')} sx={{ width: 100 }} />
-                <TextField size="small" label="Bandwidth B/s" placeholder="1024" value={tcpForm.bandwidthBytesPerSec} onChange={setTcpField('bandwidthBytesPerSec')} sx={{ width: 120 }} />
-                <TextField size="small" label="Slicer bytes" placeholder="64" value={tcpForm.slicerChunkSize} onChange={setTcpField('slicerChunkSize')} sx={{ width: 100 }} />
-                <TextField size="small" label="Limit bytes" placeholder="4096" value={tcpForm.limitDataBytes} onChange={setTcpField('limitDataBytes')} sx={{ width: 100 }} />
-                <TextField size="small" label="TTL ms" placeholder="60000" value={tcpForm.ttlMs} onChange={setTcpField('ttlMs')} sx={{ width: 100 }} />
+              <Box sx={{ ...CHAOS_GRID, mt: 0.75 }}>
+                <TextField size="small" label="Host" placeholder="upstream.svc" value={tcpForm.host} onChange={setTcpField('host')} onKeyDown={(e) => { if (e.key === 'Enter') handleRegisterTcp(); }} fullWidth />
+                <TextField size="small" label="Latency ms" placeholder="200" value={tcpForm.latencyMs} onChange={setTcpField('latencyMs')} fullWidth />
+                <TextField size="small" label="Bandwidth B/s" placeholder="1024" value={tcpForm.bandwidthBytesPerSec} onChange={setTcpField('bandwidthBytesPerSec')} fullWidth />
+                <TextField size="small" label="Slicer bytes" placeholder="64" value={tcpForm.slicerChunkSize} onChange={setTcpField('slicerChunkSize')} fullWidth />
+                <TextField size="small" label="Limit bytes" placeholder="4096" value={tcpForm.limitDataBytes} onChange={setTcpField('limitDataBytes')} fullWidth />
+                <TextField size="small" label="TTL ms" placeholder="60000" value={tcpForm.ttlMs} onChange={setTcpField('ttlMs')} fullWidth />
               </Box>
               <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
                 <FormControlLabel control={<Switch size="small" checked={tcpForm.down} onChange={setTcpToggle('down')} />} label="Down" />
                 <FormControlLabel control={<Switch size="small" checked={tcpForm.resetPeer} onChange={setTcpToggle('resetPeer')} />} label="Reset peer" />
                 <FormControlLabel control={<Switch size="small" checked={tcpForm.slowClose} onChange={setTcpToggle('slowClose')} />} label="Slow close" />
                 <FormControlLabel control={<Switch size="small" checked={tcpForm.timeout} onChange={setTcpToggle('timeout')} />} label="Timeout" />
+              </Box>
+              <Box sx={{ display: 'flex', mt: 0.5 }}>
                 <Button variant="contained" size="small" disabled={busy} onClick={handleRegisterTcp} sx={{ ml: 'auto' }}>
                   Register
                 </Button>
@@ -1384,8 +1800,10 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                   const ttl = tcpRemainingTtl(host);
                   return (
                     <Box key={host} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.75, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap' }}>
-                      <Typography variant="body2" sx={{ fontWeight: 600, minWidth: 160 }}>{host}</Typography>
-                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1 }}>
+                      <Tooltip title={host}>
+                        <Typography variant="body2" noWrap sx={{ fontWeight: 600, minWidth: 160, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{host}</Typography>
+                      </Tooltip>
+                      <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
                         {summarizeTcpChaosProfile(tcpData.hosts[host] ?? {}).map((part) => (
                           <Chip key={part} size="small" label={part} variant="outlined" />
                         ))}
@@ -1410,6 +1828,273 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                 })}
               </Box>
             )}
+          </Box>
+        </Collapse>
+      </Paper>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        title={confirm?.title ?? ''}
+        message={confirm?.message ?? ''}
+        confirmLabel={confirm?.confirmLabel ?? 'Confirm'}
+        onConfirm={() => confirm?.onConfirm()}
+        onClose={() => setConfirm(null)}
+      />
+
+      {/* Chaos Experiments */}
+      <Paper variant="outlined" sx={{ p: 1.25 }}>
+        <Box
+          sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
+          onClick={() => setExperimentsExpanded((v) => !v)}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            Experiments
+          </Typography>
+          <Chip
+            size="small"
+            label={isExperimentActive ? 'running' : experimentStatus?.status === 'halted_by_auto_halt' ? 'halted' : 'idle'}
+            color={isExperimentActive ? 'warning' : experimentStatus?.status === 'halted_by_auto_halt' ? 'error' : 'default'}
+            variant="outlined"
+          />
+          <Box sx={{ flex: 1 }} />
+          {isExperimentActive && (
+            <Button
+              size="small"
+              color="error"
+              startIcon={<StopIcon fontSize="small" />}
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleStopExperiment();
+              }}
+            >
+              Stop
+            </Button>
+          )}
+          <IconButton size="small" aria-label={experimentsExpanded ? 'Collapse experiments' : 'Expand experiments'}>
+            {experimentsExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          </IconButton>
+        </Box>
+        <Collapse in={experimentsExpanded} unmountOnExit>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Define a multi-stage chaos experiment: ordered stages that progress automatically,
+              each applying chaos profiles to upstream hosts for a specified duration.
+            </Typography>
+
+            {/* Live status when an experiment is active or recently terminated */}
+            {experimentStatus && experimentStatus.status !== 'none' && (
+              <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  Experiment Status
+                </Typography>
+                <Box sx={{ display: 'flex', gap: 2, mt: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {experimentStatus.name && (
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{experimentStatus.name}</Typography>
+                  )}
+                  <Chip
+                    size="small"
+                    label={experimentStatus.status.replace(/_/g, ' ')}
+                    color={
+                      experimentStatus.status === 'running' ? 'warning'
+                        : experimentStatus.status === 'completed' ? 'success'
+                          : experimentStatus.status === 'halted_by_auto_halt' ? 'error'
+                            : 'default'
+                    }
+                  />
+                  {experimentStatus.totalStages > 0 && (
+                    <Typography variant="body2" color="text.secondary">
+                      Stage {experimentStatus.currentStageIndex + 1}/{experimentStatus.totalStages}
+                    </Typography>
+                  )}
+                  {experimentStatus.loopIteration > 0 && (
+                    <Chip size="small" label={`loop ${experimentStatus.loopIteration}`} variant="outlined" />
+                  )}
+                  <Box sx={{ flex: 1 }} />
+                  {experimentStatus.experiment && (
+                    <Button
+                      size="small"
+                      startIcon={<EditIcon fontSize="small" />}
+                      onClick={() => loadExperimentIntoEditor(experimentStatus.experiment!)}
+                    >
+                      Edit &amp; restart
+                    </Button>
+                  )}
+                </Box>
+                {isExperimentActive && experimentStatus.totalStages > 0 && (
+                  <Box sx={{ mt: 1 }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        Stage elapsed: {formatDuration(experimentStatus.stageElapsedMillis)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Remaining: {formatDuration(experimentStatus.stageRemainingMillis)}
+                      </Typography>
+                    </Box>
+                    <LinearProgress
+                      variant="determinate"
+                      value={
+                        experimentStatus.stageElapsedMillis + experimentStatus.stageRemainingMillis > 0
+                          ? (experimentStatus.stageElapsedMillis / (experimentStatus.stageElapsedMillis + experimentStatus.stageRemainingMillis)) * 100
+                          : 0
+                      }
+                      sx={{ height: 6, borderRadius: 1 }}
+                    />
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                      Total elapsed: {formatDuration(experimentStatus.totalElapsedMillis)}
+                    </Typography>
+                  </Box>
+                )}
+                {/* Read-only view of the running experiment's stages */}
+                {experimentStatus.experiment && experimentStatus.experiment.stages.length > 0 && (
+                  <Box sx={{ mt: 1 }}>
+                    {experimentStatus.experiment.stages.map((stage, idx) => {
+                      const active = isExperimentActive && idx === experimentStatus.currentStageIndex;
+                      return (
+                        <Box
+                          key={idx}
+                          sx={{
+                            px: 0.75,
+                            py: 0.5,
+                            mt: idx === 0 ? 0 : 0.5,
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: active ? 'warning.main' : 'divider',
+                            bgcolor: active ? 'action.selected' : 'action.hover',
+                          }}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                            <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                              Stage {idx + 1}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              {formatDuration(stage.durationMillis)}
+                            </Typography>
+                            {active && <Chip size="small" color="warning" label="active" variant="outlined" />}
+                          </Box>
+                          {Object.entries(stage.profiles).map(([host, profile]) => (
+                            <Box key={host} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
+                              <Tooltip title={host}>
+                                <Typography variant="body2" noWrap sx={{ fontWeight: 600, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {host}
+                                </Typography>
+                              </Tooltip>
+                              <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                                {summarizeChaosProfile(profile).map((part) => (
+                                  <Chip key={part} size="small" label={part} variant="outlined" />
+                                ))}
+                              </Box>
+                            </Box>
+                          ))}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                )}
+              </Paper>
+            )}
+
+            {/* Stage editor */}
+            <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+              <Typography variant="caption" color="text.secondary">Define experiment</Typography>
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, flexWrap: 'wrap', alignItems: 'center' }}>
+                <TextField
+                  size="small"
+                  label="Experiment name"
+                  placeholder="latency-then-errors"
+                  value={expName}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setExpName(e.target.value)}
+                  sx={{ minWidth: 200 }}
+                />
+                <FormControlLabel
+                  control={<Switch size="small" checked={expLoop} onChange={(_e, checked) => setExpLoop(checked)} />}
+                  label="Loop"
+                />
+              </Box>
+
+              {expStages.map((stage, idx) => (
+                <Paper key={stage.id} variant="outlined" sx={{ px: 0.75, pt: 1, pb: 0.75, mt: 0.75, bgcolor: 'action.hover' }}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.25 }}>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                      Stage {idx + 1}
+                    </Typography>
+                    <Box sx={{ flex: 1 }} />
+                    {expStages.length > 1 && (
+                      <IconButton
+                        size="small"
+                        aria-label={`Remove stage ${idx + 1}`}
+                        onClick={() => removeExpStage(idx)}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                    <TextField size="small" label="Duration ms" placeholder="10000" value={stage.durationMs} onChange={setExpStageField(idx, 'durationMs')} sx={responsiveWidth(120)} />
+                    <TextField size="small" label="Host" placeholder="upstream.svc" value={stage.host} onChange={setExpStageField(idx, 'host')} sx={{ width: { xs: '100%', sm: 'auto' }, minWidth: { sm: 160 } }} />
+                    <TextField size="small" label="Error status" placeholder="503" value={stage.errorStatus} onChange={setExpStageField(idx, 'errorStatus')} sx={responsiveWidth(120)} />
+                    <TextField size="small" label="Error prob (0-1)" placeholder="1.0" value={stage.errorProbability} onChange={setExpStageField(idx, 'errorProbability')} sx={responsiveWidth(140)} />
+                    <TextField size="small" label="Latency ms" placeholder="500" value={stage.latencyMs} onChange={setExpStageField(idx, 'latencyMs')} sx={responsiveWidth(120)} />
+                    <TextField size="small" label="Drop prob (0-1)" placeholder="0.2" value={stage.dropProbability} onChange={setExpStageField(idx, 'dropProbability')} sx={responsiveWidth(140)} />
+                  </Box>
+                </Paper>
+              ))}
+
+              <Box sx={{ display: 'flex', gap: 1, mt: 0.75, justifyContent: 'flex-end' }}>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon fontSize="small" />}
+                  onClick={addExpStage}
+                >
+                  Add Stage
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={busy}
+                  onClick={handleSaveProfile}
+                >
+                  Save as Profile
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<PlayArrowIcon fontSize="small" />}
+                  disabled={busy}
+                  onClick={handleStartExperiment}
+                >
+                  Start Experiment
+                </Button>
+              </Box>
+
+              {/* ADV3: saved chaos profile library */}
+              <Box sx={{ mt: 1.5 }}>
+                <Typography variant="subtitle2" gutterBottom>
+                  Saved Profiles
+                </Typography>
+                {savedProfiles.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    No saved profiles. Use &quot;Save as Profile&quot; to store the current
+                    experiment definition under its name for one-click re-use.
+                  </Typography>
+                ) : (
+                  <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                    {savedProfiles.map((name) => (
+                      <Chip
+                        key={name}
+                        label={name}
+                        size="small"
+                        onClick={() => handleApplyProfile(name)}
+                        onDelete={() => handleDeleteProfile(name)}
+                        deleteIcon={<DeleteIcon fontSize="small" />}
+                        title={`Apply saved profile "${name}" (click) or delete (x)`}
+                        disabled={busy}
+                      />
+                    ))}
+                  </Box>
+                )}
+              </Box>
+            </Paper>
           </Box>
         </Collapse>
       </Paper>

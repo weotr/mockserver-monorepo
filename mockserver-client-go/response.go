@@ -27,6 +27,14 @@ type ConnectionOptions struct {
 	CloseSocketDelay            *Delay `json:"closeSocketDelay,omitempty"`
 }
 
+// FileBody represents a FILE response body with optional template processing.
+type FileBody struct {
+	Type         string `json:"type"`
+	FilePath     string `json:"filePath,omitempty"`
+	TemplateType string `json:"templateType,omitempty"`
+	ContentType  string `json:"contentType,omitempty"`
+}
+
 // ResponseBuilder provides a fluent API for building HttpResponse actions.
 type ResponseBuilder struct {
 	response HttpResponse
@@ -83,6 +91,20 @@ func (b *ResponseBuilder) JSONBody(jsonStr string) *ResponseBuilder {
 	return b
 }
 
+// BodyFromFile sets the response body to a FILE body with optional template type.
+// templateType may be empty, "VELOCITY", or "MUSTACHE".
+func (b *ResponseBuilder) BodyFromFile(filePath, templateType, contentType string) *ResponseBuilder {
+	fb := FileBody{Type: "FILE", FilePath: filePath}
+	if templateType != "" {
+		fb.TemplateType = templateType
+	}
+	if contentType != "" {
+		fb.ContentType = contentType
+	}
+	b.response.Body = fb
+	return b
+}
+
 // WithDelay sets the response delay.
 func (b *ResponseBuilder) WithDelay(timeUnit string, value int) *ResponseBuilder {
 	b.response.Delay = &Delay{TimeUnit: timeUnit, Value: value}
@@ -92,4 +114,12 @@ func (b *ResponseBuilder) WithDelay(timeUnit string, value int) *ResponseBuilder
 // Build returns the constructed HttpResponse.
 func (b *ResponseBuilder) Build() HttpResponse {
 	return b.response
+}
+
+// BuildPtr returns a pointer to the constructed HttpResponse. It is a
+// convenience for object-callback handlers (see Client.MockWithCallback) which
+// return a *HttpResponse.
+func (b *ResponseBuilder) BuildPtr() *HttpResponse {
+	resp := b.response
+	return &resp
 }

@@ -28,7 +28,8 @@ public class DashboardLogEntryDTOGroupSerializerTest {
     );
 
     private final long epochTime = 1593582678216L;
-    private final String timeStamp = StringUtils.substringAfter(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date(epochTime)), "-");
+    private final String fullTimeStamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS").format(new Date(epochTime));
+    private final String timeStamp = StringUtils.substringAfter(fullTimeStamp, "-");
     private DescriptionProcessor descriptionProcessor;
 
     private Description getDescription(LogEntry logEntry) {
@@ -62,6 +63,7 @@ public class DashboardLogEntryDTOGroupSerializerTest {
         assertThat(json, is("{" + NEW_LINE +
             "  \"key\" : \"" + logEntry.id() + "_log\"," + NEW_LINE +
             "  \"value\" : {" + NEW_LINE +
+            "    \"timestamp\" : \"" + fullTimeStamp + "\"," + NEW_LINE +
             "    \"description\" : \"" + timeStamp + " TEMPLATE_GENERATED \"," + NEW_LINE +
             "    \"style\" : {" + NEW_LINE +
             "      \"paddingBottom\" : \"4px\"," + NEW_LINE +
@@ -125,6 +127,7 @@ public class DashboardLogEntryDTOGroupSerializerTest {
             "  \"group\" : {\n" +
             "    \"key\" : \"" + logEntryForwardRequest.id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + fullTimeStamp + "\",\n" +
             "      \"description\" : \"" + timeStamp + " FORWARDED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -138,6 +141,7 @@ public class DashboardLogEntryDTOGroupSerializerTest {
             "  \"value\" : [ {\n" +
             "    \"key\" : \"" + logEntryForwardRequest.id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + fullTimeStamp + "\",\n" +
             "      \"description\" : \"" + timeStamp + " FORWARDED_REQUEST   \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +
@@ -167,6 +171,7 @@ public class DashboardLogEntryDTOGroupSerializerTest {
             "  }, {\n" +
             "    \"key\" : \"" + logEntryExpectationNotMatched.id() + "_log\",\n" +
             "    \"value\" : {\n" +
+            "      \"timestamp\" : \"" + fullTimeStamp + "\",\n" +
             "      \"description\" : \"" + timeStamp + " EXPECTATION_NOT_MATCHED \",\n" +
             "      \"style\" : {\n" +
             "        \"paddingBottom\" : \"4px\",\n" +

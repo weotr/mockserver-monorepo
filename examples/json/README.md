@@ -69,6 +69,7 @@ as the request body for MockServer's REST API (e.g. `PUT /mockserver/expectation
 | `match_by_not_matching_header_value.json` | Match by negated header value |
 | `match_by_not_matching_headers.json` | Match requests missing specific headers |
 | `match_by_header_key_matching.json` | Match using MATCHING_KEY key match style |
+| `match_by_accept_media_type.json` | Match by Accept content negotiation (`accept:<media-type>`) |
 
 ### matchers/cookies/
 
@@ -91,6 +92,13 @@ as the request body for MockServer's REST API (e.g. `PUT /mockserver/expectation
 | `match_by_json_schema.json` | Match body against a JSON Schema |
 | `match_by_json_path.json` | Match body by JsonPath expression |
 | `match_by_not_matching_json_path.json` | Match body NOT matching JsonPath |
+| `match_by_fuzzy_body.json` | Match a text body by fuzzy (edit-distance) similarity |
+
+### matchers/conditional/
+
+| File | Description |
+|------|-------------|
+| `match_by_conditional_request.json` | Match using an if/then/else request definition |
 
 ### response_action/
 
@@ -103,6 +111,9 @@ as the request body for MockServer's REST API (e.g. `PUT /mockserver/expectation
 | `response_suppress_headers.json` | Suppress Content-Length and Connection headers |
 | `response_override_headers.json` | Override Content-Length and keep-alive |
 | `response_close_socket.json` | Response then close the socket |
+| `weighted_response.json` | Pick one of several responses by weight (WEIGHTED mode) |
+| `switch_hit_count.json` | Switch responses after a hit count (SWITCH mode) |
+| `generate_from_schema.json` | Generate a response body from an inline JSON Schema |
 
 ### error_action/
 
@@ -146,6 +157,8 @@ as the request body for MockServer's REST API (e.g. `PUT /mockserver/expectation
 | `verify_at_most.json` | Verify request received at most twice |
 | `verify_sequence.json` | Verify a sequence of requests in order |
 | `verify_by_openapi.json` | Verify requests matching an OpenAPI operation |
+| `verify_all.json` | Per-verification body used by the client `verifyAll(...)` (soft verification) |
+| `verify_response.json` | Verify a received response by matching on `httpResponse` |
 
 ### forward_fallback/
 
@@ -200,3 +213,68 @@ as the request body for MockServer's REST API (e.g. `PUT /mockserver/expectation
 | `expectations_from_url.json` | Create expectations from an OpenAPI spec URL |
 | `expectation_for_operation.json` | Create expectation for a specific OpenAPI operation |
 | `expectation_from_classpath.json` | Create expectation from a classpath OpenAPI spec |
+
+### contract/
+
+| File | Description |
+|------|-------------|
+| `contract_test.json` | Request body for running an OpenAPI spec as a contract test against a live service (`PUT /mockserver/contractTest`) |
+
+### pact/
+
+| File | Description |
+|------|-------------|
+| `pact_with_provider_state.json` | A Pact v3 contract with a provider-state-gated interaction (`PUT /mockserver/pact/import`) |
+
+### scenario/
+
+| File | Description |
+|------|-------------|
+| `state_machine.json` | Array of expectations for a login state machine (`scenarioName` / `scenarioState` / `newScenarioState`) |
+| `sequential_cycling.json` | Single expectation with an `httpResponses` array in `SEQUENTIAL` mode |
+| `cross_protocol.json` | Array of two expectations using `crossProtocolScenarios` for cross-protocol state correlation |
+| `timed_transition.json` | Request body for `PUT /mockserver/scenario/DeployFlow` — set state with timed auto-transition |
+| `external_trigger.json` | Request body for `PUT /mockserver/scenario/HealthFlow/trigger` — force a state change externally |
+
+### load_scenario/
+
+**Load Scenario registry** request bodies — register a named, server-side traffic generator
+(`PUT /mockserver/loadScenario`), then start/stop it by name (starting requires the server
+started with `-Dmockserver.loadGenerationEnabled=true`).
+
+| File | Description |
+|------|-------------|
+| `checkout_load.json` | A realistic multi-stage `LoadScenario` (RATE ramp 5→50 req/s capped at 50 VUs, VU hold, PAUSE; two Velocity-templated steps) |
+| `demo_soak.json` | A simpler single-step soak `LoadScenario` (RATE ramp → VU hold → PAUSE) |
+| `start_single.json` | Start one scenario by name — `{"name":"checkout-load"}` for `PUT .../start` |
+| `start_names.json` | Start several scenarios — `{"names":[...]}` for `PUT .../start` |
+| `stop_all.json` | Stop all running scenarios — `{"all":true}` body for `PUT .../stop` |
+
+### llm/
+
+| File | Description |
+|------|-------------|
+| `chat_completion.json` | Mock an LLM chat/text completion (`httpLlmResponse`) |
+| `embeddings.json` | Mock an LLM embeddings response |
+| `rerank.json` | Mock an LLM rerank response |
+
+### mcp/
+
+| File | Description |
+|------|-------------|
+| `mcp_tools_list.json` | Answer the MCP `tools/list` discovery call |
+| `mcp_tool_call.json` | Answer an MCP `tools/call` invocation |
+
+### a2a/
+
+| File | Description |
+|------|-------------|
+| `a2a_agent_card.json` | Serve an A2A agent card from `/.well-known/agent.json` |
+| `a2a_task_response.json` | Answer an A2A `tasks/send` JSON-RPC call |
+
+### graphql/
+
+| File | Description |
+|------|-------------|
+| `match_by_query.json` | Match a GraphQL request by its query |
+| `match_by_operation_and_variables_schema.json` | Match by operation name and validate variables against a JSON Schema |

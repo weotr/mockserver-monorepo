@@ -3,6 +3,7 @@
 require 'base64'
 require 'json'
 require 'set'
+require 'erb'
 
 module MockServer
   # Explicit mapping from Ruby snake_case field names to the camelCase
@@ -30,6 +31,7 @@ module MockServer
     'response_callback'              => 'responseCallback',
     'drop_connection'                => 'dropConnection',
     'response_bytes'                 => 'responseBytes',
+    'stream_error'                   => 'streamError',
     'http_request'                   => 'httpRequest',
     'http_response'                  => 'httpResponse',
     'http_response_template'         => 'httpResponseTemplate',
@@ -44,6 +46,8 @@ module MockServer
     'http_sse_response'              => 'httpSseResponse',
     'http_websocket_response'        => 'httpWebSocketResponse',
     'template_type'                  => 'templateType',
+    'template_file'                  => 'templateFile',
+    'file_path'                      => 'filePath',
     'base64_bytes'                   => 'base64Bytes',
     'not_body'                       => 'not',
     'content_type'                   => 'contentType',
@@ -81,7 +85,17 @@ module MockServer
     'degradation_ramp_millis'        => 'degradationRampMillis',
     'http_class_callback'            => 'httpClassCallback',
     'http_object_callback'           => 'httpObjectCallback',
-    'failure_policy'                 => 'failurePolicy'
+    'failure_policy'                 => 'failurePolicy',
+    'http_responses'                 => 'httpResponses',
+    'response_mode'                  => 'responseMode',
+    'response_weights'               => 'responseWeights',
+    'switch_after'                   => 'switchAfter',
+    'cross_protocol_scenarios'       => 'crossProtocolScenarios',
+    'scenario_name'                  => 'scenarioName',
+    'scenario_state'                 => 'scenarioState',
+    'new_scenario_state'             => 'newScenarioState',
+    'match_pattern'                  => 'matchPattern',
+    'target_state'                   => 'targetState'
   }.freeze
 
   REVERSE_FIELD_MAP = FIELD_MAP.invert.freeze
@@ -89,7 +103,7 @@ module MockServer
   # Known Body type strings used to distinguish Body objects from plain hashes
   # during deserialization.
   BODY_TYPES = Set.new(%w[
-    STRING JSON REGEX XML BINARY JSON_SCHEMA JSON_PATH XPATH XML_SCHEMA JSON_RPC GRAPHQL
+    STRING JSON REGEX XML BINARY JSON_SCHEMA JSON_PATH XPATH XML_SCHEMA JSON_RPC GRAPHQL FILE
   ]).freeze
 
   # -------------------------------------------------------------------
@@ -114,6 +128,30 @@ module MockServer
   # @api private
   def self.strip_none(hash)
     hash.reject { |_k, v| v.nil? }
+  end
+
+  # @api private
+  # Coerce a class-callback value into an {HttpClassCallback}. Accepts:
+  #   * +nil+              -> +nil+
+  #   * a +String+         -> +HttpClassCallback.new(callback_class: <string>)+
+  #   * an HttpClassCallback -> returned unchanged
+  # Any other type raises a TypeError. This lets the Expectation setters and the
+  # fluent builder accept either a fully-qualified class-name String or a
+  # pre-built {HttpClassCallback} (carrying +delay+ / +primary+).
+  def self.coerce_class_callback(value)
+    return nil if value.nil?
+    return HttpClassCallback.new(callback_class: value) if value.is_a?(String)
+    return value if value.is_a?(HttpClassCallback)
+
+    raise TypeError,
+          "Expected a class-name String or HttpClassCallback, got #{value.class.name}"
+  end
+
+  # @api private
+  # Percent-encode a single URL path segment (e.g. a scenario name), encoding
+  # spaces as %20 (not +) so the segment is safe inside +/mockserver/scenario/{name}+.
+  def self.encode_path_segment(value)
+    ERB::Util.url_encode(value.to_s)
   end
 
   # @api private
@@ -183,6 +221,29 @@ module MockServer
         KeyToMultiValue.from_hash(item)
       end
     end
+  end
+
+  # @api private
+  # Unlike headers / query parameters, MockServer represents cookies as a
+  # single-value {name => value} object map, not a [{name, values}] array.
+  def self.serialize_cookies(items)
+    return nil if items.nil?
+
+    items.each_with_object({}) do |item, map|
+      map[item.name] = item.values.is_a?(Array) ? item.values.first : item.values
+    end
+  end
+
+  # @api private
+  def self.deserialize_cookies(data)
+    return nil if data.nil?
+
+    if data.is_a?(Hash)
+      return data.map { |k, v| KeyToMultiValue.new(name: k, values: v.is_a?(Array) ? v : [v]) }
+    end
+
+    # tolerate the legacy array form on read
+    deserialize_key_multi_values(data)
   end
 
   # -------------------------------------------------------------------
@@ -359,9 +420,11 @@ module MockServer
   end
 
   class Body
-    attr_accessor :type, :string, :json, :base64_bytes, :not_body, :content_type, :charset
+    attr_accessor :type, :string, :json, :base64_bytes, :not_body, :content_type, :charset,
+                  :file_path, :template_type
 
-    def initialize(type: nil, string: nil, json: nil, base64_bytes: nil, not_body: nil, content_type: nil, charset: nil)
+    def initialize(type: nil, string: nil, json: nil, base64_bytes: nil, not_body: nil,
+                   content_type: nil, charset: nil, file_path: nil, template_type: nil)
       @type = type
       @string = string
       @json = json
@@ -369,17 +432,21 @@ module MockServer
       @not_body = not_body
       @content_type = content_type
       @charset = charset
+      @file_path = file_path
+      @template_type = template_type
     end
 
     def to_h
       result = {}
-      result['type']        = @type        unless @type.nil?
-      result['string']      = @string      unless @string.nil?
-      result['json']        = @json        unless @json.nil?
-      result['base64Bytes'] = @base64_bytes unless @base64_bytes.nil?
-      result['not']         = @not_body    unless @not_body.nil?
-      result['contentType'] = @content_type unless @content_type.nil?
-      result['charset']     = @charset     unless @charset.nil?
+      result['type']         = @type          unless @type.nil?
+      result['string']       = @string        unless @string.nil?
+      result['json']         = @json          unless @json.nil?
+      result['base64Bytes']  = @base64_bytes  unless @base64_bytes.nil?
+      result['not']          = @not_body      unless @not_body.nil?
+      result['contentType']  = @content_type  unless @content_type.nil?
+      result['charset']      = @charset       unless @charset.nil?
+      result['filePath']     = @file_path     unless @file_path.nil?
+      result['templateType'] = @template_type unless @template_type.nil?
       result
     end
 
@@ -387,13 +454,15 @@ module MockServer
       return nil if data.nil?
 
       new(
-        type:         data['type'],
-        string:       data['string'],
-        json:         data['json'],
-        base64_bytes: data['base64Bytes'],
-        not_body:     data['not'],
-        content_type: data['contentType'],
-        charset:      data['charset']
+        type:          data['type'],
+        string:        data['string'],
+        json:          data['json'],
+        base64_bytes:  data['base64Bytes'],
+        not_body:      data['not'],
+        content_type:  data['contentType'],
+        charset:       data['charset'],
+        file_path:     data['filePath'],
+        template_type: data['templateType']
       )
     end
 
@@ -417,12 +486,21 @@ module MockServer
       new(type: 'XML', string: value)
     end
 
+    def self.file(file_path, content_type: nil, template_type: nil)
+      new(type: 'FILE', file_path: file_path, content_type: content_type, template_type: template_type)
+    end
+
     def self.json_rpc(method_name, params_schema: nil)
       JsonRpcBody.new(method_name: method_name, params_schema: params_schema)
     end
 
     def self.graphql(query, operation_name: nil, variables_schema: nil)
       GraphQLBody.new(query: query, operation_name: operation_name, variables_schema: variables_schema)
+    end
+
+    def with_template_type(template_type)
+      @template_type = template_type
+      self
     end
   end
 
@@ -544,7 +622,7 @@ module MockServer
         'path'                  => @path,
         'queryStringParameters' => MockServer.serialize_key_multi_values(@query_string_parameters),
         'headers'               => MockServer.serialize_key_multi_values(@headers),
-        'cookies'               => MockServer.serialize_key_multi_values(@cookies),
+        'cookies'               => MockServer.serialize_cookies(@cookies),
         'body'                  => MockServer.serialize_body(@body),
         'secure'                => @secure,
         'keepAlive'             => @keep_alive,
@@ -562,7 +640,7 @@ module MockServer
         path:                    data['path'],
         query_string_parameters: MockServer.deserialize_key_multi_values(data['queryStringParameters']),
         headers:                 MockServer.deserialize_key_multi_values(data['headers']),
-        cookies:                 MockServer.deserialize_key_multi_values(data['cookies']),
+        cookies:                 MockServer.deserialize_cookies(data['cookies']),
         body:                    MockServer.deserialize_body(data['body']),
         secure:                  data['secure'],
         keep_alive:              data['keepAlive'],
@@ -694,7 +772,7 @@ module MockServer
         'statusCode'       => @status_code,
         'reasonPhrase'     => @reason_phrase,
         'headers'          => MockServer.serialize_key_multi_values(@headers),
-        'cookies'          => MockServer.serialize_key_multi_values(@cookies),
+        'cookies'          => MockServer.serialize_cookies(@cookies),
         'body'             => MockServer.serialize_body(@body),
         'delay'            => @delay&.to_h,
         'connectionOptions' => @connection_options&.to_h,
@@ -709,7 +787,7 @@ module MockServer
         status_code:       data['statusCode'],
         reason_phrase:     data['reasonPhrase'],
         headers:           MockServer.deserialize_key_multi_values(data['headers']),
-        cookies:           MockServer.deserialize_key_multi_values(data['cookies']),
+        cookies:           MockServer.deserialize_cookies(data['cookies']),
         body:              MockServer.deserialize_body(data['body']),
         delay:             Delay.from_hash(data['delay']),
         connection_options: ConnectionOptions.from_hash(data['connectionOptions']),
@@ -809,11 +887,12 @@ module MockServer
   end
 
   class HttpTemplate
-    attr_accessor :template_type, :template, :delay, :primary
+    attr_accessor :template_type, :template, :template_file, :delay, :primary
 
-    def initialize(template_type: 'JAVASCRIPT', template: nil, delay: nil, primary: nil)
+    def initialize(template_type: 'JAVASCRIPT', template: nil, template_file: nil, delay: nil, primary: nil)
       @template_type = template_type
       @template = template
+      @template_file = template_file
       @delay = delay
       @primary = primary
     end
@@ -822,6 +901,7 @@ module MockServer
       MockServer.strip_none({
         'templateType' => @template_type,
         'template'     => @template,
+        'templateFile' => @template_file,
         'delay'        => @delay&.to_h,
         'primary'      => @primary
       })
@@ -833,13 +913,19 @@ module MockServer
       new(
         template_type: data.fetch('templateType', 'JAVASCRIPT'),
         template:      data['template'],
+        template_file: data['templateFile'],
         delay:         Delay.from_hash(data['delay']),
         primary:       data['primary']
       )
     end
 
-    def self.template(template_type, template = nil)
-      new(template_type: template_type, template: template)
+    def self.template(template_type, template = nil, template_file: nil)
+      new(template_type: template_type, template: template, template_file: template_file)
+    end
+
+    def with_template_file(template_file)
+      @template_file = template_file
+      self
     end
   end
 
@@ -907,11 +993,15 @@ module MockServer
   end
 
   class HttpError
-    attr_accessor :drop_connection, :response_bytes, :delay, :primary
+    # stream_error: reset the matched request stream with this error code (HTTP/2 RST_STREAM /
+    # HTTP/3 RESET_STREAM) instead of returning a response; HTTP/1.1 has no stream concept so this
+    # falls back to dropping the connection. Takes precedence over drop_connection when both are set.
+    attr_accessor :drop_connection, :response_bytes, :stream_error, :delay, :primary
 
-    def initialize(drop_connection: nil, response_bytes: nil, delay: nil, primary: nil)
+    def initialize(drop_connection: nil, response_bytes: nil, stream_error: nil, delay: nil, primary: nil)
       @drop_connection = drop_connection
       @response_bytes = response_bytes
+      @stream_error = stream_error
       @delay = delay
       @primary = primary
     end
@@ -920,6 +1010,7 @@ module MockServer
       MockServer.strip_none({
         'dropConnection' => @drop_connection,
         'responseBytes'  => @response_bytes,
+        'streamError'    => @stream_error,
         'delay'          => @delay&.to_h,
         'primary'        => @primary
       })
@@ -931,6 +1022,7 @@ module MockServer
       new(
         drop_connection: data['dropConnection'],
         response_bytes:  data['responseBytes'],
+        stream_error:    data['streamError'],
         delay:           Delay.from_hash(data['delay']),
         primary:         data['primary']
       )
@@ -1652,6 +1744,146 @@ module MockServer
     end
   end
 
+  # The strategy used to pick which of an expectation's +http_responses+ is
+  # returned for each matching request. Mirrors the core +ResponseMode+ enum.
+  module ResponseMode
+    SEQUENTIAL = 'SEQUENTIAL'
+    RANDOM     = 'RANDOM'
+    WEIGHTED   = 'WEIGHTED'
+    SWITCH     = 'SWITCH'
+  end
+
+  # The protocol event that advances a cross-protocol scenario. Mirrors the
+  # core +CrossProtocolTrigger+ enum.
+  module CrossProtocolTrigger
+    DNS_QUERY         = 'DNS_QUERY'
+    WEBSOCKET_CONNECT = 'WEBSOCKET_CONNECT'
+    GRPC_REQUEST      = 'GRPC_REQUEST'
+    HTTP_REQUEST      = 'HTTP_REQUEST'
+  end
+
+  # Describes a cross-protocol scenario correlation: when a protocol event
+  # matching +trigger+ (and optionally +match_pattern+) is observed, the named
+  # scenario +scenario_name+ is advanced to +target_state+.
+  class CrossProtocolScenario
+    attr_accessor :trigger, :match_pattern, :scenario_name, :target_state
+
+    def initialize(trigger: nil, match_pattern: nil, scenario_name: nil, target_state: nil)
+      @trigger = trigger
+      @match_pattern = match_pattern
+      @scenario_name = scenario_name
+      @target_state = target_state
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'trigger'      => @trigger,
+        'matchPattern' => @match_pattern,
+        'scenarioName' => @scenario_name,
+        'targetState'  => @target_state
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        trigger:       data['trigger'],
+        match_pattern: data['matchPattern'],
+        scenario_name: data['scenarioName'],
+        target_state:  data['targetState']
+      )
+    end
+  end
+
+  # The state of a single named scenario as reported by the server's scenario
+  # control plane. +scenario_name+ is the state-machine name and +current_state+
+  # is its current state (+nil+ if not yet set).
+  class ScenarioState
+    attr_accessor :scenario_name, :current_state, :next_state, :transition_after_ms
+
+    def initialize(scenario_name: nil, current_state: nil, next_state: nil, transition_after_ms: nil)
+      @scenario_name = scenario_name
+      @current_state = current_state
+      @next_state = next_state
+      @transition_after_ms = transition_after_ms
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'scenarioName'      => @scenario_name,
+        'currentState'      => @current_state,
+        'nextState'         => @next_state,
+        'transitionAfterMs' => @transition_after_ms
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        scenario_name:       data['scenarioName'],
+        current_state:       data['currentState'],
+        next_state:          data['nextState'],
+        transition_after_ms: data['transitionAfterMs']
+      )
+    end
+  end
+
+  # A handle to a single named stateful scenario on the server, wrapping the
+  # +/mockserver/scenario/{name}+ control-plane endpoints.
+  #
+  # Obtained via {Client#scenario}:
+  #   client.scenario('Deploy').set('Deploying', transition_after_ms: 5000, next_state: 'Deployed')
+  #   client.scenario('Deploy').trigger('Failed')
+  #   client.scenario('Deploy').state # => "Failed"
+  class ScenarioHandle
+    attr_reader :name
+
+    def initialize(client, name)
+      @client = client
+      @name = name
+    end
+
+    # GET the current state of this scenario (+nil+ if not yet set).
+    # @return [String, nil]
+    def state
+      result = @client.scenario_request('GET', scenario_path)
+      result['currentState']
+    end
+
+    # PUT to set this scenario's state, optionally scheduling a timed transition
+    # to +next_state+ after +transition_after_ms+ milliseconds.
+    #
+    # @param state [String] the state to set
+    # @param transition_after_ms [Integer, nil] delay before auto-transitioning
+    # @param next_state [String, nil] the state to auto-transition to
+    # @return [ScenarioState]
+    def set(state, transition_after_ms: nil, next_state: nil)
+      payload = { 'state' => state }
+      payload['transitionAfterMs'] = transition_after_ms unless transition_after_ms.nil?
+      payload['nextState'] = next_state unless next_state.nil?
+      result = @client.scenario_request('PUT', scenario_path, JSON.generate(payload))
+      ScenarioState.from_hash(result)
+    end
+
+    # PUT an external trigger advancing this scenario to +new_state+.
+    #
+    # @param new_state [String]
+    # @return [ScenarioState]
+    def trigger(new_state)
+      body = JSON.generate({ 'newState' => new_state })
+      result = @client.scenario_request('PUT', "#{scenario_path}/trigger", body)
+      ScenarioState.from_hash(result)
+    end
+
+    private
+
+    def scenario_path
+      "/mockserver/scenario/#{MockServer.encode_path_segment(@name)}"
+    end
+  end
+
   class Expectation
     attr_accessor :id, :priority, :percentage, :http_request, :http_response,
                   :http_response_template, :http_response_class_callback,
@@ -1663,7 +1895,8 @@ module MockServer
                   :grpc_stream_response, :grpc_bidi_response,
                   :binary_response, :dns_response,
                   :before_actions, :after_actions,
-                  :http_responses, :response_mode, :steps,
+                  :http_responses, :response_mode, :response_weights, :switch_after,
+                  :cross_protocol_scenarios, :steps,
                   :scenario_name, :scenario_state, :new_scenario_state
 
     def initialize(id: nil, priority: nil, percentage: nil, http_request: nil, http_response: nil,
@@ -1676,7 +1909,8 @@ module MockServer
                    grpc_stream_response: nil, grpc_bidi_response: nil,
                    binary_response: nil, dns_response: nil,
                    before_actions: nil, after_actions: nil,
-                   http_responses: nil, response_mode: nil, steps: nil,
+                   http_responses: nil, response_mode: nil, response_weights: nil,
+                   switch_after: nil, cross_protocol_scenarios: nil, steps: nil,
                    scenario_name: nil, scenario_state: nil, new_scenario_state: nil)
       @id = id
       @priority = priority
@@ -1684,11 +1918,14 @@ module MockServer
       @http_request = http_request
       @http_response = http_response
       @http_response_template = http_response_template
-      @http_response_class_callback = http_response_class_callback
+      # Route the two class-callback fields through their setters so a bare
+      # class-name String passed to the constructor is coerced to an
+      # HttpClassCallback (matching the setter / fluent-builder behaviour).
+      self.http_response_class_callback = http_response_class_callback
       @http_response_object_callback = http_response_object_callback
       @http_forward = http_forward
       @http_forward_template = http_forward_template
-      @http_forward_class_callback = http_forward_class_callback
+      self.http_forward_class_callback = http_forward_class_callback
       @http_forward_object_callback = http_forward_object_callback
       @http_override_forwarded_request = http_override_forwarded_request
       @http_error = http_error
@@ -1705,10 +1942,29 @@ module MockServer
       @after_actions = after_actions
       @http_responses = http_responses
       @response_mode = response_mode
+      @response_weights = response_weights
+      @switch_after = switch_after
+      @cross_protocol_scenarios = cross_protocol_scenarios
       @steps = steps
       @scenario_name = scenario_name
       @scenario_state = scenario_state
       @new_scenario_state = new_scenario_state
+    end
+
+    # Set the response class-callback action. Accepts either a fully-qualified
+    # class-name String (e.g. "com.example.MyResponseCallback") or a pre-built
+    # {HttpClassCallback} (carrying an optional +delay+ / +primary+). A String is
+    # wrapped into an {HttpClassCallback} so +to_h+ always emits
+    # +httpResponseClassCallback.callbackClass+.
+    def http_response_class_callback=(value)
+      @http_response_class_callback = MockServer.coerce_class_callback(value)
+    end
+
+    # Set the forward class-callback action. Accepts either a fully-qualified
+    # class-name String or a pre-built {HttpClassCallback}; serialized as
+    # +httpForwardClassCallback+.
+    def http_forward_class_callback=(value)
+      @http_forward_class_callback = MockServer.coerce_class_callback(value)
     end
 
     def to_h
@@ -1751,6 +2007,9 @@ module MockServer
         'afterActions'                 => after_actions_h,
         'httpResponses'                => @http_responses&.map(&:to_h),
         'responseMode'                 => @response_mode,
+        'responseWeights'              => @response_weights,
+        'switchAfter'                  => @switch_after,
+        'crossProtocolScenarios'       => @cross_protocol_scenarios&.map(&:to_h),
         'steps'                        => @steps&.map(&:to_h),
         'times'                        => @times&.to_h,
         'timeToLive'                   => @time_to_live&.to_h,
@@ -1803,6 +2062,9 @@ module MockServer
         after_actions:                   after_actions,
         http_responses:                  data['httpResponses']&.map { |r| HttpResponse.from_hash(r) },
         response_mode:                   data['responseMode'],
+        response_weights:                data['responseWeights'],
+        switch_after:                    data['switchAfter'],
+        cross_protocol_scenarios:        data['crossProtocolScenarios']&.map { |c| CrossProtocolScenario.from_hash(c) },
         steps:                           data['steps']&.map { |s| ExpectationStep.from_hash(s) },
         times:                           Times.from_hash(data['times']),
         time_to_live:                    TimeToLive.from_hash(data['timeToLive']),
@@ -1910,12 +2172,13 @@ module MockServer
   end
 
   class Verification
-    attr_accessor :http_request, :expectation_id, :times,
+    attr_accessor :http_request, :http_response, :expectation_id, :times,
                   :maximum_number_of_request_to_return_in_verification_failure
 
-    def initialize(http_request: nil, expectation_id: nil, times: nil,
+    def initialize(http_request: nil, http_response: nil, expectation_id: nil, times: nil,
                    maximum_number_of_request_to_return_in_verification_failure: nil)
       @http_request = http_request
+      @http_response = http_response
       @expectation_id = expectation_id
       @times = times
       @maximum_number_of_request_to_return_in_verification_failure = maximum_number_of_request_to_return_in_verification_failure
@@ -1924,6 +2187,7 @@ module MockServer
     def to_h
       MockServer.strip_none({
         'httpRequest'    => @http_request&.to_h,
+        'httpResponse'   => @http_response&.to_h,
         'expectationId'  => @expectation_id&.to_h,
         'times'          => @times&.to_h,
         'maximumNumberOfRequestToReturnInVerificationFailure' => @maximum_number_of_request_to_return_in_verification_failure
@@ -1935,6 +2199,7 @@ module MockServer
 
       new(
         http_request:    HttpRequest.from_hash(data['httpRequest']),
+        http_response:   HttpResponse.from_hash(data['httpResponse']),
         expectation_id:  ExpectationId.from_hash(data['expectationId']),
         times:           VerificationTimes.from_hash(data['times']),
         maximum_number_of_request_to_return_in_verification_failure: data['maximumNumberOfRequestToReturnInVerificationFailure']
@@ -1943,16 +2208,18 @@ module MockServer
   end
 
   class VerificationSequence
-    attr_accessor :http_requests, :expectation_ids
+    attr_accessor :http_requests, :http_responses, :expectation_ids
 
-    def initialize(http_requests: nil, expectation_ids: nil)
+    def initialize(http_requests: nil, http_responses: nil, expectation_ids: nil)
       @http_requests = http_requests
+      @http_responses = http_responses
       @expectation_ids = expectation_ids
     end
 
     def to_h
       MockServer.strip_none({
         'httpRequests'   => @http_requests&.map(&:to_h),
+        'httpResponses'  => @http_responses&.map(&:to_h),
         'expectationIds' => @expectation_ids&.map(&:to_h)
       })
     end
@@ -1961,9 +2228,11 @@ module MockServer
       return nil if data.nil?
 
       http_requests_data = data['httpRequests']
+      http_responses_data = data['httpResponses']
       expectation_ids_data = data['expectationIds']
       new(
-        http_requests:  http_requests_data&.map { |r| HttpRequest.from_hash(r) },
+        http_requests:   http_requests_data&.map { |r| HttpRequest.from_hash(r) },
+        http_responses:  http_responses_data&.map { |r| HttpResponse.from_hash(r) },
         expectation_ids: expectation_ids_data&.map { |e| ExpectationId.from_hash(e) }
       )
     end
@@ -2014,6 +2283,188 @@ module MockServer
         id_field:     data.fetch('idField', 'id'),
         id_strategy:  data.fetch('idStrategy', 'AUTO_INCREMENT'),
         initial_data: data['initialData']
+      )
+    end
+  end
+
+  # One stage of a {LoadProfile}, run in sequence. Each stage holds or ramps a
+  # setpoint for +duration_millis+:
+  #
+  # * +VU+ (closed model) - hold +vus+ virtual users, or ramp +start_vus+ to
+  #   +end_vus+ along +curve+.
+  # * +RATE+ (open model) - hold +rate+ iterations/second, or ramp +start_rate+
+  #   to +end_rate+ along +curve+, optionally capping the auto-scaling
+  #   virtual-user pool at +max_vus+.
+  # * +PAUSE+ - drive no load for +duration_millis+.
+  #
+  # Prefer the {.vu}, {.rate} and {.pause} factories, which emit only the fields
+  # relevant to the stage type and mode.
+  class LoadStage
+    attr_accessor :type, :duration_millis, :curve, :vus, :start_vus, :end_vus,
+                  :rate, :start_rate, :end_rate, :max_vus
+
+    def initialize(type:, duration_millis:, curve: nil, vus: nil, start_vus: nil,
+                   end_vus: nil, rate: nil, start_rate: nil, end_rate: nil, max_vus: nil)
+      @type = type
+      @duration_millis = duration_millis
+      @curve = curve
+      @vus = vus
+      @start_vus = start_vus
+      @end_vus = end_vus
+      @rate = rate
+      @start_rate = start_rate
+      @end_rate = end_rate
+      @max_vus = max_vus
+    end
+
+    # A +VU+ (closed-model) stage - hold +vus+ or ramp +start_vus+ to +end_vus+.
+    def self.vu(duration_millis, vus: nil, start_vus: nil, end_vus: nil, curve: nil)
+      new(type: 'VU', duration_millis: duration_millis, vus: vus,
+          start_vus: start_vus, end_vus: end_vus, curve: curve)
+    end
+
+    # A +RATE+ (open-model) stage - hold +rate+ or ramp +start_rate+ to
+    # +end_rate+ (iterations/second).
+    def self.rate(duration_millis, rate: nil, start_rate: nil, end_rate: nil, max_vus: nil, curve: nil)
+      new(type: 'RATE', duration_millis: duration_millis, rate: rate,
+          start_rate: start_rate, end_rate: end_rate, max_vus: max_vus, curve: curve)
+    end
+
+    # A +PAUSE+ stage - drive no load for +duration_millis+.
+    def self.pause(duration_millis)
+      new(type: 'PAUSE', duration_millis: duration_millis)
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'type'           => @type,
+        'durationMillis' => @duration_millis,
+        'curve'          => @curve,
+        'vus'            => @vus,
+        'startVus'       => @start_vus,
+        'endVus'         => @end_vus,
+        'rate'           => @rate,
+        'startRate'      => @start_rate,
+        'endRate'        => @end_rate,
+        'maxVus'         => @max_vus
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        type:            data['type'],
+        duration_millis: data['durationMillis'],
+        curve:           data['curve'],
+        vus:             data['vus'],
+        start_vus:       data['startVus'],
+        end_vus:         data['endVus'],
+        rate:            data['rate'],
+        start_rate:      data['startRate'],
+        end_rate:        data['endRate'],
+        max_vus:         data['maxVus']
+      )
+    end
+  end
+
+  # The traffic-shaping profile of a load scenario: an ordered list of {LoadStage}
+  # objects run in sequence, each holding or ramping a setpoint (virtual users, an
+  # arrival rate, or a pause) for its duration. The total run length is the sum of
+  # the stage durations.
+  class LoadProfile
+    attr_accessor :stages
+
+    def initialize(stages: [])
+      @stages = stages || []
+    end
+
+    def to_h
+      { 'stages' => @stages.map(&:to_h) }
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      stages_data = data['stages'] || []
+      new(stages: stages_data.map { |s| LoadStage.from_hash(s) })
+    end
+  end
+
+  # A single step within a load scenario. Each step fires +request+ (an HttpRequest)
+  # against the target, optionally pausing for +think_time+ (a Delay) afterwards.
+  class LoadStep
+    attr_accessor :name, :labels, :think_time, :request
+
+    def initialize(request:, name: nil, labels: nil, think_time: nil)
+      @request = request
+      @name = name
+      @labels = labels
+      @think_time = think_time
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'name'      => @name,
+        'labels'    => @labels,
+        'thinkTime' => @think_time&.to_h,
+        'request'   => @request&.to_h
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        name:       data['name'],
+        labels:     data['labels'],
+        think_time: Delay.from_hash(data['thinkTime']),
+        request:    HttpRequest.from_hash(data['request'])
+      )
+    end
+  end
+
+  # A load-injection scenario: a named set of +steps+ driven by a traffic +profile+.
+  # +template_type+ selects the templating engine (+VELOCITY+ or +MUSTACHE+) used to
+  # render step requests; +max_requests+ caps the total requests issued.
+  class LoadScenario
+    attr_accessor :name, :template_type, :labels, :max_requests, :start_delay_millis, :profile, :steps
+
+    def initialize(name:, profile:, steps:, template_type: nil, labels: nil, max_requests: nil,
+                   start_delay_millis: nil)
+      @name = name
+      @profile = profile
+      @steps = steps
+      @template_type = template_type
+      @labels = labels
+      @max_requests = max_requests
+      @start_delay_millis = start_delay_millis
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'name'             => @name,
+        'templateType'     => @template_type,
+        'labels'           => @labels,
+        'maxRequests'      => @max_requests,
+        'startDelayMillis' => @start_delay_millis,
+        'profile'          => @profile&.to_h,
+        'steps'            => @steps&.map(&:to_h)
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      steps_data = data['steps']
+      new(
+        name:               data['name'],
+        template_type:      data['templateType'],
+        labels:             data['labels'],
+        max_requests:       data['maxRequests'],
+        start_delay_millis: data['startDelayMillis'],
+        profile:            LoadProfile.from_hash(data['profile']),
+        steps:              steps_data ? steps_data.map { |s| LoadStep.from_hash(s) } : nil
       )
     end
   end

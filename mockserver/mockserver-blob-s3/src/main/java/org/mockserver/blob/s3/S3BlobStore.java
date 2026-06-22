@@ -115,10 +115,16 @@ public class S3BlobStore implements BlobStore {
         ListObjectsV2Response response;
         do {
             response = s3Client.listObjectsV2(request);
-            keys.addAll(response.contents().stream()
-                .map(S3Object::key)
-                .map(this::fromS3Key)
-                .collect(Collectors.toList()));
+            // The AWS SDK can return a null contents() list when no objects
+            // match the prefix; guard against it so listing an empty/missing
+            // prefix yields an empty result instead of throwing an NPE
+            // (consistent with the GCS and Azure blob stores).
+            if (response.contents() != null) {
+                keys.addAll(response.contents().stream()
+                    .map(S3Object::key)
+                    .map(this::fromS3Key)
+                    .collect(Collectors.toList()));
+            }
 
             request = request.toBuilder()
                 .continuationToken(response.nextContinuationToken())

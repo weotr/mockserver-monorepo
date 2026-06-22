@@ -14,12 +14,16 @@ import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.fail;
+import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.log.model.LogEntry.LogMessageType.EXPECTATION_RESPONSE;
 import static org.mockserver.log.model.LogEntry.LogMessageType.RECEIVED_REQUEST;
 import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
 
 /**
  * @author jamesdbloom
@@ -32,6 +36,9 @@ public class MockServerEventLogRequestLogEntryVerificationSequenceTest {
 
     @Before
     public void setupTestFixture() {
+        // the exact-match (is(...)) assertions below expect the message WITHOUT a closest-match diff,
+        // so keep detailed failures off by default; the diff-specific tests opt in explicitly
+        configuration.detailedVerificationFailures(false);
         mockServerEventLog = new MockServerEventLog(configuration, new MockServerLogger(configuration, MockServerLogger.class), scheduler, true);
     }
 
@@ -96,7 +103,7 @@ public class MockServerEventLogRequestLogEntryVerificationSequenceTest {
     }
 
     @Test
-    public void shouldPassVerificationSequenceWithNoRequest() {
+    public void shouldFailVerificationSequenceWithNoRequest() {
         // when
         mockServerEventLog.add(
             new LogEntry()
@@ -124,14 +131,14 @@ public class MockServerEventLogRequestLogEntryVerificationSequenceTest {
                 .setType(RECEIVED_REQUEST)
         );
 
-        // then
+        // then -- an entirely-empty sequence (no expectationIds, requests or responses) is rejected, not vacuously passed
         assertThat(verify(
                 new VerificationSequence()
                     .withRequests(
 
                     )
             ),
-            is(""));
+            is("No expectations, requests or responses specified in verification sequence"));
     }
 
     @Test
@@ -1064,6 +1071,149 @@ public class MockServerEventLogRequestLogEntryVerificationSequenceTest {
                 "}, {" + NEW_LINE +
                 "  \"path\" : \"four\"" + NEW_LINE +
                 "} ]>"));
+    }
+
+    @Test
+    public void shouldIncludeClosestMatchDiffInSequenceFailureWhenEnabled() {
+        // given - detailed failures on
+        configuration.detailedVerificationFailures(true);
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request().withMethod("POST").withPath("some_path"))
+                .setType(RECEIVED_REQUEST)
+        );
+
+        // when - the (only) sequence step does not match the recorded request
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(
+                    request().withMethod("GET").withPath("some_other_path")
+                )
+        );
+
+        // then - the failure carries a field-level closest-match diff for the failing step
+        assertThat(result, containsString("Request sequence not found"));
+        assertThat(result, containsString("closest match diff:"));
+        assertThat(result, containsString("method:"));
+    }
+
+    @Test
+    public void shouldIncludeClosestMatchDiffForTheSpecificFailingStep() {
+        // given - detailed failures on; first step will match, second step will not
+        configuration.detailedVerificationFailures(true);
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request().withMethod("GET").withPath("first"))
+                .setType(RECEIVED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request().withMethod("GET").withPath("second_actual"))
+                .setType(RECEIVED_REQUEST)
+        );
+
+        // when - step one matches "first"; step two ("second_expected") finds no later match
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(
+                    request().withMethod("GET").withPath("first"),
+                    request().withMethod("GET").withPath("second_expected")
+                )
+        );
+
+        // then - the diff is for the failing step's closest actual request (path differs)
+        assertThat(result, containsString("Request sequence not found"));
+        assertThat(result, containsString("closest match diff:"));
+        assertThat(result, containsString("path:"));
+    }
+
+    @Test
+    public void shouldNotIncludeClosestMatchDiffInSequenceFailureWhenDisabled() {
+        // given - detailed failures off
+        configuration.detailedVerificationFailures(false);
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request().withMethod("POST").withPath("some_path"))
+                .setType(RECEIVED_REQUEST)
+        );
+
+        // when
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(
+                    request().withMethod("GET").withPath("some_other_path")
+                )
+        );
+
+        // then - no diff appended; back-compat message preserved
+        assertThat(result, containsString("Request sequence not found"));
+        assertThat(result, not(containsString("closest match diff:")));
+    }
+
+    @Test
+    public void shouldNotIncludeClosestMatchDiffWhenNoRequestsLogged() {
+        // given - detailed failures on but nothing recorded
+        configuration.detailedVerificationFailures(true);
+
+        // when
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(
+                    request().withMethod("GET").withPath("some_path")
+                )
+        );
+
+        // then - nothing to diff against, so no diff appended
+        assertThat(result, containsString("Request sequence not found"));
+        assertThat(result, not(containsString("closest match diff:")));
+    }
+
+    @Test
+    public void shouldIncludeClosestResponseDiffInResponseSequenceFailureWhenEnabled() {
+        // given - detailed failures on; one recorded request-response pair with a 200 response
+        configuration.detailedVerificationFailures(true);
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request().withPath("some_path"))
+                .setHttpResponse(response().withStatusCode(200))
+                .setType(EXPECTATION_RESPONSE)
+        );
+
+        // when - verifying a response sequence expecting a 404 (recorded is 200)
+        String result = verify(
+            new VerificationSequence()
+                .withResponses(
+                    response().withStatusCode(404)
+                )
+        );
+
+        // then - the failure carries a field-level closest-response diff for the failing step
+        assertThat(result, containsString("Response sequence not found"));
+        assertThat(result, containsString("closest match diff:"));
+    }
+
+    @Test
+    public void shouldNotIncludeClosestResponseDiffInResponseSequenceFailureWhenDisabled() {
+        // given - detailed failures off
+        configuration.detailedVerificationFailures(false);
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request().withPath("some_path"))
+                .setHttpResponse(response().withStatusCode(200))
+                .setType(EXPECTATION_RESPONSE)
+        );
+
+        // when
+        String result = verify(
+            new VerificationSequence()
+                .withResponses(
+                    response().withStatusCode(404)
+                )
+        );
+
+        // then - no diff appended; back-compat message preserved
+        assertThat(result, containsString("Response sequence not found"));
+        assertThat(result, not(containsString("closest match diff:")));
     }
 
 }

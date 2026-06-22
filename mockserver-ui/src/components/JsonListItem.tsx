@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo } from 'react';
+import { Fragment, memo, useDeferredValue, useState, useMemo } from 'react';
 import type React from 'react';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -8,11 +8,15 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import BoltIcon from '@mui/icons-material/Bolt';
+import EditIcon from '@mui/icons-material/Edit';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlined';
 import type { JsonListItem as JsonListItemType } from '../types';
 import type { ConversationPredicates } from '../lib/llmTraffic';
 import JsonViewer from './JsonViewer';
 import DescriptionDisplay from './DescriptionDisplay';
 import PredicatePills from './PredicatePills';
+import { monospaceFontFamily, transitions } from '../theme';
 
 interface JsonListItemProps {
   item: JsonListItemType;
@@ -24,17 +28,38 @@ interface JsonListItemProps {
    * `turnIndex` predicate (e.g. matches via `containsToolResultFor`).
    */
   turnPosition?: { position: number; total: number };
+  /**
+   * Controlled expand state, lifted to the panel so it survives the row being
+   * unmounted while scrolled out of a virtualized list. When omitted the row
+   * falls back to its own internal state (standalone use / tests).
+   */
+  expanded?: boolean;
+  onToggleExpand?: (key: string) => void;
+  /**
+   * When provided, an "Edit" icon button is rendered (revealed on row hover)
+   * that hands this expectation off to the Composer. Only wired up by the
+   * Active Expectations panel; omitted for Received / Proxied request rows.
+   */
+  onEdit?: (item: JsonListItemType) => void;
+  /**
+   * When provided, a "Duplicate" icon button is rendered (revealed on row
+   * hover) that loads a COPY of this expectation into the Composer with its id
+   * stripped, so saving creates a brand-new expectation. Only wired up by the
+   * Active Expectations panel.
+   */
+  onDuplicate?: (item: JsonListItemType) => void;
+  /**
+   * When provided, a "Delete" icon button is rendered (revealed on row hover)
+   * that removes this single expectation. Only wired up by the Active
+   * Expectations panel.
+   */
+  onDelete?: (item: JsonListItemType) => void;
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-  ANTHROPIC: 'Anthropic',
-  OPENAI: 'OpenAI',
-  OPENAI_RESPONSES: 'OpenAI Responses',
-  GEMINI: 'Gemini',
-  BEDROCK: 'Bedrock',
-  AZURE_OPENAI: 'Azure OpenAI',
-  OLLAMA: 'Ollama',
-};
+import { PROVIDER_DISPLAY } from '../lib/clientFilters';
+
+// Re-use the canonical provider display map from clientFilters
+const PROVIDER_LABELS = PROVIDER_DISPLAY;
 
 interface LlmBadgeInfo {
   provider: string;
@@ -75,6 +100,58 @@ function extractRequestParts(value: Record<string, unknown>): { method: string |
   const path = readField('path');
   if (!method && !path) return null;
   return { method, path };
+}
+
+// Top-level action keys an expectation may carry, mapped to a short human
+// label. Used to give non-HTTP expectations (gRPC / spec-derived matchers with
+// no method+path) a meaningful row summary instead of repeating the id.
+const ACTION_LABELS: ReadonlyArray<readonly [string, string]> = [
+  ['httpResponse', 'HTTP response'],
+  ['httpResponseTemplate', 'response template'],
+  ['httpResponseClassCallback', 'response callback'],
+  ['httpResponseObjectCallback', 'response callback'],
+  ['httpForward', 'forward'],
+  ['httpForwardTemplate', 'forward template'],
+  ['httpForwardClassCallback', 'forward callback'],
+  ['httpForwardObjectCallback', 'forward callback'],
+  ['httpOverrideForwardedRequest', 'override forward'],
+  ['httpError', 'error'],
+  ['httpLlmResponse', 'LLM response'],
+];
+
+/**
+ * Derive a short human label for an expectation that lacks a recognisable
+ * method+path summary (e.g. gRPC or OpenAPI-derived matchers). Prefers the
+ * top-level action key; falls back to a generic "expectation". Never returns
+ * the id, so the row never renders "<id>: <id>".
+ */
+function extractActionLabel(value: Record<string, unknown>): string {
+  for (const [key, label] of ACTION_LABELS) {
+    if (value[key] != null) return label;
+  }
+  return 'expectation';
+}
+
+/**
+ * Whether `item.description` is just the expectation id (the server falls back
+ * to the id as the description for non-HTTP matchers, which would render as
+ * "<id>: <id>"). When true the caller should show a derived label instead.
+ */
+function descriptionIsJustId(description: unknown, value: Record<string, unknown>): boolean {
+  const id = value['id'];
+  if (typeof id !== 'string' || typeof description !== 'string') return false;
+  return description.trim() === id;
+}
+
+/**
+ * Read the expectation's match `priority` (higher wins; defaults to 0 when
+ * absent). Returns null when the value carries no numeric priority field so the
+ * caller can suppress the chip for non-expectation rows (Received / Proxied
+ * requests, which have no priority).
+ */
+export function extractPriority(value: Record<string, unknown>): number | null {
+  const raw = value['priority'];
+  return typeof raw === 'number' ? raw : null;
 }
 
 function extractIsolationLabel(scenarioName: string | undefined): string | null {
@@ -164,11 +241,22 @@ function extractChaosSummary(value: Record<string, unknown>): string | null {
   return parts.length > 0 ? parts.join(', ') : 'enabled';
 }
 
-export default function JsonListItem({ item, index, turnPosition }: JsonListItemProps) {
-  const [expanded, setExpanded] = useState(false);
+function JsonListItem({ item, index, turnPosition, expanded: expandedProp, onToggleExpand, onEdit, onDuplicate, onDelete }: JsonListItemProps) {
+  const [internalExpanded, setInternalExpanded] = useState(false);
+  const expanded = expandedProp ?? internalExpanded;
+  const handleToggle = () => {
+    if (onToggleExpand) onToggleExpand(item.key);
+    else setInternalExpanded((prev) => !prev);
+  };
+  // The chevron + row layout react to `expanded` urgently (instant click
+  // feedback), but the expensive expanded JSON tree is gated on the deferred
+  // value so building it (the @uiw/react-json-view subtree) happens in a
+  // non-blocking follow-up render instead of stalling the click.
+  const showBody = useDeferredValue(expanded);
   const llmBadge = useMemo(() => extractLlmBadge(item.value), [item.value]);
   const requestParts = useMemo(() => extractRequestParts(item.value), [item.value]);
   const chaosSummary = useMemo(() => extractChaosSummary(item.value), [item.value]);
+  const priority = useMemo(() => extractPriority(item.value), [item.value]);
 
   return (
     <Box
@@ -179,6 +267,9 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
         borderBottom: 1,
         borderColor: 'divider',
         '&:hover .copy-btn': { opacity: 1 },
+        '&:hover .row-actions': { opacity: 1 },
+        // Keep the actions reachable for keyboard users even without hover.
+        '&:focus-within .row-actions': { opacity: 1 },
         '&:last-child': { borderBottom: 0 },
       }}
     >
@@ -190,7 +281,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
           cursor: 'pointer',
           userSelect: 'none',
         }}
-        onClick={() => setExpanded((prev) => !prev)}
+        onClick={handleToggle}
       >
         {/* First row: expand toggle + position + (optional) expectation id +
             method on the left, path on the right. The expectation id is only
@@ -198,12 +289,20 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
             items have synthetic keys like "<id>_request" / "<id>_proxied" and
             no value.id field). */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-          <IconButton size="small" sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}>
+          {/* The chevron IconButton is the accessible/keyboard control; the row
+              stays click-to-toggle for the mouse but is not itself a button. */}
+          <IconButton
+            size="small"
+            aria-label={expanded ? 'Collapse' : 'Expand'}
+            aria-expanded={expanded}
+            onClick={(e) => { e.stopPropagation(); handleToggle(); }}
+            sx={{ p: 0, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}
+          >
             {expanded ? <ExpandMoreIcon /> : <ChevronRightIcon />}
           </IconButton>
           <Box
             component="span"
-            sx={{ fontFamily: 'monospace', fontSize: '0.8em', color: 'text.secondary', minWidth: 24 }}
+            sx={{ fontFamily: monospaceFontFamily, fontSize: '0.8em', color: 'text.secondary', minWidth: 24 }}
           >
             {index}
           </Box>
@@ -211,7 +310,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
             <Box
               component="span"
               sx={{
-                fontFamily: 'monospace',
+                fontFamily: monospaceFontFamily,
                 fontSize: '0.85em',
                 fontWeight: 600,
                 whiteSpace: 'nowrap',
@@ -224,7 +323,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
             <>
               <Box
                 component="span"
-                sx={{ fontFamily: 'monospace', fontSize: '0.85em', fontWeight: 600, minWidth: 50 }}
+                sx={{ fontFamily: monospaceFontFamily, fontSize: '0.85em', fontWeight: 600, minWidth: 50 }}
               >
                 {requestParts.method ?? '·'}
               </Box>
@@ -232,7 +331,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
               <Box
                 component="span"
                 sx={{
-                  fontFamily: 'monospace',
+                  fontFamily: monospaceFontFamily,
                   fontSize: '0.85em',
                   color: 'text.secondary',
                   textAlign: 'right',
@@ -246,8 +345,98 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                 {requestParts.path ?? '·'}
               </Box>
             </>
+          ) : descriptionIsJustId(item.description, item.value) ? (
+            // Non-HTTP expectation (e.g. gRPC / spec-derived) whose server-side
+            // description is just the id. Show a derived action label instead of
+            // repeating the id (which produced the "<id>: <id>" display bug).
+            <>
+              <Box
+                component="span"
+                sx={{ fontSize: '0.8em', color: 'text.secondary', fontStyle: 'italic' }}
+              >
+                {extractActionLabel(item.value)}
+              </Box>
+              <Box sx={{ flex: 1, minWidth: 0 }} />
+            </>
+          ) : item.description ? (
+            <>
+              <DescriptionDisplay description={item.description} />
+              <Box sx={{ flex: 1, minWidth: 0 }} />
+            </>
           ) : (
-            item.description && <DescriptionDisplay description={item.description} />
+            <Box sx={{ flex: 1, minWidth: 0 }} />
+          )}
+          {priority != null && (
+            // Priority chip for Active Expectations: higher priority wins when
+            // several mocks match the same request. Always shown (incl. the
+            // default 0) so the match order is visible at a glance; emphasised
+            // when non-default. Stays visible (not hover-gated) so it can be
+            // scanned and sorted against.
+            <Tooltip title={`Match priority ${priority} (higher wins)`}>
+              <Chip
+                label={`P${priority}`}
+                size="small"
+                color={priority !== 0 ? 'primary' : 'default'}
+                variant="outlined"
+                sx={{ height: 18, ml: 0.5, flexShrink: 0, fontSize: (t) => t.typography.caption.fontSize }}
+              />
+            </Tooltip>
+          )}
+          {(onEdit || onDuplicate || onDelete) && (
+            // Per-row Edit / Duplicate / Delete actions for Active Expectations. Hidden until
+            // the row is hovered (see the parent's `&:hover .row-actions` rule)
+            // so they don't clutter the dense list. stopPropagation keeps a click
+            // from toggling the row's expand state.
+            <Box
+              className="row-actions"
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.25,
+                ml: 0.5,
+                flexShrink: 0,
+                opacity: 0,
+                transition: transitions.fast,
+              }}
+            >
+              {onEdit && (
+                <Tooltip title="Edit in Composer">
+                  <IconButton
+                    size="small"
+                    aria-label="Edit expectation"
+                    onClick={(e) => { e.stopPropagation(); onEdit(item); }}
+                    sx={{ p: 0.25, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}
+                  >
+                    <EditIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
+              {onDuplicate && (
+                <Tooltip title="Duplicate as new expectation">
+                  <IconButton
+                    size="small"
+                    aria-label="Duplicate expectation"
+                    onClick={(e) => { e.stopPropagation(); onDuplicate(item); }}
+                    sx={{ p: 0.25, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}
+                  >
+                    <ContentCopyIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
+              {onDelete && (
+                <Tooltip title="Delete expectation">
+                  <IconButton
+                    size="small"
+                    color="error"
+                    aria-label="Delete expectation"
+                    onClick={(e) => { e.stopPropagation(); onDelete(item); }}
+                    sx={{ p: 0.25, '& .MuiSvgIcon-root': { fontSize: '1rem' } }}
+                  >
+                    <DeleteOutlineIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Box>
           )}
         </Box>
         {/* Second row: LLM badge chips below the matcher so wide chip sets wrap
@@ -265,7 +454,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                   label="stream"
                   size="small"
                   variant="outlined"
-                  sx={{ height: 20, fontSize: '0.65rem' }}
+                  sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
                 />
               ),
             });
@@ -280,7 +469,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                   label={lbl}
                   size="small"
                   variant="outlined"
-                  sx={{ height: 20, fontSize: '0.65rem' }}
+                  sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
                 />
               ),
             });
@@ -294,7 +483,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                   label="embedding"
                   size="small"
                   variant="outlined"
-                  sx={{ height: 20, fontSize: '0.65rem' }}
+                  sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
                 />
               ),
             });
@@ -318,7 +507,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                   size="small"
                   color="info"
                   variant="outlined"
-                  sx={{ height: 20, fontSize: '0.65rem' }}
+                  sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
                 />
               ),
             });
@@ -333,7 +522,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                   label={lbl}
                   size="small"
                   variant="outlined"
-                  sx={{ height: 20, fontSize: '0.65rem' }}
+                  sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
                 />
               ),
             });
@@ -356,7 +545,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
               size="small"
               color="secondary"
               variant="outlined"
-              sx={{ height: 20, fontSize: '0.65rem' }}
+              sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
             />
             {visibleChips.map((c) => <Fragment key={c.key}>{c.element}</Fragment>)}
             {hiddenChips.length > 0 && (
@@ -365,7 +554,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
                   label={`+${hiddenChips.length} more`}
                   size="small"
                   variant="outlined"
-                  sx={{ height: 20, fontSize: '0.65rem' }}
+                  sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
                 />
               </Tooltip>
             )}
@@ -373,7 +562,7 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
               <Box
                 component="span"
                 sx={{
-                  fontFamily: 'monospace',
+                  fontFamily: monospaceFontFamily,
                   fontSize: '0.7em',
                   color: 'text.secondary',
                   maxWidth: 200,
@@ -397,12 +586,12 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
               size="small"
               color="warning"
               variant="outlined"
-              sx={{ height: 20, fontSize: '0.65rem' }}
+              sx={{ height: 20, fontSize: (t) => t.typography.caption.fontSize }}
             />
           </Box>
         )}
       </Box>
-      {expanded && (
+      {showBody && (
         // pl: 6 matches the second-row chip indent so the expanded JSON
         // body lines up with the expectation id (Active Expectations) or
         // the method (Received / Proxied requests, where no id is shown).
@@ -418,3 +607,9 @@ export default function JsonListItem({ item, index, turnPosition }: JsonListItem
     </Box>
   );
 }
+
+// Memoized: rows are re-rendered once per second by the WebSocket push. The
+// store now preserves the `item` reference for unchanged entries (see
+// reconcileByKey), so default shallow prop comparison lets unchanged rows skip
+// the whole render — including the expensive expanded JsonViewer subtree.
+export default memo(JsonListItem);

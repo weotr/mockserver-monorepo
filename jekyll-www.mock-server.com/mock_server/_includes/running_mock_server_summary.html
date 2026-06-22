@@ -1,3 +1,18 @@
+<p>The fastest way to run MockServer is a single command &mdash; pick whichever fits your environment. Every option below starts a server that mocks and proxies HTTP and HTTPS on one port (default <span class="inline_code">1080</span>):</p>
+
+<pre class="prettyprint code"><code class="code"># Docker — no Java required
+docker run -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> mockserver/mockserver
+
+# Node — no Java and no Docker (downloads a self-contained bundle)
+npx -p mockserver-node mockserver run -p <span class="numeric_literal">1080</span>
+
+# Homebrew (macOS / Linux)
+brew install mockserver && mockserver run -p <span class="numeric_literal">1080</span></code></pre>
+
+<p>Confirm it is up (the status endpoint returns <span class="inline_code">200</span> once MockServer is ready):</p>
+
+<pre class="prettyprint code"><code class="code">curl -i -X PUT http://localhost:<span class="numeric_literal">1080</span>/mockserver/status</code></pre>
+
 <p>MockServer is flexible and support numerous usage patterns.</p>
 
 <h3>MockServer can be run:</h3>
@@ -14,6 +29,9 @@
 	<li>as a <a href="/mock_server/running_mock_server.html#mockserver_node"><strong>Node.js (npm) module</strong></a> from any Node.js code</li>
 	<li>as a <a href="/mock_server/running_mock_server.html#mockserver_node"><strong>Grunt plugin</strong></a> as part of a Grunt build cycle</li>
 	<li>as a <a href="/mock_server/running_mock_server.html#deployable_war"><strong>deployable WAR</strong></a> to an existing application server</li>
+	<li>via a <a href="/mock_server/running_mock_server.html#client_library_launcher"><strong>client library binary launcher</strong></a> (Node, Python, Ruby, Go, .NET, Rust) &mdash; downloads a cross-platform, JVM-less binary bundle automatically</li>
+	<li>as a throwaway <a href="/mock_server/mockserver_testcontainers.html"><strong>Testcontainers</strong></a> container started and stopped automatically by your test run</li>
+	<li>as a shared, <a href="/mock_server/centralized_deployment.html"><strong>centralised deployment</strong></a> across multiple teams or CI pipelines &mdash; another good option when several projects share one running MockServer</li>
 </ul>
 
 <p>To simplify configuration all versions (except the deployable WAR) use a single port to support the control plane and data plane in HTTP, HTTPS or SOCKS.</p>
@@ -23,26 +41,16 @@
 <ul>
 	<li><a target="_blank" href="https://search.maven.org/artifact/org.mock-server/mockserver-netty-no-dependencies/{{ site.mockserver_version }}/jar" rel="noopener noreferrer">java dependency</a></li>
 	<li><a target="_blank" href="https://hub.docker.com/r/mockserver/mockserver" rel="noopener noreferrer">Docker container</a></li>
-	<li><a href="#helm_chart">Helm chart</a> for Kubernetes</li>
+	<li><a href="/mock_server/running_mock_server.html#helm_chart">Helm chart</a> for Kubernetes</li>
 	<li><a target="_blank" href="https://search.maven.org/remotecontent?filepath=org/mock-server/mockserver-netty-no-dependencies/{{ site.mockserver_version }}/mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar" rel="noopener noreferrer">executable jar</a></li>
-	<li><a href="#running_from_command_line_using_homebrew">Homebrew package</a></li>
-	<li><a href="#maven_plugin">maven plugin</a></li>
+	<li><a href="/mock_server/running_mock_server.html#running_from_command_line_using_homebrew">Homebrew package</a></li>
+	<li><a href="/mock_server/running_mock_server.html#maven_plugin">maven plugin</a></li>
 	<li><a target="_blank" href="https://www.npmjs.org/package/mockserver-node" rel="noopener noreferrer">npm plugin</a></li>
 	<li><a target="_blank" href="https://www.npmjs.org/package/mockserver-node" rel="noopener noreferrer">Grunt plugin</a></li>
 	<li><a target="_blank" href="https://search.maven.org/remotecontent?filepath=org/mock-server/mockserver-war/{{ site.mockserver_version }}/mockserver-war-{{ site.mockserver_version }}.war" rel="noopener noreferrer">deployable WAR</a> that runs on JEE web servers</li>
+	<li><a href="/mock_server/running_mock_server.html#client_library_launcher">client library binary bundle</a> &mdash; a self-contained, cross-platform binary (no Java required) downloaded automatically by the Node, Python, Ruby, Go, .NET, and Rust clients</li>
 </ul>
 
 <p>It is also possible to <a href="/mock_server/running_mock_server.html#build-and-run-from-source">build and run MockServer directly from source code</a></p>
-
-<h3>MockServer UI:</h3>
-
-<p>MockServer has a <a href="/mock_server/mockserver_ui.html">UI</a> that can be used to view the internal state within MockServer, including:</p>
-
-<ul>
-	<li><strong><a href="#ui_logs_section">logs</a></strong></li>
-	<li><strong><a href="#ui_active_expectations_section">active expectations</a></strong></li>
-	<li><strong><a href="#ui_requests_received_section">requests received</a></strong></li>
-	<li><strong><a href="#ui_proxied_requests_section">proxied requests</a></strong></li>
-</ul>
 
 

@@ -14,8 +14,10 @@ import org.mockserver.echo.http.EchoServer;
 import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.HttpResponse;
+import org.mockserver.persistence.FileWatcher;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.socket.PortFactory;
+import org.mockserver.test.Retries;
 import org.mockserver.version.Version;
 import org.slf4j.event.Level;
 
@@ -51,12 +53,16 @@ public class MainCliTest {
     @BeforeClass
     public static void startEventLoopGroup() {
         clientEventLoopGroup = new NioEventLoopGroup(3, new Scheduler.SchedulerThreadFactory(MainCliTest.class.getSimpleName() + "-eventLoop"));
+        // These tests invoke Main.main(...) in-process, including failure paths (unknown flag, no port,
+        // failed import). Disable the JVM-terminating exit so a non-zero command does not kill the test JVM.
+        Main.exitOnNonZeroCode = false;
     }
 
     @AfterClass
     public static void stopEventLoopGroup() {
         clientEventLoopGroup.shutdownGracefully(0, 0, MILLISECONDS).syncUninterruptibly();
         Main.usageShown = false;
+        Main.exitOnNonZeroCode = true;
     }
 
     @After
@@ -93,6 +99,28 @@ public class MainCliTest {
     public void shouldNotPrependRunWhenVersionSubcommandPresent() {
         String[] result = Main.preprocessArguments("version");
         assertThat(result[0], is("version"));
+        assertThat(result.length, is(1));
+    }
+
+    @Test
+    public void shouldNotPrependRunWhenUiSubcommandPresent() {
+        String[] result = Main.preprocessArguments("ui", "-p", "1080");
+        assertThat(result[0], is("ui"));
+        assertThat(result.length, is(3));
+    }
+
+    @Test
+    public void shouldNormalizeLegacySingleDashHelpToTopLevel() {
+        // "-help" should behave like "--help" (top-level overview), not cluster into "run -h"
+        String[] result = Main.preprocessArguments("-help");
+        assertThat(result[0], is("--help"));
+        assertThat(result.length, is(1));
+    }
+
+    @Test
+    public void shouldNormalizeLegacySingleDashVersionToTopLevel() {
+        String[] result = Main.preprocessArguments("-version");
+        assertThat(result[0], is("--version"));
         assertThat(result.length, is(1));
     }
 
@@ -255,6 +283,88 @@ public class MainCliTest {
             assertThat(output, containsString("mock, proxy & record"));
         } finally {
             Main.systemOut = originalOut;
+        }
+    }
+
+    // ---- --print-config (effective configuration diagnostic) ----
+
+    @Test
+    public void shouldPrintEffectiveConfigWithSourceAndRedactSecrets() throws Exception {
+        PrintStream originalOut = Main.systemOut;
+        String previousNonSensitive = System.getProperty("mockserver.maxExpectations");
+        String previousSensitive = System.getProperty("mockserver.llmApiKey");
+        // effectiveConfiguration is cache-first; a prior test may have cached maxExpectations, which
+        // would otherwise win over the system property set below. Clear the cache entries so the
+        // system-property tier is authoritative, and restore them afterwards.
+        String previousCachedNonSensitive = getPropertyCacheEntry("mockserver.maxExpectations");
+        String previousCachedSensitive = getPropertyCacheEntry("mockserver.llmApiKey");
+        try {
+            clearPropertyCacheEntry("mockserver.maxExpectations");
+            clearPropertyCacheEntry("mockserver.llmApiKey");
+            System.setProperty("mockserver.maxExpectations", "4242");
+            System.setProperty("mockserver.llmApiKey", "super-secret-cli-value");
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            // --print-config must print the effective config and exit WITHOUT starting a server,
+            // so no port is needed and no MockServer is left running.
+            Main.main("--print-config");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("non-sensitive key shows value and system-property source",
+                output, containsString("mockserver.maxExpectations = 4242   [system-property]"));
+            assertThat("sensitive key is redacted with its source still reported",
+                output, containsString("mockserver.llmApiKey = ***REDACTED***   [system-property]"));
+            assertThat("secret value must never be printed",
+                output, not(containsString("super-secret-cli-value")));
+            assertThat("a never-set key reports the built-in default",
+                output, containsString("[default]"));
+        } finally {
+            Main.systemOut = originalOut;
+            restorePropertyCacheEntry("mockserver.maxExpectations", previousCachedNonSensitive);
+            restorePropertyCacheEntry("mockserver.llmApiKey", previousCachedSensitive);
+            if (previousNonSensitive != null) {
+                System.setProperty("mockserver.maxExpectations", previousNonSensitive);
+            } else {
+                System.clearProperty("mockserver.maxExpectations");
+            }
+            if (previousSensitive != null) {
+                System.setProperty("mockserver.llmApiKey", previousSensitive);
+            } else {
+                System.clearProperty("mockserver.llmApiKey");
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, String> propertyCache() throws Exception {
+        java.lang.reflect.Field cacheField = ConfigurationProperties.class.getDeclaredField("propertyCache");
+        cacheField.setAccessible(true);
+        Object cache = cacheField.get(null);
+        return cache instanceof java.util.Map ? (java.util.Map<String, String>) cache : null;
+    }
+
+    private static String getPropertyCacheEntry(String key) throws Exception {
+        java.util.Map<String, String> cache = propertyCache();
+        return cache != null ? cache.get(key) : null;
+    }
+
+    private static void clearPropertyCacheEntry(String key) throws Exception {
+        java.util.Map<String, String> cache = propertyCache();
+        if (cache != null) {
+            cache.remove(key);
+        }
+    }
+
+    private static void restorePropertyCacheEntry(String key, String previousValue) throws Exception {
+        java.util.Map<String, String> cache = propertyCache();
+        if (cache != null) {
+            if (previousValue != null) {
+                cache.put(key, previousValue);
+            } else {
+                cache.remove(key);
+            }
         }
     }
 
@@ -791,6 +901,309 @@ public class MainCliTest {
         }
     }
 
+    // ---- No-port path shows a clean CLI usage error (not the legacy blob or empty config dump) ----
+
+    @Test
+    public void shouldShowCliUsageWhenNoPortSpecified() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        PrintStream originalErr = Main.systemErr;
+        String originalSysProp = System.getProperty("mockserver.serverPort");
+        Object originalProp = ConfigurationProperties.PROPERTIES.get("mockserver.serverPort");
+        try {
+            // Ensure no port is resolvable from any source so we hit the "no port" branch
+            System.clearProperty("mockserver.serverPort");
+            ConfigurationProperties.PROPERTIES.remove("mockserver.serverPort");
+
+            ByteArrayOutputStream outBaos = new ByteArrayOutputStream();
+            ByteArrayOutputStream errBaos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(outBaos, true, StandardCharsets.UTF_8.name());
+            Main.systemErr = new PrintStream(errBaos, true, StandardCharsets.UTF_8.name());
+
+            Main.main(); // no arguments → run with no resolvable port
+
+            String out = new String(outBaos.toByteArray(), StandardCharsets.UTF_8);
+            String err = new String(errBaos.toByteArray(), StandardCharsets.UTF_8);
+            // Clean picocli usage for the run command
+            assertThat("should show picocli --port option", out, containsString("--port"));
+            // Actionable, concise error
+            assertThat("should give a 'no port specified' error", err, containsString("no port specified"));
+            // Not the legacy multi-line USAGE blob
+            assertThat("should not print the legacy '-proxyRemotePort <port>' blob line",
+                (out + err), not(containsString("-proxyRemotePort <port>")));
+        } finally {
+            Main.systemOut = originalOut;
+            Main.systemErr = originalErr;
+            if (originalSysProp != null) {
+                System.setProperty("mockserver.serverPort", originalSysProp);
+            }
+            if (originalProp != null) {
+                ConfigurationProperties.PROPERTIES.put("mockserver.serverPort", originalProp);
+            }
+        }
+    }
+
+    @Test
+    public void shouldUseLauncherNameInNoPortError() throws UnsupportedEncodingException {
+        PrintStream originalErr = Main.systemErr;
+        PrintStream originalOut = Main.systemOut;
+        String originalSysProp = System.getProperty("mockserver.serverPort");
+        Object originalProp = ConfigurationProperties.PROPERTIES.get("mockserver.serverPort");
+        try {
+            System.clearProperty("mockserver.serverPort");
+            ConfigurationProperties.PROPERTIES.remove("mockserver.serverPort");
+            System.setProperty("mockserver.launcherName", "mockserver");
+
+            ByteArrayOutputStream errBaos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8.name());
+            Main.systemErr = new PrintStream(errBaos, true, StandardCharsets.UTF_8.name());
+
+            Main.main();
+
+            String err = new String(errBaos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("error should use the launcher command name, not java -jar",
+                err, containsString("mockserver -p 1080"));
+            assertThat("error should not use the java -jar form when launched via a launcher",
+                err, not(containsString("java -jar")));
+        } finally {
+            System.clearProperty("mockserver.launcherName");
+            Main.systemOut = originalOut;
+            Main.systemErr = originalErr;
+            if (originalSysProp != null) {
+                System.setProperty("mockserver.serverPort", originalSysProp);
+            }
+            if (originalProp != null) {
+                ConfigurationProperties.PROPERTIES.put("mockserver.serverPort", originalProp);
+            }
+        }
+    }
+
+    // ---- -D property passthrough ----
+
+    @Test
+    public void shouldApplyDSystemPropertyFromCommandLine() {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        String key = "mockserver.someUnusedTestProperty";
+        String originalValue = System.getProperty(key);
+        try {
+            System.clearProperty(key);
+
+            Main.main("run", "-p", String.valueOf(freePort), "-D" + key + "=hello");
+
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("-D should set the system property", System.getProperty(key), is("hello"));
+        } finally {
+            if (originalValue != null) {
+                System.setProperty(key, originalValue);
+            } else {
+                System.clearProperty(key);
+            }
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    // ---- ui subcommand ----
+
+    @Test
+    public void shouldListUiInTopLevelHelp() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("--help");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat(output, containsString("ui"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldStartUiAndPrintDashboardUrl() throws UnsupportedEncodingException {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        PrintStream originalOut = Main.systemOut;
+        // Run headless so the dashboard URL is printed but no real browser is launched on the
+        // developer's machine (this is exactly how `ui` degrades on a server/CI/SSH host).
+        String originalHeadless = System.getProperty("java.awt.headless");
+        try {
+            System.setProperty("java.awt.headless", "true");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("ui", "-p", String.valueOf(freePort));
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("ui should print the dashboard URL",
+                output, containsString("/mockserver/dashboard"));
+            assertThat("ui should print the dashboard URL for the chosen port",
+                output, containsString("localhost:" + freePort + "/mockserver/dashboard"));
+        } finally {
+            Main.systemOut = originalOut;
+            if (originalHeadless != null) {
+                System.setProperty("java.awt.headless", originalHeadless);
+            } else {
+                System.clearProperty("java.awt.headless");
+            }
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldNotPrintDashboardUrlWhenUiFailsToStart() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        String originalHeadless = System.getProperty("java.awt.headless");
+        try {
+            System.setProperty("java.awt.headless", "true");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            // invalid port → run() reports a validation error and never starts the server
+            Main.main("ui", "-p", "notaport");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("a failed start must not print a misleading dashboard URL",
+                output, not(containsString("Dashboard UI")));
+        } finally {
+            Main.systemOut = originalOut;
+            if (originalHeadless != null) {
+                System.setProperty("java.awt.headless", originalHeadless);
+            } else {
+                System.clearProperty("java.awt.headless");
+            }
+        }
+    }
+
+    // ---- import subcommand ----
+
+    @Test
+    public void shouldNotPrependRunWhenImportSubcommandPresent() {
+        String[] result = Main.preprocessArguments("import", "./expectations.json", "-p", "1080");
+        assertThat(result[0], is("import"));
+        assertThat(result.length, is(4));
+    }
+
+    @Test
+    public void shouldListImportInTopLevelHelp() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("--help");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("top-level help should list the import subcommand",
+                output, containsString("import"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldPrintHelpForImportSubcommand() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("help", "import");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("import help should mention the file parameter", output, containsString("file"));
+            assertThat("import help should list the --port option", output, containsString("--port"));
+            assertThat("import help should list the --host option", output, containsString("--host"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldImportExpectationsFromFileIntoRunningServer() throws IOException {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+
+        try {
+            // Start a server to import into
+            Main.main("run", "-p", String.valueOf(freePort));
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+
+            // Write an expectations array JSON file (the persisted/export format)
+            File expectationsFile = tempFolder.newFile("import-expectations.json");
+            String json = "[ {" +
+                "\"httpRequest\": { \"path\": \"/imported_path\" }," +
+                "\"httpResponse\": { \"body\": \"imported_body\" }" +
+                "} ]";
+            java.nio.file.Files.write(expectationsFile.toPath(), json.getBytes(StandardCharsets.UTF_8));
+
+            // No expectations loaded yet
+            assertThat("no expectations before import",
+                mockServerClient.retrieveActiveExpectations(request().withPath("/imported_path")).length, is(0));
+
+            // Import via the CLI subcommand
+            Main.main("import", expectationsFile.getAbsolutePath(), "-p", String.valueOf(freePort));
+
+            // The imported expectation is now active and responds
+            assertThat("one expectation loaded after import",
+                mockServerClient.retrieveActiveExpectations(request().withPath("/imported_path")).length, is(1));
+
+            HttpResponse httpResponse = new NettyHttpClient(configuration(), new MockServerLogger(), clientEventLoopGroup, null, false)
+                .sendRequest(
+                    request().withHeader(HOST.toString(), "127.0.0.1:" + freePort).withPath("/imported_path"),
+                    10, TimeUnit.SECONDS
+                );
+            assertThat("imported expectation responds", httpResponse.getBodyAsString(), is("imported_body"));
+        } finally {
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldReturnNonZeroExitCodeWhenImportFails() throws UnsupportedEncodingException {
+        PrintStream originalErr = Main.systemErr;
+        PrintStream originalOut = Main.systemOut;
+        final int freePort = PortFactory.findFreePort();
+        try {
+            Main.systemErr = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8.name());
+            Main.systemOut = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8.name());
+
+            // Drive the import command through picocli directly so we can observe the exit code that
+            // Main.main() propagates to the JVM (an in-process Main.main(...) call cannot expose it).
+            int exitCode = new picocli.CommandLine(new Main()).execute(
+                "import", "/this/file/does/not/exist.json", "-p", String.valueOf(freePort));
+
+            assertThat("a failed import must report a non-zero exit code", exitCode, is(1));
+        } finally {
+            Main.systemErr = originalErr;
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldReportErrorWhenImportFileMissing() throws UnsupportedEncodingException {
+        PrintStream originalErr = Main.systemErr;
+        PrintStream originalOut = Main.systemOut;
+        final int freePort = PortFactory.findFreePort();
+        try {
+            ByteArrayOutputStream errBaos = new ByteArrayOutputStream();
+            Main.systemErr = new PrintStream(errBaos, true, StandardCharsets.UTF_8.name());
+            Main.systemOut = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8.name());
+
+            // No server running and a non-existent file → clean error, no legacy run-usage blob
+            Main.main("import", "/this/file/does/not/exist.json", "-p", String.valueOf(freePort));
+
+            String err = new String(errBaos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("import failure should report a clean error",
+                err, containsString("could not import expectations"));
+        } finally {
+            Main.systemErr = originalErr;
+            Main.systemOut = originalOut;
+        }
+    }
+
     @Test
     public void shouldNotApplyDevModeWithoutFlag() {
         // Verify that without --dev, the devMode property is false.
@@ -806,6 +1219,183 @@ public class MainCliTest {
             assertThat("devMode should be false by default", ConfigurationProperties.devMode(), is(false));
         } finally {
             stopQuietly(mockServerClient);
+        }
+    }
+
+    // ---- --watch live-reload flag ----
+
+    @Test
+    public void shouldListWatchInRunHelp() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("run", "--help");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("run help should list --watch", output, containsString("--watch"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldEnableWatchInitializationJsonViaWatchFlag() throws IOException {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        boolean originalWatch = ConfigurationProperties.watchInitializationJson();
+        String originalInit = ConfigurationProperties.initializationJsonPath();
+        File initFile = tempFolder.newFile("watch-init-flag.json");
+        java.nio.file.Files.write(initFile.toPath(), "[]".getBytes(StandardCharsets.UTF_8));
+
+        try {
+            Main.main("run", "-p", String.valueOf(freePort),
+                "--init", initFile.getAbsolutePath(), "--watch");
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("--watch should enable watchInitializationJson",
+                ConfigurationProperties.watchInitializationJson(), is(true));
+        } finally {
+            ConfigurationProperties.watchInitializationJson(originalWatch);
+            ConfigurationProperties.initializationJsonPath(originalInit != null ? originalInit : "");
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldLiveReloadExpectationsWhenWatchedFileChanges() throws Exception {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        boolean originalWatch = ConfigurationProperties.watchInitializationJson();
+        String originalInit = ConfigurationProperties.initializationJsonPath();
+        long originalPollPeriod = FileWatcher.getPollPeriod();
+        TimeUnit originalPollPeriodUnits = FileWatcher.getPollPeriodUnits();
+        FileWatcher.setPollPeriod(200);
+        FileWatcher.setPollPeriodUnits(MILLISECONDS);
+        File initFile = tempFolder.newFile("watch-reload-init.json");
+        java.nio.file.Files.write(initFile.toPath(), "[]".getBytes(StandardCharsets.UTF_8));
+
+        try {
+            Main.main("run", "-p", String.valueOf(freePort),
+                "--init", initFile.getAbsolutePath(), "--watch");
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("no expectation before the watched file is updated",
+                mockServerClient.retrieveActiveExpectations(request().withPath("/watched")).length, is(0));
+
+            // Modify the watched initializer file — the watcher should pick up the change and reload.
+            String updated = "[ { \"httpRequest\": { \"path\": \"/watched\" }," +
+                " \"httpResponse\": { \"body\": \"reloaded_body\" } } ]";
+            java.nio.file.Files.write(initFile.toPath(), updated.getBytes(StandardCharsets.UTF_8),
+                java.nio.file.StandardOpenOption.TRUNCATE_EXISTING, java.nio.file.StandardOpenOption.SYNC);
+
+            Retries.tryWaitForSuccess(() -> {
+                try {
+                    java.nio.file.Files.probeContentType(initFile.toPath());
+                } catch (IOException ignore) {
+                    // best-effort nudge for the filesystem to flush the change
+                }
+                assertThat("watched-file change should live-reload the expectation",
+                    mockServerClient.retrieveActiveExpectations(request().withPath("/watched")).length, is(1));
+            }, 50, 1000, MILLISECONDS);
+
+            HttpResponse httpResponse = new NettyHttpClient(configuration(), new MockServerLogger(), clientEventLoopGroup, null, false)
+                .sendRequest(
+                    request().withHeader(HOST.toString(), "127.0.0.1:" + freePort).withPath("/watched"),
+                    10, TimeUnit.SECONDS
+                );
+            assertThat("reloaded expectation responds", httpResponse.getBodyAsString(), is("reloaded_body"));
+        } finally {
+            ConfigurationProperties.watchInitializationJson(originalWatch);
+            ConfigurationProperties.initializationJsonPath(originalInit != null ? originalInit : "");
+            FileWatcher.setPollPeriod(originalPollPeriod);
+            FileWatcher.setPollPeriodUnits(originalPollPeriodUnits);
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    // ---- demo subcommand ----
+
+    @Test
+    public void shouldNotPrependRunWhenDemoSubcommandPresent() {
+        String[] result = Main.preprocessArguments("demo", "-p", "1080");
+        assertThat(result[0], is("demo"));
+        assertThat(result.length, is(3));
+    }
+
+    @Test
+    public void shouldListDemoInTopLevelHelp() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("--help");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("top-level help should list the demo subcommand", output, containsString("demo"));
+        } finally {
+            Main.systemOut = originalOut;
+        }
+    }
+
+    @Test
+    public void shouldStartDemoSeedExamplesAndPrintInstructions() throws Exception {
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("demo", "-p", String.valueOf(freePort));
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            // Instructions printed
+            assertThat("demo prints a getting-started URL",
+                output, containsString("localhost:" + freePort + "/hello"));
+            assertThat("demo prints a sample curl",
+                output, containsString("curl http://localhost:" + freePort + "/hello"));
+            assertThat("demo prints the dashboard URL",
+                output, containsString("/mockserver/dashboard"));
+
+            // Example expectations seeded and serving
+            HttpResponse hello = new NettyHttpClient(configuration(), new MockServerLogger(), clientEventLoopGroup, null, false)
+                .sendRequest(
+                    request().withHeader(HOST.toString(), "127.0.0.1:" + freePort).withPath("/hello"),
+                    10, TimeUnit.SECONDS
+                );
+            assertThat("demo /hello example responds",
+                hello.getBodyAsString(), containsString("Hello from MockServer!"));
+
+            HttpResponse user = new NettyHttpClient(configuration(), new MockServerLogger(), clientEventLoopGroup, null, false)
+                .sendRequest(
+                    request().withHeader(HOST.toString(), "127.0.0.1:" + freePort).withPath("/users/1"),
+                    10, TimeUnit.SECONDS
+                );
+            assertThat("demo /users/{id} example responds",
+                user.getBodyAsString(), containsString("Example User"));
+        } finally {
+            Main.systemOut = originalOut;
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
+    public void shouldPrintHelpForDemoSubcommand() throws UnsupportedEncodingException {
+        PrintStream originalOut = Main.systemOut;
+        try {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            Main.systemOut = new PrintStream(baos, true, StandardCharsets.UTF_8.name());
+
+            Main.main("help", "demo");
+
+            String output = new String(baos.toByteArray(), StandardCharsets.UTF_8);
+            assertThat("demo help should list the --port option", output, containsString("--port"));
+            assertThat("demo help should describe the example expectations",
+                output, containsString("example expectations"));
+        } finally {
+            Main.systemOut = originalOut;
         }
     }
 }

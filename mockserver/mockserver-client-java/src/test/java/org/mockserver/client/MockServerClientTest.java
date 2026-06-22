@@ -10,6 +10,11 @@ import org.mockito.Mock;
 import org.mockito.internal.verification.AtLeast;
 import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.httpclient.SocketConnectionException;
+import org.mockserver.load.LoadProfile;
+import org.mockserver.load.LoadScenario;
+import org.mockserver.load.LoadStage;
+import org.mockserver.load.LoadStep;
+import org.mockserver.load.RampCurve;
 import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
@@ -28,7 +33,10 @@ import java.util.concurrent.TimeUnit;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 import static io.netty.handler.codec.http.HttpHeaderNames.HOST;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.CONFLICT;
 import static io.netty.handler.codec.http.HttpResponseStatus.CREATED;
+import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -241,6 +249,88 @@ public class MockServerClientTest {
             TimeUnit.MILLISECONDS,
             false
         );
+    }
+
+    @Test
+    public void shouldMockOpenIdProviderAndReturnExpectations() {
+        // given
+        Expectation discovery = new Expectation(request().withPath("/.well-known/openid-configuration"))
+            .thenRespond(response().withBody("{}"));
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(CREATED.code()).withBody("[ {} ]"));
+        when(mockExpectationSerializer.deserializeArray("[ {} ]", true))
+            .thenReturn(new Expectation[]{discovery});
+
+        // when
+        Expectation[] result = mockServerClient.mockOpenIdProvider(
+            new org.mockserver.oidc.OidcProviderConfiguration().setIssuer("https://idp.test"));
+
+        // then — round-trips and returns the deserialized expectations
+        assertThat(result.length, is(1));
+        assertThat(result[0], is(discovery));
+        verify(mockHttpClient, atLeastOnce()).sendRequest(
+            httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getAllValues().stream()
+            .filter(r -> "/mockserver/oidc".equals(r.getPath().getValue()))
+            .findFirst().orElseThrow(() -> new AssertionError("no PUT /mockserver/oidc was sent"));
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getBodyAsString(), containsString("https://idp.test"));
+    }
+
+    @Test
+    public void shouldMockOpenIdProviderWithDefaultsSendsEmptyBody() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(CREATED.code()).withBody(""));
+
+        // when
+        Expectation[] result = mockServerClient.mockOpenIdProvider();
+
+        // then — empty body, empty result
+        assertThat(result.length, is(0));
+        verify(mockHttpClient, atLeastOnce()).sendRequest(
+            httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getAllValues().stream()
+            .filter(r -> "/mockserver/oidc".equals(r.getPath().getValue()))
+            .findFirst().orElseThrow(() -> new AssertionError("no PUT /mockserver/oidc was sent"));
+        assertThat(sent.getBodyAsString(), is(""));
+    }
+
+    @Test
+    public void shouldImportExpectationsFromJson() {
+        // given
+        Expectation expectationOne = new Expectation(request().withPath("/some_path"), unlimited(), TimeToLive.unlimited(), 0)
+            .thenRespond(response().withBody("some_body_one"));
+        String expectationsJson = "[ { \"httpRequest\": { \"path\": \"/some_path\" } } ]";
+        when(mockExpectationSerializer.deserializeArray(expectationsJson, false)).thenReturn(new Expectation[]{expectationOne});
+        when(mockExpectationSerializer.serialize(expectationOne)).thenReturn("serialized_body");
+
+        // when
+        mockServerClient.importExpectations(expectationsJson);
+
+        // then
+        verify(mockExpectationSerializer).deserializeArray(expectationsJson, false);
+        verify(mockHttpClient, atLeastOnce()).sendRequest(
+            request()
+                .withHeader(CONTENT_TYPE.toString(), APPLICATION_JSON_UTF_8.toString())
+                .withHeader(HOST.toString(), "localhost:" + 1090)
+                .withMethod("PUT")
+                .withPath("/mockserver/expectation")
+                .withBody("serialized_body", UTF_8),
+            20000,
+            TimeUnit.MILLISECONDS,
+            false
+        );
+    }
+
+    @Test
+    public void shouldImportNoExpectationsForBlankJson() {
+        // when
+        Expectation[] imported = mockServerClient.importExpectations("   ");
+
+        // then
+        assertThat(imported.length, is(0));
+        verifyNoInteractions(mockHttpClient);
     }
 
     @Test
@@ -864,6 +954,26 @@ public class MockServerClientTest {
     }
 
     @Test
+    public void shouldSendClearByNamespaceRequest() {
+        // when
+        mockServerClient.clearByNamespace("team-a");
+
+        // then
+        verify(mockHttpClient).sendRequest(
+            request()
+                .withHeader(HOST.toString(), "localhost:" + 1090)
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath("/mockserver/clear")
+                .withQueryStringParameter("type", ClearType.EXPECTATIONS.name().toLowerCase())
+                .withQueryStringParameter("namespace", "team-a"),
+            20000,
+            TimeUnit.MILLISECONDS,
+            false
+        );
+    }
+
+    @Test
     public void shouldSendClearRequestForNullRequest() {
         // when
         mockServerClient
@@ -1038,6 +1148,42 @@ public class MockServerClientTest {
                 .withPath("/mockserver/retrieve")
                 .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
                 .withQueryStringParameter("format", Format.JSON.name())
+                .withBody(someRequestMatcher.toString(), StandardCharsets.UTF_8),
+            20000,
+            TimeUnit.MILLISECONDS,
+            false
+        );
+        verify(mockExpectationSerializer).deserializeArray("body", true);
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsByNamespace() {
+        // given - a request
+        HttpRequest someRequestMatcher = new HttpRequest()
+            .withPath("/some_path")
+            .withBody(new StringBody("some_request_body"));
+        when(mockRequestDefinitionSerializer.serialize(someRequestMatcher)).thenReturn(someRequestMatcher.toString());
+
+        // and - a client
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean())).thenReturn(response().withBody("body"));
+
+        // and - an expectation
+        Expectation[] expectations = {};
+        when(mockExpectationSerializer.deserializeArray("body", true)).thenReturn(expectations);
+
+        // when
+        assertThat(mockServerClient.retrieveActiveExpectations(someRequestMatcher, "team-a"), sameInstance(expectations));
+
+        // then
+        verify(mockHttpClient).sendRequest(
+            request()
+                .withHeader(HOST.toString(), "localhost:" + 1090)
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath("/mockserver/retrieve")
+                .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+                .withQueryStringParameter("format", Format.JSON.name())
+                .withQueryStringParameter("namespace", "team-a")
                 .withBody(someRequestMatcher.toString(), StandardCharsets.UTF_8),
             20000,
             TimeUnit.MILLISECONDS,
@@ -1290,6 +1436,130 @@ public class MockServerClientTest {
             );
             assertThat(ae.getMessage(), is("Request not found at least once expected:<foo> but was:<bar>"));
         }
+    }
+
+    @Test
+    public void shouldVerifyAllPassesWhenEveryVerificationPasses() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean())).thenReturn(response().withBody(""));
+        when(mockVerificationSerializer.serialize(any(Verification.class))).thenReturn("verification_json");
+
+        // when
+        mockServerClient.verifyAll(
+            verification().withRequest(request().withPath("/one")).withTimes(once()),
+            verification().withRequest(request().withPath("/two")).withTimes(once())
+        );
+
+        // then - one verify request sent per verification, no exception thrown
+        verify(mockHttpClient, new AtLeast(2)).sendRequest(
+            any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()
+        );
+    }
+
+    @Test
+    public void shouldVerifyAllCollectsEveryFailureInOneAssertionError() {
+        // given - every verify request returns a distinct failure body
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("FAILURE_ONE"))
+            .thenReturn(response().withBody("FAILURE_TWO"));
+        when(mockVerificationSerializer.serialize(any(Verification.class))).thenReturn("verification_json");
+
+        try {
+            mockServerClient.verifyAll(
+                verification().withRequest(request().withPath("/one")).withTimes(once()),
+                verification().withRequest(request().withPath("/two")).withTimes(once())
+            );
+            fail("expected exception to be thrown");
+        } catch (AssertionError ae) {
+            // then - both failures appear in the single thrown message
+            assertThat(ae.getMessage(), containsString("FAILURE_ONE"));
+            assertThat(ae.getMessage(), containsString("FAILURE_TWO"));
+        }
+    }
+
+    @Test
+    public void shouldVerifyAllRejectNullArray() {
+        IllegalArgumentException illegalArgumentException = assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifyAll((Verification[]) null));
+        assertThat(illegalArgumentException.getMessage(), containsString("verifyAll(Verification...) requires a non-null non-empty array of Verification objects"));
+    }
+
+    @Test
+    public void shouldVerifyAllRejectEmptyArray() {
+        IllegalArgumentException illegalArgumentException = assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifyAll(new Verification[0]));
+        assertThat(illegalArgumentException.getMessage(), containsString("verifyAll(Verification...) requires a non-null non-empty array of Verification objects"));
+    }
+
+    @Test
+    public void shouldVerifyWithinTimeoutPassWhenRequestArrivesDuringWindow() {
+        // given - first poll fails (request not yet recorded), second poll passes (empty body)
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("Request not found"))
+            .thenReturn(response().withBody(""));
+        when(mockVerificationSerializer.serialize(any(Verification.class))).thenReturn("verification_json");
+
+        // when - eventual verify polls until it passes
+        mockServerClient.verify(request().withPath("/some_path"), once(), java.time.Duration.ofSeconds(5));
+
+        // then - at least two verify requests were sent (one failing, one passing)
+        verify(mockHttpClient, new AtLeast(2)).sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean());
+    }
+
+    @Test
+    public void shouldVerifyWithinTimeoutFailCleanlyWhenRequestNeverArrives() {
+        // given - every poll fails (request never recorded)
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("Request not found at least once expected:<foo> but was:<bar>"));
+        when(mockVerificationSerializer.serialize(any(Verification.class))).thenReturn("verification_json");
+
+        try {
+            mockServerClient.verify(request().withPath("/some_path"), once(), java.time.Duration.ofMillis(250));
+            fail("expected AssertionError to be thrown after timeout");
+        } catch (AssertionError ae) {
+            // then - the last failure message is surfaced
+            assertThat(ae.getMessage(), containsString("Request not found"));
+        }
+    }
+
+    @Test
+    public void shouldVerifyWithinTimeoutRejectNullDuration() {
+        IllegalArgumentException illegalArgumentException = assertThrows(IllegalArgumentException.class, () -> mockServerClient.verify(request(), once(), (java.time.Duration) null));
+        assertThat(illegalArgumentException.getMessage(), containsString("requires a non null non-negative Duration object"));
+    }
+
+    @Test
+    public void shouldVerifyNeverPassWhenNoMatchingRequestArrivesInWindow() {
+        // given - every poll fails to match (no matching request), so the window completes cleanly
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody("Request not found"));
+        when(mockVerificationSerializer.serialize(any(Verification.class))).thenReturn("verification_json");
+
+        // when - negative-within-timeout returns normally because the verification never passed
+        mockServerClient.verifyNever(request().withPath("/should_not_be_called"), java.time.Duration.ofMillis(250));
+
+        // then - it polled at least once during the window
+        verify(mockHttpClient, new AtLeast(1)).sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean());
+    }
+
+    @Test
+    public void shouldVerifyNeverFailWhenMatchingRequestArrives() {
+        // given - the verification passes (empty body) meaning a matching request was observed
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withBody(""));
+        when(mockVerificationSerializer.serialize(any(Verification.class))).thenReturn("verification_json");
+
+        try {
+            mockServerClient.verifyNever(request().withPath("/should_not_be_called"), java.time.Duration.ofSeconds(5));
+            fail("expected AssertionError to be thrown when a matching request is observed");
+        } catch (AssertionError ae) {
+            // then - the window failed because a match was found
+            assertThat(ae.getMessage(), containsString("window that was expected to find no match"));
+        }
+    }
+
+    @Test
+    public void shouldVerifyNeverRejectNullWindow() {
+        IllegalArgumentException illegalArgumentException = assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifyNever(request(), (java.time.Duration) null));
+        assertThat(illegalArgumentException.getMessage(), containsString("requires a non null non-negative Duration object"));
     }
 
     @Test
@@ -1569,6 +1839,186 @@ public class MockServerClientTest {
     }
 
     // -------------------------------------------------------------------
+    // Load Scenario (load injection) Control-Plane
+    // -------------------------------------------------------------------
+
+    private static LoadScenario sampleLoadScenario() {
+        return LoadScenario.loadScenario("smoke")
+            .withProfile(LoadProfile.of(
+                LoadStage.rampVus(0, 5, 5000L, RampCurve.LINEAR),
+                LoadStage.constantVus(5, 10000L),
+                LoadStage.pause(1000L),
+                LoadStage.constantRate(2.0, 5000L)
+            ))
+            .withSteps(java.util.Collections.singletonList(
+                LoadStep.loadStep(request().withMethod("GET").withPath("/api/health"))
+            ));
+    }
+
+    @Test
+    public void shouldSendRegisterLoadScenarioRequest() {
+        // when
+        mockServerClient.loadScenario(sampleLoadScenario());
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario"));
+        assertThat(sent.getBodyAsString(), containsString("\"name\" : \"smoke\""));
+        assertThat(sent.getBodyAsString(), containsString("/api/health"));
+    }
+
+    @Test
+    public void shouldThrowErrorWhenRegisterLoadScenarioRejected() {
+        // given (a 4xx other than 400/401, which sendRequest itself maps to dedicated exceptions)
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(CONFLICT.code()).withBody("{\"error\":\"a load scenario named 'smoke' is already registered\"}"));
+
+        // when
+        ClientException clientException = assertThrows(ClientException.class, () -> mockServerClient.loadScenario(sampleLoadScenario()));
+
+        // then
+        assertThat(clientException.getMessage(), containsString("while registering load scenario"));
+    }
+
+    @Test
+    public void shouldSendListLoadScenariosRequest() {
+        // when
+        mockServerClient.loadScenarios();
+
+        // then
+        verify(mockHttpClient).sendRequest(
+            request()
+                .withHeader(HOST.toString(), "localhost:" + 1090)
+                .withMethod("GET")
+                .withPath("/mockserver/loadScenario"),
+            20000,
+            TimeUnit.MILLISECONDS,
+            false
+        );
+    }
+
+    @Test
+    public void shouldSendGetLoadScenarioByNameRequest() {
+        // when
+        mockServerClient.getLoadScenario("smoke");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("GET"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario/smoke"));
+    }
+
+    @Test
+    public void shouldSendDeleteLoadScenarioByNameRequest() {
+        // when
+        mockServerClient.deleteLoadScenario("smoke");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("DELETE"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario/smoke"));
+    }
+
+    @Test
+    public void shouldSendClearLoadScenariosRequest() {
+        // when
+        mockServerClient.clearLoadScenarios();
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("DELETE"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario"));
+    }
+
+    @Test
+    public void shouldSendStartLoadScenariosRequest() {
+        // when
+        mockServerClient.startLoadScenarios("smoke", "soak");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario/start"));
+        assertThat(sent.getBodyAsString(), is("{\"names\":[\"smoke\",\"soak\"]}"));
+    }
+
+    @Test
+    public void shouldThrowHelpfulErrorWhenLoadGenerationDisabledOnStart() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(FORBIDDEN.code()).withBody("{\"error\":\"load generation not enabled (set loadGenerationEnabled=true)\"}"));
+
+        // when
+        ClientException clientException = assertThrows(ClientException.class, () -> mockServerClient.startLoadScenarios("smoke"));
+
+        // then
+        assertThat(clientException.getMessage(), containsString("loadGenerationEnabled=true"));
+    }
+
+    @Test
+    public void shouldThrowErrorWhenStartLoadScenarioUnknownName() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(NOT_FOUND.code()).withBody("{\"error\":\"no load scenario registered with name 'ghost'\"}"));
+
+        // when
+        ClientException clientException = assertThrows(ClientException.class, () -> mockServerClient.startLoadScenarios("ghost"));
+
+        // then
+        assertThat(clientException.getMessage(), containsString("while starting load scenarios"));
+    }
+
+    @Test
+    public void shouldSendStopNamedLoadScenariosRequest() {
+        // when
+        mockServerClient.stopLoadScenarios("smoke");
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario/stop"));
+        assertThat(sent.getBodyAsString(), is("{\"names\":[\"smoke\"]}"));
+    }
+
+    @Test
+    public void shouldSendStopAllLoadScenariosRequest() {
+        // when
+        mockServerClient.stopLoadScenarios();
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/loadScenario/stop"));
+        assertThat(sent.getBodyAsString(), is(""));
+    }
+
+    @Test
+    public void shouldRunLoadScenarioRegisterThenStart() {
+        // when
+        mockServerClient.runLoadScenario(sampleLoadScenario());
+
+        // then
+        verify(mockHttpClient, times(2)).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        java.util.List<HttpRequest> sent = httpRequestArgumentCaptor.getAllValues();
+        HttpRequest register = sent.get(0);
+        assertThat(register.getMethod().getValue(), is("PUT"));
+        assertThat(register.getPath().getValue(), is("/mockserver/loadScenario"));
+        assertThat(register.getBodyAsString(), containsString("\"name\" : \"smoke\""));
+        HttpRequest start = sent.get(1);
+        assertThat(start.getMethod().getValue(), is("PUT"));
+        assertThat(start.getPath().getValue(), is("/mockserver/loadScenario/start"));
+        assertThat(start.getBodyAsString(), is("{\"names\":[\"smoke\"]}"));
+    }
+
+    // -------------------------------------------------------------------
     // AsyncAPI Control-Plane
     // -------------------------------------------------------------------
 
@@ -1643,134 +2093,6 @@ public class MockServerClientTest {
     @Test
     public void shouldThrowIllegalArgumentForNullVerifyAsyncMessage() {
         assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifyAsyncMessage(null));
-    }
-
-    // -------------------------------------------------------------------
-    // Breakpoint Control
-    // -------------------------------------------------------------------
-
-    @Test
-    public void shouldSendListBreakpointsRequest() {
-        // given
-        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
-            .thenReturn(response().withBody("{\"pausedExchanges\":[],\"count\":0}"));
-
-        // when
-        String result = mockServerClient.listBreakpoints();
-
-        // then
-        verify(mockHttpClient).sendRequest(
-            request()
-                .withHeader(HOST.toString(), "localhost:" + 1090)
-                .withMethod("GET")
-                .withPath("/mockserver/breakpoint"),
-            20000,
-            TimeUnit.MILLISECONDS,
-            false
-        );
-        assertThat(result, containsString("pausedExchanges"));
-    }
-
-    @Test
-    public void shouldSendContinueBreakpointRequest() {
-        // given
-        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
-            .thenReturn(response().withBody("{\"status\":\"continued\",\"id\":\"abc-123\"}"));
-
-        // when
-        mockServerClient.continueBreakpoint("abc-123");
-
-        // then
-        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
-        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
-        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
-        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/continue"));
-        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
-        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
-    }
-
-    @Test
-    public void shouldThrowIllegalArgumentForBlankContinueBreakpointId() {
-        assertThrows(IllegalArgumentException.class, () -> mockServerClient.continueBreakpoint(""));
-        assertThrows(IllegalArgumentException.class, () -> mockServerClient.continueBreakpoint(null));
-    }
-
-    @Test
-    public void shouldSendModifyBreakpointRequest() {
-        // given
-        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
-            .thenReturn(response().withBody("{\"status\":\"modified\",\"id\":\"abc-123\"}"));
-        HttpRequest modifiedRequest = request().withMethod("POST").withPath("/modified");
-        when(mockHttpRequestSerializer.serialize(modifiedRequest)).thenReturn("{\"method\":\"POST\",\"path\":\"/modified\"}");
-
-        // when
-        mockServerClient.modifyBreakpoint("abc-123", modifiedRequest);
-
-        // then
-        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
-        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
-        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
-        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/modify"));
-        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
-        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
-        assertThat(sentRequest.getBodyAsString(), containsString("\"httpRequest\""));
-    }
-
-    @Test
-    public void shouldThrowIllegalArgumentForBlankModifyBreakpointId() {
-        assertThrows(IllegalArgumentException.class, () -> mockServerClient.modifyBreakpoint("", request()));
-    }
-
-    @Test
-    public void shouldThrowIllegalArgumentForNullModifyBreakpointRequest() {
-        assertThrows(IllegalArgumentException.class, () -> mockServerClient.modifyBreakpoint("abc-123", null));
-    }
-
-    @Test
-    public void shouldSendAbortBreakpointRequest() {
-        // given
-        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
-            .thenReturn(response().withBody("{\"status\":\"aborted\",\"id\":\"abc-123\"}"));
-
-        // when
-        mockServerClient.abortBreakpoint("abc-123");
-
-        // then
-        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
-        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
-        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
-        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/abort"));
-        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
-        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
-        // no httpResponse field when response is null
-        assertThat(sentRequest.getBodyAsString(), not(containsString("\"httpResponse\"")));
-    }
-
-    @Test
-    public void shouldSendAbortBreakpointRequestWithResponse() {
-        // given
-        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
-            .thenReturn(response().withBody("{\"status\":\"aborted\",\"id\":\"abc-123\"}"));
-        HttpResponse abortResponse = response().withStatusCode(503).withBody("Service Unavailable");
-        when(mockHttpResponseSerializer.serialize(abortResponse)).thenReturn("{\"statusCode\":503,\"body\":\"Service Unavailable\"}");
-
-        // when
-        mockServerClient.abortBreakpoint("abc-123", abortResponse);
-
-        // then
-        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
-        HttpRequest sentRequest = httpRequestArgumentCaptor.getValue();
-        assertThat(sentRequest.getMethod().getValue(), is("PUT"));
-        assertThat(sentRequest.getPath().getValue(), is("/mockserver/breakpoint/abort"));
-        assertThat(sentRequest.getBodyAsString(), containsString("\"id\""));
-        assertThat(sentRequest.getBodyAsString(), containsString("abc-123"));
-        assertThat(sentRequest.getBodyAsString(), containsString("\"httpResponse\""));
-    }
-
-    @Test
-    public void shouldThrowIllegalArgumentForBlankAbortBreakpointId() {
-        assertThrows(IllegalArgumentException.class, () -> mockServerClient.abortBreakpoint(""));
-        assertThrows(IllegalArgumentException.class, () -> mockServerClient.abortBreakpoint(null));
     }
 
     // -------------------------------------------------------------------

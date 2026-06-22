@@ -1,0 +1,17 @@
+meta {
+  name: retrieve the current proxy / mock operating mode
+  type: http
+  seq: 12
+}
+
+get {
+  url: {{baseUrl}}/mockserver/mode
+  body: none
+  auth: inherit
+}
+
+docs {
+  returns the current operating mode and whether unmatched requests are proxied
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

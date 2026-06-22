@@ -2,9 +2,25 @@
 
 ## TL;DR
 
-The collection is already committed at `examples/postman/MockServer.postman_collection.json`.
+**Status: LIVE + automated.** The collection is published to the public workspace
+`official-mockserver` (workspace `1739eeee-…`, collection `3256712-63a2d67a-…`) and now covers
+**all 68 control-plane endpoints**. It is **generated from the OpenAPI spec**
+(`jekyll-www.mock-server.com/mockserver-openapi.yaml`) by
+`scripts/collections/generate_collections.py`, and the release pipeline's `postman-collection`
+component re-generates and **republishes it via the Postman API on every release** (key in Secrets
+Manager at `mockserver-build/postman-api-key`). The steps below are the original one-time go-live
+runbook, kept for reference / disaster recovery.
+
+The collection is committed at `examples/postman/MockServer.postman_collection.json`.
 Publishing it to the Postman Public API Network takes about 10 minutes and needs a Postman account.
 Once live, link the workspace URL from the website and README.
+
+**Cost: free.** Publishing a public workspace / public collection to the Postman API Network is
+available on every tier, including the **Free** plan — no paid subscription is required. The
+March 2026 pricing change restricts *multi-user team collaboration* (the Free plan is now
+single-user), **not** public publishing; a single-user Free account can publish this collection.
+The only practical blocker has been network access — `postman.com` is blocked on the company
+laptop, so publish from another machine.
 
 ---
 
@@ -87,14 +103,18 @@ After publishing, add this badge to `README.md` in the **Quick Start** section (
 
 ## Keeping it in sync
 
-The JSON file in `examples/postman/MockServer.postman_collection.json` is the source of truth.
-When the control-plane API changes in a release:
+The **OpenAPI spec** (`jekyll-www.mock-server.com/mockserver-openapi.yaml`) is the source of truth —
+**not** the collection JSON, which is generated. When the control-plane API changes:
 
-1. Update the JSON file in the repo (keep the `_postman_id` stable so Postman tracks history).
-2. Re-import into the public workspace: **Import → Replace** the existing collection.
-3. No URL change — the workspace and collection IDs remain stable.
+1. Edit the spec (add/adjust the endpoint and its `requestBody` example).
+2. Regenerate: `python3 scripts/collections/generate_collections.py` (rewrites both the Postman
+   JSON and the Bruno collection) and commit the result.
+3. Validate: `python3 scripts/collections/test_collections.py`.
 
-There is no Buildkite automation for this step; it is a manual follow-up after each release.
+The release pipeline's `postman-collection` component then **republishes automatically** via the
+Postman API on each release (the workspace and collection IDs stay stable, so no URL changes). If you
+ever need to publish by hand, `PUT https://api.getpostman.com/collections/<uid>` with
+`{"collection": <json>}` and an `X-Api-Key` header does the same thing.
 
 ---
 

@@ -1,0 +1,23 @@
+meta {
+  name: trigger registered load scenario(s) to run
+  type: http
+  seq: 6
+}
+
+put {
+  url: {{baseUrl}}/mockserver/loadScenario/start
+  body: none
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+docs {
+  Triggers one or more registered load scenarios to start running concurrently. Each gets a fresh run id and honours its own startDelayMillis (a positive delay → the scenario is PENDING until the delay elapses, then RUNNING). Requires loadGenerationEnabled=true (else 403). 404 if a name is not registered. Rejected with 400 if it would exceed loadGenerationMaxConcurrentScenarios (default 10). Re-triggering an already-active name replaces that run.
+  
+  the registered scenario name(s) to trigger
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

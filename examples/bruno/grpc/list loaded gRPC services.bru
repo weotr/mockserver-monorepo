@@ -1,0 +1,17 @@
+meta {
+  name: list loaded gRPC services
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/mockserver/grpc/services
+  body: none
+  auth: inherit
+}
+
+docs {
+  Returns the gRPC services available from the loaded proto descriptor set, each with its methods and their input/output types and streaming flags.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

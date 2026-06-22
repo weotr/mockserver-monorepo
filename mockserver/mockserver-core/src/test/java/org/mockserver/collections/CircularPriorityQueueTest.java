@@ -4,8 +4,10 @@ import org.junit.Test;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.SortableExpectationId;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.CoreMatchers.not;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -624,6 +626,135 @@ public class CircularPriorityQueueTest {
         // then
         assertThat(concurrentLinkedQueue.size(), is(3));
         assertThat(concurrentLinkedQueue.toSortedList(), contains(five, one, two));
+    }
+
+    @Test
+    public void shouldFireEvictionListenerExactlyOncePerOverflowEvictedElement() {
+        // given
+        List<SortableExpectationId> evicted = new ArrayList<>();
+        CircularPriorityQueue<String, SortableExpectationId, SortableExpectationId> queue = new CircularPriorityQueue<>(
+            2,
+            EXPECTATION_SORTABLE_PRIORITY_COMPARATOR,
+            id -> id,
+            id -> id.id
+        );
+        queue.setEvictionListener(evicted::add);
+
+        SortableExpectationId one = new SortableExpectationId("1", 0, 0);
+        SortableExpectationId two = new SortableExpectationId("2", 0, 0);
+        SortableExpectationId three = new SortableExpectationId("3", 0, 0);
+        SortableExpectationId four = new SortableExpectationId("4", 0, 0);
+
+        // when - overflow past maxSize 2
+        queue.add(one);
+        queue.add(two);
+        assertThat(evicted, is(empty()));
+        queue.add(three); // evicts oldest "1"
+        queue.add(four);  // evicts oldest "2"
+
+        // then - each overflow-evicted element fired exactly once, in eviction order
+        assertThat(evicted, contains(one, two));
+        assertThat(queue.size(), is(2));
+        assertThat(queue.toSortedList(), containsInAnyOrder(three, four));
+    }
+
+    @Test
+    public void shouldNotFireEvictionListenerOnExplicitRemoveOrReplace() {
+        // given
+        AtomicInteger evictionCount = new AtomicInteger(0);
+        CircularPriorityQueue<String, Expectation, SortableExpectationId> queue = new CircularPriorityQueue<>(
+            5, EXPECTATION_SORTABLE_PRIORITY_COMPARATOR, Expectation::getSortableId, Expectation::getId);
+        queue.setEvictionListener(e -> evictionCount.incrementAndGet());
+
+        long ts = System.currentTimeMillis();
+        Expectation a = when(request("a"), 0).withCreated(ts).withId("a");
+        Expectation b = when(request("b"), 0).withCreated(ts + 1).withId("b");
+        queue.add(a);
+        queue.add(b);
+
+        // when - explicit remove and replace (no overflow)
+        queue.remove(a);
+        Expectation bUpdated = when(request("b2"), 5).withCreated(ts + 1).withId("b");
+        queue.replaceValue("b", bUpdated);
+
+        // then - listener NOT invoked for remove/replace
+        assertThat(evictionCount.get(), is(0));
+        assertThat(queue.getByKey("b"), is(Optional.of(bUpdated)));
+    }
+
+    @Test
+    public void shouldRestoreNoOpEvictionListenerWhenSetToNull() {
+        // given
+        AtomicInteger evictionCount = new AtomicInteger(0);
+        CircularPriorityQueue<String, SortableExpectationId, SortableExpectationId> queue = new CircularPriorityQueue<>(
+            1, EXPECTATION_SORTABLE_PRIORITY_COMPARATOR, id -> id, id -> id.id);
+        queue.setEvictionListener(e -> evictionCount.incrementAndGet());
+        queue.setEvictionListener(null); // restore no-op
+
+        // when - force an overflow eviction
+        queue.add(new SortableExpectationId("1", 0, 0));
+        queue.add(new SortableExpectationId("2", 0, 0));
+
+        // then - no NPE, no count (default no-op restored)
+        assertThat(evictionCount.get(), is(0));
+        assertThat(queue.size(), is(1));
+    }
+
+    @Test
+    public void shouldPreserveEvictionPositionAcrossReplaceValue() {
+        // given - a full queue of size 3 with a known eviction order one -> two -> three
+        CircularPriorityQueue<String, Expectation, SortableExpectationId> queue = new CircularPriorityQueue<>(
+            3, EXPECTATION_SORTABLE_PRIORITY_COMPARATOR, Expectation::getSortableId, Expectation::getId);
+
+        long ts = System.currentTimeMillis();
+        Expectation one = when(request("one"), 0).withCreated(ts + 1).withId("one");
+        Expectation two = when(request("two"), 0).withCreated(ts + 2).withId("two");
+        Expectation three = when(request("three"), 0).withCreated(ts + 3).withId("three");
+        queue.add(one);
+        queue.add(two);
+        queue.add(three);
+
+        // when - replace the OLDEST element (one) in place
+        Expectation oneUpdated = when(request("one-v2"), 9).withCreated(ts + 1).withId("one");
+        assertThat(queue.replaceValue("one", oneUpdated), is(true));
+        // the live value is swapped
+        assertThat(queue.getByKey("one"), is(Optional.of(oneUpdated)));
+
+        // and - add a 4th element, forcing one eviction
+        Expectation four = when(request("four"), 0).withCreated(ts + 4).withId("four");
+        queue.add(four);
+
+        // then - "one" is still the eviction victim despite the in-place replace,
+        // proving replaceValue did NOT move it to the back of the insertion queue
+        assertThat(queue.size(), is(3));
+        assertThat(queue.getByKey("one"), is(Optional.empty()));
+        assertThat(queue.getByKey("two").isPresent(), is(true));
+        assertThat(queue.getByKey("three").isPresent(), is(true));
+        assertThat(queue.getByKey("four").isPresent(), is(true));
+    }
+
+    @Test
+    public void shouldFireEvictionListenerWithReplacedValueNotStaleOriginal() {
+        // given - replaceValue swaps the live value; eviction must surface the LIVE value
+        List<Expectation> evicted = new ArrayList<>();
+        CircularPriorityQueue<String, Expectation, SortableExpectationId> queue = new CircularPriorityQueue<>(
+            2, EXPECTATION_SORTABLE_PRIORITY_COMPARATOR, Expectation::getSortableId, Expectation::getId);
+        queue.setEvictionListener(evicted::add);
+
+        long ts = System.currentTimeMillis();
+        Expectation one = when(request("one"), 0).withCreated(ts + 1).withId("one");
+        Expectation two = when(request("two"), 0).withCreated(ts + 2).withId("two");
+        queue.add(one);
+        queue.add(two);
+
+        // replace "one" in place, then overflow to evict it
+        Expectation oneUpdated = when(request("one-v2"), 0).withCreated(ts + 1).withId("one");
+        queue.replaceValue("one", oneUpdated);
+        Expectation three = when(request("three"), 0).withCreated(ts + 3).withId("three");
+        queue.add(three); // evicts "one", which now resolves to oneUpdated
+
+        // then - the eviction listener received the live (replaced) value
+        assertThat(evicted, contains(oneUpdated));
     }
 
 }

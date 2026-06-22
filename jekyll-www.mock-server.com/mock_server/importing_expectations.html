@@ -1,24 +1,25 @@
 ---
-title: Importing Expectations from HAR & Postman
-description: Import expectations into MockServer from HAR (HTTP Archive) or Postman Collection files via a single PUT /mockserver/import request, with format auto-detection.
-shortTitle: Import HAR / Postman
+title: Importing Expectations from HAR, Postman & Pact
+description: Import expectations into MockServer from HAR (HTTP Archive), Postman Collection, or Pact v3 contract files via a single PUT /mockserver/import request, with format auto-detection.
+shortTitle: Import HAR / Postman / Pact
 layout: page
-pageOrder: 5
+pageOrder: 6
 section: 'Creating Mocks'
 subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2026-06-02T00:00:00+00:00
+  lastmod: 2026-06-17T00:00:00+00:00
 ---
 
-<p>MockServer can import expectations directly from <strong>HAR (HTTP Archive)</strong> files and <strong>Postman Collection v2.x</strong> files. This lets you record real HTTP traffic in your browser or Postman, then replay it through MockServer without writing expectations by hand.</p>
+<p>MockServer can import expectations directly from <strong>HAR (HTTP Archive)</strong> files, <strong>Postman Collection v2.x</strong> files, and <strong>Pact v3 consumer contracts</strong>. This lets you record real HTTP traffic, reuse existing collections, or bootstrap stubs from a published contract without writing expectations by hand.</p>
 
 <p>Common use cases:</p>
 <ul>
     <li><strong>Record-and-replay</strong> &mdash; capture traffic with browser DevTools (Export HAR) or Postman, then import it to create a mock that replays the recorded responses</li>
     <li><strong>Migrate existing collections</strong> &mdash; teams with an existing Postman collection can import their saved example responses into MockServer</li>
     <li><strong>Bootstrap mocks quickly</strong> &mdash; import a HAR from staging traffic to get a working mock in seconds, then fine-tune individual expectations as needed</li>
+    <li><strong>Replay a Pact contract</strong> &mdash; import a Pact v3 consumer contract to create a stub provider that satisfies the contract without standing up the real service</li>
 </ul>
 
 <a id="import_endpoint" class="anchor" href="#import_endpoint">&nbsp;</a>
@@ -35,6 +36,7 @@ sitemap:
 <ul>
     <li>If the body contains <span class="inline_code">log.entries</span>, it is treated as HAR</li>
     <li>If the body contains <span class="inline_code">info</span> and <span class="inline_code">item</span>, it is treated as a Postman Collection</li>
+    <li>If the body contains a top-level <span class="inline_code">interactions</span> array, it is treated as a Pact v3 contract</li>
 </ul>
 
 <p>You can also override auto-detection with the <span class="inline_code">format</span> query parameter:</p>
@@ -58,12 +60,52 @@ sitemap:
             <td><span class="inline_code">postman</span></td>
             <td>Force Postman Collection parsing</td>
         </tr>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">pact</span></td>
+            <td>Force Pact v3 contract parsing</td>
+        </tr>
     </tbody>
 </table>
 
 <p>If auto-detection fails and no <span class="inline_code">format</span> parameter is provided, MockServer returns <span class="inline_code">400 Bad Request</span> with a message suggesting you specify the format explicitly.</p>
 
-<p><strong>Insomnia collections are not supported.</strong> Attempting to import an Insomnia export returns a clear error message. Convert Insomnia collections to HAR or Postman format first.</p>
+<p><strong>Insomnia is not a supported import format</strong> &mdash; the only recognised formats are <span class="inline_code">har</span>, <span class="inline_code">postman</span>, and <span class="inline_code">pact</span>. Export from Insomnia as HAR, or convert to a Postman collection, then import that instead.</p>
+
+<a id="import_redaction" class="anchor" href="#import_redaction">&nbsp;</a>
+
+<h2>Sensitive Data Redaction</h2>
+
+<p>MockServer automatically redacts sensitive values from imported files before creating expectations, so that credentials captured in recorded traffic are not stored in your mock configuration.</p>
+
+<p><strong>Headers redacted by default:</strong> <span class="inline_code">Authorization</span>, <span class="inline_code">X-Api-Key</span>, <span class="inline_code">X-Auth-Token</span>, <span class="inline_code">Cookie</span>, <span class="inline_code">Set-Cookie</span>, <span class="inline_code">Proxy-Authorization</span>, and similar credential-bearing headers. The header name is preserved in the generated expectation but the value is replaced with a placeholder so the mock does not depend on a specific secret.</p>
+
+<p><strong>JSON body fields redacted by default:</strong> common secret field names such as <span class="inline_code">password</span>, <span class="inline_code">secret</span>, <span class="inline_code">token</span>, <span class="inline_code">api_key</span>, <span class="inline_code">apiKey</span>, <span class="inline_code">access_token</span>, and <span class="inline_code">refresh_token</span> are replaced with a placeholder value in request and response bodies.</p>
+
+<p>If you need to disable redaction (for example when importing a file that contains only test credentials and you want exact value matching), or to extend the set of redacted fields for your organisation, pass import options in the query string:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Query parameter</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">redactSensitiveData=false</span></td>
+            <td>Disable all redaction; imported values are stored as-is</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">additionalRedactedHeaders=X-My-Secret,X-Internal-Key</span></td>
+            <td>Comma-separated list of extra header names to redact, in addition to the defaults</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">additionalRedactedBodyFields=clientSecret,privateKey</span></td>
+            <td>Comma-separated list of extra JSON body field names to redact, in addition to the defaults</td>
+        </tr>
+    </tbody>
+</table>
 
 <a id="import_har" class="anchor" href="#import_har">&nbsp;</a>
 
@@ -80,7 +122,7 @@ sitemap:
     <li><strong>Response headers excluded:</strong> <span class="inline_code">Date</span>, <span class="inline_code">Transfer-Encoding</span>, <span class="inline_code">Content-Length</span>, <span class="inline_code">Connection</span>, <span class="inline_code">Set-Cookie</span>, <span class="inline_code">Server</span>, <span class="inline_code">Vary</span>, trace headers, and others</li>
 </ul>
 
-<p>Non-volatile headers (such as <span class="inline_code">Content-Type</span>, <span class="inline_code">Accept-Language</span>) are preserved and included in the generated expectations.</p>
+<p>Non-volatile headers (such as <span class="inline_code">Content-Type</span>) are preserved and included in the generated expectations.</p>
 
 <h3>Request body handling</h3>
 
@@ -126,6 +168,78 @@ sitemap:
     </div>
 </div>
 
+<a id="import_pact" class="anchor" href="#import_pact">&nbsp;</a>
+
+<h2>Importing from a Pact v3 Contract</h2>
+
+<p>MockServer accepts a <a target="_blank" href="https://docs.pact.io/" rel="noopener noreferrer">Pact v3</a> consumer contract and generates one expectation per interaction. This is the inverse of the <a href="/mock_server/pact_export.html">Pact export</a> endpoint: rather than producing a contract from active expectations, it <em>creates</em> expectations directly from the contract, turning a published contract into a ready-to-use stub provider.</p>
+
+<p>For each interaction, the importer builds:</p>
+<ul>
+    <li>A request matcher from the interaction's <span class="inline_code">request</span> object (<span class="inline_code">method</span>, <span class="inline_code">path</span>, <span class="inline_code">query</span>, <span class="inline_code">headers</span>, <span class="inline_code">body</span>)</li>
+    <li>A response from the interaction's <span class="inline_code">response</span> object (<span class="inline_code">status</span>, <span class="inline_code">headers</span>, <span class="inline_code">body</span>)</li>
+</ul>
+
+<p>JSON request bodies are matched semantically (key-order and whitespace insensitive) rather than by exact string equality.</p>
+
+<p>The expectation ID is set to the interaction's <span class="inline_code">description</span> field, or <span class="inline_code">pact-&lt;index&gt;</span> when the description is blank.</p>
+
+<h3>Pact matchingRules mapping</h3>
+
+<p>Pact v3 contracts carry optional <span class="inline_code">matchingRules.request</span> instructions that relax exact-equality matching. MockServer translates them to matcher values:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Pact rule</th>
+            <th>MockServer matcher value</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">regex</span></td>
+            <td>The supplied regex pattern (MockServer matches it as a regular expression)</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">include</span></td>
+            <td><span class="inline_code">.*&lt;value&gt;.*</span> &mdash; a substring regex</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">type</span> / <span class="inline_code">number</span> / <span class="inline_code">integer</span> / <span class="inline_code">decimal</span> / <span class="inline_code">boolean</span></td>
+            <td><span class="inline_code">.+</span> &mdash; any non-empty value (MockServer has no first-class type matcher for string fields)</td>
+        </tr>
+        <tr>
+            <td>Unrecognised rule / no rule</td>
+            <td>The concrete example value from the contract (exact match)</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Unrecognised rule types fall back to exact matching and are logged at DEBUG.</p>
+
+<h3>Dedicated endpoint</h3>
+
+<p>A dedicated URL is also available for Pact-only imports; it behaves identically to <span class="inline_code">PUT /mockserver/import?format=pact</span> but without needing the query parameter:</p>
+
+<pre class="prettyprint code"><code class="code">PUT /mockserver/pact/import</code></pre>
+
+<p>Both the generic and dedicated endpoints accept the same <a href="#import_redaction">redaction query parameters</a> and return <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+
+<button id="button_import_pact" class="accordion">import expectations from a Pact v3 contract</button>
+<div class="panel">
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import?format=pact" \
+  -H "Content-Type: application/json" \
+  --data-binary @consumer-provider.json</code></pre>
+        <p>Or use the dedicated endpoint:</p>
+        <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact/import" \
+  -H "Content-Type: application/json" \
+  --data-binary @consumer-provider.json</code></pre>
+        <p>MockServer returns <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
+    </div>
+</div>
+
 <a id="import_what_is_generated" class="anchor" href="#import_what_is_generated">&nbsp;</a>
 
 <h2>What gets generated</h2>
@@ -152,7 +266,7 @@ sitemap:
         </tr>
         <tr>
             <td>400</td>
-            <td>Empty body, invalid JSON, unrecognised format, or missing required structure (<span class="inline_code">log.entries</span> for HAR, <span class="inline_code">info</span>/<span class="inline_code">item</span> for Postman)</td>
+            <td>Empty body, invalid JSON, unrecognised format, or missing required structure (<span class="inline_code">log.entries</span> for HAR, <span class="inline_code">info</span>/<span class="inline_code">item</span> for Postman, <span class="inline_code">interactions</span> array for Pact)</td>
         </tr>
     </tbody>
 </table>
@@ -165,4 +279,5 @@ sitemap:
     <li><a href="/mock_server/creating_expectations.html">Creating Expectations</a> &mdash; the structure of each expectation you are importing: request matchers and response, forward, callback, and error actions</li>
     <li><a href="/mock_server/initializing_expectations.html">Initializing Expectations</a> &mdash; load expectations automatically at startup from a JSON file or initializer class</li>
     <li><a href="/mock_server/persisting_expectations.html">Persisting Expectations</a> &mdash; save expectations so they survive a restart</li>
+    <li><a href="/mock_server/pact_export.html">Pact Export &amp; Verification</a> &mdash; export active expectations as a Pact v3 contract, or verify that expectations satisfy a contract</li>
 </ul>

@@ -11,6 +11,7 @@ import java.util.List;
  */
 public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeToString implements DTO<VerificationSequence> {
     private List<RequestDefinitionDTO> httpRequests = new ArrayList<>();
+    private List<HttpResponseDTO> httpResponses = new ArrayList<>();
     private List<ExpectationId> expectationIds = new ArrayList<>();
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
 
@@ -22,6 +23,9 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
                 } else if (httpRequest instanceof OpenAPIDefinition) {
                     httpRequests.add(new OpenAPIDefinitionDTO((OpenAPIDefinition) httpRequest));
                 }
+            }
+            for (HttpResponse httpResponse : verification.getHttpResponses()) {
+                httpResponses.add(new HttpResponseDTO(httpResponse));
             }
             expectationIds.addAll(verification.getExpectationIds());
             maximumNumberOfRequestToReturnInVerificationFailure = verification.getMaximumNumberOfRequestToReturnInVerificationFailure();
@@ -36,8 +40,13 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
         for (RequestDefinitionDTO httpRequest : this.httpRequests) {
             httpRequests.add(httpRequest.buildObject());
         }
+        List<HttpResponse> httpResponses = new ArrayList<>();
+        for (HttpResponseDTO httpResponse : this.httpResponses) {
+            httpResponses.add(httpResponse.buildObject());
+        }
         return new VerificationSequence()
             .withRequests(httpRequests)
+            .withResponses(httpResponses)
             .withExpectationIds(expectationIds)
             .withMaximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
     }
@@ -48,6 +57,15 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
 
     public VerificationSequenceDTO setHttpRequests(List<RequestDefinitionDTO> httpRequests) {
         this.httpRequests = httpRequests;
+        return this;
+    }
+
+    public List<HttpResponseDTO> getHttpResponses() {
+        return httpResponses;
+    }
+
+    public VerificationSequenceDTO setHttpResponses(List<HttpResponseDTO> httpResponses) {
+        this.httpResponses = httpResponses;
         return this;
     }
 

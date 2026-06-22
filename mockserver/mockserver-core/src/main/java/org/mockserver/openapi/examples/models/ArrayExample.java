@@ -45,11 +45,11 @@ public class ArrayExample extends AbstractExample {
         builder.append("[");
         if (values != null) {
             for (int i = 0; i < values.size(); i++) {
-                Example example = values.get(i);
-                builder.append(example.asString());
                 if (i > 0) {
                     builder.append(",");
                 }
+                Example example = values.get(i);
+                builder.append(example.asString());
             }
         }
         builder.append("]");

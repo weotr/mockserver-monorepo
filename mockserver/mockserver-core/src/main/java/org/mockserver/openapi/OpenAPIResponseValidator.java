@@ -29,11 +29,25 @@ public class OpenAPIResponseValidator {
         List<String> errors = new ArrayList<>();
         try {
             OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, logger);
-            Optional<Pair<String, Operation>> operationPair = openAPI
-                .getPaths()
-                .values()
-                .stream()
-                .flatMap(pathItem -> mapOperations(pathItem).stream())
+            // Search paths first, then webhooks (OAS 3.1). A valid OAS 3.1 document may omit paths
+            // entirely (webhooks-only / components-only), so getPaths() can be null — treat it as an
+            // empty stream rather than NPE-ing.
+            java.util.stream.Stream<Pair<String, Operation>> pathOps = java.util.stream.Stream.empty();
+            if (openAPI.getPaths() != null) {
+                pathOps = openAPI
+                    .getPaths()
+                    .values()
+                    .stream()
+                    .flatMap(pathItem -> mapOperations(pathItem).stream());
+            }
+            java.util.stream.Stream<Pair<String, Operation>> webhookOps = java.util.stream.Stream.empty();
+            if (openAPI.getWebhooks() != null) {
+                webhookOps = openAPI.getWebhooks()
+                    .values()
+                    .stream()
+                    .flatMap(pathItem -> mapOperations(pathItem).stream());
+            }
+            Optional<Pair<String, Operation>> operationPair = java.util.stream.Stream.concat(pathOps, webhookOps)
                 .filter(pair -> pair.getRight().getOperationId().equals(operationId))
                 .findFirst();
 
@@ -47,27 +61,54 @@ public class OpenAPIResponseValidator {
             ApiResponse apiResponse = null;
 
             if (operation.getResponses() != null) {
+                // exact three-digit match wins
                 apiResponse = operation.getResponses().get(statusCode);
                 if (apiResponse == null) {
+                    // then the range bucket (e.g. "2XX" for "200"). swagger-parser stores range keys
+                    // verbatim, and the generator (OpenAPIConverter.parseResponseStatusCode) also
+                    // accepts lowercase "2xx", so match the bucket key case-insensitively to keep the
+                    // generator and validator in agreement.
+                    String rangeBucket = (Character.toUpperCase(statusCode.charAt(0)) + "XX");
+                    apiResponse = findResponseIgnoreCase(operation.getResponses(), rangeBucket);
+                }
+                if (apiResponse == null) {
+                    // finally fall back to the "default" response
                     apiResponse = operation.getResponses().get("default");
                 }
             }
 
             if (apiResponse == null) {
-                errors.add("response status code " + statusCode + " not defined in OpenAPI spec for operation " + operationId);
+                String availableStatuses = operation.getResponses() != null && !operation.getResponses().isEmpty()
+                    ? String.join(", ", operation.getResponses().keySet())
+                    : "none";
+                errors.add("response status code " + statusCode + " not defined in OpenAPI spec for operation " + operationId + " - defined response status codes are " + availableStatuses);
                 return errors;
             }
 
-            validateResponseBody(apiResponse, response, logger, errors);
-            validateResponseHeaders(apiResponse, response, logger, errors);
+            validateResponseBody(apiResponse, operationId, response, logger, errors);
+            validateResponseHeaders(apiResponse, operationId, response, logger, errors);
         } catch (Throwable throwable) {
-            errors.add("OpenAPI response validation error: " + throwable.getMessage());
+            errors.add(OpenAPIValidationErrors.unexpectedError("OpenAPI response validation for operation " + operationId, throwable, logger));
         }
         return errors;
     }
 
+    /**
+     * Looks up a response by key ignoring case. Used for the range-bucket lookup (e.g. {@code "2XX"})
+     * so a spec authored with a lowercase range key such as {@code "2xx"} — which the generator
+     * accepts — still matches here.
+     */
+    private static ApiResponse findResponseIgnoreCase(io.swagger.v3.oas.models.responses.ApiResponses responses, String bucket) {
+        for (Map.Entry<String, ApiResponse> entry : responses.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(bucket)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
     @SuppressWarnings("unchecked")
-    private static void validateResponseBody(ApiResponse apiResponse, HttpResponse response, MockServerLogger logger, List<String> errors) {
+    private static void validateResponseBody(ApiResponse apiResponse, String operationId, HttpResponse response, MockServerLogger logger, List<String> errors) {
         if (apiResponse.getContent() == null || apiResponse.getContent().isEmpty()) {
             return;
         }
@@ -101,18 +142,18 @@ public class OpenAPIResponseValidator {
 
         try {
             String schemaJson = OBJECT_MAPPER.writeValueAsString(schema);
-            JsonSchemaValidator validator = new JsonSchemaValidator(logger, schemaJson);
+            JsonSchemaValidator validator = JsonSchemaValidator.cachedJsonSchemaValidator(logger, schemaJson);
             String validationResult = validator.isValid(bodyString, false);
             if (isNotBlank(validationResult)) {
                 errors.add("response body validation error: " + validationResult);
             }
         } catch (Throwable throwable) {
-            errors.add("failed to validate response body against schema: " + throwable.getMessage());
+            errors.add(OpenAPIValidationErrors.unexpectedError("validating response body against schema for operation " + operationId, throwable, logger));
         }
     }
 
     @SuppressWarnings("unchecked")
-    private static void validateResponseHeaders(ApiResponse apiResponse, HttpResponse response, MockServerLogger logger, List<String> errors) {
+    private static void validateResponseHeaders(ApiResponse apiResponse, String operationId, HttpResponse response, MockServerLogger logger, List<String> errors) {
         if (apiResponse.getHeaders() == null || apiResponse.getHeaders().isEmpty()) {
             return;
         }
@@ -136,13 +177,23 @@ public class OpenAPIResponseValidator {
 
             try {
                 String schemaJson = OBJECT_MAPPER.writeValueAsString(headerSchema);
-                JsonSchemaValidator validator = new JsonSchemaValidator(logger, schemaJson);
+                JsonSchemaValidator validator = JsonSchemaValidator.cachedJsonSchemaValidator(logger, schemaJson);
+                // Resolve type from getType() (OAS 3.0) or getTypes() (OAS 3.1)
+                String schemaType = headerSchema.getType();
+                if (schemaType == null && headerSchema.getTypes() != null) {
+                    @SuppressWarnings("unchecked")
+                    Set<String> types = headerSchema.getTypes();
+                    schemaType = types.stream()
+                        .filter(t -> !"null".equals(t))
+                        .findFirst()
+                        .orElse(null);
+                }
                 String jsonValue = headerValue;
-                if ("string".equals(headerSchema.getType())) {
+                if ("string".equals(schemaType)) {
                     jsonValue = OBJECT_MAPPER.writeValueAsString(headerValue);
-                } else if ("integer".equals(headerSchema.getType()) || "number".equals(headerSchema.getType())) {
+                } else if ("integer".equals(schemaType) || "number".equals(schemaType)) {
                     // leave as-is, numbers are valid JSON
-                } else if ("boolean".equals(headerSchema.getType())) {
+                } else if ("boolean".equals(schemaType)) {
                     // leave as-is, booleans are valid JSON
                 } else {
                     jsonValue = OBJECT_MAPPER.writeValueAsString(headerValue);
@@ -152,7 +203,7 @@ public class OpenAPIResponseValidator {
                     errors.add("response header " + headerName + " validation error: " + validationResult);
                 }
             } catch (Throwable throwable) {
-                errors.add("failed to validate response header " + headerName + " against schema: " + throwable.getMessage());
+                errors.add(OpenAPIValidationErrors.unexpectedError("validating response header " + headerName + " against schema for operation " + operationId, throwable, logger));
             }
         }
     }

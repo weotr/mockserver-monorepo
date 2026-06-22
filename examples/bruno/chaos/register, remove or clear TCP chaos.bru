@@ -1,0 +1,34 @@
+meta {
+  name: register, remove or clear TCP chaos
+  type: http
+  seq: 4
+}
+
+put {
+  url: {{baseUrl}}/mockserver/tcpChaos
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "host": "slow-api.example.com",
+    "chaos": {
+      "bandwidthBytesPerSec": 1024,
+      "latencyMs": 50
+    },
+    "ttlMillis": 30000
+  }
+}
+
+docs {
+  Registers a TCP-layer chaos / fault-injection profile for a downstream host, removes a host's profile, or clears all TCP chaos. Supply a 'host' with a 'chaos' object to register, 'host' with 'remove':true (or no 'chaos') to remove a single host, or 'clear':true to clear all.
+  
+  TCP chaos registration, removal or clear instruction
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

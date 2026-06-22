@@ -21,10 +21,11 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [Netty Pipeline](code/netty-pipeline.md) | Medium | Port unification, protocol detection, channel handlers, MCP handler, relay pattern |
 | [Request Processing](code/request-processing.md) | Medium | Mock matching, proxy forwarding, action dispatch, WAR bridge |
 | [Event System](code/event-system.md) | Medium | LMAX Disruptor ring buffer, verification, persistence, observers |
-| [Dashboard UI](code/dashboard-ui.md) | Medium | React SPA, Zustand state, ten top-level views (Dashboard / Traffic / Sessions / Mocks / Library / Chaos / Drift / Verification / AsyncAPI / Metrics), WebSocket communication, data assembly |
+| [Dashboard UI](code/dashboard-ui.md) | Medium | React SPA, Zustand state, twelve top-level views (Dashboard / Traffic / Sessions / Mocks / Library / Chaos / Drift / Verification / AsyncAPI / Metrics / Breakpoints / Get Started), WebSocket communication, data assembly |
 | [Domain Model](code/domain-model.md) | Low | Model hierarchy, matchers, codecs, OpenAPI support, configuration (incl. MCP) |
 | [TLS & Security](code/tls-and-security.md) | Low | BouncyCastle CA, SNI, mTLS, JWT auth, control plane security |
-| [Client & Integrations](code/client-and-integrations.md) | Low | MockServerClient, JUnit 4/5, Spring, WebSocket callbacks |
+| [Client & Integrations](code/client-and-integrations.md) | Low | MockServerClient, JUnit 4/5, Spring, WebSocket callbacks, VS Code extension, JetBrains plugin |
+| [Editor Extensions](code/editor-extensions.md) | Low | VS Code and JetBrains extensions: shared JSON Schema generation, REST client architecture, feature inventory, build/CI, gotchas |
 | [Memory Management](code/memory-management.md) | Medium | Log entry and expectation memory analysis, default limit calculation, tuning guide |
 | [Metrics & Monitoring](code/metrics.md) | Low | Prometheus metrics, memory monitoring, CSV export |
 | [Telemetry](code/telemetry.md) | Low | OpenTelemetry integration: OTLP export, GenAI spans, W3C trace context propagation |
@@ -33,7 +34,11 @@ Deep-dive documentation of MockServer's codebase, from high-level module structu
 | [LLM Codec Golden Files](code/llm-codec-fixtures.md) | Low | Automated wire-format drift detection for the LLM provider codecs: golden-master fixtures, normalization, refresh process |
 | [CLI](code/cli.md) | Low | picocli command tree, subcommands, preprocessArguments heuristic, legacy flag compatibility, how to add a subcommand |
 | [Configuration Reference](code/configuration-reference.md) | Low | Property mechanism, resolution order, four equivalent forms, how to add a property |
+| [Chaos Experiments](code/chaos.md) | Low | Scheduled multi-stage chaos experiments: ChaosExperimentOrchestrator, ordered stages, auto-halt integration, PUT/GET/DELETE /chaosExperiment |
+| [Breakpoints](code/breakpoints.md) | Low | Request/response/stream breakpoints: BreakpointRegistry, PausedExchange, request and response phases, stream frame interception |
 | [Drift Detection](code/drift-detection.md) | Low | Mock drift detection: comparing forwarded responses against stub expectations |
+| [SLO Verdicts](code/slo-verdicts.md) | Low | Synchronous SLO verdicts over forwarded traffic: SloSampleStore, SloEvaluator, PUT /mockserver/verifySLO (200 PASS / 406 FAIL) |
+| [Load Generation](code/load-generation.md) | Low | API-driven load scenarios: LoadScenarioOrchestrator, ramp profiles, per-iteration templating, PUT/GET/DELETE /mockserver/loadScenario, SLI producer for SLO verdicts |
 | [WASM Rules](code/wasm-rules.md) | Low | WASM custom rule engine: chicory interpreter, module ABI, REST endpoints, configuration |
 | [Async Messaging](code/async-messaging.md) | Low | AsyncAPI broker mocking: spec parsing, example generation, Kafka/MQTT publisher adapters, orchestrator |
 | [HTTP/3 (QUIC)](code/http3.md) | Low | Experimental HTTP/3 support: Http3Server, QUIC native dependency, MVP boundaries |
@@ -116,9 +121,9 @@ mockserver-monorepo/
 ├── terraform/                      # Terraform IaC (Buildkite agents + pipelines)
 ├── scripts/                        # Build, deploy, and utility scripts
 └── docs/                           # This documentation (you are here)
-    ├── code/                       #   Code architecture (21 docs)
+    ├── code/                       #   Code architecture (25 docs)
     ├── infrastructure/             #   AWS, CI/CD, Docker, Helm, Service Mesh (6 docs)
-    ├── operations/                 #   Build, release, deps, security, website, perf (13 docs)
+    ├── operations/                 #   Build, release, deps, security, website, perf (15 docs)
     ├── plans/                      #   Active plans and RFCs (1 doc)
     └── testing.md                  #   Test frameworks, architecture, config, coverage, CI
 ```
@@ -129,7 +134,7 @@ mockserver-monorepo/
 - **GitHub:** https://github.com/mock-server/mockserver-monorepo
 - **Docker Hub:** https://hub.docker.com/r/mockserver/mockserver
 - **Maven Central:** `org.mock-server:mockserver-netty`
-- **Helm Chart Repo:** https://www.mock-server.com/mockserver-7.0.0.tgz
+- **Helm Chart Repo:** https://www.mock-server.com/mockserver-7.1.0.tgz
 - **SwaggerHub API:** https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi
 - **Buildkite:** https://buildkite.com/mockserver/mockserver
 - **Snyk:** https://app.snyk.io/org/mockserver/projects

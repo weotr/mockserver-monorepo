@@ -8,11 +8,10 @@ import io.netty.handler.codec.http3.DefaultHttp3HeadersFrame;
 import io.netty.handler.codec.http3.Http3DataFrame;
 import io.netty.handler.codec.http3.Http3Headers;
 import io.netty.handler.codec.http3.Http3HeadersFrame;
-import org.mockserver.model.Header;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
+import org.mockserver.model.Protocol;
 
-import java.nio.charset.StandardCharsets;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -67,7 +66,11 @@ public final class Http3RequestBridge {
         HttpRequest request = HttpRequest.request()
             .withMethod(method != null ? method : "GET")
             .withPath(requestPath)
-            .withSecure(true); // HTTP/3 is always over TLS
+            .withSecure(true) // HTTP/3 is always over TLS
+            // the HTTP/3 ALPN identifier is always "h3", so the negotiated protocol is
+            // server-trusted and cannot be spoofed by a header (unlike the h2c upgrade);
+            // tag the request so it can be matched on / verified by protocol
+            .withProtocol(Protocol.HTTP_3);
 
         if (!queryString.isEmpty()) {
             request.withQueryStringParameters(parseQueryString(queryString));
@@ -151,6 +154,24 @@ public final class Http3RequestBridge {
         }
 
         return headersFrame;
+    }
+
+    /**
+     * Build a trailing HTTP/3 HEADERS frame from the response trailers, or null when the
+     * response carries no trailers. The trailer field names are lower-cased per HTTP/3
+     * (HTTP/2-style) header conventions. This is the general-purpose (non-gRPC) trailer
+     * frame; gRPC trailers (grpc-status / grpc-message) are emitted separately by
+     * {@code Http3GrpcResponseWriter}.
+     */
+    public static DefaultHttp3HeadersFrame toHttp3TrailersFrame(HttpResponse response) {
+        if (response.getTrailerMultimap() == null || response.getTrailerMultimap().isEmpty()) {
+            return null;
+        }
+        DefaultHttp3HeadersFrame trailersFrame = new DefaultHttp3HeadersFrame();
+        response.getTrailerMultimap().entries().forEach(entry ->
+            trailersFrame.headers().add(entry.getKey().getValue().toLowerCase(), entry.getValue().getValue())
+        );
+        return trailersFrame;
     }
 
     /**

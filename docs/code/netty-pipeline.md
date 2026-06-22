@@ -353,6 +353,179 @@ An `IdleStateHandler(0, 0, streamIdleTimeoutSeconds)` is added to the streaming 
 
 The server-side `NettyResponseWriter` checks `response.getStreamingBody() != null` and, when true, writes a `DefaultHttpResponse` head followed by `DefaultHttpContent` frames per chunk and `LastHttpContent.EMPTY_LAST_CONTENT` at stream end — mirroring the existing `HttpSseResponseActionHandler` pattern.
 
+## Response Trailers (Trailing Headers)
+
+A `HttpResponse` can carry **general HTTP trailers** (trailing headers) via
+`withTrailers(...)` / `withTrailer(name, values...)`, serialised in JSON as a `trailers`
+object that mirrors `headers`. When present they are emitted as protocol-appropriate
+trailing headers; when absent (null/empty — the default) the response is byte-for-byte
+identical to before.
+
+```mermaid
+flowchart TD
+    R["HttpResponse with trailers"] --> ENC["MockServerHttpToNettyHttpResponseEncoder\nMockServerHttpResponseToFullHttpResponse"]
+    ENC -->|"DefaultHttpResponse (chunked) + DefaultHttpContent +\nDefaultLastHttpContent.trailingHeaders()"| H1["HTTP/1.1: chunked body + Trailer header +\ntrailing header block"]
+    ENC -->|same LastHttpContent trailing headers| H2["HTTP/2: HttpToHttp2ConnectionHandler /\nHttp2StreamFrameToHttpObjectCodec ⇒ trailing HEADERS frame"]
+    W3["Http3ResponseWriter"] -->|"Http3RequestBridge.toHttp3TrailersFrame()"| H3["HTTP/3: trailing HEADERS frame after DATA"]
+```
+
+| Protocol | Where | How trailers are emitted |
+|----------|-------|--------------------------|
+| HTTP/1.1 | `MockServerHttpResponseToFullHttpResponse.mapResponseWithTrailers()` (`mockserver-core`) | Emits a `DefaultHttpResponse` head with **chunked** transfer-encoding and an automatic `Trailer` header listing the field names (RFC 9110 §6.5.1), the body as `DefaultHttpContent`, and a `DefaultLastHttpContent` whose `trailingHeaders()` carry the trailers. A body-less status (204/304/HEAD) yields an empty `LastHttpContent` that still carries the trailers. Trailers **force chunked encoding**: RFC 7230 §3.3.1 makes a fixed `Content-Length` and chunked transfer-encoding mutually exclusive, and Netty's `HttpObjectEncoder` only writes the trailing-header block while in its chunked state — so any explicit `Content-Length` (and `contentLengthHeaderOverride`) is **dropped** from a trailer-carrying HTTP/1.1 response. Streaming-body responses (`NettyResponseWriter.writeStreamingResponse`) are already chunked and emit the same trailing-header block on a `DefaultLastHttpContent` at stream completion. |
+| HTTP/2 | Netty `HttpToHttp2ConnectionHandler` (default pipeline) / `Http2StreamFrameToHttpObjectCodec` (gRPC-multiplex child pipeline) | Both adapters strip transfer-encoding and convert the same `LastHttpContent.trailingHeaders()` into a trailing HEADERS frame with `endStream=true`. No MockServer-specific wiring is needed beyond the HTTP/1.1 mapping. |
+| HTTP/3 | `Http3ResponseWriter` + `Http3RequestBridge.toHttp3TrailersFrame()` (`mockserver-netty`) | After the DATA frame(s), a trailing `Http3HeadersFrame` is written before the QUIC stream output is shut down — for both static and streaming responses. Field names are lower-cased per HTTP/2/3 conventions. |
+| Servlet (WAR) | `MockServerHttpResponseToHttpServletResponseEncoder.setTrailers()` (`mockserver-core`) | Sets `HttpServletResponse.setTrailerFields(...)`; the container handles framing. The Servlet API models one string value per name, so multi-valued trailers are joined with `", "` (HTTP list semantics) and duplicate names collapse to the last write — a WAR-path-only limitation. |
+
+### Precedence vs gRPC trailers
+
+gRPC responses carry their own status trailers (`grpc-status` / `grpc-message`), built by the
+gRPC layer independently of the general-trailer field:
+
+- On the **gRPC HTTP/2 path** (`GrpcToHttpResponseHandler`) the gRPC status is set as a
+  response header on a cloned `HttpResponse`; the gRPC writers (`Http3GrpcResponseWriter`,
+  `GrpcStreamResponseActionHandler`) build the trailing HEADERS frame directly from
+  `grpc-status`/`grpc-message`.
+- The gRPC writers do **not** read the general `trailers` field, so on a gRPC response general
+  trailers are simply **not emitted** — there is no name collision to resolve, because the
+  general-trailer block is never produced on the gRPC path.
+
+ByteBuf safety: the trailer path keeps the body buffer's refcount at exactly one across all
+branches — it is handed to a `DefaultHttpContent` only when non-empty and released in a
+`finally` otherwise (and on any exception between allocation and transfer), and a body-less
+response attaches an empty `Unpooled.EMPTY_BUFFER` `LastHttpContent`. The existing chunk-delay
+and HTTP/3 writer paths retain/release as before.
+
+## Connection-Lifecycle Response-Path Faults
+
+These faults fire at response/dispatch time (not connect time) and are distinct from
+the connect-time `TcpChaosHandler` faults. They are implemented in `NettyResponseWriter`
+and `Http2GoAwayEmitter`, and gated by `HttpRequestHandler`'s L6 cordon check.
+
+### Hot-path guarantee
+
+`NettyResponseWriter.resolveLifecycleProfile(HttpRequest)` resolves the host-scoped
+`TcpChaosProfile` keyed on the request `Host` header. It returns `null` immediately when:
+
+1. `ConfigurationProperties.connectionLifecycleChaosEnabled()` is `false`, OR
+2. `TcpChaosRegistry.getInstance().activeCount() == 0` (a single volatile read)
+
+When either condition holds the normal write-and-close path is taken byte-for-byte
+unchanged. There is no allocation and no additional branching on the hot path in the
+common (no-lifecycle-chaos) case.
+
+### L1 — Mid-response RST (`resetMidResponse`)
+
+`NettyResponseWriter.writeHeadThenReset()` writes the response head via `ctx.writeAndFlush(response)`,
+then on the write-complete future sets `SO_LINGER 0` and calls `channel.close()` — the same proven RST
+mechanism as `TcpChaosHandler` (zero linger makes the close emit a TCP RST rather than a FIN). The
+client sees "connection reset" while reading the body — the "server crashed mid-reply" fault.
+
+When `connectionLifecycleAutoHaltCountsRst` is true (default), the RST records
+`Metrics.incrementHttpChaosInjected("drop")` so a RST storm trips the auto-halt circuit-breaker.
+
+**Streaming carve-out (v1):** these L1/L2/L3 faults are applied only in the non-streaming
+`writeAndCloseSocket()` path. The streaming response path (`writeStreamingResponse`, SSE / chunked
+streaming) ignores lifecycle faults in v1 and completes normally even when a host profile is registered.
+
+**Host-scoping is not control-plane-exempt:** like `TcpChaosHandler`, these faults are keyed on the
+request `Host` header and are *not* control-plane-exempt — a profile registered against the MockServer
+host itself can RST a control-plane response on that host. Register lifecycle profiles against the
+mocked-upstream host. (The L6 preemption cordon below *is* control-plane-exempt.)
+
+### L2 — Host-scoped slow close (`slowCloseDelay`)
+
+`NettyResponseWriter.addCloseSocketListener()` applies the close delay in priority order:
+
+1. `ConnectionOptions.closeSocketDelay` (per-expectation)
+2. `TcpChaosProfile.slowCloseDelay` (host-scoped, L2 — only reached when no per-expectation delay is set)
+3. Immediate close (default)
+
+This means a single `PUT /mockserver/tcpChaos` registration can make every response to a given
+host linger on close without touching individual expectations.
+
+### L3 — HTTP/2 GOAWAY on the response path (`http2GoAway`)
+
+`Http2GoAwayEmitter.emit(ctx, lastStreamId, errorCode)` emits a connection-level GOAWAY frame
+so the client stops opening new streams. It is called in `NettyResponseWriter.writeAndCloseSocket()`
+before the response head is written, so the client receives the GOAWAY and can avoid opening
+further streams while the current stream still completes normally.
+
+**Implementation:** `Http2GoAwayEmitter` resolves the `Http2ConnectionHandler` via
+`ctx.pipeline().context(Http2ConnectionHandler.class)` — the same lookup pattern as
+`HttpErrorActionHandler.resetHttp2Stream`. A negative `lastStreamId` argument is converted to
+`Integer.MAX_VALUE` and clamped down by the connection handler to the actual last-processed stream.
+
+**v1 scope:** connection-level HTTP/2 pipeline only. The multiplex pipeline (per-stream child
+channels used for gRPC bidi streaming) is deferred — see [chaos.md](chaos.md).
+
+**HTTP/1.1 degradation:** when no `Http2ConnectionHandler` is found on the pipeline (HTTP/1.1
+connection), `Http2GoAwayEmitter.emit()` returns `false` and callers degrade to
+`Connection: close` + 503. GOAWAY is benign (graceful drain signal) and is NOT counted toward
+the auto-halt window.
+
+### L6 — Preemption cordon check in `HttpRequestHandler`
+
+`HttpRequestHandler.channelRead0()` checks the preemption cordon early in request processing,
+before any expectation matching:
+
+```mermaid
+flowchart TD
+    REQ["Incoming request"] --> FEAT{"connectionLifecycleChaosEnabled?"}
+    FEAT -->|No| NORMAL["Normal processing"]
+    FEAT -->|Yes| CP{"path starts with /mockserver/?"}
+    CP -->|Yes control-plane| NORMAL
+    CP -->|No| CORD{"PreemptionSimulator.isCordoned()?"}
+    CORD -->|No| NORMAL
+    CORD -->|Yes| GA{"emitsGoAway() and HTTP/2?\n(Http2GoAwayEmitter.emit returns true)"}
+    GA -->|Yes| EMIT["emit connection-level GOAWAY"]
+    GA -->|No| REJ
+    EMIT --> REJ{"rejectsNewExchanges()?"}
+    REJ -->|Yes| REJECT["503 + Retry-After + Connection: close\ncompleteInFlight() + CLOSE listener"]
+    REJ -->|No| NORMAL2["serve request normally\n(goaway-only: GOAWAY already sent / HTTP/1.1 no-op)"]
+```
+
+The control plane (`/mockserver/...`) is always exempt so the operator can observe state and issue
+`DELETE /mockserver/preemption` to uncordon. The GOAWAY is emitted lazily on a cordoned HTTP/2
+connection's next request — `Http2GoAwayEmitter.emit()` is the HTTP/2 detection (it returns `false`,
+a no-op, on HTTP/1.1). The in-flight token is completed on every branch so the drain counter cannot
+leak, and `GET /mockserver/preemption` reports the live in-flight count from `LifeCycle.getRequestsInFlight()`.
+The `isCordoned()` probe is a single volatile read when no simulation is active, so this branch adds
+nothing measurable to the hot path in the common case. GOAWAY is HTTP/2-only; HTTP/1.1 has no GOAWAY
+and falls back to the 503 path (or is served normally in goaway-only mode).
+
+## Stream-Level Error Injection (HttpError streamError)
+
+An `HttpError` action can reset the individual request stream instead of returning a response, for
+resilience testing of clients that must handle mid-stream resets. It is configured with
+`HttpError.withStreamError(long errorCode)` (or the `StreamErrorCode` enum / `withStreamErrorCodeName`
+convenience), serialised as a `streamError` integer. When `streamError` is null (the default) the
+existing `dropConnection` / `responseBytes` behaviour is unchanged.
+
+```mermaid
+flowchart TD
+    A["HttpError with streamError"] --> D{"Action dispatch\nHttpActionHandler.dispatchErrorAction"}
+    D -->|"responseWriter is StreamErrorWriter\n(HTTP/3)"| H3["Http3ResponseWriter.writeStreamError()\nQuicStreamChannel.shutdownOutput(code)\n→ QUIC RESET_STREAM"]
+    D -->|"otherwise"| HEH["HttpErrorActionHandler.handle()"]
+    HEH -->|"channel is Http2StreamChannel\n(multiplex child)"| MUX["write DefaultHttp2ResetFrame(code)\n→ RST_STREAM"]
+    HEH -->|"Http2ConnectionHandler present\n+ request.streamId (default h2 path)"| CONN["Http2ConnectionHandler.resetStream(streamId, code)\n→ RST_STREAM"]
+    HEH -->|"HTTP/1.1 (no stream)"| DROP["ctx.disconnect + close\n(connection drop fallback)"]
+```
+
+| Transport | Where | How the stream is reset |
+|-----------|-------|--------------------------|
+| HTTP/2 (default connection-level pipeline) | `HttpErrorActionHandler.resetHttp2Stream()` (`mockserver-core`) | Resolves the `Http2ConnectionHandler` (`HttpToHttp2ConnectionHandler`) via `ctx.pipeline().context(...)` and calls `resetStream(ctx, streamId, errorCode, promise)`. The stream id is carried on the `HttpRequest` (set from the `x-http2-stream-id` extension header that `InboundHttp2ToHttpAdapter` adds — now captured for both TLS h2 and cleartext h2c). |
+| HTTP/2 (gRPC multiplex pipeline) | `HttpErrorActionHandler.resetHttp2Stream()` | When the request is processed on a per-stream `Http2StreamChannel` child channel, writes a `DefaultHttp2ResetFrame(errorCode)` on that child channel; the parent `Http2MultiplexHandler`/`Http2FrameCodec` emits the `RST_STREAM`. |
+| HTTP/3 | `Http3ResponseWriter.writeStreamError()` (`mockserver-netty`), reached via the `StreamErrorWriter` seam | Calls `QuicStreamChannel.shutdownOutput(errorCode)`, sending a QUIC `RESET_STREAM` for just this stream. The QUIC types live only in the netty module, so dispatch delegates through the transport-neutral `StreamErrorWriter` seam in core (mirroring the `GrpcStreamResponseWriter` pattern). |
+| HTTP/1.1 | `HttpErrorActionHandler.handle()` | **No stream concept** — falls back to dropping the whole connection (`ctx.disconnect()` + `ctx.close()`), the same as the existing `dropConnection` behaviour. Documented caveat: a `streamError` on HTTP/1.1 closes the connection rather than resetting a single stream. |
+
+`HttpActionHandler.dispatchErrorAction()` is the single funnel for the `ERROR` action (both the
+early-match and main paths). It first checks whether the active `ResponseWriter` implements
+`StreamErrorWriter` (the HTTP/3 case) and delegates; otherwise it hands the `HttpError` plus the
+`HttpRequest` (for the stream id) to `HttpErrorActionHandler`. ByteBuf safety: the HTTP/2 reset uses
+`resetStream(...)`/a single `DefaultHttp2ResetFrame` (no body buffer), and the HTTP/3 reset allocates
+no buffer, so there is nothing to leak. Resetting one stream leaves the rest of the multiplexed
+connection intact.
+
 ## Relay Connect Pattern
 
 When HTTP CONNECT or SOCKS tunneling is established, MockServer uses a **self-loopback relay** rather than connecting directly to the target:
@@ -542,6 +715,8 @@ stateDiagram-v2
 | `PortUnificationHandler` | `mockserver-netty/.../netty/unification/PortUnificationHandler.java` | Protocol detection and pipeline assembly |
 | `HttpRequestHandler` | `mockserver-netty/.../netty/HttpRequestHandler.java` | Main request dispatcher |
 | `NettyResponseWriter` | `mockserver-netty/.../netty/responsewriter/NettyResponseWriter.java` | Writes responses to Netty channels |
+| `HttpErrorActionHandler` | `mockserver-core/.../mock/action/http/HttpErrorActionHandler.java` | Applies an `HttpError` action: raw response bytes, HTTP/2 stream reset (RST_STREAM), and/or connection drop (also the HTTP/1.1 stream-error fallback) |
+| `StreamErrorWriter` | `mockserver-core/.../responsewriter/StreamErrorWriter.java` | Transport-neutral seam for resetting the request stream; implemented by `Http3ResponseWriter` for the QUIC RESET_STREAM |
 | `HttpConnectHandler` | `mockserver-netty/.../netty/proxy/connect/HttpConnectHandler.java` | HTTP CONNECT tunnel handler |
 | `RelayConnectHandler` | `mockserver-netty/.../netty/proxy/relay/RelayConnectHandler.java` | Abstract relay establishment |
 | `UpstreamProxyRelayHandler` | `mockserver-netty/.../netty/proxy/relay/UpstreamProxyRelayHandler.java` | Client → MockServer relay |

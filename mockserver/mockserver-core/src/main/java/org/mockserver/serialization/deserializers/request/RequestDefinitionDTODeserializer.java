@@ -10,6 +10,7 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.*;
 import org.mockserver.serialization.model.BinaryRequestDefinitionDTO;
 import org.mockserver.serialization.model.BodyDTO;
+import org.mockserver.serialization.model.ConditionalRequestDefinitionDTO;
 import org.mockserver.serialization.model.DnsRequestDefinitionDTO;
 import org.mockserver.serialization.model.HttpRequestDTO;
 import org.mockserver.serialization.model.OpenAPIDefinitionDTO;
@@ -59,6 +60,10 @@ public class RequestDefinitionDTODeserializer extends StdDeserializer<RequestDef
             String dnsName = null;
             DnsRecordType dnsType = null;
             DnsRecordClass dnsClass = null;
+            RequestDefinitionDTO conditionalIf = null;
+            RequestDefinitionDTO conditionalThen = null;
+            RequestDefinitionDTO conditionalElse = null;
+            boolean hasConditionalIf = false;
             while (jsonParser.nextToken() != JsonToken.END_OBJECT) {
                 String fieldName = jsonParser.currentName();
                 if (fieldName != null) {
@@ -219,10 +224,32 @@ public class RequestDefinitionDTODeserializer extends StdDeserializer<RequestDef
                             }
                             break;
                         }
+                        case "if": {
+                            jsonParser.nextToken();
+                            hasConditionalIf = true;
+                            conditionalIf = ctxt.readValue(jsonParser, RequestDefinitionDTO.class);
+                            break;
+                        }
+                        case "then": {
+                            jsonParser.nextToken();
+                            conditionalThen = ctxt.readValue(jsonParser, RequestDefinitionDTO.class);
+                            break;
+                        }
+                        case "else": {
+                            jsonParser.nextToken();
+                            conditionalElse = ctxt.readValue(jsonParser, RequestDefinitionDTO.class);
+                            break;
+                        }
                     }
                 }
             }
-            if (isNotBlank(dnsName)) {
+            if (hasConditionalIf) {
+                return (RequestDefinitionDTO) new ConditionalRequestDefinitionDTO()
+                    .setIf(conditionalIf)
+                    .setThen(conditionalThen)
+                    .setElse(conditionalElse)
+                    .setNot(not);
+            } else if (isNotBlank(dnsName)) {
                 return (RequestDefinitionDTO) new DnsRequestDefinitionDTO()
                     .setDnsName(dnsName)
                     .setDnsType(dnsType)

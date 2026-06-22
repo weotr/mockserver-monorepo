@@ -149,6 +149,23 @@ export function seedRegression() {
   return res;
 }
 
+// Seed ONLY the /forward expectation (forward.js). The forward path is the sole
+// workload, so the instance under measurement has just this one expectation. The
+// upstream MockServer (or self, when K6_FORWARD_SELF=true) must itself answer
+// /simple with a 200 for the forward to succeed.
+export function seedForward() {
+  const host = FORWARD.forwardSelf ? '127.0.0.1:1080' : FORWARD.upstreamHost;
+  const res = http.put(
+    `${CONFIG.controlPlane}/expectation`,
+    JSON.stringify([forwardExpectation(host)]),
+    jsonParams(),
+  );
+  if (res.status !== 201 && res.status !== 200) {
+    fail(`failed to seed forward expectation: HTTP ${res.status} ${res.body}`);
+  }
+  return res;
+}
+
 // --- actions (tagged so k6 reports per-operation) --------------------------
 
 const SIMPLE_EXPECTATION = JSON.stringify([

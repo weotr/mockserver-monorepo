@@ -32,7 +32,7 @@ public class FileWatcher {
         return scheduler;
     }
 
-    private boolean running = true;
+    private volatile boolean running = true;
     private final ScheduledFuture<?> scheduledFuture;
     private static long pollPeriod = 5;
     private static TimeUnit pollPeriodUnits = TimeUnit.SECONDS;
@@ -47,10 +47,30 @@ public class FileWatcher {
                 .setArguments(path, fileHash)
         );
         scheduledFuture = getScheduler().scheduleAtFixedRate(() -> {
+            // Skip the iteration entirely if this watcher has been stopped but
+            // the already-scheduled task has not yet been cancelled.
+            if (!running) {
+                return;
+            }
             try {
-                if (!getFileHash(path).equals(fileHash.get())) {
+                Integer currentHash = getFileHash(path);
+                // A null hash means the file could not be read (missing, being
+                // rewritten, or otherwise unreadable). Do NOT treat that as a
+                // content change: skip this poll iteration and keep the previous
+                // hash so the next successful read decides whether to reload.
+                // Conflating "unreadable" with "changed" (the old return-0
+                // behaviour) caused spurious reloads of partial/empty content
+                // mid-rewrite and could mask a real subsequent change.
+                if (currentHash == null) {
+                    return;
+                }
+                if (!currentHash.equals(fileHash.get())) {
                     updatedHandler.run();
-                    fileHash.set(getFileHash(path));
+                    // Re-read after the handler ran; only update the stored hash
+                    // when the re-read succeeds, otherwise keep the value we just
+                    // acted on so a transient read failure does not lose state.
+                    Integer afterHash = getFileHash(path);
+                    fileHash.set(afterHash != null ? afterHash : currentHash);
                 }
             } catch (Throwable throwable) {
                 errorHandler.accept(throwable);
@@ -58,11 +78,17 @@ public class FileWatcher {
         }, pollPeriod, pollPeriod, pollPeriodUnits);
     }
 
+    /**
+     * Computes a content fingerprint of the watched file, or returns
+     * {@code null} when the file cannot be read (missing, mid-rewrite, or
+     * otherwise unreadable). Callers must treat {@code null} as "no reliable
+     * reading this iteration" rather than as a content change.
+     */
     private Integer getFileHash(Path path) {
         try {
             return Arrays.hashCode(Files.readAllBytes(path));
         } catch (IOException ioe) {
-            return 0;
+            return null;
         }
     }
 

@@ -1,0 +1,24 @@
+---
+layout: null
+sitemap:
+  exclude: true
+---
+{%- comment %}
+  Redirect stub. This page was renamed to the proxy "Getting Started" page in
+  a docs restructure. Google Search Console (coverage 2026-06-14) still listed
+  the old URL, so this stub consolidates any residual link equity onto the
+  current page via an instant meta-refresh plus a canonical pointing at the
+  new location.
+{%- endcomment %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Page moved — Proxy Getting Started | MockServer</title>
+<link rel="canonical" href="{{ '/proxy/getting_started.html' | prepend: site.url }}">
+<meta http-equiv="refresh" content="0; url=/proxy/getting_started.html">
+</head>
+<body>
+<p>This page has moved to <a href="/proxy/getting_started.html">MockServer Proxy — Getting Started</a>.</p>
+</body>
+</html>

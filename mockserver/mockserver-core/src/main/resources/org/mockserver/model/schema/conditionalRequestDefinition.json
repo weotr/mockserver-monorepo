@@ -1,0 +1,37 @@
+{
+  "title": "conditional (if-then-else) request matcher",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "not": {
+      "type": "boolean"
+    },
+    "if": {
+      "$ref": "#/definitions/conditionalBranch"
+    },
+    "then": {
+      "$ref": "#/definitions/conditionalBranch"
+    },
+    "else": {
+      "$ref": "#/definitions/conditionalBranch"
+    }
+  },
+  "required": [
+    "if"
+  ],
+  "definitions": {
+    "conditionalBranch": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/httpRequest"
+        },
+        {
+          "$ref": "#/definitions/openAPIDefinition"
+        },
+        {
+          "$ref": "#/definitions/conditionalRequestDefinition"
+        }
+      ]
+    }
+  }
+}

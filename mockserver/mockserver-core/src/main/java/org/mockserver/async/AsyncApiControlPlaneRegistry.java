@@ -87,6 +87,19 @@ public class AsyncApiControlPlaneRegistry {
         return delegate.verify(verificationJson);
     }
 
+    /**
+     * Delegate HTTP-expectation generation to the registered implementation.
+     *
+     * @return a JSON array string of MockServer expectations
+     * @throws IllegalStateException if no implementation is registered
+     */
+    public String generateHttpExpectations(String requestBody) {
+        if (delegate == null) {
+            throw new IllegalStateException("AsyncAPI messaging module is not available — mockserver-async is not on the classpath");
+        }
+        return delegate.generateHttpExpectations(requestBody);
+    }
+
     private JsonNode notAvailableResponse() {
         ObjectNode node = MAPPER.createObjectNode();
         node.put("error", "AsyncAPI messaging module is not available — mockserver-async is not on the classpath");

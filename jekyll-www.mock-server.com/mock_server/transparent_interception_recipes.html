@@ -24,6 +24,40 @@ keywords: transparent interception, iptables redirect, tproxy, dns steering, htt
 
 <p><strong>One prerequisite applies to all mechanisms:</strong> <code class="inline code">transparentProxyEnabled</code> must be set to <code class="inline code">true</code> (environment variable <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED=true</code>). Without this flag, MockServer does not treat incoming connections as transparent-proxy requests.</p>
 
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>Every mechanism for routing traffic to MockServer, grouped by platform, with a full capability matrix at the end:</p>
+
+<table class="comparison_table">
+    <thead>
+        <tr>
+            <th>Delivery mechanisms</th>
+            <th>Prerequisites &amp; reference</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#resolver_chain_summary">Resolver Chain Summary</a> &mdash; priority-ordered resolver strategies table</li>
+                    <li><a href="#kubernetes_containers">Kubernetes and Containers</a> &mdash; sidecar iptables, DaemonSet, Istio, Docker Compose, eBPF</li>
+                    <li><a href="#os_host">OS / Host</a> &mdash; HTTP_PROXY env, PAC file, DNS, Linux iptables/nftables, macOS pf, Windows netsh, proxychains</li>
+                    <li><a href="#network_cloud">Network / Cloud</a> &mdash; AWS NLB (PROXY protocol v2), VPC route, GCP static route, Azure UDR, default gateway, split-horizon DNS</li>
+                    <li><a href="#browser_ci">Browser and CI</a> &mdash; browser proxy / PAC, CI service container</li>
+                </ul>
+            </td>
+            <td style="vertical-align: top;">
+                <ul>
+                    <li><a href="#cross_cutting_prerequisites">Cross-Cutting Prerequisites</a> &mdash; TLS CA trust (universal), redirect-loop avoidance</li>
+                    <li><a href="#capability_matrix">Capability Matrix</a> &mdash; all mechanisms compared by platform, resolver, privilege, and scope</li>
+                </ul>
+            </td>
+        </tr>
+    </tbody>
+</table>
+
 <a id="resolver_chain_summary" class="anchor" href="#resolver_chain_summary">&nbsp;</a>
 
 <h2>Resolver Chain Summary</h2>

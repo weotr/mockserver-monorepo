@@ -8,6 +8,7 @@ require 'timeout'
 
 module MockServer
   WEB_SOCKET_CORRELATION_ID_HEADER_NAME = 'WebSocketCorrelationId'
+  BREAKPOINT_ID_HEADER_NAME = 'X-MockServer-BreakpointId'
   CLIENT_REGISTRATION_ID_HEADER = 'X-CLIENT-REGISTRATION-ID'
 
   WEBSOCKET_PATH = '/_mockserver_callback_websocket'
@@ -17,6 +18,8 @@ module MockServer
   TYPE_HTTP_REQUEST_AND_RESPONSE = 'org.mockserver.model.HttpRequestAndHttpResponse'
   TYPE_CLIENT_ID_DTO             = 'org.mockserver.serialization.model.WebSocketClientIdDTO'
   TYPE_ERROR_DTO                 = 'org.mockserver.serialization.model.WebSocketErrorDTO'
+  TYPE_PAUSED_STREAM_FRAME_DTO   = 'org.mockserver.serialization.model.PausedStreamFrameDTO'
+  TYPE_STREAM_FRAME_DECISION_DTO = 'org.mockserver.serialization.model.StreamFrameDecisionDTO'
 
   MAX_RECONNECT_ATTEMPTS = 3
   REGISTRATION_TIMEOUT   = 10
@@ -26,6 +29,17 @@ module MockServer
 
     request.headers.each do |header|
       if header.name == WEB_SOCKET_CORRELATION_ID_HEADER_NAME
+        return header.values.first if header.values && !header.values.empty?
+      end
+    end
+    nil
+  end
+
+  def self.extract_breakpoint_id(request)
+    return nil if request.headers.nil?
+
+    request.headers.each do |header|
+      if header.name == BREAKPOINT_ID_HEADER_NAME
         return header.values.first if header.values && !header.values.empty?
       end
     end
@@ -94,6 +108,10 @@ module MockServer
       @logger.progname = 'MockServer::WebSocketClient'
       @logger.level = Logger::WARN
       @registration_queue = nil
+      # Per-breakpoint-id handlers for matcher-driven breakpoints
+      @breakpoint_request_handlers = {}
+      @breakpoint_response_handlers = {}
+      @breakpoint_stream_frame_handlers = {}
     end
 
     def connected?
@@ -122,6 +140,37 @@ module MockServer
     def register_forward_callback(forward_fn, response_fn = nil)
       @forward_callback = forward_fn
       @forward_response_callback = response_fn
+    end
+
+    # Register a REQUEST-phase breakpoint handler keyed by breakpoint id.
+    def set_breakpoint_request_handler(breakpoint_id, handler)
+      @breakpoint_request_handlers[breakpoint_id] = handler if breakpoint_id && handler
+    end
+
+    # Register a RESPONSE-phase breakpoint handler keyed by breakpoint id.
+    def set_breakpoint_response_handler(breakpoint_id, handler)
+      @breakpoint_response_handlers[breakpoint_id] = handler if breakpoint_id && handler
+    end
+
+    # Register a stream-frame breakpoint handler keyed by breakpoint id.
+    def set_breakpoint_stream_frame_handler(breakpoint_id, handler)
+      @breakpoint_stream_frame_handlers[breakpoint_id] = handler if breakpoint_id && handler
+    end
+
+    # Remove all handlers for the given breakpoint id.
+    def remove_breakpoint_handlers(breakpoint_id)
+      return unless breakpoint_id
+
+      @breakpoint_request_handlers.delete(breakpoint_id)
+      @breakpoint_response_handlers.delete(breakpoint_id)
+      @breakpoint_stream_frame_handlers.delete(breakpoint_id)
+    end
+
+    # Remove all breakpoint handlers.
+    def clear_breakpoint_handlers
+      @breakpoint_request_handlers.clear
+      @breakpoint_response_handlers.clear
+      @breakpoint_stream_frame_handlers.clear
     end
 
     def listen
@@ -270,8 +319,12 @@ module MockServer
       if msg_type == TYPE_HTTP_REQUEST
         request = HttpRequest.from_hash(JSON.parse(msg_value))
         correlation_id = MockServer.extract_correlation_id(request)
+        breakpoint_id = MockServer.extract_breakpoint_id(request)
 
-        if @forward_callback
+        bp_handler = breakpoint_id ? @breakpoint_request_handlers[breakpoint_id] : nil
+        if bp_handler
+          handle_breakpoint_request(request, correlation_id, bp_handler)
+        elsif @forward_callback
           handle_forward_request(request, correlation_id)
         elsif @response_callback
           handle_response_request(request, correlation_id)
@@ -284,12 +337,22 @@ module MockServer
       if msg_type == TYPE_HTTP_REQUEST_AND_RESPONSE
         req_and_resp = HttpRequestAndHttpResponse.from_hash(JSON.parse(msg_value))
         correlation_id = MockServer.extract_correlation_id(req_and_resp.http_request)
+        breakpoint_id = MockServer.extract_breakpoint_id(req_and_resp.http_request)
 
-        if @forward_response_callback
+        bp_handler = breakpoint_id ? @breakpoint_response_handlers[breakpoint_id] : nil
+        if bp_handler
+          handle_breakpoint_response(req_and_resp, correlation_id, bp_handler)
+        elsif @forward_response_callback
           handle_forward_response(req_and_resp, correlation_id)
         else
           @logger.warn("Received HttpRequestAndHttpResponse callback but no forward_response_callback registered")
         end
+        return
+      end
+
+      if msg_type == TYPE_PAUSED_STREAM_FRAME_DTO
+        paused_frame = JSON.parse(msg_value)
+        handle_breakpoint_stream_frame(paused_frame)
         return
       end
 
@@ -348,6 +411,70 @@ module MockServer
         error_msg = MockServer.build_error_message(exc.message, correlation_id)
         @ws.send(error_msg)
       end
+    end
+
+    def handle_breakpoint_request(request, correlation_id, handler)
+      result = handler.call(request)
+      result = request if result.nil? # auto-continue
+
+      MockServer.add_correlation_id_header(result, correlation_id) if correlation_id
+
+      type_name = result.is_a?(HttpResponse) ? TYPE_HTTP_RESPONSE : TYPE_HTTP_REQUEST
+      msg = MockServer.build_ws_message(type_name, result.to_h)
+      @ws.send(msg)
+    rescue StandardError => exc
+      @logger.error("Error in breakpoint request handler, auto-continuing: #{exc.message}")
+      MockServer.add_correlation_id_header(request, correlation_id) if correlation_id
+      msg = MockServer.build_ws_message(TYPE_HTTP_REQUEST, request.to_h)
+      @ws.send(msg)
+    end
+
+    def handle_breakpoint_response(req_and_resp, correlation_id, handler)
+      result = handler.call(req_and_resp.http_request, req_and_resp.http_response)
+      result = req_and_resp.http_response if result.nil? # auto-continue
+
+      unless result.is_a?(HttpResponse)
+        raise CallbackError, "Breakpoint response handler must return HttpResponse, got #{result.class}"
+      end
+
+      MockServer.add_correlation_id_header(result, correlation_id) if correlation_id
+      msg = MockServer.build_ws_message(TYPE_HTTP_RESPONSE, result.to_h)
+      @ws.send(msg)
+    rescue StandardError => exc
+      @logger.error("Error in breakpoint response handler, auto-continuing: #{exc.message}")
+      resp = req_and_resp.http_response || HttpResponse.new
+      MockServer.add_correlation_id_header(resp, correlation_id) if correlation_id
+      msg = MockServer.build_ws_message(TYPE_HTTP_RESPONSE, resp.to_h)
+      @ws.send(msg)
+    end
+
+    def handle_breakpoint_stream_frame(paused_frame)
+      breakpoint_id = paused_frame['breakpointId']
+      correlation_id = paused_frame['correlationId'] || ''
+      handler = breakpoint_id ? @breakpoint_stream_frame_handlers[breakpoint_id] : nil
+
+      decision = if handler
+                   begin
+                     result = handler.call(paused_frame)
+                     if result.nil?
+                       { 'correlationId' => correlation_id, 'action' => 'CONTINUE' }
+                     else
+                       result['correlationId'] = correlation_id # ensure echoed
+                       result
+                     end
+                   rescue StandardError => exc
+                     @logger.error("Error in breakpoint stream frame handler, auto-continuing: #{exc.message}")
+                     { 'correlationId' => correlation_id, 'action' => 'CONTINUE' }
+                   end
+                 else
+                   { 'correlationId' => correlation_id, 'action' => 'CONTINUE' }
+                 end
+
+      msg = JSON.generate({
+        'type'  => TYPE_STREAM_FRAME_DECISION_DTO,
+        'value' => JSON.generate(decision)
+      })
+      @ws.send(msg)
     end
   end
 end

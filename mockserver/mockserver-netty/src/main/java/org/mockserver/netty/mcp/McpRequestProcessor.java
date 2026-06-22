@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.lifecycle.LifeCycle;
-import org.mockserver.logging.MockServerLogger;
 import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.HttpState;
 import org.mockserver.serialization.ObjectMapperFactory;
@@ -58,7 +57,13 @@ public class McpRequestProcessor {
     private final McpSessionManager sessionManager;
     private final McpToolRegistry toolRegistry;
     private final McpResourceRegistry resourceRegistry;
+    private final McpPromptRegistry promptRegistry;
     private final ObjectMapper objectMapper;
+
+    /** Default model name reported by {@code sampling/createMessage} when the request omits a preferred model. */
+    private static final String DEFAULT_SAMPLING_MODEL = "mock-llm";
+    /** Stop reason reported in the {@code sampling/createMessage} result (MCP server-side field, not a request field). */
+    private static final String SAMPLING_STOP_REASON = "endTurn";
 
     public McpRequestProcessor(HttpState httpState, LifeCycle server, McpSessionManager sessionManager) {
         this.httpState = httpState;
@@ -66,6 +71,7 @@ public class McpRequestProcessor {
         this.sessionManager = sessionManager;
         this.toolRegistry = new McpToolRegistry(httpState, server);
         this.resourceRegistry = new McpResourceRegistry(httpState);
+        this.promptRegistry = new McpPromptRegistry();
         this.objectMapper = ObjectMapperFactory.buildObjectMapperWithoutRemovingEmptyValues();
     }
 
@@ -357,6 +363,12 @@ public class McpRequestProcessor {
                 return handleResourcesList(rpcRequest);
             case "resources/read":
                 return handleResourcesRead(rpcRequest);
+            case "prompts/list":
+                return handlePromptsList(rpcRequest);
+            case "prompts/get":
+                return handlePromptsGet(rpcRequest);
+            case "sampling/createMessage":
+                return handleSamplingCreateMessage(rpcRequest);
             case "ping":
                 return handlePing(rpcRequest);
             default:
@@ -388,6 +400,9 @@ public class McpRequestProcessor {
         ObjectNode resourcesCap = capabilities.putObject("resources");
         resourcesCap.put("subscribe", false);
         resourcesCap.put("listChanged", false);
+        ObjectNode promptsCap = capabilities.putObject("prompts");
+        promptsCap.put("listChanged", false);
+        capabilities.putObject("sampling");
 
         ObjectNode serverInfo = result.putObject("serverInfo");
         serverInfo.put("name", SERVER_NAME);
@@ -498,6 +513,101 @@ public class McpRequestProcessor {
         }
 
         contents.add(contentEntry);
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handlePromptsList(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        ObjectNode result = objectMapper.createObjectNode();
+        ArrayNode promptsArray = result.putArray("prompts");
+
+        for (McpPromptRegistry.PromptDefinition prompt : promptRegistry.getPrompts().values()) {
+            ObjectNode promptNode = objectMapper.createObjectNode();
+            promptNode.put("name", prompt.getName());
+            promptNode.put("description", prompt.getDescription());
+            ArrayNode argumentsArray = promptNode.putArray("arguments");
+            for (McpPromptRegistry.PromptArgument argument : prompt.getArguments()) {
+                ObjectNode argumentNode = objectMapper.createObjectNode();
+                argumentNode.put("name", argument.getName());
+                argumentNode.put("description", argument.getDescription());
+                argumentNode.put("required", argument.isRequired());
+                argumentsArray.add(argumentNode);
+            }
+            promptsArray.add(promptNode);
+        }
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    private JsonRpcMessage.JsonRpcResponse handlePromptsGet(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        JsonNode params = rpcRequest.getParams();
+        if (params == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
+        }
+
+        String name = params.path("name").asText(null);
+        if (name == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing prompt name");
+        }
+
+        McpPromptRegistry.PromptDefinition promptDef = promptRegistry.getPrompts().get(name);
+        if (promptDef == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS,
+                "Unknown prompt: " + name);
+        }
+
+        JsonNode arguments = params.path("arguments");
+        ArrayNode messages = promptRegistry.getMessages(name, arguments.isMissingNode() ? null : arguments);
+
+        ObjectNode result = objectMapper.createObjectNode();
+        result.put("description", promptDef.getDescription());
+        result.set("messages", messages);
+
+        return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
+    }
+
+    /**
+     * Mocked {@code sampling/createMessage} — returns a deterministic mocked model completion in the
+     * MCP sampling result shape ({@code role}, {@code content}, {@code model}, {@code stopReason}).
+     * The completion text is taken from the (optional) {@code mockResponse} param, the model echoes the
+     * client's preferred model when supplied, and the stop reason defaults to {@code endTurn}.
+     */
+    private JsonRpcMessage.JsonRpcResponse handleSamplingCreateMessage(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+        JsonNode params = rpcRequest.getParams();
+        if (params == null) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
+        }
+
+        JsonNode messagesNode = params.path("messages");
+        if (!messagesNode.isArray() || messagesNode.size() == 0) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS,
+                "'messages' must be a non-empty array");
+        }
+
+        // The mocked completion text: an explicit 'mockResponse' override, else a deterministic echo.
+        String text = params.path("mockResponse").asText(null);
+        if (text == null) {
+            text = "This is a mocked completion from MockServer's sampling/createMessage handler.";
+        }
+
+        // Echo the client's preferred model when supplied, else a default model name.
+        String model = DEFAULT_SAMPLING_MODEL;
+        JsonNode preferences = params.path("modelPreferences");
+        JsonNode hints = preferences.path("hints");
+        if (hints.isArray() && hints.size() > 0) {
+            String hintName = hints.get(0).path("name").asText(null);
+            if (hintName != null && !hintName.isEmpty()) {
+                model = hintName;
+            }
+        }
+
+        ObjectNode result = objectMapper.createObjectNode();
+        result.put("role", "assistant");
+        ObjectNode content = result.putObject("content");
+        content.put("type", "text");
+        content.put("text", text);
+        result.put("model", model);
+        result.put("stopReason", SAMPLING_STOP_REASON);
 
         return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
     }

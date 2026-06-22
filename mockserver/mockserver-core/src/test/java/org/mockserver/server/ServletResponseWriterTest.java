@@ -12,6 +12,8 @@ import org.mockserver.servlet.responsewriter.ServletResponseWriter;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.is;
 import static org.mockito.Mockito.verify;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.configuration.Configuration.configuration;
@@ -135,6 +137,61 @@ public class ServletResponseWriterTest {
         } finally {
             enableCORSForAllResponses(enableCORSForAllResponses);
         }
+    }
+
+    @Test
+    public void shouldStampConfiguredDefaultResponseHeadersOnMockResponse() {
+        // given - per-instance configuration (no global state mutation); a real writer/encoder so
+        // the headers actually land on the MockHttpServletResponse
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+        ServletResponseWriter writer = new ServletResponseWriter(
+            configuration().defaultResponseHeaders("Server=MockServer|X-Trace-Id=abc123"),
+            new MockServerLogger(),
+            servletResponse
+        );
+
+        // when - mock response (apiResponse == false)
+        writer.writeResponse(request("some_request"), response("some_response"), false);
+
+        // then
+        assertThat(servletResponse.getHeader("Server"), is("MockServer"));
+        assertThat(servletResponse.getHeader("X-Trace-Id"), is("abc123"));
+    }
+
+    @Test
+    public void shouldNotOverwriteResponseHeaderWithConfiguredDefault() {
+        // given - the mock response already sets Server, default also configures Server
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+        ServletResponseWriter writer = new ServletResponseWriter(
+            configuration().defaultResponseHeaders("Server=MockServer|X-Trace-Id=abc123"),
+            new MockServerLogger(),
+            servletResponse
+        );
+
+        // when
+        writer.writeResponse(request("some_request"), response("some_response").withHeader("Server", "ExplicitValue"), false);
+
+        // then - explicit Server wins (add-if-absent), only the absent default is added
+        assertThat(servletResponse.getHeaders("Server"), is(java.util.Collections.singletonList("ExplicitValue")));
+        assertThat(servletResponse.getHeader("X-Trace-Id"), is("abc123"));
+    }
+
+    @Test
+    public void shouldNotAddAnyHeadersWhenDefaultResponseHeadersEmpty() {
+        // given - default (no defaultResponseHeaders configured) => behaviour unchanged
+        MockHttpServletResponse servletResponse = new MockHttpServletResponse();
+        ServletResponseWriter writer = new ServletResponseWriter(
+            configuration(),
+            new MockServerLogger(),
+            servletResponse
+        );
+
+        // when
+        writer.writeResponse(request("some_request"), response("some_response"), false);
+
+        // then - no default headers stamped (Server header absent)
+        assertThat(servletResponse.getHeader("Server"), is(org.hamcrest.Matchers.nullValue()));
+        assertThat(servletResponse.getHeader("X-Trace-Id"), is(org.hamcrest.Matchers.nullValue()));
     }
 
 }

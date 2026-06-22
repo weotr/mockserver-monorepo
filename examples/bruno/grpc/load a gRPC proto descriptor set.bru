@@ -1,0 +1,23 @@
+meta {
+  name: load a gRPC proto descriptor set
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/grpc/descriptors
+  body: none
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/octet-stream
+}
+
+docs {
+  loads a compiled protobuf FileDescriptorSet (raw bytes) so gRPC services can be matched and mocked
+  
+  Binary upload of a compiled protobuf FileDescriptorSet (the .desc file produced by `protoc --descriptor_set_out`). Send the raw bytes with Content-Type application/octet-stream.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

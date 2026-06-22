@@ -60,6 +60,9 @@ public class ExpectationToJavaSerializer implements ToJavaSerializer<Expectation
             if (expectation.getPercentage() != null) {
                 appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".withPercentage(").append(expectation.getPercentage()).append(")");
             }
+            if (isNotBlank(expectation.getNamespace())) {
+                appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".withNamespace(\"").append(StringEscapeUtils.escapeJava(expectation.getNamespace())).append("\")");
+            }
             if (isNotBlank(expectation.getScenarioName())) {
                 appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".withScenarioName(\"").append(StringEscapeUtils.escapeJava(expectation.getScenarioName())).append("\")");
             }
@@ -71,6 +74,20 @@ public class ExpectationToJavaSerializer implements ToJavaSerializer<Expectation
             }
             if (expectation.getResponseMode() != null) {
                 appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".withResponseMode(org.mockserver.mock.ResponseMode.").append(expectation.getResponseMode().name()).append(")");
+            }
+            if (expectation.getResponseWeights() != null && !expectation.getResponseWeights().isEmpty()) {
+                StringBuilder weights = new StringBuilder();
+                List<Integer> responseWeights = expectation.getResponseWeights();
+                for (int i = 0; i < responseWeights.size(); i++) {
+                    if (i > 0) {
+                        weights.append(", ");
+                    }
+                    weights.append(responseWeights.get(i));
+                }
+                appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".withResponseWeights(java.util.Arrays.asList(").append(weights).append("))");
+            }
+            if (expectation.getSwitchAfter() != null) {
+                appendNewLineAndIndent(numberOfSpacesToIndent * INDENT_SIZE, output).append(".withSwitchAfter(").append(expectation.getSwitchAfter()).append(")");
             }
             if (expectation.getHttpResponses() != null && !expectation.getHttpResponses().isEmpty()) {
                 HttpResponseToJavaSerializer responseSerializer = new HttpResponseToJavaSerializer();

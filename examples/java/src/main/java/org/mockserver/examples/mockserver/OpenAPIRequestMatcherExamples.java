@@ -48,7 +48,7 @@ public class OpenAPIRequestMatcherExamples {
         new MockServerClient("localhost", 1080)
             .when(
                 openAPI(
-                    "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+                    "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
                 )
             )
             .respond(
@@ -73,7 +73,7 @@ public class OpenAPIRequestMatcherExamples {
             .when(
                 new OpenAPIDefinition()
                     .withSpecUrlOrPayload(
-                        FileReader.readFileFromClassPathOrPath("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json")
+                        FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json")
                     )
                     .withOperationId("listPets")
             )
@@ -281,7 +281,7 @@ public class OpenAPIRequestMatcherExamples {
             .when(
                 new OpenAPIDefinition()
                     .withSpecUrlOrPayload(
-                        FileReader.readFileFromClassPathOrPath("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json")
+                        FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json")
                     )
                     .withOperationId("listPets"),
                 Times.exactly(2)

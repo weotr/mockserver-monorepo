@@ -1,0 +1,34 @@
+meta {
+  name: retrieve recorded requests, active expectations, recorded expectations or log messages
+  type: http
+  seq: 3
+}
+
+put {
+  url: {{baseUrl}}/mockserver/retrieve
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+params:query {
+  ~format: java
+  ~type: logs
+}
+
+body:json {
+  {
+    "path": "/api/users"
+  }
+}
+
+docs {
+  Retrieve recorded requests, active expectations, recorded expectations or log messages.
+  
+  request used to match which recorded requests, expectations or log messages to return, an empty body matches all requests, expectations or log messages
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -8,15 +8,19 @@
 import { buildBaseUrl } from './mcpClient';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 
-async function textError(res: Response): Promise<string> {
-  const text = await res.text().catch(() => '');
-  return text || `HTTP ${res.status}`;
+/**
+ * Build the standard `MockServer returned <status>: <body>` error message so
+ * thrown errors are mapped by {@link humanizeError}/{@link humanizeServerError}.
+ */
+async function serverError(res: Response): Promise<string> {
+  const body = await res.text().catch(() => '');
+  return `MockServer returned ${res.status}: ${body}`;
 }
 
 /** List all file names in the server file store. */
 export async function listFiles(params: ConnectionParams, signal?: AbortSignal): Promise<string[]> {
   const res = await fetch(`${buildBaseUrl(params)}/mockserver/files/list`, { method: 'PUT', signal });
-  if (!res.ok) throw new Error(await textError(res));
+  if (!res.ok) throw new Error(await serverError(res));
   const body: unknown = await res.json().catch(() => []);
   return Array.isArray(body) ? (body as string[]) : [];
 }
@@ -31,7 +35,7 @@ export async function storeFile(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(file),
   });
-  if (!res.ok) throw new Error(await textError(res));
+  if (!res.ok) throw new Error(await serverError(res));
   return (await res.json()) as { name: string; size: number };
 }
 
@@ -42,7 +46,7 @@ export async function deleteFile(params: ConnectionParams, name: string): Promis
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error(await textError(res));
+  if (!res.ok) throw new Error(await serverError(res));
 }
 
 /** Retrieve a file's content as text. */
@@ -52,6 +56,6 @@ export async function retrieveFileText(params: ConnectionParams, name: string): 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   });
-  if (!res.ok) throw new Error(await textError(res));
+  if (!res.ok) throw new Error(await serverError(res));
   return res.text();
 }

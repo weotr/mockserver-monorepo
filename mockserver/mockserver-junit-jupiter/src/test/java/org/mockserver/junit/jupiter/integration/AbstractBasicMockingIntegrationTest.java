@@ -1656,9 +1656,10 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractMockin
             "" + NEW_LINE +
             " schema validation errors:" + NEW_LINE +
             "" + NEW_LINE +
-            "  8 errors:\n" +
+            "  9 errors:\n" +
             "   - $.binaryData: is missing but it is required\n" +
             "   - $.dnsName: is missing but it is required\n" +
+            "   - $.if: is missing but it is required\n" +
             "   - $.keepAlive: string found, boolean expected\n" +
             "   - $.method: boolean found, string expected\n" +
             "   - $.method: should be valid to one and only one schema, but 0 are valid\n" +

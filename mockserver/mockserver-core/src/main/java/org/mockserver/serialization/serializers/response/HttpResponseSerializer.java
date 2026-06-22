@@ -23,11 +23,17 @@ public class HttpResponseSerializer extends StdSerializer<HttpResponse> {
         if (httpResponse.getStatusCode() != null) {
             jgen.writeObjectField("statusCode", httpResponse.getStatusCode());
         }
+        if (httpResponse.getStatusCodeRange() != null) {
+            jgen.writeObjectField("statusCodeRange", httpResponse.getStatusCodeRange());
+        }
         if (httpResponse.getReasonPhrase() != null) {
             jgen.writeObjectField("reasonPhrase", httpResponse.getReasonPhrase());
         }
         if (httpResponse.getHeaderList() != null && !httpResponse.getHeaderList().isEmpty()) {
             jgen.writeObjectField("headers", httpResponse.getHeaders());
+        }
+        if (httpResponse.getTrailerList() != null && !httpResponse.getTrailerList().isEmpty()) {
+            jgen.writeObjectField("trailers", httpResponse.getTrailers());
         }
         if (httpResponse.getCookieList() != null && !httpResponse.getCookieList().isEmpty()) {
             jgen.writeObjectField("cookies", httpResponse.getCookies());
@@ -47,6 +53,9 @@ public class HttpResponseSerializer extends StdSerializer<HttpResponse> {
             } else if (body instanceof LogEntryBody) {
                 jgen.writeObjectField("body", body);
             }
+        }
+        if (httpResponse.getGenerateFromSchema() != null) {
+            jgen.writeObjectField("generateFromSchema", httpResponse.getGenerateFromSchema());
         }
         if (httpResponse.getDelay() != null) {
             jgen.writeObjectField("delay", httpResponse.getDelay());

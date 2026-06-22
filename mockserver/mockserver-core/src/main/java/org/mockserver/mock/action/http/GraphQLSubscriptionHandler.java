@@ -11,12 +11,19 @@ import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketServerHandshaker;
+import org.mockserver.closurecallback.websocketregistry.WebSocketClientRegistry;
+import org.mockserver.configuration.Configuration;
 import org.mockserver.matchers.GraphQLAstMatcher;
+import org.mockserver.mock.breakpoint.PausedStreamFrame;
+import org.mockserver.mock.breakpoint.StreamFrameBreakpointRegistry;
 import org.mockserver.model.Delay;
 import org.mockserver.model.GraphQLBody;
 import org.mockserver.model.SelectionSetMatchType;
 import org.mockserver.model.WebSocketMessage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -38,8 +45,17 @@ import java.util.concurrent.ConcurrentHashMap;
  *       on no match sends {@code error}</li>
  *   <li>{@code complete} (client) - cancels that subscription's pending messages</li>
  * </ul>
+ *
+ * <p><b>Inbound breakpoints (A1e):</b> when an INBOUND_STREAM breakpoint matcher is registered and
+ * inbound stream ID is configured, incoming WebSocket frames are parked in the
+ * {@link StreamFrameBreakpointRegistry} before protocol dispatch. The frame text is copied
+ * to {@code byte[]} (UTF-8) at park time and the original {@link TextWebSocketFrame} is
+ * released immediately. On resume, the text is reconstructed from the captured/modified bytes.
+ * Backpressure is applied via {@code autoRead=false} while a frame is parked.
  */
 public class GraphQLSubscriptionHandler extends SimpleChannelInboundHandler<WebSocketFrame> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(GraphQLSubscriptionHandler.class);
 
     static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -47,6 +63,15 @@ public class GraphQLSubscriptionHandler extends SimpleChannelInboundHandler<WebS
     private final List<WebSocketMessage> subscriptionPayloads;
     private final FrameSender frameSender;
     private final WebSocketServerHandshaker handshaker;
+
+    // Inbound breakpoint fields — null when inbound breakpoints are disabled
+    private final Configuration configuration;
+    private final String inboundStreamId;
+    // Pre-computed inbound breakpoint WS dispatch fields (CPX-01)
+    private final boolean inboundUseWsDispatch;
+    private final String inboundBreakpointClientId;
+    private final String inboundBreakpointId;
+    private final WebSocketClientRegistry webSocketClientRegistry;
 
     /**
      * Tracks active subscription IDs so that a client {@code complete} message
@@ -72,6 +97,8 @@ public class GraphQLSubscriptionHandler extends SimpleChannelInboundHandler<WebS
     }
 
     /**
+     * Original constructor — no inbound breakpoint support (backward compatible).
+     *
      * @param expectedSubscriptionQuery a GraphQLBody describing the subscription query to match
      * @param subscriptionPayloads      the sequence of payloads to push as {@code next} messages
      * @param frameSender               callback for sending text frames with optional delays
@@ -83,11 +110,70 @@ public class GraphQLSubscriptionHandler extends SimpleChannelInboundHandler<WebS
         FrameSender frameSender,
         WebSocketServerHandshaker handshaker
     ) {
+        this(expectedSubscriptionQuery, subscriptionPayloads, frameSender, handshaker, null, null, null);
+    }
+
+    /**
+     * Constructor with inbound breakpoint support (performs its own findMatch for backward compatibility).
+     *
+     * @deprecated use the constructor that accepts inboundBreakpointClientId and inboundBreakpointId
+     */
+    public GraphQLSubscriptionHandler(
+        GraphQLBody expectedSubscriptionQuery,
+        List<WebSocketMessage> subscriptionPayloads,
+        FrameSender frameSender,
+        WebSocketServerHandshaker handshaker,
+        Configuration configuration,
+        String inboundStreamId,
+        WebSocketClientRegistry webSocketClientRegistry
+    ) {
+        this(expectedSubscriptionQuery, subscriptionPayloads, frameSender, handshaker,
+            configuration, inboundStreamId, webSocketClientRegistry, null, null);
+    }
+
+    /**
+     * Constructor with inbound breakpoint support and pre-resolved breakpoint identity.
+     *
+     * @param expectedSubscriptionQuery  a GraphQLBody describing the subscription query to match
+     * @param subscriptionPayloads       the sequence of payloads to push as {@code next} messages
+     * @param frameSender                callback for sending text frames with optional delays
+     * @param handshaker                 the WebSocket handshaker for closing the connection
+     * @param configuration              the active server configuration (null to disable inbound breakpoints)
+     * @param inboundStreamId            the stream ID for inbound breakpoints (null to disable)
+     * @param webSocketClientRegistry    the per-server WS registry for callback dispatch (null to disable WS dispatch)
+     * @param inboundBreakpointClientId  the matched inbound breakpoint's owning clientId (from outer caller)
+     * @param inboundBreakpointId        the matched inbound breakpoint's id (from outer caller)
+     */
+    public GraphQLSubscriptionHandler(
+        GraphQLBody expectedSubscriptionQuery,
+        List<WebSocketMessage> subscriptionPayloads,
+        FrameSender frameSender,
+        WebSocketServerHandshaker handshaker,
+        Configuration configuration,
+        String inboundStreamId,
+        WebSocketClientRegistry webSocketClientRegistry,
+        String inboundBreakpointClientId,
+        String inboundBreakpointId
+    ) {
         super(false); // don't auto-release frames
         this.astMatcher = createMatcher(expectedSubscriptionQuery);
         this.subscriptionPayloads = subscriptionPayloads != null ? subscriptionPayloads : Collections.emptyList();
         this.frameSender = frameSender;
         this.handshaker = handshaker;
+        this.configuration = configuration;
+        this.inboundStreamId = inboundStreamId;
+        this.webSocketClientRegistry = webSocketClientRegistry;
+        // Use the matched breakpoint's clientId and id passed from the outer caller
+        // (avoids re-matching with null request which can pick the wrong breakpoint)
+        if (inboundStreamId != null && inboundBreakpointClientId != null && webSocketClientRegistry != null) {
+            this.inboundUseWsDispatch = true;
+            this.inboundBreakpointClientId = inboundBreakpointClientId;
+            this.inboundBreakpointId = inboundBreakpointId;
+        } else {
+            this.inboundUseWsDispatch = false;
+            this.inboundBreakpointClientId = null;
+            this.inboundBreakpointId = null;
+        }
     }
 
     private static GraphQLAstMatcher createMatcher(GraphQLBody body) {
@@ -122,6 +208,81 @@ public class GraphQLSubscriptionHandler extends SimpleChannelInboundHandler<WebS
         String text = textFrame.text();
         frame.release();
 
+        // --- Inbound breakpoint interception ---
+        if (inboundStreamId != null) {
+
+            byte[] frameBytes = text.getBytes(StandardCharsets.UTF_8);
+
+            // WS-callback dispatch (clientId is always present — required since 7b)
+            final java.util.concurrent.CompletableFuture<org.mockserver.mock.breakpoint.StreamFrameDecision> decisionFuture;
+            int seq = StreamFrameBreakpointRegistry.getInstance().nextSequenceNumber(inboundStreamId);
+            java.util.concurrent.CompletableFuture<org.mockserver.mock.breakpoint.StreamFrameDecision> wsFuture =
+                org.mockserver.mock.breakpoint.StreamFrameCallbackDispatcher.getInstance().dispatchFrame(
+                    inboundBreakpointClientId, inboundBreakpointId, inboundStreamId, seq, PausedStreamFrame.Direction.INBOUND,
+                    org.mockserver.mock.breakpoint.BreakpointPhase.INBOUND_STREAM,
+                    frameBytes, "GQL-INBOUND", "/", webSocketClientRegistry, configuration, null);
+            if (wsFuture != null) {
+                decisionFuture = wsFuture;
+            } else {
+                processText(ctx, text);
+                return;
+            }
+
+            // Apply backpressure
+            ctx.channel().config().setAutoRead(false);
+
+            decisionFuture.thenAccept(decision ->
+                ctx.channel().eventLoop().execute(() -> {
+                    try {
+                        if (!ctx.channel().isActive()) {
+                            return;
+                        }
+
+                        // Restore autoRead + request next frame
+                        ctx.channel().config().setAutoRead(true);
+                        ctx.read();
+
+                        switch (decision.getAction()) {
+                            case CONTINUE ->
+                                processText(ctx, new String(frameBytes, StandardCharsets.UTF_8));
+                            case MODIFY ->
+                                processText(ctx, new String(decision.getReplacementBody(), StandardCharsets.UTF_8));
+                            case DROP -> {
+                                // Discard — do not process
+                            }
+                            case INJECT -> {
+                                processText(ctx, new String(frameBytes, StandardCharsets.UTF_8));
+                                processText(ctx, new String(decision.getInjectedBody(), StandardCharsets.UTF_8));
+                            }
+                            case CLOSE -> {
+                                StreamFrameBreakpointRegistry.getInstance().evictStream(inboundStreamId);
+                                closeConnection(ctx);
+                            }
+                        }
+                    } catch (Exception e) {
+                        LOG.warn("error processing inbound breakpoint decision for GraphQL stream {}", inboundStreamId, e);
+                    }
+                })
+            ).exceptionally(ex -> {
+                LOG.debug("inbound breakpoint decision callback failed for GraphQL stream {}: {}", inboundStreamId, ex.getMessage());
+                ctx.channel().eventLoop().execute(() -> {
+                    ctx.channel().config().setAutoRead(true);
+                    ctx.read();
+                });
+                return null;
+            });
+            return;
+        }
+
+        // --- Default path (no inbound breakpoints) ---
+        processText(ctx, text);
+    }
+
+    /**
+     * Process a text message through the graphql-transport-ws protocol state machine.
+     * Extracted so it can be called from both the default path and the breakpoint resume path.
+     */
+    private void processText(ChannelHandlerContext ctx, String text) {
         try {
             JsonNode message = OBJECT_MAPPER.readTree(text);
             String type = message.has("type") ? message.get("type").asText() : "";
@@ -303,6 +464,15 @@ public class GraphQLSubscriptionHandler extends SimpleChannelInboundHandler<WebS
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         closeConnection(ctx);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        // Evict any held inbound frames on channel close to prevent leaks
+        if (inboundStreamId != null) {
+            StreamFrameBreakpointRegistry.getInstance().evictStream(inboundStreamId);
+        }
+        super.channelInactive(ctx);
     }
 
     /**

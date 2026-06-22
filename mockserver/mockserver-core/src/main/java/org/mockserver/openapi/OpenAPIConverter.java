@@ -18,7 +18,9 @@ import org.mockserver.model.AfterAction;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.OpenAPIDefinition;
 import org.mockserver.openapi.examples.ExampleBuilder;
+import org.mockserver.openapi.examples.GenerationOptions;
 import org.mockserver.openapi.examples.JsonNodeExampleSerializer;
+import org.mockserver.openapi.examples.XmlExampleSerializer;
 import org.mockserver.openapi.examples.models.StringExample;
 import org.mockserver.serialization.ObjectMapperFactory;
 
@@ -53,18 +55,31 @@ public class OpenAPIConverter {
     public List<Expectation> buildExpectations(String specUrlOrPayload, Map<String, Object> operationsAndResponses, String contextPathPrefix) {
         OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, mockServerLogger);
         String specKey = deriveSpecKey(openAPI, specUrlOrPayload);
+        // Optional per-run example-generation options (seed + per-field overrides) embedded under a
+        // reserved namespaced key in operationsAndResponses; null when neither is supplied.
+        GenerationOptions generationOptions = GenerationOptions.fromOperationsMap(operationsAndResponses);
         // Track how many times each operationId appears so we can disambiguate
         // when the same operationId maps to multiple expectations (e.g. multiple response codes)
         Map<String, Integer> operationIdCounts = new HashMap<>();
-        return openAPI
-            .getPaths()
-            .values()
-            .stream()
-            .flatMap(pathItem ->
-                pathItem
-                    .readOperations()
-                    .stream()
-            )
+        // Collect all operations from both paths and webhooks (OAS 3.1).
+        // A valid OAS 3.1 document may omit paths entirely (webhooks-only or components-only),
+        // so getPaths() can be null — treat it as an empty stream rather than NPE-ing.
+        java.util.stream.Stream<io.swagger.v3.oas.models.Operation> pathOperations = java.util.stream.Stream.empty();
+        if (openAPI.getPaths() != null) {
+            pathOperations = openAPI
+                .getPaths()
+                .values()
+                .stream()
+                .flatMap(pathItem -> pathItem.readOperations().stream());
+        }
+        java.util.stream.Stream<io.swagger.v3.oas.models.Operation> webhookOperations = java.util.stream.Stream.empty();
+        if (openAPI.getWebhooks() != null) {
+            webhookOperations = openAPI.getWebhooks()
+                .values()
+                .stream()
+                .flatMap(pathItem -> pathItem.readOperations().stream());
+        }
+        return java.util.stream.Stream.concat(pathOperations, webhookOperations)
             .filter(operation -> operationsAndResponses == null || operationsAndResponses.containsKey(operation.getOperationId()))
             .map(operation -> {
                 String apiResponseKey = null;
@@ -85,8 +100,8 @@ public class OpenAPIConverter {
                     openAPIDefinition.withContextPathPrefix(contextPathPrefix);
                 }
                 Expectation expectation = new Expectation(openAPIDefinition)
-                    .thenRespond(buildHttpResponse(openAPI, operation.getResponses(), apiResponseKey, exampleName));
-                List<AfterAction> afterActions = buildAfterActions(openAPI, operation);
+                    .thenRespond(buildHttpResponse(openAPI, operation.getResponses(), apiResponseKey, exampleName, generationOptions));
+                List<AfterAction> afterActions = buildAfterActions(openAPI, operation, generationOptions);
                 if (!afterActions.isEmpty()) {
                     expectation.withAfterActions(afterActions);
                 }
@@ -104,23 +119,25 @@ public class OpenAPIConverter {
     }
 
     /**
-     * Derives a stable spec key from the parsed OpenAPI object. Uses the
-     * spec title (sanitized) if available, otherwise falls back to a short
-     * hash of the raw spec URL or payload.
+     * Derives a stable, collision-resistant spec key from the parsed OpenAPI object
+     * and its source. The key combines the sanitized title (for human readability)
+     * with a short hash of the spec <em>source identity</em> (URL/file reference or
+     * inline payload), so two distinct specs that share the same {@code info.title}
+     * still get distinct namespaces and never prune/overwrite each other.
+     *
+     * <p>See {@link OpenApiSyncPlanner#deriveSpecKey(String, String)} for the exact
+     * identity semantics (URL vs inline payload) and the deliberate trade-off for
+     * edited inline payloads.
      */
     static String deriveSpecKey(OpenAPI openAPI, String specUrlOrPayload) {
         String title = null;
         if (openAPI.getInfo() != null) {
             title = openAPI.getInfo().getTitle();
         }
-        String key = OpenApiSyncPlanner.specKeyFromTitle(title);
-        if (key == null) {
-            key = OpenApiSyncPlanner.specKeyFromHash(specUrlOrPayload);
-        }
-        return key;
+        return OpenApiSyncPlanner.deriveSpecKey(title, specUrlOrPayload);
     }
 
-    private List<AfterAction> buildAfterActions(OpenAPI openAPI, io.swagger.v3.oas.models.Operation operation) {
+    private List<AfterAction> buildAfterActions(OpenAPI openAPI, io.swagger.v3.oas.models.Operation operation, GenerationOptions generationOptions) {
         List<AfterAction> afterActions = new ArrayList<>();
         Map<String, io.swagger.v3.oas.models.callbacks.Callback> callbacks = operation.getCallbacks();
         if (callbacks == null || callbacks.isEmpty()) {
@@ -163,7 +180,8 @@ public class OpenAPIConverter {
                                 if (mediaType != null && mediaType.getSchema() != null) {
                                     org.mockserver.openapi.examples.models.Example example = ExampleBuilder.fromSchema(
                                         mediaType.getSchema(),
-                                        openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null
+                                        openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null,
+                                        generationOptions
                                     );
                                     if (example != null) {
                                         callbackRequest.withBody(serialise(example));
@@ -195,18 +213,15 @@ public class OpenAPIConverter {
         return callbackUrl;
     }
 
-    private HttpResponse buildHttpResponse(OpenAPI openAPI, ApiResponses apiResponses, String apiResponseKey) {
-        return buildHttpResponse(openAPI, apiResponses, apiResponseKey, null);
-    }
-
-    private HttpResponse buildHttpResponse(OpenAPI openAPI, ApiResponses apiResponses, String apiResponseKey, String exampleName) {
+    private HttpResponse buildHttpResponse(OpenAPI openAPI, ApiResponses apiResponses, String apiResponseKey, String exampleName, GenerationOptions generationOptions) {
         HttpResponse response = response();
         Optional
             .ofNullable(apiResponses)
-            .flatMap(notNullApiResponses -> notNullApiResponses.entrySet().stream().filter(entry -> isBlank(apiResponseKey) | entry.getKey().equals(apiResponseKey)).findFirst())
+            .flatMap(notNullApiResponses -> selectApiResponse(notNullApiResponses, apiResponseKey))
             .ifPresent(apiResponse -> {
-                if (!apiResponse.getKey().equalsIgnoreCase("default")) {
-                    response.withStatusCode(Integer.parseInt(apiResponse.getKey()));
+                Integer statusCode = parseResponseStatusCode(apiResponse.getKey());
+                if (statusCode != null) {
+                    response.withStatusCode(statusCode);
                 }
                 Optional
                     .ofNullable(apiResponse.getValue().getHeaders())
@@ -219,7 +234,7 @@ public class OpenAPIConverter {
                             if (headerExample != null) {
                                 response.withHeader(entry.getKey(), String.valueOf(headerExample));
                             } else if (value.getSchema() != null) {
-                                org.mockserver.openapi.examples.models.Example generatedExample = ExampleBuilder.fromSchema(value.getSchema(), openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null);
+                                org.mockserver.openapi.examples.models.Example generatedExample = ExampleBuilder.fromSchema(value.getSchema(), openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null, generationOptions);
                                 if (generatedExample instanceof StringExample stringExample) {
                                     response.withHeader(entry.getKey(), stringExample.getValue());
                                 } else {
@@ -256,7 +271,7 @@ public class OpenAPIConverter {
                                             response.withBody(serialise(schemaExample));
                                         }
                                     } else {
-                                        org.mockserver.openapi.examples.models.Example generatedExample = ExampleBuilder.fromSchema(mediaType.getSchema(), openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null);
+                                        org.mockserver.openapi.examples.models.Example generatedExample = ExampleBuilder.fromSchema(mediaType.getSchema(), openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null, generationOptions);
                                         if (generatedExample instanceof StringExample stringExample) {
                                             if (isJsonContentType(contentType.getKey())) {
                                                 response.withBody(json(serialise(stringExample.getValue())));
@@ -264,11 +279,15 @@ public class OpenAPIConverter {
                                                 response.withBody(stringExample.getValue());
                                             }
                                         } else if (generatedExample != null) {
-                                            String serialise = serialise(generatedExample);
                                             if (isJsonContentType(contentType.getKey())) {
-                                                response.withBody(json(serialise));
+                                                response.withBody(json(serialise(generatedExample)));
+                                            } else if (isXmlContentType(contentType.getKey())) {
+                                                // common path: no inline example, so generate a real,
+                                                // spec-correct XML body from the generated Example tree
+                                                // rather than emitting a JSON-shaped string in an XML body
+                                                response.withBody(new XmlExampleSerializer().serialize(generatedExample));
                                             } else {
-                                                response.withBody(serialise);
+                                                response.withBody(serialise(generatedExample));
                                             }
                                         }
                                     }
@@ -277,6 +296,67 @@ public class OpenAPIConverter {
                     });
             });
         return response;
+    }
+
+    /**
+     * Selects the response entry to render for the requested {@code apiResponseKey}.
+     * <ul>
+     *   <li>blank key: the first defined response (unchanged historical behaviour);</li>
+     *   <li>key present: the matching response;</li>
+     *   <li>key non-blank but absent: a WARN naming the requested key vs the available keys, then a
+     *       deliberate fall back to the first defined response — never a silently empty 200.</li>
+     * </ul>
+     */
+    private Optional<Map.Entry<String, io.swagger.v3.oas.models.responses.ApiResponse>> selectApiResponse(ApiResponses apiResponses, String apiResponseKey) {
+        if (isBlank(apiResponseKey)) {
+            return apiResponses.entrySet().stream().findFirst();
+        }
+        Optional<Map.Entry<String, io.swagger.v3.oas.models.responses.ApiResponse>> exactMatch = apiResponses
+            .entrySet()
+            .stream()
+            .filter(entry -> entry.getKey().equals(apiResponseKey))
+            .findFirst();
+        if (exactMatch.isPresent()) {
+            return exactMatch;
+        }
+        Optional<Map.Entry<String, io.swagger.v3.oas.models.responses.ApiResponse>> fallback = apiResponses.entrySet().stream().findFirst();
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setLogLevel(WARN)
+                .setMessageFormat("requested OpenAPI response status code {} not defined for operation - available response keys are {} - falling back to {}")
+                .setArguments(apiResponseKey, apiResponses.keySet(), fallback.map(Map.Entry::getKey).orElse("none"))
+        );
+        return fallback;
+    }
+
+    /**
+     * Resolves an OpenAPI response-map key to a concrete HTTP status code.
+     * <ul>
+     *   <li>a literal three-digit key (e.g. {@code "200"}) becomes that status code;</li>
+     *   <li>a range key (e.g. {@code "2XX"}, {@code "4xx"} — legal per OpenAPI 3.x) becomes the
+     *       first code in the range, i.e. {@code firstDigit * 100} ({@code "2XX"} -> 200);</li>
+     *   <li>{@code "default"} (case-insensitive) returns {@code null}, leaving the default status as-is;</li>
+     *   <li>any other unparseable key is logged at WARN and returns {@code null}.</li>
+     * </ul>
+     * Never throws.
+     */
+    private Integer parseResponseStatusCode(String key) {
+        if (key == null || key.equalsIgnoreCase("default")) {
+            return null;
+        }
+        if (key.matches("\\d{3}")) {
+            return Integer.parseInt(key);
+        }
+        if (key.matches("[1-5][xX]{2}")) {
+            return (key.charAt(0) - '0') * 100;
+        }
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setLogLevel(WARN)
+                .setMessageFormat("unable to parse OpenAPI response status code key {} - leaving default status code")
+                .setArguments(key)
+        );
+        return null;
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -291,7 +371,7 @@ public class OpenAPIConverter {
         }
         try {
             if (schema.getExample() != null) {
-                return resolveExampleRefs(schema.getExample(), openAPI);
+                return resolveExampleRefs(ExampleBuilder.normalizeFlattenedExample(schema.getExample(), schema), openAPI);
             }
             if (schema instanceof ComposedSchema composedSchema) {
                 if (composedSchema.getAllOf() != null) {
@@ -306,6 +386,11 @@ public class OpenAPIConverter {
                         Map<String, Schema> ownProperties = composedSchema.getProperties();
                         for (Map.Entry<String, Schema> entry : ownProperties.entrySet()) {
                             Object propExample = resolveSchemaExample(entry.getValue(), openAPI, activeStack);
+                            // Returning null for the WHOLE object when a property has no inline example is
+                            // load-bearing: it makes the caller fall back to ExampleBuilder.fromSchema, which
+                            // generates a COMPLETE example (samples for array/enum/sample-only properties).
+                            // Keeping a partial object here instead silently DROPS those properties from the
+                            // response body (regression: petstore photoUrls/tags/status disappeared).
                             if (propExample == null) {
                                 return null;
                             }
@@ -336,6 +421,10 @@ public class OpenAPIConverter {
                 Map<String, Object> result = new LinkedHashMap<>();
                 for (Map.Entry<String, io.swagger.v3.oas.models.media.Schema> entry : properties.entrySet()) {
                     Object propExample = resolveSchemaExample(entry.getValue(), openAPI, activeStack);
+                    // Returning null for the whole object when one property has no inline example is
+                    // load-bearing: it makes the caller fall back to ExampleBuilder.fromSchema, which produces
+                    // a COMPLETE example (samples for properties without an explicit example). Keeping a partial
+                    // object here silently DROPS the sample-only properties from the response body.
                     if (propExample == null) {
                         return null;
                     }
@@ -361,7 +450,46 @@ public class OpenAPIConverter {
         return org.mockserver.model.MediaType.parse(contentType).isJson();
     }
 
+    /**
+     * True when the content type denotes XML — {@code application/xml}, {@code text/xml}, or any media
+     * type with a {@code +xml} structured-syntax suffix (e.g. {@code application/atom+xml}). Used to route
+     * a generated example through {@link XmlExampleSerializer} so an XML response yields a real XML body
+     * rather than a JSON-shaped string.
+     */
+    public static boolean isXmlContentType(String contentType) {
+        if (isBlank(contentType)) {
+            return false;
+        }
+        org.mockserver.model.MediaType mediaType = org.mockserver.model.MediaType.parse(contentType);
+        String type = mediaType.getType();
+        String subtype = mediaType.getSubtype();
+        if (type == null || subtype == null) {
+            return false;
+        }
+        type = type.toLowerCase(Locale.ROOT);
+        subtype = subtype.toLowerCase(Locale.ROOT);
+        if ("application".equals(type) && "xml".equals(subtype)) {
+            return true;
+        }
+        if ("text".equals(type) && "xml".equals(subtype)) {
+            return true;
+        }
+        return subtype.endsWith("+xml");
+    }
+
+    private void warnExampleNameNotFound(String exampleName, Map<String, Example> availableExamples) {
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setLogLevel(WARN)
+                .setMessageFormat("requested OpenAPI example name {} not defined - available example names are {} - falling back to the first defined example")
+                .setArguments(exampleName, availableExamples != null ? availableExamples.keySet() : Collections.emptySet())
+        );
+    }
+
     private Object findHeaderExample(Header value, OpenAPI openAPI, String exampleName) {
+        if (isNotBlank(exampleName) && (value.getExamples() == null || !value.getExamples().containsKey(exampleName))) {
+            warnExampleNameNotFound(exampleName, value.getExamples());
+        }
         if (exampleName != null && value.getExamples() != null && value.getExamples().containsKey(exampleName)) {
             Example example = value.getExamples().get(exampleName);
             if (example != null) {
@@ -386,6 +514,11 @@ public class OpenAPIConverter {
 
     private Object findExample(MediaType mediaType, OpenAPI openAPI, String exampleName) {
         Object example = null;
+        if (isNotBlank(exampleName) && (mediaType.getExamples() == null || !mediaType.getExamples().containsKey(exampleName))) {
+            // a specific example was requested but is not defined - warn before falling back rather
+            // than silently substituting a different (unrequested) named example or the inline example
+            warnExampleNameNotFound(exampleName, mediaType.getExamples());
+        }
         if (exampleName != null && mediaType.getExamples() != null && mediaType.getExamples().containsKey(exampleName)) {
             Example namedExample = mediaType.getExamples().get(exampleName);
             if (namedExample != null) {
@@ -417,7 +550,16 @@ public class OpenAPIConverter {
 
     @SuppressWarnings("unchecked")
     private Object resolveExampleRefs(Object value, OpenAPI openAPI, Set<String> activeRefChain, int refDepth, int structureDepth) {
-        if (structureDepth > MAX_STRUCTURE_DEPTH) {
+        // both depth guards use >= so the limit is the maximum *processed* depth (consistent with the
+        // refDepth guard below); truncation is logged at WARN, matching the ref-depth and cycle guards,
+        // so a silently-truncated example never goes unreported
+        if (structureDepth >= MAX_STRUCTURE_DEPTH) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(WARN)
+                    .setMessageFormat("example structure exceeded maximum nesting depth of {} — returning literal value")
+                    .setArguments(MAX_STRUCTURE_DEPTH)
+            );
             return value;
         }
         if (value instanceof ObjectNode node) {
@@ -448,6 +590,9 @@ public class OpenAPIConverter {
                     activeRefChain.remove(ref);
                     return result;
                 }
+                // unresolvable internal $ref - drop it (resolveRef already logged) rather than leaking
+                // the literal {"$ref": "..."} node into the generated response body
+                return null;
             }
             ObjectNode resolvedNode = node.objectNode();
             node.properties().forEach(entry -> {
@@ -499,6 +644,9 @@ public class OpenAPIConverter {
                     activeRefChain.remove(ref);
                     return result;
                 }
+                // unresolvable internal $ref - drop it (resolveRef already logged) rather than leaking
+                // the literal {"$ref": "..."} node into the generated response body
+                return null;
             }
             Map<String, Object> resolvedMap = new LinkedHashMap<>();
             for (Map.Entry<String, Object> entry : map.entrySet()) {
@@ -516,24 +664,63 @@ public class OpenAPIConverter {
         return value;
     }
 
+    /**
+     * Resolves an internal {@code $ref} appearing inside an example value. Handles
+     * {@code #/components/examples/<name>} and any JSON-pointer suffix beyond the example name
+     * (e.g. {@code #/components/examples/<name>/value/<field>}) by navigating into the resolved
+     * example value. Any {@code $ref} that cannot be resolved (unsupported target, missing component,
+     * or a pointer suffix that does not navigate) is logged at WARN and returns {@code null}; the
+     * caller drops the node rather than leaking the literal {@code $ref} into the response body.
+     */
     private Object resolveRef(String ref, OpenAPI openAPI) {
         if (ref != null && ref.startsWith("#/components/examples/") && openAPI.getComponents() != null && openAPI.getComponents().getExamples() != null) {
             String path = ref.substring("#/components/examples/".length());
             String[] parts = path.split("/");
-            if (parts.length >= 1) {
+            if (parts.length >= 1 && isNotBlank(parts[0])) {
                 Example componentExample = openAPI.getComponents().getExamples().get(parts[0]);
                 if (componentExample != null) {
-                    return componentExample.getValue();
+                    Object resolved = componentExample.getValue();
+                    // navigate any JSON-pointer suffix beyond the example name (parts[1..]);
+                    // a "value" segment immediately after the example name addresses the Example.value
+                    // object itself, so skip it
+                    int from = (parts.length >= 2 && "value".equals(parts[1])) ? 2 : 1;
+                    resolved = navigatePointer(resolved, parts, from);
+                    if (resolved != null) {
+                        return resolved;
+                    }
                 }
             }
-            mockServerLogger.logEvent(
-                new LogEntry()
-                    .setLogLevel(WARN)
-                    .setMessageFormat("unable to resolve $ref {} in example")
-                    .setArguments(ref)
-            );
         }
+        mockServerLogger.logEvent(
+            new LogEntry()
+                .setLogLevel(WARN)
+                .setMessageFormat("unable to resolve $ref {} in example — dropping unresolved reference")
+                .setArguments(ref)
+        );
         return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object navigatePointer(Object current, String[] parts, int from) {
+        for (int i = from; i < parts.length && current != null; i++) {
+            String segment = parts[i].replace("~1", "/").replace("~0", "~");
+            if (current instanceof JsonNode jsonNode) {
+                current = jsonNode.get(segment);
+            } else if (current instanceof Map) {
+                current = ((Map<String, Object>) current).get(segment);
+            } else if (current instanceof List) {
+                try {
+                    List<Object> list = (List<Object>) current;
+                    int index = Integer.parseInt(segment);
+                    current = (index >= 0 && index < list.size()) ? list.get(index) : null;
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            } else {
+                return null;
+            }
+        }
+        return current;
     }
 
     private String serialise(Object example) {

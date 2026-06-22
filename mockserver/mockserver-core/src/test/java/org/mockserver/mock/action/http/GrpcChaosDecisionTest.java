@@ -6,7 +6,9 @@ import org.mockserver.grpc.GrpcStatusMapper;
 import org.mockserver.model.GrpcChaosProfile;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThan;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.mockserver.model.GrpcChaosProfile.grpcChaosProfile;
@@ -153,6 +155,31 @@ public class GrpcChaosDecisionTest {
 
         assertThat(fault1.getStatusCode(), is(fault2.getStatusCode()));
         assertThat(fault1.getStatusCode(), is(GrpcStatusMapper.GrpcStatusCode.INTERNAL));
+    }
+
+    @Test
+    public void shouldInjectRoughlyHalfTheTimeWithProbabilityOneHalf() {
+        // Regression guard: previously a new Random(seed)/new Random() was constructed per request,
+        // so the first draw was effectively constant — turning a 0.5 probability into an
+        // all-or-nothing switch (0% or 100%). With the shared ChaosProbability draw an unseeded 0.5
+        // probability must inject roughly half the time over many independent calls.
+        GrpcChaosProfile profile = grpcChaosProfile()
+            .withErrorProbability(0.5)
+            .withErrorStatusCode("UNAVAILABLE");
+
+        int iterations = 5_000;
+        int faults = 0;
+        for (int i = 0; i < iterations; i++) {
+            // Use a count window of 1-and-out is not possible here; matchCount is always eligible.
+            if (GrpcChaosDecision.evaluate(profile, 1, quotaRegistry) != null) {
+                faults++;
+            }
+        }
+
+        // With 5000 draws at p=0.5 the count is overwhelmingly within [40%, 60%]; the key assertion
+        // is that it is neither ~0% nor ~100% (the pre-fix degenerate behaviour).
+        assertThat("injection rate should be well above 0%", faults, is(greaterThan((int) (iterations * 0.40))));
+        assertThat("injection rate should be well below 100%", faults, is(lessThan((int) (iterations * 0.60))));
     }
 
     @Test

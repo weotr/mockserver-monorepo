@@ -207,6 +207,124 @@ public class MockServerClientTests
         act.Should().Throw<VerificationException>();
     }
 
+    // --- Response Verification Tests ---
+
+    [Fact]
+    public void Verify_WithResponse_SendsCorrectRequest()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.Accepted;
+
+        client.Verify(
+            HttpRequest.Request().WithPath("/api"),
+            HttpResponse.Response().WithStatusCode(200).Build(),
+            VerificationTimes.AtLeastTimes(1)
+        );
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/verify");
+        handler.LastRequestBody.Should().Contain("\"httpRequest\"");
+        handler.LastRequestBody.Should().Contain("\"path\":\"/api\"");
+        handler.LastRequestBody.Should().Contain("\"httpResponse\"");
+        handler.LastRequestBody.Should().Contain("\"statusCode\":200");
+        handler.LastRequestBody.Should().Contain("\"atLeast\":1");
+    }
+
+    [Fact]
+    public void Verify_ResponseOnly_OmitsHttpRequest()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.Accepted;
+
+        client.Verify(
+            null,
+            HttpResponse.Response().WithStatusCode(500).Build()
+        );
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/verify");
+        handler.LastRequestBody.Should().NotContain("\"httpRequest\"");
+        handler.LastRequestBody.Should().Contain("\"httpResponse\"");
+        handler.LastRequestBody.Should().Contain("\"statusCode\":500");
+    }
+
+    [Fact]
+    public void Verify_WithResponse_ThrowsVerificationException_On406()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.NotAcceptable;
+        handler.ResponseBody = "Response not found at least 1 times";
+
+        var act = () => client.Verify(
+            HttpRequest.Request().WithPath("/missing"),
+            HttpResponse.Response().WithStatusCode(200).Build(),
+            VerificationTimes.AtLeastTimes(1)
+        );
+
+        act.Should().Throw<VerificationException>()
+            .WithMessage("*Response not found*");
+    }
+
+    [Fact]
+    public void Verify_WithResponseHeaders_SerializesCorrectly()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.Accepted;
+
+        client.Verify(
+            HttpRequest.Request().WithPath("/api"),
+            HttpResponse.Response()
+                .WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .Build()
+        );
+
+        handler.LastRequestBody.Should().Contain("\"httpResponse\"");
+        handler.LastRequestBody.Should().Contain("\"Content-Type\"");
+        handler.LastRequestBody.Should().Contain("\"application/json\"");
+    }
+
+    [Fact]
+    public void VerifySequence_WithResponses_SendsCorrectRequest()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.Accepted;
+
+        client.VerifySequence(
+            new List<HttpRequest>
+            {
+                HttpRequest.Request().WithPath("/first"),
+                HttpRequest.Request().WithPath("/second")
+            },
+            new List<HttpResponse>
+            {
+                HttpResponse.Response().WithStatusCode(200).Build(),
+                HttpResponse.Response().WithStatusCode(201).Build()
+            }
+        );
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/verifySequence");
+        handler.LastRequestBody.Should().Contain("\"httpRequests\"");
+        handler.LastRequestBody.Should().Contain("/first");
+        handler.LastRequestBody.Should().Contain("/second");
+        handler.LastRequestBody.Should().Contain("\"httpResponses\"");
+        handler.LastRequestBody.Should().Contain("\"statusCode\":200");
+        handler.LastRequestBody.Should().Contain("\"statusCode\":201");
+    }
+
+    [Fact]
+    public void VerifySequence_WithResponses_ThrowsVerificationException_On406()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.NotAcceptable;
+        handler.ResponseBody = "Response sequence not found";
+
+        var act = () => client.VerifySequence(
+            new List<HttpRequest> { HttpRequest.Request().WithPath("/first") },
+            new List<HttpResponse> { HttpResponse.Response().WithStatusCode(200).Build() }
+        );
+
+        act.Should().Throw<VerificationException>();
+    }
+
     [Fact]
     public void Clear_SendsCorrectRequest()
     {
@@ -294,6 +412,34 @@ public class MockServerClientTests
         client.RetrieveRecordedExpectations();
 
         handler.LastRequest!.RequestUri!.PathAndQuery.Should().Contain("type=recorded_expectations");
+    }
+
+    [Fact]
+    public void RetrieveExpectationsAsCode_SendsCorrectRequestAndReturnsCode()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.OK;
+        handler.ResponseBody = "new MockServerClient().When(request().WithPath(\"/code\"));";
+
+        var code = client.RetrieveExpectationsAsCode("java");
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Contain("type=active_expectations");
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Contain("format=JAVA");
+        code.Should().Contain("/code");
+    }
+
+    [Fact]
+    public void RetrieveRecordedExpectationsAsCode_SendsCorrectRequest()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.OK;
+        handler.ResponseBody = "# generated python";
+
+        var code = client.RetrieveRecordedExpectationsAsCode("python");
+
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Contain("type=recorded_expectations");
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Contain("format=PYTHON");
+        code.Should().Be("# generated python");
     }
 
     [Fact]

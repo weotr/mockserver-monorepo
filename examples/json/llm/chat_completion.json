@@ -1,0 +1,18 @@
+{
+  "httpRequest": {
+    "method": "POST",
+    "path": "/v1/messages"
+  },
+  "httpLlmResponse": {
+    "provider": "ANTHROPIC",
+    "model": "claude-sonnet-4-20250514",
+    "completion": {
+      "text": "Hello, world!",
+      "stopReason": "end_turn",
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 25
+      }
+    }
+  }
+}

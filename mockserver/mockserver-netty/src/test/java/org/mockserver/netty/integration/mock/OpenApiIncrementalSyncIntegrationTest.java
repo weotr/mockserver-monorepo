@@ -24,11 +24,17 @@ import static org.mockserver.stop.Stop.stopQuietly;
  *
  * <p>Verifies that:
  * <ul>
- *   <li>PUT /mockserver/openapi with an inline OpenAPI spec creates expectations with stable
- *       {@code openapi:<specKey>:<operationId>} ids.</li>
- *   <li>Re-importing a modified spec (same title, different operations) prunes removed operations
- *       and adds new ones without creating duplicates — the incremental/idempotent contract.</li>
+ *   <li>PUT /mockserver/openapi with an inline OpenAPI spec creates expectations with stable,
+ *       collision-resistant {@code openapi:<specKey>:<operationId>} ids (the spec key embeds a short
+ *       hash of the spec source).</li>
+ *   <li>Importing a DIFFERENT inline spec that shares the same {@code info.title} does NOT delete the
+ *       first spec's expectations — the cross-spec data-loss guard.</li>
+ *   <li>Re-importing the byte-identical inline spec is idempotent (no duplicates).</li>
  * </ul>
+ *
+ * <p>Incremental sync of an evolving spec (pruning operations removed from it) is guaranteed for
+ * URL/file-referenced specs and is proven deterministically at the HttpState/planner level in
+ * mockserver-core ({@code OpenApiCrossSpecSyncTest}, {@code OpenApiSyncPlannerTest}).
  */
 public class OpenApiIncrementalSyncIntegrationTest {
 
@@ -75,61 +81,57 @@ public class OpenApiIncrementalSyncIntegrationTest {
 
         assertThat("should have exactly 2 expectations", expectations.size(), is(2));
 
-        // Verify stable ids: openapi:foo:listItems and openapi:foo:getItem
+        // Verify stable ids: openapi:foo_<hash>:listItems and openapi:foo_<hash>:getItem
+        // (the spec key embeds a short hash of the spec source to avoid cross-spec collisions)
         boolean hasListItems = false;
         boolean hasGetItem = false;
         for (JsonNode exp : expectations) {
             String id = exp.get("id").asText();
-            if ("openapi:foo:listItems".equals(id)) {
+            if (id.startsWith("openapi:foo_") && id.endsWith(":listItems")) {
                 hasListItems = true;
             }
-            if ("openapi:foo:getItem".equals(id)) {
+            if (id.startsWith("openapi:foo_") && id.endsWith(":getItem")) {
                 hasGetItem = true;
             }
         }
-        assertThat("should have openapi:foo:listItems", hasListItems, is(true));
-        assertThat("should have openapi:foo:getItem", hasGetItem, is(true));
+        assertThat("should have openapi:foo_<hash>:listItems", hasListItems, is(true));
+        assertThat("should have openapi:foo_<hash>:getItem", hasGetItem, is(true));
     }
 
+    // NOTE on incremental sync of an EVOLVING spec (prune removed ops): that guarantee holds when
+    // the spec is referenced by a stable URL/file path (the path is the namespace identity, so changed
+    // content under the same path re-targets the same namespace and removed ops are pruned). It is
+    // proven deterministically at the HttpState level in
+    // mockserver-core's org.mockserver.mock.OpenApiCrossSpecSyncTest#invariant3_... and via the pure
+    // planner in OpenApiSyncPlannerTest, rather than here, because driving file-content evolution through
+    // the live HTTP path also exercises the third-party swagger file reader/cache and is not the unit
+    // under test. Inline payloads instead key off content (editing them spawns a new namespace by
+    // design) — see shouldNotDeleteOtherSpecWhenImportingDifferentInlineSpecWithSameTitle below.
+
     @Test
-    public void shouldIncrementallySyncOpenApiSpec() throws Exception {
-        // Import v1 spec (listItems + getItem)
-        String responseV1 = sendPutRequest("/mockserver/openapi", SPEC_V1);
-        assertThat("first import should return 201", responseV1, containsString("201"));
+    public void shouldNotDeleteOtherSpecWhenImportingDifferentInlineSpecWithSameTitle() throws Exception {
+        // Cross-spec data-loss guard (the confirmed CRITICAL bug): two DIFFERENT inline specs that
+        // share the same info.title "Foo" must land in DISTINCT namespaces, so importing one never
+        // deletes the other's expectations.
+        sendPutRequest("/mockserver/openapi", SPEC_V1); // title Foo: listItems + getItem
+        sendPutRequest("/mockserver/openapi", SPEC_V2); // title Foo (different payload): listItems + createItem
 
-        // Verify 2 expectations after v1
-        String activeV1 = sendPutRequest("/mockserver/retrieve?type=ACTIVE_EXPECTATIONS", "");
-        JsonNode expectationsV1 = OBJECT_MAPPER.readTree(extractJsonBody(activeV1));
-        assertThat("v1 should have 2 expectations", expectationsV1.size(), is(2));
+        String active = sendPutRequest("/mockserver/retrieve?type=ACTIVE_EXPECTATIONS", "");
+        JsonNode expectations = OBJECT_MAPPER.readTree(extractJsonBody(active));
 
-        // Import v2 spec (listItems kept, getItem removed, createItem added)
-        String responseV2 = sendPutRequest("/mockserver/openapi", SPEC_V2);
-        assertThat("second import should return 201", responseV2, containsString("201"));
-
-        // Retrieve active expectations after v2
-        String activeV2 = sendPutRequest("/mockserver/retrieve?type=ACTIVE_EXPECTATIONS", "");
-        JsonNode expectationsV2 = OBJECT_MAPPER.readTree(extractJsonBody(activeV2));
-
-        assertThat("v2 should have exactly 2 expectations (listItems + createItem)", expectationsV2.size(), is(2));
-
-        boolean hasListItems = false;
-        boolean hasCreateItem = false;
-        boolean hasGetItem = false;
-        for (JsonNode exp : expectationsV2) {
+        boolean hasGetItem = false;     // unique to spec V1
+        boolean hasCreateItem = false;  // unique to spec V2
+        for (JsonNode exp : expectations) {
             String id = exp.get("id").asText();
-            if ("openapi:foo:listItems".equals(id)) {
-                hasListItems = true;
-            }
-            if ("openapi:foo:createItem".equals(id)) {
-                hasCreateItem = true;
-            }
-            if ("openapi:foo:getItem".equals(id)) {
+            if (id.endsWith(":getItem")) {
                 hasGetItem = true;
             }
+            if (id.endsWith(":createItem")) {
+                hasCreateItem = true;
+            }
         }
-        assertThat("listItems should be retained", hasListItems, is(true));
-        assertThat("createItem should be added", hasCreateItem, is(true));
-        assertThat("getItem should be pruned", hasGetItem, is(false));
+        assertThat("spec V1's getItem must survive importing spec V2 (no cross-spec deletion)", hasGetItem, is(true));
+        assertThat("spec V2's createItem must be present", hasCreateItem, is(true));
     }
 
     @Test

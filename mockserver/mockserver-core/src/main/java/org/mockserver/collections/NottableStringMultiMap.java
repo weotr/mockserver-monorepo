@@ -10,6 +10,7 @@ import java.util.*;
 
 import static org.mockserver.collections.ImmutableEntry.entry;
 import static org.mockserver.collections.SubSetMatcher.containsSubset;
+import static org.mockserver.model.NottableString.string;
 
 /**
  * @author jamesdbloom
@@ -26,6 +27,28 @@ public class NottableStringMultiMap extends ObjectWithReflectiveEqualsHashCodeTo
         for (KeyToMultiValue keyToMultiValue : entries) {
             backingMap.put(keyToMultiValue.getName(), keyToMultiValue.getValues());
         }
+    }
+
+    /**
+     * Returns a {@link NottableStringMultiMap} view of the given request-side collection, reusing a
+     * memoized instance held on the collection when one is available for this {@code controlPlaneMatcher}.
+     * <p>
+     * The conversion is keyed by {@code controlPlaneMatcher} because the resulting map embeds a
+     * control-plane-sensitive {@link RegexStringMatcher}; the memo on {@link KeysToMultiValues} is cleared
+     * on every mutation, so a collection that is mutated mid-scan (e.g. query parameters split by
+     * {@code ExpandedParameterDecoder.splitParameters}) rebuilds rather than serving a stale view.
+     * <p>
+     * For matcher (expectation) side maps the existing constructor is used directly; this factory is for
+     * the request (matched) side, which would otherwise be rebuilt once per candidate expectation.
+     */
+    public static NottableStringMultiMap multiMap(MockServerLogger mockServerLogger, boolean controlPlaneMatcher, KeysToMultiValues<? extends KeyToMultiValue, ? extends KeysToMultiValues> matched) {
+        Object cached = matched.getConvertedMatcher(controlPlaneMatcher);
+        if (cached instanceof NottableStringMultiMap) {
+            return (NottableStringMultiMap) cached;
+        }
+        NottableStringMultiMap converted = new NottableStringMultiMap(mockServerLogger, controlPlaneMatcher, matched.getKeyMatchStyle(), matched.getEntries());
+        matched.setConvertedMatcher(controlPlaneMatcher, converted);
+        return converted;
     }
 
     @VisibleForTesting
@@ -54,6 +77,23 @@ public class NottableStringMultiMap extends ObjectWithReflectiveEqualsHashCodeTo
             }
             case MATCHING_KEY: {
                 for (NottableString matcherKey : subset.backingMap.keySet()) {
+                    // A notted matcher key (e.g. "!X") asserts that the key is ABSENT, mirroring the
+                    // SUB_SET semantic in SubSetMatcher#nottedAndPresent. Without this special case
+                    // getAll(matcherKey) would "match" every actual key that is NOT X (via the XOR
+                    // not-semantics in RegexStringMatcher), aggregating a bag of unrelated values from
+                    // those keys — which is not a meaningful "this key must be absent" assertion. So
+                    // instead fail iff some actual (non-notted) key matches the un-notted matcher key,
+                    // and otherwise treat the absence requirement as satisfied (no values to assert).
+                    if (matcherKey.isNot()) {
+                        if (containsUnNottedKey(matcherKey)) {
+                            if (context != null) {
+                                context.addDifference(mockServerLogger, "multimap matching key match failed for notted key:{}", matcherKey);
+                            }
+                            return false;
+                        }
+                        continue;
+                    }
+
                     List<NottableString> matchedValuesForKey = getAll(matcherKey);
                     if (matchedValuesForKey.isEmpty() && !matcherKey.isOptional()) {
                         if (context != null) {
@@ -117,6 +157,24 @@ public class NottableStringMultiMap extends ObjectWithReflectiveEqualsHashCodeTo
         return backingMap.isEmpty();
     }
 
+    /**
+     * Returns true when some actual (non-notted) key matches the un-notted form of the given notted
+     * matcher key — i.e. the key the {@code "!X"} matcher asserts must be absent is in fact present.
+     * Mirrors {@link SubSetMatcher} {@code nottedAndPresent} so MATCHING_KEY and SUB_SET agree on the
+     * "this key must be absent" semantic for a notted key.
+     */
+    private boolean containsUnNottedKey(NottableString nottedKey) {
+        if (!isEmpty()) {
+            NottableString unNottedKey = string(nottedKey.getValue());
+            for (NottableString actualKey : backingMap.keySet()) {
+                if (!actualKey.isNot() && regexStringMatcher.matches(unNottedKey, actualKey)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private List<NottableString> getAll(NottableString key) {
         if (!isEmpty()) {
             List<NottableString> values = new ArrayList<>();
@@ -131,18 +189,26 @@ public class NottableStringMultiMap extends ObjectWithReflectiveEqualsHashCodeTo
         }
     }
 
+    // The backingMap is immutable after construction, so the derived entryList is computed once and reused.
+    // This matters because a memoized request-side map (see #multiMap) has its entryList read once per
+    // candidate expectation during a request's scan.
+    private List<ImmutableEntry> entryList;
+
     private List<ImmutableEntry> entryList() {
-        if (!isEmpty()) {
-            List<ImmutableEntry> entrySet = new ArrayList<>();
-            for (Map.Entry<NottableString, List<NottableString>> entry : backingMap.entrySet()) {
-                for (NottableString value : entry.getValue()) {
-                    entrySet.add(entry(regexStringMatcher, entry.getKey(), value));
+        if (entryList == null) {
+            if (!isEmpty()) {
+                List<ImmutableEntry> entrySet = new ArrayList<>();
+                for (Map.Entry<NottableString, List<NottableString>> entry : backingMap.entrySet()) {
+                    for (NottableString value : entry.getValue()) {
+                        entrySet.add(entry(regexStringMatcher, entry.getKey(), value));
+                    }
                 }
+                entryList = entrySet;
+            } else {
+                entryList = Collections.emptyList();
             }
-            return entrySet;
-        } else {
-            return Collections.emptyList();
         }
+        return entryList;
     }
 }
 

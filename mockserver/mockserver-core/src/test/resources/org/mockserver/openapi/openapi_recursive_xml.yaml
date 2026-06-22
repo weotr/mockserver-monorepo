@@ -1,0 +1,27 @@
+---
+openapi: 3.0.3
+info:
+  version: 1.0.0
+  title: Recursive XML schema
+paths:
+  "/node":
+    get:
+      operationId: getNode
+      responses:
+        '200':
+          description: a node
+          content:
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/Node'
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        label:
+          type: string
+        left:
+          $ref: '#/components/schemas/Node'
+        right:
+          $ref: '#/components/schemas/Node'

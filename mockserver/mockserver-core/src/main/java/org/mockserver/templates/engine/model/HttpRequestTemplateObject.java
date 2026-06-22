@@ -8,6 +8,7 @@ import org.mockserver.serialization.model.BodyDTO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +24,13 @@ public class HttpRequestTemplateObject extends RequestDefinition {
     private String method = "";
     private String path = "";
     private final Map<String, List<String>> pathParameters = new HashMap<>();
+    // Regex capture groups from the matched expectation's path pattern, 1-based aligned with
+    // java.util.regex group numbering (index 0 is the whole match, index 1 the first capturing group),
+    // so a template can reference e.g. $request.pathGroups[1] (Velocity), {{ request.pathGroups.1 }}
+    // (Mustache) or request.pathGroups[1] (JavaScript). Empty when the matched path had no capture groups.
+    private final List<String> pathGroups = new ArrayList<>();
+    // Java named groups (?<name>...) from the matched expectation's path pattern, keyed by name.
+    private final Map<String, String> namedPathGroups = new HashMap<>();
     private final Map<String, List<String>> queryStringParameters = new HashMap<>();
     private final Map<String, String> cookies = new HashMap<>();
     private final Map<String, List<String>> headers = new LinkedHashMap<>();
@@ -44,6 +52,12 @@ public class HttpRequestTemplateObject extends RequestDefinition {
             path = httpRequest.getPath().getValue();
             for (Parameter parameter : httpRequest.getPathParameterList()) {
                 pathParameters.put(parameter.getName().getValue(), parameter.getValues().stream().map(NottableString::getValue).collect(Collectors.toList()));
+            }
+            if (httpRequest.getPathGroups() != null) {
+                pathGroups.addAll(httpRequest.getPathGroups());
+            }
+            if (httpRequest.getNamedPathGroups() != null) {
+                namedPathGroups.putAll(httpRequest.getNamedPathGroups());
             }
             for (Parameter parameter : httpRequest.getQueryStringParameterList()) {
                 queryStringParameters.put(parameter.getName().getValue(), parameter.getValues().stream().map(NottableString::getValue).collect(Collectors.toList()));
@@ -75,6 +89,24 @@ public class HttpRequestTemplateObject extends RequestDefinition {
 
     public Map<String, List<String>> getPathParameters() {
         return pathParameters;
+    }
+
+    /**
+     * The numbered regex capture groups from the matched expectation's path pattern, 1-based aligned with
+     * {@link java.util.regex.Matcher} group numbering (index 0 is the whole match). Empty when the matched
+     * path had no capturing groups. Reference as {@code $request.pathGroups[1]} (Velocity),
+     * {@code {{ request.pathGroups.1 }}} (Mustache) or {@code request.pathGroups[1]} (JavaScript).
+     */
+    public List<String> getPathGroups() {
+        return pathGroups;
+    }
+
+    /**
+     * The named regex capture groups {@code (?<name>...)} from the matched expectation's path pattern,
+     * keyed by name. Empty when the matched path had no named groups.
+     */
+    public Map<String, String> getNamedPathGroups() {
+        return namedPathGroups;
     }
 
     public Map<String, List<String>> getQueryStringParameters() {
@@ -174,6 +206,8 @@ public class HttpRequestTemplateObject extends RequestDefinition {
         return Objects.equals(method, that.method) &&
             Objects.equals(path, that.path) &&
             Objects.equals(pathParameters, that.pathParameters) &&
+            Objects.equals(pathGroups, that.pathGroups) &&
+            Objects.equals(namedPathGroups, that.namedPathGroups) &&
             Objects.equals(queryStringParameters, that.queryStringParameters) &&
             Objects.equals(cookies, that.cookies) &&
             Objects.equals(headers, that.headers) &&
@@ -190,7 +224,7 @@ public class HttpRequestTemplateObject extends RequestDefinition {
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), method, path, pathParameters, queryStringParameters, cookies, headers, body, secure, localAddress, remoteAddress, keepAlive, jsonRpcId, jsonRpcRawId, jsonRpcMethod);
+            hashCode = Objects.hash(super.hashCode(), method, path, pathParameters, pathGroups, namedPathGroups, queryStringParameters, cookies, headers, body, secure, localAddress, remoteAddress, keepAlive, jsonRpcId, jsonRpcRawId, jsonRpcMethod);
         }
         return hashCode;
     }

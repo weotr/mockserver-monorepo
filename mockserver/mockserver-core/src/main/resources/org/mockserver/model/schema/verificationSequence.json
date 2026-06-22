@@ -17,6 +17,13 @@
         "$ref": "#/definitions/requestDefinition"
       }
     },
+    "httpResponses": {
+      "type": "array",
+      "additionalProperties": false,
+      "items": {
+        "$ref": "#/definitions/httpResponse"
+      }
+    },
     "maximumNumberOfRequestToReturnInVerificationFailure": {
       "type": "integer"
     }
@@ -31,6 +38,25 @@
       "required": [
         "httpRequests"
       ]
+    },
+    {
+      "required": [
+        "httpResponses"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "expectationIds"
+            ]
+          },
+          {
+            "required": [
+              "httpRequests"
+            ]
+          }
+        ]
+      }
     }
   ],
   "definitions": {

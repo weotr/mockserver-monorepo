@@ -1,0 +1,30 @@
+meta {
+  name: set a gRPC health serving status
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/mockserver/grpc/health
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "service": "helloworld.Greeter",
+    "status": "SERVING"
+  }
+}
+
+docs {
+  Sets the gRPC health-checking serving status for a service (an empty service name sets the default), or removes a service override with 'remove':true.
+  
+  gRPC service name and serving status
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

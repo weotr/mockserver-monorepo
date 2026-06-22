@@ -2,7 +2,7 @@ function matchRequestByOpenAPILoadedByHttpUrl() {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080).mockAnyResponse({
         "httpRequest": {
-            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
+            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json"
         },
         "httpResponse": {
             "body": "some_response_body"
@@ -21,7 +21,7 @@ function matchRequestByOpenAPIOperation() {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080).mockAnyResponse({
         "httpRequest": {
-            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
             "operationId": "showPetById"
         },
         "httpResponse": {
@@ -38,10 +38,12 @@ function matchRequestByOpenAPIOperation() {
 }
 
 function matchRequestByOpenAPILoadedByFileUrl() {
+    var path = require('path');
     var mockServerClient = require('mockserver-client').mockServerClient;
+    // load the OpenAPI spec from a local file (the spec bundled alongside this example)
     mockServerClient("localhost", 1080).mockAnyResponse({
         "httpRequest": {
-            "specUrlOrPayload": "file:/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json"
+            "specUrlOrPayload": "file://" + path.join(__dirname, "openapi_petstore_example.json")
         },
         "httpResponse": {
             "body": "some_response_body"
@@ -58,6 +60,8 @@ function matchRequestByOpenAPILoadedByFileUrl() {
 
 function matchRequestByOpenAPILoadedByClasspathLocation() {
     var mockServerClient = require('mockserver-client').mockServerClient;
+    // NOTE: this loads the spec from the MockServer JVM classpath, so the spec file must be
+    // present on the running server's classpath (e.g. baked into a custom server image).
     mockServerClient("localhost", 1080).mockAnyResponse({
         "httpRequest": {
             "specUrlOrPayload": "org/mockserver/openapi/openapi_petstore_example.json"
@@ -77,12 +81,13 @@ function matchRequestByOpenAPILoadedByClasspathLocation() {
 
 function matchRequestByOpenAPILoadedByJsonStringLiteral() {
     var fs = require('fs');
-    var jsEscape = require('js-string-escape');
+    var path = require('path');
     try {
         var mockServerClient = require('mockserver-client').mockServerClient;
+        // pass the spec inline as a JSON payload string (read from the bundled local file)
         mockServerClient("localhost", 1080).mockAnyResponse({
             "httpRequest": {
-                "specUrlOrPayload": jsEscape.jsStringEscape(fs.readFileSync("/Users/jamesbloom/git/mockserver/mockserver/mockserver-core/target/test-classes/org/mockserver/openapi/openapi_petstore_example.json", "utf8")),
+                "specUrlOrPayload": fs.readFileSync(path.join(__dirname, "openapi_petstore_example.json"), "utf8"),
                 "operationId": "showPetById"
             },
             "httpResponse": {
@@ -303,7 +308,7 @@ function matchRequestByOpenAPIOperationTwice() {
     var mockServerClient = require('mockserver-client').mockServerClient;
     mockServerClient("localhost", 1080).mockAnyResponse({
         "httpRequest": {
-            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
             "operationId": "showPetById"
         },
         "httpResponse": {
@@ -329,7 +334,7 @@ function updateExpectationById() {
         "id": "630a6e5b-9d61-4668-a18f-a0d3df558583",
         "priority": 0,
         "httpRequest": {
-            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver/master/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
+            "specUrlOrPayload": "https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-integration-testing/src/main/resources/org/mockserver/openapi/openapi_petstore_example.json",
             "operationId": "showPetById"
         },
         "httpResponse": {

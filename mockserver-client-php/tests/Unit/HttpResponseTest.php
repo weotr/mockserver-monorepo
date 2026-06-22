@@ -129,6 +129,72 @@ class HttpResponseTest extends TestCase
         $this->assertTrue($array['connectionOptions']['suppressContentLengthHeader']);
     }
 
+    public function testFileBody(): void
+    {
+        $response = HttpResponse::response()
+            ->statusCode(200)
+            ->fileBody('/path/to/file.html');
+
+        $expected = [
+            'statusCode' => 200,
+            'body' => [
+                'type' => 'FILE',
+                'filePath' => '/path/to/file.html',
+            ],
+        ];
+
+        $this->assertSame($expected, $response->toArray());
+    }
+
+    public function testFileBodyWithContentType(): void
+    {
+        $response = HttpResponse::response()
+            ->statusCode(200)
+            ->fileBody('/path/to/data.json', 'application/json');
+
+        $array = $response->toArray();
+
+        $this->assertSame('FILE', $array['body']['type']);
+        $this->assertSame('/path/to/data.json', $array['body']['filePath']);
+        $this->assertSame('application/json', $array['body']['contentType']);
+        $this->assertArrayNotHasKey('templateType', $array['body']);
+    }
+
+    public function testFileBodyWithTemplateType(): void
+    {
+        $response = HttpResponse::response()
+            ->statusCode(200)
+            ->fileBody('/templates/response.html', 'text/html', 'VELOCITY');
+
+        $expected = [
+            'statusCode' => 200,
+            'body' => [
+                'type' => 'FILE',
+                'filePath' => '/templates/response.html',
+                'contentType' => 'text/html',
+                'templateType' => 'VELOCITY',
+            ],
+        ];
+
+        $this->assertSame($expected, $response->toArray());
+    }
+
+    public function testFileBodyWithMustacheTemplateType(): void
+    {
+        $response = HttpResponse::response()
+            ->fileBody('/templates/response.mustache', null, 'MUSTACHE');
+
+        $expected = [
+            'body' => [
+                'type' => 'FILE',
+                'filePath' => '/templates/response.mustache',
+                'templateType' => 'MUSTACHE',
+            ],
+        ];
+
+        $this->assertSame($expected, $response->toArray());
+    }
+
     public function testJsonSerialize(): void
     {
         $response = HttpResponse::response()

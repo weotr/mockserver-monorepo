@@ -1,0 +1,38 @@
+meta {
+  name: register, remove or clear service-scoped HTTP chaos
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/serviceChaos
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "host": "payments.internal:8443",
+    "chaos": {
+      "errorStatus": 503,
+      "errorProbability": 0.3,
+      "latency": {
+        "timeUnit": "MILLISECONDS",
+        "value": 200
+      }
+    },
+    "ttlMillis": 60000
+  }
+}
+
+docs {
+  Registers an HTTP chaos / fault-injection profile for a downstream host, removes a host's profile, or clears all service-scoped chaos. Supply a 'host' with a 'chaos' object to register, 'host' with 'remove':true (or no 'chaos') to remove a single host, or 'clear':true to clear all.
+  
+  service chaos registration, removal or clear instruction
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

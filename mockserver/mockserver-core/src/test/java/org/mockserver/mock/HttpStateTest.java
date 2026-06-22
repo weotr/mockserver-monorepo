@@ -13,6 +13,7 @@ import org.mockito.InjectMocks;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.file.FilePath;
 import org.mockserver.file.FileReader;
+import org.mockserver.fixture.FixtureRedactor;
 import org.mockserver.log.MockServerEventLog;
 import org.mockserver.time.EpochService;
 import org.mockserver.time.GlobalFixedTime;
@@ -21,6 +22,7 @@ import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
+import org.mockserver.model.GraphQLBody;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 import org.mockserver.model.MediaType;
@@ -92,10 +94,17 @@ public class HttpStateTest {
     @ClassRule
     public static final GlobalFixedTime fixedTime = new GlobalFixedTime();
 
+    private java.util.concurrent.ScheduledExecutorService schedulerExecutor;
+
     @Before
     public void prepareTestFixture() {
         configuration.detailedVerificationFailures(false);
         Scheduler scheduler = mock(Scheduler.class);
+        // Several control-plane handlers (e.g. contract-test) deliberately offload their blocking
+        // work off the Netty event loop onto the scheduler's executor; back the mock with a real
+        // executor so that offloaded work actually runs.
+        schedulerExecutor = java.util.concurrent.Executors.newScheduledThreadPool(2);
+        org.mockito.Mockito.when(scheduler.getExecutorService()).thenReturn(schedulerExecutor);
         httpState = new HttpState(configuration, new MockServerLogger(configuration, MockServerLogger.class), scheduler);
         openMocks(this);
     }
@@ -103,10 +112,14 @@ public class HttpStateTest {
     @After
     public void resetClock() {
         TimeService.reset();
+        if (schedulerExecutor != null) {
+            schedulerExecutor.shutdownNow();
+        }
     }
 
     private static class FakeResponseWriter extends ResponseWriter {
-        public HttpResponse response;
+        public volatile HttpResponse response;
+        private final java.util.concurrent.CountDownLatch responseLatch = new java.util.concurrent.CountDownLatch(1);
 
         protected FakeResponseWriter() {
             super(configuration(), new MockServerLogger());
@@ -115,6 +128,17 @@ public class HttpStateTest {
         @Override
         public void sendResponse(HttpRequest request, HttpResponse response) {
             this.response = response;
+            responseLatch.countDown();
+        }
+
+        /**
+         * Block until {@link #sendResponse} has been called (the response may be produced on a
+         * different thread when the handler offloads its work). Fails the test on timeout.
+         */
+        public void awaitResponse() throws InterruptedException {
+            if (!responseLatch.await(30, SECONDS)) {
+                fail("timed out waiting for the handler to write a response");
+            }
         }
     }
 
@@ -142,6 +166,251 @@ public class HttpStateTest {
         assertThat(responseWriter.response.getBodyAsString(), is(requestDefinitionSerializer.serialize(true, Collections.singletonList(
             request("request_one")
         ))));
+    }
+
+    @Test
+    public void shouldHandleBaselineCompareRequestWithExplicitCurrent() throws Exception {
+        // given — baseline has one interaction, current adds a field to the response body
+        String baseline = expectationSerializer.serialize(Collections.singletonList(
+            new Expectation(request().withMethod("GET").withPath("/api/users"))
+                .thenRespond(response().withStatusCode(200).withBody("{\"id\":1}"))));
+        String current = expectationSerializer.serialize(Collections.singletonList(
+            new Expectation(request().withMethod("GET").withPath("/api/users"))
+                .thenRespond(response().withStatusCode(200).withBody("{\"id\":1,\"email\":\"a@b.com\"}"))));
+        HttpRequest compareRequest = request("/mockserver/baseline/compare")
+            .withMethod("PUT")
+            .withBody("{\"baseline\":" + baseline + ",\"current\":" + current + "}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(compareRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("added").size(), is(0));
+        assertThat(report.get("removed").size(), is(0));
+        assertThat(report.get("changed").size(), is(1));
+        assertThat(report.get("changed").get(0).get("key").asText(), is("GET /api/users"));
+        assertThat(report.get("changed").get(0).get("responseDiffs").get(0).get("field").asText(),
+            is("response.body.email"));
+    }
+
+    @Test
+    public void shouldHandleBaselineCompareRequestAgainstLiveRecordedExpectations() throws Exception {
+        // given — live recorded expectation matches the baseline exactly (no current supplied)
+        httpState.add(new Expectation(request().withMethod("GET").withPath("/api/users"))
+            .thenRespond(response().withStatusCode(200).withBody("{\"id\":1}")));
+        String baseline = expectationSerializer.serialize(Collections.singletonList(
+            new Expectation(request().withMethod("GET").withPath("/api/users"))
+                .thenRespond(response().withStatusCode(200).withBody("{\"id\":1}"))));
+        HttpRequest compareRequest = request("/mockserver/baseline/compare")
+            .withMethod("PUT")
+            .withBody("{\"baseline\":" + baseline + "}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(compareRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("hasDrift").asBoolean(), is(false));
+        assertThat(report.get("added").size(), is(0));
+        assertThat(report.get("removed").size(), is(0));
+        assertThat(report.get("changed").size(), is(0));
+    }
+
+    @Test
+    public void shouldHandleContractTestRequestWhenServiceConforms() throws Exception {
+        // given — a conformant SUT: listPets (GET /pets) returns a JSON array as the spec requires
+        String spec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+        httpState.setReplayHandler(req -> {
+            HttpResponse upstream = response()
+                .withStatusCode(200)
+                .withHeader("content-type", "application/json")
+                .withBody("[{\"id\":1,\"name\":\"Fido\"}]");
+            return CompletableFuture.completedFuture(upstream);
+        });
+        HttpRequest contractTestRequest = request("/mockserver/contractTest")
+            .withMethod("PUT")
+            .withBody("{\"spec\":" + org.mockserver.serialization.ObjectMapperFactory.createObjectMapper().writeValueAsString(spec)
+                + ",\"baseUrl\":\"http://localhost:1080\",\"operationId\":\"listPets\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(contractTestRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("baseUrl").asText(), is("http://localhost:1080"));
+        assertThat(report.get("totalOperations").asInt(), is(1));
+        assertThat(report.get("passed").asInt(), is(1));
+        assertThat(report.get("failed").asInt(), is(0));
+        assertThat(report.get("allPassed").asBoolean(), is(true));
+        com.fasterxml.jackson.databind.JsonNode result = report.get("results").get(0);
+        assertThat(result.get("operationId").asText(), is("listPets"));
+        assertThat(result.get("passed").asBoolean(), is(true));
+        assertThat(result.get("validationErrors").size(), is(0));
+    }
+
+    @Test
+    public void shouldHandleContractTestRequestWhenServiceViolatesSpec() throws Exception {
+        // given — a non-conformant SUT: listPets returns a JSON object instead of an array
+        String spec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+        httpState.setReplayHandler(req -> {
+            HttpResponse upstream = response()
+                .withStatusCode(200)
+                .withHeader("content-type", "application/json")
+                .withBody("{\"not\":\"an array\"}");
+            return CompletableFuture.completedFuture(upstream);
+        });
+        HttpRequest contractTestRequest = request("/mockserver/contractTest")
+            .withMethod("PUT")
+            .withBody("{\"spec\":" + org.mockserver.serialization.ObjectMapperFactory.createObjectMapper().writeValueAsString(spec)
+                + ",\"baseUrl\":\"http://localhost:1080\",\"operationId\":\"listPets\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(contractTestRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("totalOperations").asInt(), is(1));
+        assertThat(report.get("passed").asInt(), is(0));
+        assertThat(report.get("failed").asInt(), is(1));
+        assertThat(report.get("allPassed").asBoolean(), is(false));
+        com.fasterxml.jackson.databind.JsonNode result = report.get("results").get(0);
+        assertThat(result.get("operationId").asText(), is("listPets"));
+        assertThat(result.get("passed").asBoolean(), is(false));
+        assertThat(result.get("validationErrors").size(), is(greaterThan(0)));
+    }
+
+    @Test
+    public void shouldRunContractTestOffTheCallingThreadWithAsynchronousReplayHandler() throws Exception {
+        // given — a replay handler whose future is completed from a SEPARATE thread after a short
+        // delay (NOT CompletableFuture.completedFuture). This is what a real wired NettyHttpClient
+        // does, and it is the case that would self-deadlock if the per-operation .get(timeout) ran
+        // on the Netty event-loop thread. The contract-test handler MUST offload that blocking
+        // .get() onto the scheduler executor, so the calling thread must NOT block.
+        String spec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+        java.util.concurrent.ExecutorService asyncCompleter = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            final Thread callingThread = Thread.currentThread();
+            final java.util.concurrent.atomic.AtomicReference<Thread> senderThread = new java.util.concurrent.atomic.AtomicReference<>();
+            httpState.setReplayHandler(req -> {
+                senderThread.set(Thread.currentThread());
+                CompletableFuture<HttpResponse> future = new CompletableFuture<>();
+                asyncCompleter.submit(() -> {
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                    }
+                    future.complete(response()
+                        .withStatusCode(200)
+                        .withHeader("content-type", "application/json")
+                        .withBody("[{\"id\":1,\"name\":\"Fido\"}]"));
+                });
+                return future;
+            });
+            HttpRequest contractTestRequest = request("/mockserver/contractTest")
+                .withMethod("PUT")
+                .withBody("{\"spec\":" + org.mockserver.serialization.ObjectMapperFactory.createObjectMapper().writeValueAsString(spec)
+                    + ",\"baseUrl\":\"http://localhost:1080\",\"operationId\":\"listPets\"}");
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+            CompletableFuture<Boolean> canHandle = new CompletableFuture<>();
+
+            // when — invoke the handler directly so we can observe that the calling thread returns
+            // before the (asynchronously completed) work has produced a response.
+            httpState.handleContractTestForTest(contractTestRequest, responseWriter, canHandle);
+
+            // then — the handler returned without blocking; the response is produced later, on the
+            // off-loop worker, and the per-operation .get() did NOT run on the calling thread.
+            assertThat("handler must offload and return before the async future completes",
+                responseWriter.response, is(nullValue()));
+            responseWriter.awaitResponse();
+            assertThat(canHandle.get(30, SECONDS), is(true));
+            assertThat(senderThread.get(), is(notNullValue()));
+            assertThat("the blocking per-operation .get() must not run on the calling (event-loop) thread",
+                senderThread.get(), is(not(callingThread)));
+
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            com.fasterxml.jackson.databind.JsonNode report =
+                org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                    .readTree(responseWriter.response.getBodyAsString());
+            assertThat(report.get("totalOperations").asInt(), is(1));
+            assertThat(report.get("passed").asInt(), is(1));
+            assertThat(report.get("allPassed").asBoolean(), is(true));
+        } finally {
+            asyncCompleter.shutdownNow();
+        }
+    }
+
+    @Test
+    public void shouldHonourPerOperationTimeoutWhenReplayFutureNeverCompletes() throws Exception {
+        // given — a replay handler that returns a future that NEVER completes. The per-operation
+        // .get(maxSocketTimeout) must bound the wait so a single hung upstream operation cannot
+        // hang the run forever — and crucially it must do so off the event loop.
+        configuration.maxSocketTimeoutInMillis(200L);
+        String spec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+        httpState.setReplayHandler(req -> new CompletableFuture<>()); // never completes
+        HttpRequest contractTestRequest = request("/mockserver/contractTest")
+            .withMethod("PUT")
+            .withBody("{\"spec\":" + org.mockserver.serialization.ObjectMapperFactory.createObjectMapper().writeValueAsString(spec)
+                + ",\"baseUrl\":\"http://localhost:1080\",\"operationId\":\"listPets\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        CompletableFuture<Boolean> canHandle = new CompletableFuture<>();
+
+        // when
+        long start = System.currentTimeMillis();
+        httpState.handleContractTestForTest(contractTestRequest, responseWriter, canHandle);
+        responseWriter.awaitResponse();
+        long elapsed = System.currentTimeMillis() - start;
+
+        // then — the per-operation timeout was honoured (failed, not hung), and it completed well
+        // within the response-await window rather than hanging.
+        assertThat(canHandle.get(30, SECONDS), is(true));
+        assertThat("the never-completing operation must time out, not hang", elapsed, is(lessThan(20_000L)));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("totalOperations").asInt(), is(1));
+        assertThat(report.get("failed").asInt(), is(1));
+        assertThat(report.get("allPassed").asBoolean(), is(false));
+    }
+
+    @Test
+    public void shouldRejectContractTestRequestWithoutBaseUrl() {
+        // given — body missing the required baseUrl
+        httpState.setReplayHandler(req -> CompletableFuture.completedFuture(response().withStatusCode(200)));
+        HttpRequest contractTestRequest = request("/mockserver/contractTest")
+            .withMethod("PUT")
+            .withBody("{\"spec\":\"{}\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(contractTestRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("baseUrl"));
     }
 
     @Test
@@ -333,6 +602,50 @@ public class HttpStateTest {
         // then — completes cleanly with a clear message rather than hanging
         assertThat(handle, is(true));
         assertThat(responseWriter.response.getBodyAsString(), containsString("CURL not supported for ACTIVE_EXPECTATIONS"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsJavaScript() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "JAVASCRIPT");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("const { mockServerClient } = require('mockserver-client');"));
+        assertThat(body, containsString("mockServerClient(\"localhost\", 1080).mockAnyResponse("));
+        assertThat(body, containsString("/somePath"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsPython() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "PYTHON");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("from mockserver import MockServerClient, Expectation"));
+        assertThat(body, containsString("client.upsert(Expectation.from_dict(json.loads("));
+        assertThat(body, containsString("/somePath"));
     }
 
     @Test
@@ -1813,6 +2126,464 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldRetrieveRecordedExpectationsAsJavaScript() {
+        // given
+        httpState.log(
+            new LogEntry()
+                .setType(FORWARDED_REQUEST)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request("request_one"))
+                .setHttpResponse(response("response_one"))
+                .setExpectation(request("request_one"), response("response_one"))
+        );
+        httpState.log(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(FORWARDED_REQUEST)
+                .setHttpRequest(request("request_two"))
+                .setHttpResponse(response("response_two"))
+                .setExpectation(request("request_two"), response("response_two"))
+        );
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "javascript")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("application", "javascript").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        // import preamble emitted exactly once
+        assertThat(body.split("require\\('mockserver-client'\\)", -1).length - 1, is(1));
+        // one client call per recorded expectation, each wrapping the expectation JSON
+        assertThat(body.split("mockAnyResponse\\(", -1).length - 1, is(2));
+        assertThat(body, containsString("mockServerClient(\"localhost\", 1080).mockAnyResponse("));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+        assertThat(body, containsString("response_one"));
+        assertThat(body, containsString("response_two"));
+    }
+
+    @Test
+    public void shouldRetrieveRecordedExpectationsAsPython() {
+        // given
+        httpState.log(
+            new LogEntry()
+                .setType(FORWARDED_REQUEST)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request("request_one"))
+                .setHttpResponse(response("response_one"))
+                .setExpectation(request("request_one"), response("response_one"))
+        );
+        httpState.log(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(FORWARDED_REQUEST)
+                .setHttpRequest(request("request_two"))
+                .setHttpResponse(response("response_two"))
+                .setExpectation(request("request_two"), response("response_two"))
+        );
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "python")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("text", "x-python").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        // import preamble emitted exactly once
+        assertThat(body.split("import json", -1).length - 1, is(1));
+        assertThat(body, containsString("from mockserver import MockServerClient, Expectation"));
+        // one client call per recorded expectation, each wrapping the expectation JSON
+        assertThat(body.split("client\\.upsert\\(", -1).length - 1, is(2));
+        assertThat(body, containsString("client.upsert(Expectation.from_dict(json.loads("));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+        assertThat(body, containsString("response_one"));
+        assertThat(body, containsString("response_two"));
+    }
+
+    @Test
+    public void shouldRejectJavaScriptForRequests() {
+        // given
+        httpState.log(
+            new LogEntry()
+                .setHttpRequest(request("request_one"))
+                .setType(RECEIVED_REQUEST)
+        );
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "requests")
+                    .withQueryStringParameter("format", "javascript")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), is("JAVASCRIPT not supported for REQUESTS (use RECORDED_EXPECTATIONS)"));
+    }
+
+    @Test
+    public void shouldRejectPythonForRequests() {
+        // given
+        httpState.log(
+            new LogEntry()
+                .setHttpRequest(request("request_one"))
+                .setType(RECEIVED_REQUEST)
+        );
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "requests")
+                    .withQueryStringParameter("format", "python")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), is("PYTHON not supported for REQUESTS (use RECORDED_EXPECTATIONS)"));
+    }
+
+    @Test
+    public void shouldRejectJavaScriptForRequestResponses() {
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "request_responses")
+                    .withQueryStringParameter("format", "javascript")
+                    .withBody(requestDefinitionSerializer.serialize(request("request_one")))
+            );
+
+        // then
+        assertThat(response.getBodyAsString(), is("JAVASCRIPT not supported for REQUEST_RESPONSES"));
+    }
+
+    @Test
+    public void shouldRejectPythonForRequestResponses() {
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "request_responses")
+                    .withQueryStringParameter("format", "python")
+                    .withBody(requestDefinitionSerializer.serialize(request("request_one")))
+            );
+
+        // then
+        assertThat(response.getBodyAsString(), is("PYTHON not supported for REQUEST_RESPONSES"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsGo() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "GO");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBody().getContentType(), is(MediaType.create("text", "x-go").withCharset(UTF_8).toString()));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("mockserver \"github.com/mock-server/mockserver-monorepo/mockserver-client-go\""));
+        assertThat(body, containsString("client := mockserver.New(\"localhost\", 1080)"));
+        assertThat(body, containsString("client.Upsert(e)"));
+        assertThat(body, containsString("/somePath"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsCSharp() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "CSHARP");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBody().getContentType(), is(MediaType.create("text", "x-csharp").withCharset(UTF_8).toString()));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("using MockServer.Client;"));
+        assertThat(body, containsString("new MockServerClient(\"localhost\", 1080)"));
+        assertThat(body, containsString("client.Upsert(JsonSerializer.Deserialize<Expectation>(@\""));
+        assertThat(body, containsString("/somePath"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsRuby() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "RUBY");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBody().getContentType(), is(MediaType.create("text", "x-ruby").withCharset(UTF_8).toString()));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("require 'mockserver-client'"));
+        assertThat(body, containsString("MockServer::Client.new('localhost', 1080)"));
+        assertThat(body, containsString("client.upsert(MockServer::Expectation.from_hash(JSON.parse(<<JSON)))"));
+        assertThat(body, containsString("/somePath"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsRust() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "RUST");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBody().getContentType(), is(MediaType.create("text", "x-rust").withCharset(UTF_8).toString()));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("use mockserver_client::{ClientBuilder, Expectation};"));
+        assertThat(body, containsString("ClientBuilder::new(\"localhost\", 1080).build()?"));
+        assertThat(body, containsString("client.upsert(&[serde_json::from_str::<Expectation>(r#\""));
+        assertThat(body, containsString("/somePath"));
+    }
+
+    @Test
+    public void shouldRetrieveActiveExpectationsAsPhp() {
+        // given
+        httpState.add(new Expectation(request("/somePath")).withId("key_one").thenRespond(response("someBody")));
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        HttpRequest retrieveRequest = request("/mockserver/retrieve")
+            .withMethod("PUT")
+            .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+            .withQueryStringParameter("format", "PHP");
+        boolean handle = httpState.handle(retrieveRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        assertThat(responseWriter.response.getBody().getContentType(), is(MediaType.create("application", "x-httpd-php").withCharset(UTF_8).toString()));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("use MockServer\\MockServerClient;"));
+        assertThat(body, containsString("$client = new MockServerClient('localhost', 1080);"));
+        assertThat(body, containsString("$client->upsertExpectation(Expectation::fromArray(json_decode(<<<'JSON'"));
+        assertThat(body, containsString("/somePath"));
+    }
+
+    @Test
+    public void shouldRetrieveRecordedExpectationsAsGo() {
+        // given
+        logTwoRecordedExpectations();
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "go")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("text", "x-go").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        // import preamble emitted exactly once
+        assertThat(body.split("package main", -1).length - 1, is(1));
+        // one client call per recorded expectation
+        assertThat(body.split("client\\.Upsert\\(e\\)", -1).length - 1, is(2));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+    }
+
+    @Test
+    public void shouldRetrieveRecordedExpectationsAsCSharp() {
+        // given
+        logTwoRecordedExpectations();
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "csharp")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("text", "x-csharp").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        assertThat(body.split("using MockServer.Client;", -1).length - 1, is(1));
+        assertThat(body.split("client\\.Upsert\\(JsonSerializer", -1).length - 1, is(2));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+    }
+
+    @Test
+    public void shouldRetrieveRecordedExpectationsAsRuby() {
+        // given
+        logTwoRecordedExpectations();
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "ruby")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("text", "x-ruby").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        assertThat(body.split("require 'mockserver-client'", -1).length - 1, is(1));
+        assertThat(body.split("client\\.upsert\\(MockServer::Expectation", -1).length - 1, is(2));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+    }
+
+    @Test
+    public void shouldRetrieveRecordedExpectationsAsRust() {
+        // given
+        logTwoRecordedExpectations();
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "rust")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("text", "x-rust").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        assertThat(body.split("use mockserver_client", -1).length - 1, is(1));
+        assertThat(body.split("client\\.upsert\\(&\\[serde_json", -1).length - 1, is(2));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+    }
+
+    @Test
+    public void shouldRetrieveRecordedExpectationsAsPhp() {
+        // given
+        logTwoRecordedExpectations();
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "recorded_expectations")
+                    .withQueryStringParameter("format", "php")
+            );
+
+        // then
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBody().getContentType(), is(MediaType.create("application", "x-httpd-php").withCharset(UTF_8).toString()));
+        String body = response.getBodyAsString();
+        assertThat(body.split("use MockServer\\\\MockServerClient;", -1).length - 1, is(1));
+        assertThat(body.split("\\$client->upsertExpectation\\(Expectation::fromArray", -1).length - 1, is(2));
+        assertThat(body, containsString("request_one"));
+        assertThat(body, containsString("request_two"));
+    }
+
+    @Test
+    public void shouldRejectGoForRequests() {
+        assertRejectedForRequests("go", "GO not supported for REQUESTS (use RECORDED_EXPECTATIONS)");
+    }
+
+    @Test
+    public void shouldRejectCSharpForRequests() {
+        assertRejectedForRequests("csharp", "CSHARP not supported for REQUESTS (use RECORDED_EXPECTATIONS)");
+    }
+
+    @Test
+    public void shouldRejectRubyForRequests() {
+        assertRejectedForRequests("ruby", "RUBY not supported for REQUESTS (use RECORDED_EXPECTATIONS)");
+    }
+
+    @Test
+    public void shouldRejectRustForRequests() {
+        assertRejectedForRequests("rust", "RUST not supported for REQUESTS (use RECORDED_EXPECTATIONS)");
+    }
+
+    @Test
+    public void shouldRejectPhpForRequests() {
+        assertRejectedForRequests("php", "PHP not supported for REQUESTS (use RECORDED_EXPECTATIONS)");
+    }
+
+    private void logTwoRecordedExpectations() {
+        httpState.log(
+            new LogEntry()
+                .setType(FORWARDED_REQUEST)
+                .setLogLevel(Level.INFO)
+                .setHttpRequest(request("request_one"))
+                .setHttpResponse(response("response_one"))
+                .setExpectation(request("request_one"), response("response_one"))
+        );
+        httpState.log(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(FORWARDED_REQUEST)
+                .setHttpRequest(request("request_two"))
+                .setHttpResponse(response("response_two"))
+                .setExpectation(request("request_two"), response("response_two"))
+        );
+    }
+
+    private void assertRejectedForRequests(String format, String expectedMessage) {
+        httpState.log(
+            new LogEntry()
+                .setHttpRequest(request("request_one"))
+                .setType(RECEIVED_REQUEST)
+        );
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "requests")
+                    .withQueryStringParameter("format", format)
+            );
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), is(expectedMessage));
+    }
+
+    @Test
     public void shouldRetrieveActiveExpectationsAsJson() {
         // given
         Expectation expectationOne = new Expectation(request("request_one")).thenRespond(response("response_one"));
@@ -2189,7 +2960,7 @@ public class HttpStateTest {
         } catch (Throwable throwable) {
             // then
             assertThat(throwable, instanceOf(IllegalArgumentException.class));
-            assertThat(throwable.getMessage(), is("\"invalid\" is not a valid value for \"format\" parameter, only the following values are supported [java, json, log_entries, har, openapi, postman, bruno, curl]"));
+            assertThat(throwable.getMessage(), is("\"invalid\" is not a valid value for \"format\" parameter, only the following values are supported [java, javascript, python, go, csharp, ruby, rust, php, json, log_entries, har, openapi, postman, bruno, curl]"));
         }
     }
 
@@ -2584,6 +3355,157 @@ public class HttpStateTest {
         assertThat(responseWriter.response.getBodyAsString(), is("{\"name\":\"test.txt\",\"size\":11}"));
     }
 
+    // --- WASM test endpoint (POST /mockserver/wasm/test) ---
+
+    private static String matchRequestModuleBase64() throws java.io.IOException {
+        try (java.io.InputStream in = HttpStateTest.class.getResourceAsStream("/org/mockserver/wasm/match-request.wasm")) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            return java.util.Base64.getEncoder().encodeToString(out.toByteArray());
+        }
+    }
+
+    @Test
+    public void shouldTestWasmModuleAndReturnMatchedTrue() throws java.io.IOException {
+        // given
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String body = "{\"module\":\"" + matchRequestModuleBase64() + "\","
+                + "\"request\":{\"method\":\"POST\",\"path\":\"/orders\",\"headers\":{\"X-Tenant\":[\"acme\"]},\"body\":\"{}\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            assertThat(responseWriter.response.getBodyAsString(), is("{\"matched\":true}"));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldTestWasmModuleAndReturnMatchedFalse() throws java.io.IOException {
+        // given
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String body = "{\"module\":\"" + matchRequestModuleBase64() + "\","
+                + "\"request\":{\"method\":\"GET\",\"path\":\"/orders\",\"headers\":{\"X-Tenant\":[\"acme\"]},\"body\":\"{}\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            assertThat(responseWriter.response.getBodyAsString(), is("{\"matched\":false}"));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldReturnMatchedFalseForInvalidWasmModule() {
+        // given
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String junk = java.util.Base64.getEncoder().encodeToString(new byte[]{0x00, 0x01, 0x02, 0x03});
+            String body = "{\"module\":\"" + junk + "\",\"request\":{\"method\":\"POST\",\"path\":\"/orders\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then — fails closed, no error
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            assertThat(responseWriter.response.getBodyAsString(), is("{\"matched\":false}"));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldRejectWasmTestWhenWasmDisabled() throws java.io.IOException {
+        // given
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(false);
+            String body = "{\"module\":\"" + matchRequestModuleBase64() + "\"}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(403));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldRejectWasmTestWithoutModule() {
+        // given
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST")
+                .withBody("{\"request\":{\"method\":\"POST\"}}");
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(400));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldTestLoadedWasmModuleByName() throws java.io.IOException {
+        // given
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            byte[] moduleBytes = java.util.Base64.getDecoder().decode(matchRequestModuleBase64());
+            org.mockserver.wasm.WasmStore.getInstance().put("ordersByName", moduleBytes);
+            String body = "{\"moduleName\":\"ordersByName\","
+                + "\"request\":{\"method\":\"POST\",\"path\":\"/orders\",\"headers\":{\"X-Tenant\":[\"acme\"]}}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            assertThat(responseWriter.response.getBodyAsString(), is("{\"matched\":true}"));
+        } finally {
+            org.mockserver.wasm.WasmStore.getInstance().reset();
+            configuration.wasmEnabled(original);
+        }
+    }
+
     @Test
     public void shouldHandleFileStoreBase64() {
         // given
@@ -2880,6 +3802,64 @@ public class HttpStateTest {
 
         // then
         assertThat(httpState.getFileStore().size(), is(0));
+    }
+
+    // --- Effective-configuration endpoint test (GET /mockserver/config) ---
+
+    @Test
+    public void shouldReturnEffectiveConfigurationAsJsonWithSourcesAndRedaction() throws Exception {
+        // given — clear any cached maxExpectations so the system-property tier is authoritative
+        // (effectiveConfiguration is cache-first, exactly like the real resolution path).
+        String previousNonSensitive = System.getProperty("mockserver.maxExpectations");
+        String previousSensitive = System.getProperty("mockserver.llmApiKey");
+        java.lang.reflect.Field cacheField = org.mockserver.configuration.ConfigurationProperties.class.getDeclaredField("propertyCache");
+        cacheField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, String> cache = (java.util.Map<String, String>) cacheField.get(null);
+        String previousCachedMaxExpectations = cache != null ? cache.get("mockserver.maxExpectations") : null;
+        try {
+            if (cache != null) {
+                cache.remove("mockserver.maxExpectations");
+            }
+            System.setProperty("mockserver.maxExpectations", "4242");
+            System.setProperty("mockserver.llmApiKey", "super-secret-endpoint-value");
+
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+            HttpRequest configRequest = request("/mockserver/config").withMethod("GET");
+
+            // when
+            boolean handle = httpState.handle(configRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            String body = responseWriter.response.getBodyAsString();
+            assertThat(body, containsString("\"name\":\"mockserver.maxExpectations\""));
+            assertThat(body, containsString("\"value\":\"4242\""));
+            assertThat(body, containsString("\"source\":\"system-property\""));
+            // sensitive value redacted, never printed verbatim
+            assertThat(body, containsString("\"name\":\"mockserver.llmApiKey\""));
+            assertThat(body, containsString("\"value\":\"***REDACTED***\""));
+            assertThat(body, not(containsString("super-secret-endpoint-value")));
+        } finally {
+            if (cache != null) {
+                if (previousCachedMaxExpectations != null) {
+                    cache.put("mockserver.maxExpectations", previousCachedMaxExpectations);
+                } else {
+                    cache.remove("mockserver.maxExpectations");
+                }
+            }
+            if (previousNonSensitive != null) {
+                System.setProperty("mockserver.maxExpectations", previousNonSensitive);
+            } else {
+                System.clearProperty("mockserver.maxExpectations");
+            }
+            if (previousSensitive != null) {
+                System.setProperty("mockserver.llmApiKey", previousSensitive);
+            } else {
+                System.clearProperty("mockserver.llmApiKey");
+            }
+        }
     }
 
     // --- Clock endpoint tests ---
@@ -3231,6 +4211,44 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldReturnSingleNodeClusterStatusForInMemoryBackend() throws Exception {
+        // given — the default backend is the in-memory single-node backend
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        HttpRequest getRequest = request("/mockserver/cluster").withMethod("GET");
+
+        // when
+        assertThat(httpState.handle(getRequest, getWriter, false), is(true));
+
+        // then — a sensible degenerate JSON response (single local member, clustered=false)
+        assertThat(getWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode body =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(getWriter.response.getBodyAsString());
+        assertThat(body.get("clustered").asBoolean(), is(false));
+        assertThat(body.get("memberCount").asInt(), is(1));
+        assertThat(body.get("nodeId").asText(), is(not(emptyOrNullString())));
+        assertThat(body.get("coordinator").asText(), is(body.get("nodeId").asText()));
+        com.fasterxml.jackson.databind.JsonNode members = body.get("members");
+        assertThat(members.isArray(), is(true));
+        assertThat(members.size(), is(1));
+        assertThat(members.get(0).get("id").asText(), is(body.get("nodeId").asText()));
+        assertThat(members.get(0).get("coordinator").asBoolean(), is(true));
+        assertThat(members.get(0).get("local").asBoolean(), is(true));
+    }
+
+    @Test
+    public void shouldAddCorsHeadersToClusterResponse() {
+        // the dashboard GETs /mockserver/cluster cross-origin from the UI dev server
+        FakeResponseWriter getWriter = new FakeResponseWriter();
+        HttpRequest getRequest = request("/mockserver/cluster")
+            .withMethod("GET")
+            .withHeader("Origin", "http://localhost:3000");
+        assertThat(httpState.handle(getRequest, getWriter, false), is(true));
+        assertThat(getWriter.response.getStatusCode(), is(200));
+        assertThat(getWriter.response.getFirstHeader("access-control-allow-origin"), is("http://localhost:3000"));
+    }
+
+    @Test
     public void shouldRejectServiceChaosWithTtlBelowOne() throws Exception {
         FakeResponseWriter writer = new FakeResponseWriter();
         HttpRequest putRequest = request("/mockserver/serviceChaos")
@@ -3274,7 +4292,13 @@ public class HttpStateTest {
         Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
             responseWriter.response.getBodyAsString(), true
         );
-        assertThat(returnedExpectations.length, is(6));
+        // discovery, jwks, token, authorize, userinfo, introspection, revocation, logout, device_authorization
+        assertThat(returnedExpectations.length, is(9));
+
+        // Verify the device-authorization endpoint (added with the OAuth2 device grant) is matchable
+        assertThat(httpState.firstMatchingExpectation(
+            request("/device_authorization").withMethod("POST")
+        ), is(notNullValue()));
 
         // Verify the discovery endpoint is now matchable
         HttpResponse discoveryResponse = httpState.firstMatchingExpectation(
@@ -3305,7 +4329,10 @@ public class HttpStateTest {
             request("/custom/token").withMethod("POST")
         );
         assertThat(tokenMatch, is(notNullValue()));
-        assertThat(tokenMatch.getHttpResponse().getBodyAsString(), containsString("access_token"));
+        // /token is now served by the OidcTokenCallback class callback (authorization-code flow),
+        // so it has no static httpResponse — assert the callback wiring instead of a response body.
+        assertThat(tokenMatch.getHttpResponseClassCallback(), is(notNullValue()));
+        assertThat(tokenMatch.getHttpResponseClassCallback().getCallbackClass(), containsString("OidcTokenCallback"));
     }
 
     @Test
@@ -3325,7 +4352,8 @@ public class HttpStateTest {
         Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
             responseWriter.response.getBodyAsString(), true
         );
-        assertThat(returnedExpectations.length, is(6));
+        // discovery, jwks, token, authorize, userinfo, introspection, revocation, logout, device_authorization
+        assertThat(returnedExpectations.length, is(9));
     }
 
     @Test
@@ -3338,6 +4366,96 @@ public class HttpStateTest {
 
         // when
         boolean handle = httpState.handle(oidcRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
+    // --- PUT /saml tests ---
+
+    @Test
+    public void shouldHandleSamlRequestWithDefaults() {
+        // given
+        HttpRequest samlRequest = request("/mockserver/saml")
+            .withMethod("PUT");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(samlRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(3));
+
+        // Verify the metadata endpoint is now matchable and returns SAML metadata
+        HttpResponse metadataResponse = httpState.firstMatchingExpectation(
+            request("/saml/metadata").withMethod("GET")
+        ).getHttpResponse();
+        assertThat(metadataResponse, is(notNullValue()));
+        assertThat(metadataResponse.getStatusCode(), is(200));
+        assertThat(metadataResponse.getBodyAsString(), containsString("IDPSSODescriptor"));
+        assertThat(metadataResponse.getBodyAsString(), containsString("SingleSignOnService"));
+    }
+
+    @Test
+    public void shouldHandleSamlRequestWithCustomConfig() {
+        // given
+        HttpRequest samlRequest = request("/mockserver/saml")
+            .withMethod("PUT")
+            .withBody("{\"idpEntityId\":\"https://custom.idp/entity\",\"ssoServiceUrl\":\"/custom/sso\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(samlRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+
+        // Verify the SSO endpoint matches the custom path and is served by the class callback
+        Expectation ssoMatch = httpState.firstMatchingExpectation(
+            request("/custom/sso").withMethod("GET")
+        );
+        assertThat(ssoMatch, is(notNullValue()));
+        assertThat(ssoMatch.getHttpResponseClassCallback(), is(notNullValue()));
+        assertThat(ssoMatch.getHttpResponseClassCallback().getCallbackClass(), containsString("SamlSsoCallback"));
+    }
+
+    @Test
+    public void shouldHandleSamlRequestWithEmptyBody() {
+        // given
+        HttpRequest samlRequest = request("/mockserver/saml")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(samlRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(3));
+    }
+
+    @Test
+    public void shouldHandleInvalidSamlRequest() {
+        // given
+        HttpRequest samlRequest = request("/mockserver/saml")
+            .withMethod("PUT")
+            .withBody("{invalid json");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(samlRequest, responseWriter, false);
 
         // then
         assertThat(handle, is(true));
@@ -3487,6 +4605,105 @@ public class HttpStateTest {
         assertThat(handle, is(true));
         assertThat(responseWriter.response.getStatusCode(), is(400));
         assertThat(responseWriter.response.getBodyAsString(), containsString("unable to auto-detect"));
+    }
+
+    private static final String PACT_V3_CONTRACT = "{" +
+        "\"consumer\":{\"name\":\"c\"},\"provider\":{\"name\":\"p\"}," +
+        "\"interactions\":[{" +
+        "  \"description\":\"get health\"," +
+        "  \"request\":{\"method\":\"GET\",\"path\":\"/health\"}," +
+        "  \"response\":{\"status\":200,\"body\":{\"status\":\"up\"}}" +
+        "}]," +
+        "\"metadata\":{\"pactSpecification\":{\"version\":\"3.0.0\"}}}";
+
+    @Test
+    public void shouldHandleImportPactWithFormatQueryParam() {
+        // given
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withQueryStringParameter("format", "pact")
+            .withBody(PACT_V3_CONTRACT);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(1));
+
+        // the imported expectation is now matchable
+        Expectation match = httpState.firstMatchingExpectation(
+            request("/health").withMethod("GET")
+        );
+        assertThat(match, is(notNullValue()));
+        assertThat(match.getHttpResponse().getStatusCode(), is(200));
+    }
+
+    @Test
+    public void shouldHandleImportPactAutoDetected() {
+        // given — no format param; top-level "interactions" array triggers Pact auto-detect
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withBody(PACT_V3_CONTRACT);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(1));
+    }
+
+    @Test
+    public void shouldHandlePactImportDedicatedRoute() {
+        // given
+        HttpRequest importRequest = request("/mockserver/pact/import")
+            .withMethod("PUT")
+            .withBody(PACT_V3_CONTRACT);
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] returnedExpectations = expectationSerializer.deserializeArray(
+            responseWriter.response.getBodyAsString(), true
+        );
+        assertThat(returnedExpectations.length, is(1));
+
+        // the imported expectation is now matchable
+        Expectation match = httpState.firstMatchingExpectation(
+            request("/health").withMethod("GET")
+        );
+        assertThat(match, is(notNullValue()));
+    }
+
+    @Test
+    public void shouldHandlePactImportEmptyBody() {
+        // given
+        HttpRequest importRequest = request("/mockserver/pact/import")
+            .withMethod("PUT")
+            .withBody("");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
     }
 
     // ---- Pact Verify Endpoint Tests ----
@@ -3822,6 +5039,151 @@ public class HttpStateTest {
         assertThat(responseBody, containsString("line1"));
         assertThat(responseBody, containsString("line2"));
         assertThat(responseBody, containsString("quoted"));
+    }
+
+    // a HAR with one entry whose JSON request body contains a default-sensitive field
+    // (password) plus a non-default field (foo); used to exercise import redaction over
+    // the REST endpoint (the importer filters volatile headers independently of
+    // redaction, so the stable signal is the JSON body fields)
+    private static final String IMPORT_REDACTION_HAR =
+        "{" +
+            "\"log\":{\"entries\":[{" +
+            "\"request\":{" +
+            "\"method\":\"POST\"," +
+            "\"url\":\"http://example.com/login\"," +
+            "\"postData\":{\"mimeType\":\"application/json\",\"text\":\"{\\\"password\\\":\\\"hunter2\\\",\\\"foo\\\":\\\"bar\\\"}\"}" +
+            "}," +
+            "\"response\":{\"status\":200}" +
+            "}]}}";
+
+    @Test
+    public void shouldImportWithRedactionEnabledByDefault() {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withQueryStringParameter("format", "har")
+            .withBody(IMPORT_REDACTION_HAR);
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then — the default-sensitive body field is redacted
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, not(containsString("hunter2")));
+        assertThat(body, containsString(FixtureRedactor.REDACTED_PLACEHOLDER));
+        // foo is not a default-sensitive field, so it is kept verbatim
+        assertThat(body, containsString("bar"));
+    }
+
+    @Test
+    public void shouldImportVerbatimWhenRedactSensitiveDataIsFalse() {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withQueryStringParameter("format", "har")
+            .withQueryStringParameter("redactSensitiveData", "false")
+            .withBody(IMPORT_REDACTION_HAR);
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then — nothing is redacted; the real secret is kept verbatim
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, containsString("hunter2"));
+        assertThat(body, containsString("bar"));
+        assertThat(body, not(containsString(FixtureRedactor.REDACTED_PLACEHOLDER)));
+    }
+
+    @Test
+    public void shouldRedactAdditionalBodyFieldsWhenRequested() {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest importRequest = request("/mockserver/import")
+            .withMethod("PUT")
+            .withQueryStringParameter("format", "har")
+            .withQueryStringParameter("additionalRedactedBodyFields", "foo")
+            .withBody(IMPORT_REDACTION_HAR);
+
+        // when
+        boolean handle = httpState.handle(importRequest, responseWriter, false);
+
+        // then — the extra "foo" field is redacted in addition to the defaults
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        String body = responseWriter.response.getBodyAsString();
+        assertThat(body, not(containsString("\"bar\"")));
+        assertThat(body, not(containsString("hunter2")));
+        assertThat(body, containsString(FixtureRedactor.REDACTED_PLACEHOLDER));
+    }
+
+    @Test
+    public void shouldImportGraphQLSchemaAsExpectations() {
+        // given - a GraphQL SDL document
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest graphqlImport = request("/mockserver/graphql")
+            .withMethod("PUT")
+            .withBody("type Query { hello: String } type Mutation { ping: String }");
+
+        // when
+        boolean handle = httpState.handle(graphqlImport, responseWriter, false);
+
+        // then - one expectation per root operation type is created and persisted
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(201));
+        Expectation[] created = expectationSerializer.deserializeArray(responseWriter.response.getBodyAsString(), false);
+        assertThat(created.length, is(2));
+
+        // and - a real GraphQL query now matches the imported query expectation
+        Expectation matchedQuery = httpState.firstMatchingExpectation(
+            request().withMethod("POST").withPath("/graphql").withBody("{\"query\":\"{ hello }\"}"));
+        assertThat(matchedQuery, is(notNullValue()));
+
+        // and - a mutation matches the (distinct) mutation expectation, not the query one
+        Expectation matchedMutation = httpState.firstMatchingExpectation(
+            request().withMethod("POST").withPath("/graphql").withBody("{\"query\":\"mutation { ping }\"}"));
+        assertThat(matchedMutation, is(notNullValue()));
+        assertThat(((GraphQLBody) ((HttpRequest) matchedMutation.getHttpRequest()).getBody()).getQuery(),
+            startsWith("mutation"));
+    }
+
+    @Test
+    public void shouldReturnBadRequestForMalformedGraphQLSchema() {
+        // given
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest graphqlImport = request("/mockserver/graphql")
+            .withMethod("PUT")
+            .withBody("type Query { this is not valid");
+
+        // when
+        boolean handle = httpState.handle(graphqlImport, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+    }
+
+    @Test
+    public void shouldRouteAsyncApiHttpImportAndReportModuleNotAvailable() {
+        // given - mockserver-async is not on the core test classpath, so the route must
+        // still be recognised and respond with 501 rather than falling through to the data plane
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+        HttpRequest asyncApiImport = request("/mockserver/asyncapi/http")
+            .withMethod("PUT")
+            .withBody("{\"asyncapi\":\"2.6.0\",\"info\":{\"title\":\"T\",\"version\":\"1.0.0\"},\"channels\":{}}");
+
+        // when
+        boolean handle = httpState.handle(asyncApiImport, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(501));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("mockserver-async"));
     }
 
 }

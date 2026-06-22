@@ -22,6 +22,59 @@
             return deferred;
         };
 
+        // ------------------------------------------------------------------
+        // Control-plane auth + mTLS helpers
+        // ------------------------------------------------------------------
+        // `clientOptions` is the optional options object threaded through from
+        // mockServerClient(host, port, contextPath, tls, caCertPath, options).
+        // Recognised keys:
+        //   bearerToken           static control-plane JWT (string)
+        //   bearerTokenSupplier   function() => string, evaluated per-request
+        //                         (so the token can be refreshed)
+        //   clientCertPemFilePath path to a PEM client certificate (mTLS)
+        //   clientKeyPemFilePath  path to a PEM private key (mTLS)
+
+        // Resolve the bearer token for a single request, preferring the supplier
+        // (so a refreshed token is picked up) and falling back to the static
+        // token. Returns null when neither is configured or the supplier yields
+        // a blank value.
+        var resolveBearerToken = function (clientOptions) {
+            if (!clientOptions) {
+                return null;
+            }
+            var token = null;
+            if (typeof clientOptions.bearerTokenSupplier === 'function') {
+                token = clientOptions.bearerTokenSupplier();
+            } else if (clientOptions.bearerToken !== undefined && clientOptions.bearerToken !== null) {
+                token = clientOptions.bearerToken;
+            }
+            if (token === undefined || token === null || token === '') {
+                return null;
+            }
+            return String(token);
+        };
+
+        // Attach the control-plane Authorization header and mTLS client cert/key
+        // to a Node http(s) request options object. Mutates and returns options.
+        var applyControlPlaneAuth = function (options, clientOptions) {
+            var token = resolveBearerToken(clientOptions);
+            if (token) {
+                if (!options.headers) {
+                    options.headers = {};
+                }
+                options.headers['Authorization'] = 'Bearer ' + token;
+            }
+            if (clientOptions) {
+                if (clientOptions.clientCertPemFilePath) {
+                    options.cert = fs.readFileSync(clientOptions.clientCertPemFilePath, {encoding: 'utf-8'});
+                }
+                if (clientOptions.clientKeyPemFilePath) {
+                    options.key = fs.readFileSync(clientOptions.clientKeyPemFilePath, {encoding: 'utf-8'});
+                }
+            }
+            return options;
+        };
+
         var downloadCACert = function (tls, caCertPath, callback) {
             // https://raw.githubusercontent.com/mock-server/mockserver-monorepo/master/mockserver/mockserver-core/src/main/resources/org/mockserver/socket/CertificateAuthorityCertificate.pem
 
@@ -63,14 +116,14 @@
             }
         };
 
-        var sendRequest = function (tls, caCertPath) {
+        var sendRequest = function (tls, caCertPath, clientOptions) {
             var http = tls ? require('https') : require('http');
             return function (host, port, path, jsonBody, resolveCallback) {
                 var deferred = defer();
                 downloadCACert(tls, caCertPath, function (ca) {
 
                     var body = (typeof jsonBody === "string" ? jsonBody : JSON.stringify(jsonBody || ""));
-                    var options = {
+                    var options = applyControlPlaneAuth({
                         protocol: tls ? 'https:' : 'http:',
                         method: 'PUT',
                         host: host,
@@ -80,7 +133,7 @@
                         headers: {
                             'Content-Type': "application/json; charset=utf-8"
                         },
-                    };
+                    }, clientOptions);
 
                     var req = http.request(options);
 
@@ -115,7 +168,11 @@
                         if (error.code && error.code === "ECONNREFUSED") {
                             deferred.reject("Can't connect to MockServer running on host: \"" + host + "\" and port: \"" + port + "\"");
                         } else {
-                            deferred.reject(JSON.stringify(error));
+                            // reject with the error message (not JSON.stringify, which
+                            // serialises an Error to "{}" since message/stack are
+                            // non-enumerable) to preserve diagnostic information while
+                            // keeping the string rejection contract used elsewhere
+                            deferred.reject(error.message || String(error));
                         }
                     });
 
@@ -127,20 +184,25 @@
             };
         };
 
-        var sendGetRequest = function (tls, caCertPath) {
+        var sendBinaryRequest = function (tls, caCertPath, clientOptions) {
             var http = tls ? require('https') : require('http');
-            return function (host, port, path) {
+            return function (host, port, path, bodyBuffer, contentType) {
                 var deferred = defer();
                 downloadCACert(tls, caCertPath, function (ca) {
 
-                    var options = {
+                    var body = Buffer.isBuffer(bodyBuffer) ? bodyBuffer : Buffer.from(bodyBuffer || []);
+                    var options = applyControlPlaneAuth({
                         protocol: tls ? 'https:' : 'http:',
-                        method: 'GET',
+                        method: 'PUT',
                         host: host,
                         path: path,
                         port: port,
                         ca: ca,
-                    };
+                        headers: {
+                            'Content-Type': contentType || "application/octet-stream",
+                            'Content-Length': body.length
+                        },
+                    }, clientOptions);
 
                     var req = http.request(options);
 
@@ -171,7 +233,130 @@
                         if (error.code && error.code === "ECONNREFUSED") {
                             deferred.reject("Can't connect to MockServer running on host: \"" + host + "\" and port: \"" + port + "\"");
                         } else {
-                            deferred.reject(JSON.stringify(error));
+                            // reject with the error message (not JSON.stringify, which
+                            // serialises an Error to "{}" since message/stack are
+                            // non-enumerable) to preserve diagnostic information while
+                            // keeping the string rejection contract used elsewhere
+                            deferred.reject(error.message || String(error));
+                        }
+                    });
+
+                    req.write(body);
+                    req.end();
+
+                });
+                return deferred.promise;
+            };
+        };
+
+        var sendGetRequest = function (tls, caCertPath, clientOptions) {
+            var http = tls ? require('https') : require('http');
+            return function (host, port, path) {
+                var deferred = defer();
+                downloadCACert(tls, caCertPath, function (ca) {
+
+                    var options = applyControlPlaneAuth({
+                        protocol: tls ? 'https:' : 'http:',
+                        method: 'GET',
+                        host: host,
+                        path: path,
+                        port: port,
+                        ca: ca,
+                    }, clientOptions);
+
+                    var req = http.request(options);
+
+                    req.once('response', function (response) {
+                        var data = '';
+
+                        response.on('data', function (chunk) {
+                            data += chunk;
+                        });
+
+                        response.on('end', function () {
+                            if (response.statusCode >= 400 && response.statusCode < 600) {
+                                if (response.statusCode === 404) {
+                                    deferred.reject("404 Not Found");
+                                } else {
+                                    deferred.reject(data);
+                                }
+                            } else {
+                                deferred.resolve({
+                                    statusCode: response.statusCode,
+                                    body: data
+                                });
+                            }
+                        });
+                    });
+
+                    req.once('error', function (error) {
+                        if (error.code && error.code === "ECONNREFUSED") {
+                            deferred.reject("Can't connect to MockServer running on host: \"" + host + "\" and port: \"" + port + "\"");
+                        } else {
+                            // reject with the error message (not JSON.stringify, which
+                            // serialises an Error to "{}" since message/stack are
+                            // non-enumerable) to preserve diagnostic information while
+                            // keeping the string rejection contract used elsewhere
+                            deferred.reject(error.message || String(error));
+                        }
+                    });
+
+                    req.end();
+
+                });
+                return deferred.promise;
+            };
+        };
+
+        var sendDeleteRequest = function (tls, caCertPath, clientOptions) {
+            var http = tls ? require('https') : require('http');
+            return function (host, port, path) {
+                var deferred = defer();
+                downloadCACert(tls, caCertPath, function (ca) {
+
+                    var options = applyControlPlaneAuth({
+                        protocol: tls ? 'https:' : 'http:',
+                        method: 'DELETE',
+                        host: host,
+                        path: path,
+                        port: port,
+                        ca: ca,
+                    }, clientOptions);
+
+                    var req = http.request(options);
+
+                    req.once('response', function (response) {
+                        var data = '';
+
+                        response.on('data', function (chunk) {
+                            data += chunk;
+                        });
+
+                        response.on('end', function () {
+                            if (response.statusCode >= 400 && response.statusCode < 600) {
+                                if (response.statusCode === 404) {
+                                    deferred.reject("404 Not Found");
+                                } else {
+                                    deferred.reject(data);
+                                }
+                            } else {
+                                deferred.resolve({
+                                    statusCode: response.statusCode,
+                                    body: data
+                                });
+                            }
+                        });
+                    });
+
+                    req.once('error', function (error) {
+                        if (error.code && error.code === "ECONNREFUSED") {
+                            deferred.reject("Can't connect to MockServer running on host: \"" + host + "\" and port: \"" + port + "\"");
+                        } else {
+                            // reject with the error message (not JSON.stringify, which
+                            // serialises an Error to "{}" since message/stack are
+                            // non-enumerable) to preserve diagnostic information while
+                            // keeping the string rejection contract used elsewhere
+                            deferred.reject(error.message || String(error));
                         }
                     });
 
@@ -184,7 +369,9 @@
 
         module.exports = {
             sendRequest: sendRequest,
-            sendGetRequest: sendGetRequest
+            sendGetRequest: sendGetRequest,
+            sendBinaryRequest: sendBinaryRequest,
+            sendDeleteRequest: sendDeleteRequest
         };
     }
 })();

@@ -10,6 +10,8 @@
     "use strict";
 
     module.exports = {
-        mockServerClient: require('./mockServerClient').mockServerClient
+        mockServerClient: require('./mockServerClient').mockServerClient,
+        llm: require('./llm'),
+        mcpMock: require('./mcpMockBuilder').mcpMock
     };
 })();

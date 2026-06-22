@@ -16,6 +16,7 @@ import static org.mockserver.mock.Expectation.when;
 import static org.mockserver.model.Completion.completion;
 import static org.mockserver.model.ConversationPredicates.conversationPredicates;
 import static org.mockserver.model.EmbeddingResponse.embedding;
+import static org.mockserver.model.RerankResponse.rerank;
 import static org.mockserver.model.HttpLlmResponse.llmResponse;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.ToolUse.toolUse;
@@ -85,6 +86,83 @@ public class ExpectationLlmRoundTripTest {
     }
 
     @Test
+    public void shouldRoundTripCompletionWithEnforceOutputSchema() {
+        // given — a completion opting in to strict structured-output enforcement
+        String schema = "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"]}";
+        Expectation original = when(request().withPath("/v1/messages"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.ANTHROPIC)
+                    .withModel("claude-sonnet-4-20250514")
+                    .withCompletion(
+                        completion()
+                            .withText("{\"name\":\"Ada\"}")
+                            .withOutputSchema(schema)
+                            .enforceOutputSchema()
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — the enforcement flag survives the JSON round-trip intact
+        assertThat(deserialized, is(notNullValue()));
+        assertThat(deserialized.length, is(1));
+        assertThat(deserialized[0].getHttpLlmResponse().getCompletion().getEnforceOutputSchema(), is(true));
+        assertThat(deserialized[0].getHttpLlmResponse().getCompletion().getOutputSchema(), is(schema));
+    }
+
+    @Test
+    public void shouldRoundTripCompletionWithToolChoice() {
+        // given — a completion carrying a tool_choice directive
+        Expectation original = when(request().withPath("/v1/chat/completions"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.OPENAI)
+                    .withModel("gpt-4o")
+                    .withCompletion(
+                        completion()
+                            .withToolCall(toolUse("get_weather").withArguments("{\"city\":\"London\"}"))
+                            .withToolChoice("required")
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — toolChoice survives the schema-validated JSON round-trip
+        assertThat(deserialized, is(notNullValue()));
+        assertThat(deserialized.length, is(1));
+        assertThat(deserialized[0].getHttpLlmResponse().getCompletion().getToolChoice(), is("required"));
+    }
+
+    @Test
+    public void shouldRoundTripCompletionWithModel() {
+        // given — a completion carrying a model identifier (set on the proxied/forwarded parse path)
+        Expectation original = when(request().withPath("/v1/chat/completions"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.OPENAI)
+                    .withCompletion(
+                        completion()
+                            .withText("Hello, world!")
+                            .withModel("gpt-4o")
+                    )
+            );
+
+        // when — serialize + deserialize through the schema-validated path
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — the completion model survives the round-trip without a validation error
+        assertThat(deserialized, is(notNullValue()));
+        assertThat(deserialized.length, is(1));
+        assertThat(deserialized[0].getHttpLlmResponse().getCompletion().getModel(), is("gpt-4o"));
+    }
+
+    @Test
     public void shouldRoundTripEmbeddingExpectation() {
         // given
         Expectation original = when(request().withPath("/v1/embeddings"))
@@ -112,6 +190,37 @@ public class ExpectationLlmRoundTripTest {
         assertThat(result.getHttpLlmResponse().getModel(), is("text-embedding-3-small"));
         assertThat(result.getHttpLlmResponse().getEmbedding().getDimensions(), is(1536));
         assertThat(result.getHttpLlmResponse().getEmbedding().getDeterministicFromInput(), is(true));
+    }
+
+    @Test
+    public void shouldRoundTripRerankExpectation() {
+        // given
+        Expectation original = when(request().withPath("/v1/rerank"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.COHERE)
+                    .withRerank(
+                        rerank()
+                            .withTopN(3)
+                            .withDeterministicFromInput(true)
+                            .withSeed(42L)
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then
+        assertThat(deserialized, is(notNullValue()));
+        assertThat(deserialized.length, is(1));
+        Expectation result = deserialized[0];
+        assertThat(result.getHttpLlmResponse(), is(notNullValue()));
+        assertThat(result.getHttpLlmResponse().getProvider(), is(Provider.COHERE));
+        assertThat(result.getHttpLlmResponse().getRerank(), is(notNullValue()));
+        assertThat(result.getHttpLlmResponse().getRerank().getTopN(), is(3));
+        assertThat(result.getHttpLlmResponse().getRerank().getDeterministicFromInput(), is(true));
+        assertThat(result.getHttpLlmResponse().getRerank().getSeed(), is(42L));
     }
 
     @Test
@@ -279,6 +388,8 @@ public class ExpectationLlmRoundTripTest {
                             .withQuotaLimit(100)
                             .withQuotaWindowMillis(60_000L)
                             .withQuotaErrorStatus(529)
+                            .withTokenQuotaLimit(50_000L)
+                            .withTokenQuotaWindowMillis(60_000L)
                     )
             );
 
@@ -300,6 +411,9 @@ public class ExpectationLlmRoundTripTest {
         assertThat(chaos.getQuotaLimit(), is(100));
         assertThat(chaos.getQuotaWindowMillis(), is(60_000L));
         assertThat(chaos.getQuotaErrorStatus(), is(529));
+        // token-based quota fields must survive the schema-validated JSON round-trip
+        assertThat(chaos.getTokenQuotaLimit(), is(50_000L));
+        assertThat(chaos.getTokenQuotaWindowMillis(), is(60_000L));
     }
 
     @Test

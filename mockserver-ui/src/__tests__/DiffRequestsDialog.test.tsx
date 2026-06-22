@@ -62,4 +62,28 @@ describe('DiffRequestsDialog', () => {
       actual: { method: 'POST' },
     });
   });
+
+  it('auto-runs the diff on open when both requests are pre-populated (Traffic Compare flow)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ diffCount: 0, identical: true, diffs: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <ThemeProvider theme={buildTheme('dark')}>
+        <DiffRequestsDialog
+          open
+          onClose={vi.fn()}
+          connectionParams={connectionParams}
+          initialExpected={'{"method":"GET"}'}
+          initialActual={'{"method":"GET"}'}
+        />
+      </ThemeProvider>,
+    );
+
+    // No "Compare" click — the result appears on its own.
+    expect(await screen.findByText('Request Diff')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

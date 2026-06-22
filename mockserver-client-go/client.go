@@ -2,27 +2,120 @@ package mockserver
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"sync"
 	"time"
 )
 
 // Client is a MockServer control-plane client.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL      string
+	httpClient   *http.Client
+	bpMu         sync.Mutex // guards breakpointWS lazy-init and close
+	breakpointWS *breakpointWSClient
+
+	// bearerTokenSupplier, when non-nil, is invoked for every control-plane
+	// request to obtain the token attached as "Authorization: Bearer <token>".
+	bearerTokenSupplier func() string
+
+	// tlsConfig accumulates CA roots and client certificates from the
+	// WithCACert*/WithClientCert* options. It is applied to the http.Client's
+	// Transport (creating one if the user did not supply their own).
+	tlsConfig *tls.Config
+	// tlsConfigErr captures the first error encountered while building
+	// tlsConfig so it can surface on the next request rather than panicking
+	// inside an option.
+	tlsConfigErr error
+	// userSuppliedHTTPClient records that the caller provided an http.Client
+	// via WithHTTPClient, in which case a user-supplied Transport.TLSClientConfig
+	// takes precedence over the CA/client-cert options.
+	userSuppliedHTTPClient bool
 }
 
 // Option configures a Client.
 type Option func(*Client)
 
 // WithHTTPClient sets a custom http.Client for the MockServer client.
+//
+// Precedence: if the supplied http.Client has a *http.Transport whose
+// TLSClientConfig is already set, that configuration is left untouched and the
+// WithCACert*/WithClientCert* options are NOT applied on top of it (the caller
+// is assumed to be in full control of TLS). If the supplied client has no
+// TLSClientConfig, the CA/client-cert options populate one on its Transport.
 func WithHTTPClient(c *http.Client) Option {
 	return func(client *Client) {
 		client.httpClient = c
+		client.userSuppliedHTTPClient = true
+	}
+}
+
+// WithControlPlaneBearerToken attaches "Authorization: Bearer <token>" to every
+// control-plane request the client sends. Use this when MockServer is started
+// with mockserver.controlPlaneJWTAuthenticationRequired (the client does not
+// generate the JWT — supply the token string yourself).
+func WithControlPlaneBearerToken(token string) Option {
+	return func(client *Client) {
+		client.bearerTokenSupplier = func() string { return token }
+	}
+}
+
+// WithControlPlaneBearerTokenSupplier attaches "Authorization: Bearer <token>"
+// to every control-plane request, calling the supplied function once per
+// request so a short-lived/refreshable token can be provided. If supplier
+// returns an empty string, no Authorization header is attached for that request.
+func WithControlPlaneBearerTokenSupplier(supplier func() string) Option {
+	return func(client *Client) {
+		client.bearerTokenSupplier = supplier
+	}
+}
+
+// WithCACertPEMPath trusts the CA certificate(s) in the given PEM file when
+// connecting to an HTTPS MockServer, so a server presenting a certificate
+// signed by that CA validates. Compose with WithTLS to use HTTPS.
+func WithCACertPEMPath(path string) Option {
+	return func(client *Client) {
+		pem, err := os.ReadFile(path)
+		if err != nil {
+			client.setTLSConfigErr(fmt.Errorf("mockserver: read CA cert %q: %w", path, err))
+			return
+		}
+		WithCACertPEM(pem)(client)
+	}
+}
+
+// WithCACertPEM trusts the CA certificate(s) in the given PEM bytes when
+// connecting to an HTTPS MockServer. Compose with WithTLS to use HTTPS.
+func WithCACertPEM(pem []byte) Option {
+	return func(client *Client) {
+		cfg := client.ensureTLSConfig()
+		if cfg.RootCAs == nil {
+			cfg.RootCAs = x509.NewCertPool()
+		}
+		if !cfg.RootCAs.AppendCertsFromPEM(pem) {
+			client.setTLSConfigErr(fmt.Errorf("mockserver: no valid CA certificates found in PEM"))
+		}
+	}
+}
+
+// WithClientCertPEM presents the given client certificate + private key (PEM
+// files) for mutual TLS when connecting to MockServer started with
+// mockserver.controlPlaneTLSMutualAuthenticationRequired.
+func WithClientCertPEM(certPath, keyPath string) Option {
+	return func(client *Client) {
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			client.setTLSConfigErr(fmt.Errorf("mockserver: load client cert/key: %w", err))
+			return
+		}
+		cfg := client.ensureTLSConfig()
+		cfg.Certificates = append(cfg.Certificates, cert)
 	}
 }
 
@@ -64,6 +157,7 @@ func New(host string, port int, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.applyTLSConfig()
 	return c
 }
 
@@ -82,7 +176,54 @@ func NewFromURL(baseURL string, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.applyTLSConfig()
 	return c
+}
+
+// ensureTLSConfig lazily creates the accumulating tls.Config used by the
+// CA/client-cert options.
+func (c *Client) ensureTLSConfig() *tls.Config {
+	if c.tlsConfig == nil {
+		c.tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	return c.tlsConfig
+}
+
+// setTLSConfigErr records the first TLS configuration error so it surfaces on
+// the next request rather than panicking inside an option.
+func (c *Client) setTLSConfigErr(err error) {
+	if c.tlsConfigErr == nil {
+		c.tlsConfigErr = err
+	}
+}
+
+// applyTLSConfig installs the accumulated tls.Config onto the http.Client's
+// Transport. If the user supplied their own http.Client whose Transport already
+// has a TLSClientConfig, that configuration takes precedence and is left alone.
+func (c *Client) applyTLSConfig() {
+	if c.tlsConfig == nil {
+		return
+	}
+	if c.httpClient == nil {
+		c.httpClient = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	transport, ok := c.httpClient.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		if c.userSuppliedHTTPClient && c.httpClient.Transport != nil {
+			// A custom non-*http.Transport RoundTripper is fully in the
+			// caller's control; do not override it.
+			return
+		}
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+		c.httpClient.Transport = transport
+	}
+
+	if c.userSuppliedHTTPClient && transport.TLSClientConfig != nil {
+		// Caller already configured TLS; their configuration wins.
+		return
+	}
+	transport.TLSClientConfig = c.tlsConfig
 }
 
 // ForwardChainExpectation allows chaining a When() call with Respond/Forward/Error.
@@ -103,10 +244,52 @@ func (f *ForwardChainExpectation) WithPriority(priority int) *ForwardChainExpect
 	return f
 }
 
+// WithResponseMode sets how MockServer selects between multiple responses
+// registered via RespondMultiple (SEQUENTIAL, RANDOM, WEIGHTED, or SWITCH).
+func (f *ForwardChainExpectation) WithResponseMode(mode ResponseMode) *ForwardChainExpectation {
+	f.expectation.ResponseMode = mode
+	return f
+}
+
+// WithResponseWeights sets the relative weights (index-aligned with the
+// responses passed to RespondMultiple) used when the response mode is WEIGHTED.
+func (f *ForwardChainExpectation) WithResponseWeights(weights ...int) *ForwardChainExpectation {
+	f.expectation.ResponseWeights = weights
+	return f
+}
+
+// WithSwitchAfter sets the number of requests served per response before
+// advancing to the next one when the response mode is SWITCH.
+func (f *ForwardChainExpectation) WithSwitchAfter(requests int) *ForwardChainExpectation {
+	f.expectation.SwitchAfter = &requests
+	return f
+}
+
+// WithCrossProtocolScenario registers a cross-protocol scenario transition on
+// the expectation.
+func (f *ForwardChainExpectation) WithCrossProtocolScenario(scenarios ...CrossProtocolScenario) *ForwardChainExpectation {
+	f.expectation.CrossProtocolScenarios = append(f.expectation.CrossProtocolScenarios, scenarios...)
+	return f
+}
+
 // Respond completes the expectation with an HTTP response action.
 func (f *ForwardChainExpectation) Respond(rb *ResponseBuilder) ([]Expectation, error) {
 	resp := rb.Build()
 	f.expectation.HttpResponse = &resp
+	return f.client.Upsert(f.expectation)
+}
+
+// RespondMultiple completes the expectation with multiple HTTP responses.
+// MockServer selects between them according to the response mode (set via
+// WithResponseMode; defaults to SEQUENTIAL). Multiple responses take priority
+// over a singular response.
+func (f *ForwardChainExpectation) RespondMultiple(builders ...*ResponseBuilder) ([]Expectation, error) {
+	responses := make([]*HttpResponse, len(builders))
+	for i, b := range builders {
+		resp := b.Build()
+		responses[i] = &resp
+	}
+	f.expectation.HttpResponses = responses
 	return f.client.Upsert(f.expectation)
 }
 
@@ -117,10 +300,59 @@ func (f *ForwardChainExpectation) Forward(fb *ForwardBuilder) ([]Expectation, er
 	return f.client.Upsert(f.expectation)
 }
 
+// RespondTemplate completes the expectation with a response template action.
+func (f *ForwardChainExpectation) RespondTemplate(tb *TemplateBuilder) ([]Expectation, error) {
+	tmpl := tb.Build()
+	f.expectation.HttpResponseTemplate = &tmpl
+	return f.client.Upsert(f.expectation)
+}
+
+// ForwardTemplate completes the expectation with a forward template action.
+func (f *ForwardChainExpectation) ForwardTemplate(tb *TemplateBuilder) ([]Expectation, error) {
+	tmpl := tb.Build()
+	f.expectation.HttpForwardTemplate = &tmpl
+	return f.client.Upsert(f.expectation)
+}
+
 // RespondWithError completes the expectation with an error action.
 func (f *ForwardChainExpectation) RespondWithError(eb *ErrorBuilder) ([]Expectation, error) {
 	e := eb.Build()
 	f.expectation.HttpError = &e
+	return f.client.Upsert(f.expectation)
+}
+
+// RespondSse completes the expectation with a Server-Sent Events response action.
+func (f *ForwardChainExpectation) RespondSse(sb *SseResponseBuilder) ([]Expectation, error) {
+	resp := sb.Build()
+	f.expectation.HttpSseResponse = &resp
+	return f.client.Upsert(f.expectation)
+}
+
+// RespondWebSocket completes the expectation with a WebSocket response action.
+func (f *ForwardChainExpectation) RespondWebSocket(wb *WebSocketResponseBuilder) ([]Expectation, error) {
+	resp := wb.Build()
+	f.expectation.HttpWebSocketResponse = &resp
+	return f.client.Upsert(f.expectation)
+}
+
+// RespondGrpcStream completes the expectation with a gRPC streaming response action.
+func (f *ForwardChainExpectation) RespondGrpcStream(gb *GrpcStreamResponseBuilder) ([]Expectation, error) {
+	resp := gb.Build()
+	f.expectation.GrpcStreamResponse = &resp
+	return f.client.Upsert(f.expectation)
+}
+
+// RespondBinary completes the expectation with a raw binary response action.
+func (f *ForwardChainExpectation) RespondBinary(bb *BinaryResponseBuilder) ([]Expectation, error) {
+	resp := bb.Build()
+	f.expectation.BinaryResponse = &resp
+	return f.client.Upsert(f.expectation)
+}
+
+// RespondDns completes the expectation with a DNS response action.
+func (f *ForwardChainExpectation) RespondDns(db *DnsResponseBuilder) ([]Expectation, error) {
+	resp := db.Build()
+	f.expectation.DnsResponse = &resp
 	return f.client.Upsert(f.expectation)
 }
 
@@ -219,6 +451,70 @@ func (c *Client) Verify(rb *RequestBuilder, times *VerificationTimes) error {
 	return nil
 }
 
+// VerifyResponse asserts that a request-response pair matching the given
+// builders was recorded. This verifies proxied/forwarded responses rather
+// than simply whether a request was received. Pass nil for request to verify
+// only the response. Pass nil for times to use the server default.
+func (c *Client) VerifyResponse(rb *RequestBuilder, respB *ResponseBuilder, times *VerificationTimes) error {
+	v := verification{
+		Times: times,
+	}
+	if rb != nil {
+		req := rb.Build()
+		v.HttpRequest = &req
+	}
+	if respB != nil {
+		resp := respB.Build()
+		v.HttpResponse = &resp
+	}
+
+	body, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("mockserver: marshal verification: %w", err)
+	}
+
+	respBody, statusCode, err := c.doRequest("PUT", "/mockserver/verify", body, nil)
+	if err != nil {
+		return err
+	}
+
+	if statusCode == 406 {
+		return &VerificationError{Message: string(respBody)}
+	}
+	if statusCode >= 400 {
+		return fmt.Errorf("mockserver: verify failed (status %d): %s", statusCode, string(respBody))
+	}
+	return nil
+}
+
+// VerifyZeroInteractions asserts that MockServer received no requests at all.
+// It is a thin wrapper over Verify with an empty request matcher and an
+// at-most-zero times constraint (matching the Java/Python/Ruby/Node clients).
+func (c *Client) VerifyZeroInteractions() error {
+	v := verification{
+		HttpRequest: &HttpRequest{},
+		Times:       &VerificationTimes{atMostSet: true},
+	}
+
+	body, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("mockserver: marshal verification: %w", err)
+	}
+
+	respBody, statusCode, err := c.doRequest("PUT", "/mockserver/verify", body, nil)
+	if err != nil {
+		return err
+	}
+
+	if statusCode == 406 {
+		return &VerificationError{Message: string(respBody)}
+	}
+	if statusCode >= 400 {
+		return fmt.Errorf("mockserver: verify failed (status %d): %s", statusCode, string(respBody))
+	}
+	return nil
+}
+
 // VerifySequence asserts that requests matching the given builders were received
 // in the specified order.
 func (c *Client) VerifySequence(builders ...*RequestBuilder) error {
@@ -227,6 +523,56 @@ func (c *Client) VerifySequence(builders ...*RequestBuilder) error {
 		requests[i] = b.Build()
 	}
 	v := verificationSequence{HttpRequests: requests}
+
+	body, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("mockserver: marshal verification sequence: %w", err)
+	}
+
+	respBody, statusCode, err := c.doRequest("PUT", "/mockserver/verifySequence", body, nil)
+	if err != nil {
+		return err
+	}
+
+	if statusCode == 406 {
+		return &VerificationError{Message: string(respBody)}
+	}
+	if statusCode >= 400 {
+		return fmt.Errorf("mockserver: verify sequence failed (status %d): %s", statusCode, string(respBody))
+	}
+	return nil
+}
+
+// VerifyResponseSequence asserts that request-response pairs were recorded in
+// order. Requests and responses are index-aligned — each request builder at
+// position i is paired with the response builder at position i. Either slice
+// may contain nil entries for positions where only the request or only the
+// response should be matched.
+func (c *Client) VerifyResponseSequence(requestBuilders []*RequestBuilder, responseBuilders []*ResponseBuilder) error {
+	var requests []HttpRequest
+	if len(requestBuilders) > 0 {
+		requests = make([]HttpRequest, len(requestBuilders))
+		for i, b := range requestBuilders {
+			if b != nil {
+				requests[i] = b.Build()
+			}
+		}
+	}
+
+	var responses []HttpResponse
+	if len(responseBuilders) > 0 {
+		responses = make([]HttpResponse, len(responseBuilders))
+		for i, b := range responseBuilders {
+			if b != nil {
+				responses[i] = b.Build()
+			}
+		}
+	}
+
+	v := verificationSequence{
+		HttpRequests:  requests,
+		HttpResponses: responses,
+	}
 
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -336,6 +682,17 @@ type RetrieveFormat string
 const (
 	FormatJSON       RetrieveFormat = "json"
 	FormatLogEntries RetrieveFormat = "log_entries"
+	// Code-generation formats. These return MockServer SDK setup code (the
+	// builder code that recreates the expectations) for the requested client
+	// language, rather than JSON.
+	FormatJava       RetrieveFormat = "java"
+	FormatJavaScript RetrieveFormat = "javascript"
+	FormatPython     RetrieveFormat = "python"
+	FormatGo         RetrieveFormat = "go"
+	FormatCSharp     RetrieveFormat = "csharp"
+	FormatRuby       RetrieveFormat = "ruby"
+	FormatRust       RetrieveFormat = "rust"
+	FormatPHP        RetrieveFormat = "php"
 )
 
 // Retrieve retrieves recorded data from MockServer. The result is the raw JSON
@@ -423,6 +780,31 @@ func (c *Client) RetrieveLogMessages(rb *RequestBuilder) ([]byte, error) {
 	return c.Retrieve(rb, RetrieveLogs, FormatJSON)
 }
 
+// RetrieveExpectationsAsCode retrieves the active expectations as MockServer SDK
+// setup code (the builder code that recreates the expectations) in the requested
+// language. The format is one of the code-generation formats (e.g. FormatJava,
+// FormatJavaScript, FormatPython, FormatGo, FormatCSharp, FormatRuby, FormatRust,
+// FormatPHP). The generated code is returned as a string.
+func (c *Client) RetrieveExpectationsAsCode(rb *RequestBuilder, format RetrieveFormat) (string, error) {
+	data, err := c.Retrieve(rb, RetrieveActiveExpectations, format)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// RetrieveRecordedExpectationsAsCode retrieves the recorded (proxied) request/
+// response pairs as MockServer SDK setup code in the requested language. The
+// format is one of the code-generation formats (e.g. FormatJava, FormatGo). The
+// generated code is returned as a string.
+func (c *Client) RetrieveRecordedExpectationsAsCode(rb *RequestBuilder, format RetrieveFormat) (string, error) {
+	data, err := c.Retrieve(rb, RetrieveRecordedExpectations, format)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // StatusResponse contains the response from the status endpoint.
 type StatusResponse struct {
 	Ports []int `json:"ports"`
@@ -477,8 +859,19 @@ func (c *Client) IsRunning() bool {
 	return err == nil
 }
 
-// doRequest performs an HTTP request to MockServer.
+// doRequest performs an HTTP request to MockServer with a JSON content type.
 func (c *Client) doRequest(method, path string, body []byte, params url.Values) ([]byte, int, error) {
+	return c.doRequestWithContentType(method, path, body, params, "application/json; charset=utf-8")
+}
+
+// doRequestWithContentType performs an HTTP request to MockServer using the
+// given Content-Type. The body is sent verbatim (no encoding), which is
+// required for raw binary payloads such as gRPC descriptor sets.
+func (c *Client) doRequestWithContentType(method, path string, body []byte, params url.Values, contentType string) ([]byte, int, error) {
+	if c.tlsConfigErr != nil {
+		return nil, 0, c.tlsConfigErr
+	}
+
 	u := c.baseURL + path
 	if len(params) > 0 {
 		u = u + "?" + params.Encode()
@@ -493,7 +886,16 @@ func (c *Client) doRequest(method, path string, body []byte, params url.Values) 
 	if err != nil {
 		return nil, 0, fmt.Errorf("mockserver: create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Content-Type", contentType)
+
+	// Attach the control-plane bearer token (if configured) to every
+	// control-plane request. All requests this client sends are control-plane
+	// (/mockserver/*); the data plane is never driven through this method.
+	if c.bearerTokenSupplier != nil {
+		if token := c.bearerTokenSupplier(); token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

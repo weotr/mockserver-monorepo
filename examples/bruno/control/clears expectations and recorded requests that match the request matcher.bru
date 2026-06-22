@@ -1,0 +1,33 @@
+meta {
+  name: clears expectations and recorded requests that match the request matcher
+  type: http
+  seq: 1
+}
+
+put {
+  url: {{baseUrl}}/mockserver/clear
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+params:query {
+  ~type: all
+}
+
+body:json {
+  {
+    "path": "/api/users"
+  }
+}
+
+docs {
+  Clears expectations and recorded requests that match the request matcher.
+  
+  request used to match expectations and record requests to clear
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "mockserver",
+  "session": {
+    "key": "host:api.openai.com",
+    "groupingBasis": "PROXY_HOST",
+    "providers": ["OPENAI"],
+    "models": ["gpt-4o-2024-08-06"]
+  },
+  "totals": {
+    "callCount": 6,
+    "inputTokens": 48210,
+    "outputTokens": 3120,
+    "cachedInputTokens": 0,
+    "reasoningTokens": 0,
+    "estimatedCostUsd": 0.1573,
+    "costIsEstimated": false,
+    "totalLatencyMs": 14230,
+    "toolCallCount": 4
+  },
+  "calls": [
+    {
+      "index": 0,
+      "path": "/v1/chat/completions",
+      "provider": "OPENAI",
+      "model": "gpt-4o-2024-08-06",
+      "inputTokens": 8120,
+      "outputTokens": 540,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "estimatedCostUsd": 0.0264,
+      "costIsEstimated": false,
+      "latencyMs": 2300,
+      "finishReason": "tool_calls",
+      "messageCount": 4,
+      "systemPromptTokens": 5400,
+      "systemPromptFingerprint": "a1b2c3d4",
+      "toolCalls": [
+        { "name": "get_weather", "argsFingerprint": "e5f6", "resultTokens": 30 }
+      ]
+    },
+    {
+      "index": 1,
+      "path": "/v1/chat/completions",
+      "provider": "OPENAI",
+      "model": "gpt-4o-2024-08-06",
+      "inputTokens": 8050,
+      "outputTokens": 420,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "estimatedCostUsd": 0.0243,
+      "costIsEstimated": false,
+      "latencyMs": 2100,
+      "finishReason": "tool_calls",
+      "messageCount": 6,
+      "systemPromptTokens": 5400,
+      "systemPromptFingerprint": "a1b2c3d4",
+      "toolCalls": [
+        { "name": "get_weather", "argsFingerprint": "e5f6", "resultTokens": 30 }
+      ]
+    },
+    {
+      "index": 2,
+      "path": "/v1/chat/completions",
+      "provider": "OPENAI",
+      "model": "gpt-4o-2024-08-06",
+      "inputTokens": 8100,
+      "outputTokens": 480,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "estimatedCostUsd": 0.0250,
+      "costIsEstimated": false,
+      "latencyMs": 2400,
+      "finishReason": "stop",
+      "messageCount": 8,
+      "systemPromptTokens": 5400,
+      "systemPromptFingerprint": "a1b2c3d4",
+      "toolCalls": []
+    },
+    {
+      "index": 3,
+      "path": "/v1/chat/completions",
+      "provider": "OPENAI",
+      "model": "gpt-4o-2024-08-06",
+      "inputTokens": 8000,
+      "outputTokens": 1180,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "estimatedCostUsd": 0.0318,
+      "costIsEstimated": false,
+      "latencyMs": 3600,
+      "finishReason": "length",
+      "messageCount": 10,
+      "systemPromptTokens": 5400,
+      "systemPromptFingerprint": "a1b2c3d4",
+      "toolCalls": [
+        { "name": "search_docs", "argsFingerprint": "aa11", "resultTokens": 1850 }
+      ]
+    },
+    {
+      "index": 4,
+      "path": "/v1/chat/completions",
+      "provider": "OPENAI",
+      "model": "gpt-4o-2024-08-06",
+      "inputTokens": 7940,
+      "outputTokens": 260,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "estimatedCostUsd": 0.0224,
+      "costIsEstimated": false,
+      "latencyMs": 1830,
+      "finishReason": "stop",
+      "messageCount": 12,
+      "systemPromptTokens": 5400,
+      "systemPromptFingerprint": "a1b2c3d4",
+      "toolCalls": []
+    },
+    {
+      "index": 5,
+      "path": "/v1/chat/completions",
+      "provider": "OPENAI",
+      "model": "gpt-4o-2024-08-06",
+      "inputTokens": 8000,
+      "outputTokens": 240,
+      "cachedInputTokens": 0,
+      "reasoningTokens": 0,
+      "estimatedCostUsd": 0.0224,
+      "costIsEstimated": false,
+      "latencyMs": 2000,
+      "finishReason": "stop",
+      "messageCount": 14,
+      "systemPromptTokens": 5400,
+      "systemPromptFingerprint": "a1b2c3d4",
+      "toolCalls": [
+        { "name": "get_weather", "argsFingerprint": "e5f6", "resultTokens": 30 }
+      ]
+    }
+  ],
+  "signals": [
+    {
+      "id": "REPEATED_SYSTEM_PROMPT",
+      "severity": "HIGH",
+      "title": "Identical 5,400-token system prompt resent on all 6 calls",
+      "detail": "The same system prompt (fingerprint a1b2c3d4) was sent on 6/6 calls. Caching or moving it into a retrieval tool avoids resending it every turn.",
+      "affectedCalls": [0, 1, 2, 3, 4, 5],
+      "estimatedWastedInputTokens": 27000,
+      "estimatedSavingUsd": 0.0675,
+      "recommendation": "Enable provider prompt caching, or move the static context into a retrieval tool so it is not resent every turn."
+    },
+    {
+      "id": "DETERMINISTIC_TOOL_CALL",
+      "severity": "MEDIUM",
+      "title": "get_weather called 3 times with identical arguments",
+      "detail": "The get_weather tool (argsFingerprint e5f6) returned the same result across calls 0, 1 and 5. A deterministic step like this can run as a direct HTTP/MCP endpoint instead of round-tripping the model.",
+      "affectedCalls": [0, 1, 5],
+      "estimatedWastedInputTokens": 5000,
+      "estimatedSavingUsd": 0.0150,
+      "recommendation": "Replace the LLM-mediated get_weather step with a direct HTTP or MCP endpoint."
+    },
+    {
+      "id": "OVERSIZED_TOOL_RESULT",
+      "severity": "LOW",
+      "title": "search_docs returned 1,850 tokens inflating downstream input",
+      "detail": "The search_docs result on call 3 was large and is carried forward into later turns. Trimming or summarising it reduces input tokens on subsequent calls.",
+      "affectedCalls": [3],
+      "estimatedWastedInputTokens": null,
+      "estimatedSavingUsd": null,
+      "recommendation": "Trim or summarise the search_docs tool output before returning it to the model."
+    }
+  ],
+  "redaction": {
+    "applied": true,
+    "redactedHeaders": ["authorization", "x-api-key"],
+    "redactedBodyFields": []
+  }
+}

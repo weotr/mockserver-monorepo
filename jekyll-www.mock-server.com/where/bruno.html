@@ -1,0 +1,63 @@
+---
+title: Bruno
+description: Open the MockServer Bruno collection to drive the REST control plane from Bruno — create expectations, verify requests, and inspect recorded traffic. Git-native, no account required.
+layout: page
+pageOrder: 11
+section: 'Where'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-11T08:00:00+01:00
+---
+
+<h2>Bruno</h2>
+
+<p>MockServer provides an official <a target="_blank" href="https://www.usebruno.com/" rel="noopener noreferrer">Bruno</a> collection for its REST control plane. It covers <strong>every control-plane endpoint</strong> — create expectations, verify requests, inspect recorded traffic, inject chaos, drive scenarios, set breakpoints, and manage server state. Bruno is open-source and <strong>git-native</strong>: the collection lives in the repository as plain <span class="keyword">.bru</span> files, so it versions alongside the code and needs no account to use. It is generated from MockServer's OpenAPI specification, so it always matches the running server.</p>
+
+<h2>Open the Collection</h2>
+
+<p>The collection lives in the MockServer repository at <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/bruno" rel="noopener noreferrer"><code>examples/bruno</code></a>:</p>
+
+<ul>
+    <li>Clone the repository, then in Bruno click <strong>Open Collection</strong> and select the <span class="keyword">examples/bruno</span> folder.</li>
+    <li>Select the <strong>Local</strong> environment (top-right). Its <span class="keyword">baseUrl</span> variable defaults to <span class="keyword">http://localhost:1080</span> — change it to point at any MockServer instance.</li>
+</ul>
+
+<h2>Quick Start</h2>
+
+<p>Start MockServer with Docker:</p>
+
+<pre class="prettyprint code"><code class="code">docker run -d --rm -p 1080:1080 mockserver/mockserver</code></pre>
+
+<p>Each request carries a worked example body and documentation. A typical first run:</p>
+
+<ol>
+    <li><strong>expectation → create expectation</strong> — registers a mock endpoint.</li>
+    <li><strong>verify → verify a request has been received</strong> — asserts MockServer saw a request.</li>
+    <li><strong>control → retrieve recorded requests</strong> — inspects what was received.</li>
+    <li><strong>control → clears all expectations and recorded requests</strong> — resets state.</li>
+</ol>
+
+<h2>What the Collection Covers</h2>
+
+<p>The collection is organised into folders by area, covering all 68 control-plane endpoints:</p>
+
+<table>
+    <thead>
+        <tr><th>Folder</th><th>What's in it</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>expectation</td><td>Create expectations (from JSON, an OpenAPI/Swagger spec, or a WSDL) and generate suggestions from unmatched requests</td></tr>
+        <tr><td>verify</td><td>Verify a request or a sequence was received; diff two requests field-by-field</td></tr>
+        <tr><td>control</td><td>Clear, reset, retrieve, status, bind ports, configuration, clock, proxy/mock mode, cassettes, replay, and request breakpoints</td></tr>
+        <tr><td>troubleshooting</td><td>Explain why requests did not match; per-expectation mismatch debugging</td></tr>
+        <tr><td>chaos</td><td>Register, list and live-patch service / TCP / gRPC chaos, plus scheduled multi-stage experiments</td></tr>
+        <tr><td>scenario</td><td>List, get, set and trigger stateful scenario state</td></tr>
+        <tr><td>drift</td><td>Retrieve and clear recorded mock drift</td></tr>
+        <tr><td>files / crud / import</td><td>File store, generated CRUD data stores, and HAR/Postman import</td></tr>
+        <tr><td>oidc / asyncapi / grpc / wasm / pact</td><td>Turnkey OIDC provider, AsyncAPI broker mocking, gRPC descriptors/health, WASM rule modules, and Pact contract export/verify</td></tr>
+    </tbody>
+</table>
+
+<p>This is the Bruno counterpart of the <a href="postman.html">Postman collection</a> — both are generated from the same OpenAPI spec, so they stay identical. The full control-plane API is documented as an <a target="_blank" href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" rel="noopener noreferrer">OpenAPI spec on SwaggerHub</a>.</p>

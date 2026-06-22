@@ -1,6 +1,7 @@
 import Box from '@mui/material/Box';
 import type { Description } from '../types';
 import JsonViewer from './JsonViewer';
+import { monospaceFontFamily } from '../theme';
 
 interface DescriptionDisplayProps {
   description: Description;
@@ -11,7 +12,7 @@ export default function DescriptionDisplay({ description }: DescriptionDisplayPr
     return (
       <Box
         component="span"
-        sx={{ fontFamily: 'monospace', fontSize: '0.9em', whiteSpace: 'pre' }}
+        sx={{ fontFamily: monospaceFontFamily, fontSize: '0.9em', whiteSpace: 'pre' }}
       >
         {description}
       </Box>
@@ -21,13 +22,13 @@ export default function DescriptionDisplay({ description }: DescriptionDisplayPr
   if (description.json) {
     return (
       <Box sx={{ display: 'inline-flex', alignItems: 'baseline', gap: 0.5, flexWrap: 'wrap' }}>
-        <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+        <Box component="span" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.9em' }}>
           {description.first}
         </Box>
         <Box sx={{ display: 'inline-block', maxWidth: 300 }}>
           <JsonViewer data={description.object} collapsed={0} enableClipboard={false} />
         </Box>
-        <Box component="span" sx={{ fontFamily: 'monospace', fontSize: '0.9em' }}>
+        <Box component="span" sx={{ fontFamily: monospaceFontFamily, fontSize: '0.9em' }}>
           {description.second}
         </Box>
       </Box>
@@ -35,7 +36,7 @@ export default function DescriptionDisplay({ description }: DescriptionDisplayPr
   }
 
   return (
-    <Box sx={{ display: 'inline-flex', gap: 0.5, fontFamily: 'monospace', fontSize: '0.9em' }}>
+    <Box sx={{ display: 'inline-flex', gap: 0.5, fontFamily: monospaceFontFamily, fontSize: '0.9em' }}>
       <span>{description.first}</span>
       <span>{description.second}</span>
     </Box>

@@ -6,7 +6,6 @@ import com.nimbusds.jose.jwk.source.RemoteJWKSet;
 import org.mockserver.authentication.AuthenticationException;
 import org.mockserver.authentication.AuthenticationHandler;
 import org.mockserver.file.FilePath;
-import org.mockserver.file.FileReader;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.HttpRequest;
@@ -15,7 +14,6 @@ import org.slf4j.event.Level;
 
 import java.io.File;
 import java.net.URI;
-import java.net.URL;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;

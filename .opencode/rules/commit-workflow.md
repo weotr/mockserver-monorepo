@@ -50,12 +50,36 @@ Run `git status --short` to see all changed, staged, and untracked files. From t
 | `npm` | `package.json`, `package-lock.json`, `*.js`, `*.ts`, `*.tsx`, `*.jsx` (in `mockserver-ui/`, `mockserver-client-node/`, `mockserver-node/`) |
 | `python` | `*.py`, `pyproject.toml`, `requirements*.txt` (in `mockserver-client-python/`) |
 | `ruby` | `*.rb`, `Gemfile`, `Gemfile.lock`, `*.gemspec` (in `mockserver-client-ruby/`) |
+| `control` (AI component) | `.opencode/rules/**`, `.opencode/agents/**`, `.claude/agents/**`, `opencode.jsonc`, the review constitution, and CI / test-gate definitions — i.e. changes to **the controls AI is judged by** |
 
 A commit may contain files from multiple categories. Run ALL applicable validations.
+
+**Higher-scrutiny control class.** If any changed file is in the `control`
+(AI-component) category, this is a **higher-scrutiny change** ([[control-integrity]],
+[[risk-authority-classification]]). It is **NOT act-autonomously**: it additionally
+requires (a) the evaluation harness in Step 2, (b) the **authoritative `review-final`**
+reviewer in Step 4 — a distinct agent from the one that authored the change
+(**separation of duties**) — and (c) **gated approval**: surface the change and the
+review verdict to the user and get explicit approval before committing, rather than
+auto-committing on PASS.
 
 ## Step 2: Run Category-Specific Validations
 
 Validation principle: prefer executable verification over static inspection. When a file can be executed, built, rendered, or planned, run that command and use its output as evidence.
+
+**Control integrity:** never weaken, disable, skip, or game a gate to make it pass — a gate satisfied by lowering its bar is a *failure*, not a pass. If a test or rule is genuinely wrong, fix it openly as a higher-scrutiny control change, not as a silent workaround. See [[control-integrity]].
+
+**Licence / IP provenance:** for generated code, do not reproduce non-trivial verbatim third-party blocks, and ensure any new dependency carries an Apache-2.0-compatible licence — escalate copyleft/incompatible cases rather than committing them. See [[licence-provenance]].
+
+### Control / AI-component changes (`control`)
+
+Changes to the controls AI is judged by (rules, agent prompts, `opencode.jsonc`, the review constitution, CI/test gates) MUST run the evaluation harness as a gate:
+
+```bash
+bash .opencode/evals/run-evals.sh    # exits non-zero on a regressed golden task or a malformed fixture
+```
+
+A **regression** (a recorded `.result` flips from its expected verdict) or a malformed fixture **blocks** the change ([[evaluation-harness]]). Where the baseline for an affected agent is missing (fixtures show `PENDING`), establish it — run the agent on the relevant fixtures and record the results — or record the gap as residual risk for the user's gated approval. (This is in addition to the per-category validations above, e.g. `docs`/`config` link and JSON checks.)
 
 ### Java changes (`java`)
 1. Identify affected Maven modules from file paths (see testing-policy.md for module mapping)
@@ -141,9 +165,11 @@ If the change is **not** user-facing (tests, CI, internal refactors with no beha
 
 ## Step 4: Adversarial Code Review (MANDATORY for all commits)
 
-After validations and the changelog review pass, launch an adversarial review using a subagent on a **different model** with a **fresh context**. This catches issues the implementing agent may have blind spots for.
+After validations and the changelog review pass, launch an adversarial review using a subagent with a **fresh context** (a different model where a stronger tier is provisioned; on opencode, fresh context + low temperature — see `docs/operations/opencode-configuration.md`). The reviewer MUST be a distinct agent from the one that authored the change (**separation of duties**). This catches issues the implementing agent may have blind spots for.
 
-Spawn a `review-cheap` subagent (use the Agent tool in Claude Code; the Task tool in opencode) and provide:
+**Control / AI-component changes use the authoritative `review-final`** (not `review-cheap`), and are **gated-approval, not act-autonomously**: after a PASS, present the change and the verdict to the user and get explicit approval before committing (per the higher-scrutiny note in Step 1). All other changes use `review-cheap` as below.
+
+Spawn the review subagent (`review-cheap` by default, `review-final` for control changes; use the Agent tool in Claude Code, the Task tool in opencode) and provide:
 - The diff of files being committed: stage them first with `git add`, then capture `git diff --cached`
 - The commit message you intend to use
 - The file categories from Step 1
@@ -153,7 +179,10 @@ The review prompt MUST include:
 Review these changes adversarially using `.opencode/rules/review-constitution.md`.
 
 Apply all 8 lenses (Ambiguity, Incompleteness, Inconsistency, Infeasibility, Insecurity, 
-Inoperability, Incorrectness, Overcomplexity). Pay special attention to:
+Inoperability, Incorrectness, Overcomplexity) as the baseline, and additionally apply the 
+matching per-artefact profile — select it from the profiles table in the constitution 
+(e.g. review-coding for code+tests, review-deployment for infra/Terraform, review-documentation 
+for docs). The profile extends the baseline; it never lets you skip a lens. Pay special attention to:
 - Hallucinated function/method/module names that don't exist (COR-07)
 - Plausible-looking but incorrect logic (COR-05)
 - Missing error handling or edge cases (INC-01, INC-07)
@@ -170,18 +199,19 @@ Provide PASS or BLOCK verdict with severity-ranked findings.
 
 **Security:** Before sending the diff to the reviewer, scan for obvious secrets (API keys, tokens, passwords, `.env` content). If found, warn the user and do NOT include the secret values in the review prompt — redact them or exclude those files from the review.
 
-If the review returns **BLOCK**, fix the issues, re-run any affected validations (Step 2), and re-run the review before committing.
+If the review returns **BLOCK**, fix the issues, re-run any affected validations (Step 2), and re-run the review before committing. Iterate until the review returns PASS — but you **MUST cap the loop at 8 review iterations** (per the Iteration Protocol in [[review-constitution]]). If 8 iterations complete without a PASS, **do not commit**: record the unresolved residual risk explicitly (the outstanding findings and why they remain) and escalate to the user rather than reintegrating as if converged.
 If the review returns **PASS**, proceed to commit.
 
 ## Step 5: Acquire Lock and Commit
 
 Only after all validations, the changelog review, and the adversarial review pass:
 
+0. **Check the operator halt**: Run `.opencode/scripts/check-halt.sh commit` (checks the global `AGENT_HALT` and the scoped `AGENT_HALT_commit`). If it exits non-zero, an operator has engaged the kill-switch — **do not commit**; stop and wait (see [[operator-halt]]).
 1. **Acquire commit lock**: Run `.opencode/scripts/acquire-commit-lock.sh`
    - If lock is held by another session, this will wait (up to 5 minutes)
    - If lock acquisition fails, stop and inform the user
 2. **Verify staged files**: Run `git status` to ensure only your session's files are staged
-3. **Create commit**: Run `git commit` with a descriptive message
+3. **Create commit**: Run `git commit` with a descriptive message — the commit message is the durable record of *why* and *what*. For a significant or escalated unit, also capture the fuller decision trail (model/temperature, assumptions, review findings + disposition, evidence) per [[decision-log]].
 4. **Release lock**: Run `.opencode/scripts/release-commit-lock.sh` (ALWAYS, even if commit fails)
 
 **IMPORTANT**: Use this bash pattern to ensure lock is always released:
@@ -223,9 +253,13 @@ flowchart TD
     review-cheap agent via Task tool
     fresh context, different model"]
     E --> F{PASS?}
-    F -->|Yes| G["Acquire commit lock
+    F -->|Yes| HALT{"Operator halt?"}
+    HALT -->|"engaged"| HSTOP["Stop — wait for operator"]
+    HALT -->|"clear"| G["Acquire commit lock
     acquire-commit-lock.sh"]
-    F -->|No| H["Fix issues"] --> D
+    F -->|"No (<8 iters)"| H["Fix issues"] --> D
+    F -->|"No (8th iter)"| CAP["Record residual risk
+    escalate — do NOT commit"]
     G --> I{Lock acquired?}
     I -->|Yes| J["Verify staged files
     Create commit

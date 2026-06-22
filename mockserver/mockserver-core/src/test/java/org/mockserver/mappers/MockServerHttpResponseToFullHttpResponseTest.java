@@ -144,6 +144,33 @@ public class MockServerHttpResponseToFullHttpResponseTest {
         }
     }
 
+    @Test
+    public void shouldNotFailEncodingWhenHeaderValueIsNull() {
+        // given - a response carrying a header whose value is null (issue #2358: the dashboard
+        // served favicon.svg with a Content-Type built from an unmapped MIME lookup that returned
+        // null, which crashed Netty's header encoder with "NullPointerException: value")
+        HttpResponse httpResponse = response()
+            .withStatusCode(200)
+            .withHeader("Content-Type", (String) null)
+            .withHeader("headerName", "headerValue")
+            .withBody("some body");
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then - encoding succeeds (no NPE) and the response is genuinely usable
+        DefaultFullHttpResponse fullResponse = (DefaultFullHttpResponse) result.get(0);
+        try {
+            assertThat(fullResponse.status().code(), equalTo(200));
+            // the null-valued header is omitted rather than written to the wire
+            assertThat(fullResponse.headers().contains("Content-Type"), is(false));
+            // other headers are unaffected
+            assertThat(fullResponse.headers().get("headerName"), equalTo("headerValue"));
+        } finally {
+            fullResponse.release();
+        }
+    }
+
     // --- body ---
 
     @Test
@@ -390,6 +417,187 @@ public class MockServerHttpResponseToFullHttpResponseTest {
             assertThat(fullResponse.headers().getInt("x-http2-stream-id"), equalTo(5));
         } finally {
             fullResponse.release();
+        }
+    }
+
+    // --- trailers ---
+
+    @Test
+    public void shouldNotChangeShapeWhenNoTrailers() {
+        // given
+        HttpResponse httpResponse = response().withStatusCode(200).withBody("body");
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then -- regression: still a single FullHttpResponse, no Trailer header, fixed length
+        assertThat(result, hasSize(1));
+        DefaultFullHttpResponse fullResponse = (DefaultFullHttpResponse) result.get(0);
+        try {
+            assertThat(fullResponse.headers().contains(HttpHeaderNames.TRAILER), is(false));
+            assertThat(fullResponse.headers().contains(HttpHeaderNames.TRANSFER_ENCODING), is(false));
+            assertThat(fullResponse.headers().getInt(HttpHeaderNames.CONTENT_LENGTH.toString()), equalTo(4));
+        } finally {
+            fullResponse.release();
+        }
+    }
+
+    @Test
+    public void shouldEmitChunkedResponseWithTrailingHeaders() {
+        // given
+        HttpResponse httpResponse = response()
+            .withStatusCode(200)
+            .withBody("body")
+            .withTrailer("x-checksum", "abc123")
+            .withTrailer("x-signature", "deadbeef");
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then -- head (chunked + Trailer header) + content + LastHttpContent with trailers
+        try {
+            assertThat(result, hasSize(3));
+
+            DefaultHttpResponse head = (DefaultHttpResponse) result.get(0);
+            assertThat(head, not(instanceOf(DefaultFullHttpResponse.class)));
+            assertThat(head.headers().get(HttpHeaderNames.TRANSFER_ENCODING), equalTo("chunked"));
+            assertThat(head.headers().contains(HttpHeaderNames.CONTENT_LENGTH), is(false));
+            String trailerHeader = head.headers().get(HttpHeaderNames.TRAILER);
+            assertThat(trailerHeader, containsString("x-checksum"));
+            assertThat(trailerHeader, containsString("x-signature"));
+
+            assertThat(result.get(1), instanceOf(DefaultHttpContent.class));
+
+            LastHttpContent last = (LastHttpContent) result.get(2);
+            assertThat(last.trailingHeaders().get("x-checksum"), equalTo("abc123"));
+            assertThat(last.trailingHeaders().get("x-signature"), equalTo("deadbeef"));
+        } finally {
+            for (DefaultHttpObject object : result) {
+                if (object instanceof ReferenceCounted) {
+                    ((ReferenceCounted) object).release();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void shouldNotFailEncodingWhenTrailerValueIsNull() {
+        // given - a response with a trailer whose value is null (same null-header hazard as
+        // issue #2358, on the trailing-header path)
+        HttpResponse httpResponse = response()
+            .withStatusCode(200)
+            .withBody("body")
+            .withTrailer("x-null", (String) null)
+            .withTrailer("x-checksum", "abc123");
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then - encoding succeeds (no NPE); the null-valued trailer is omitted, others survive
+        try {
+            assertThat(result, hasSize(3));
+            LastHttpContent last = (LastHttpContent) result.get(2);
+            assertThat(last.trailingHeaders().contains("x-null"), is(false));
+            assertThat(last.trailingHeaders().get("x-checksum"), equalTo("abc123"));
+        } finally {
+            for (DefaultHttpObject object : result) {
+                if (object instanceof ReferenceCounted) {
+                    ((ReferenceCounted) object).release();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void shouldEmitTrailersForBodylessResponse() {
+        // given
+        HttpResponse httpResponse = response()
+            .withStatusCode(204)
+            .withTrailer("x-checksum", "abc123");
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then -- head + empty LastHttpContent carrying the trailers (no content frame)
+        try {
+            assertThat(result, hasSize(2));
+            DefaultHttpResponse head = (DefaultHttpResponse) result.get(0);
+            assertThat(head.headers().get(HttpHeaderNames.TRAILER), containsString("x-checksum"));
+            LastHttpContent last = (LastHttpContent) result.get(1);
+            assertThat(last.trailingHeaders().get("x-checksum"), equalTo("abc123"));
+        } finally {
+            for (DefaultHttpObject object : result) {
+                if (object instanceof ReferenceCounted) {
+                    ((ReferenceCounted) object).release();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void shouldForceChunkedAndDropContentLengthWhenTrailersWithExplicitContentLength() {
+        // given -- an explicit Content-Length header alongside trailers (COR-10): trailers and a
+        // fixed Content-Length are mutually exclusive on HTTP/1.1, and Netty only writes the
+        // trailing-header block in its chunked state, so Content-Length must be dropped and the
+        // response forced to chunked or the trailers would silently vanish on the wire.
+        HttpResponse httpResponse = response()
+            .withStatusCode(200)
+            .withHeader("content-length", "4")
+            .withBody("body")
+            .withTrailer("x-checksum", "abc123");
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then -- chunked head with NO Content-Length, and the trailers on the LastHttpContent
+        try {
+            assertThat(result, hasSize(3));
+
+            DefaultHttpResponse head = (DefaultHttpResponse) result.get(0);
+            assertThat(head, not(instanceOf(DefaultFullHttpResponse.class)));
+            assertThat(head.headers().get(HttpHeaderNames.TRANSFER_ENCODING), equalTo("chunked"));
+            assertThat(head.headers().contains(HttpHeaderNames.CONTENT_LENGTH), is(false));
+            assertThat(head.headers().get(HttpHeaderNames.TRAILER), containsString("x-checksum"));
+
+            assertThat(result.get(1), instanceOf(DefaultHttpContent.class));
+
+            LastHttpContent last = (LastHttpContent) result.get(2);
+            assertThat(last.trailingHeaders().get("x-checksum"), equalTo("abc123"));
+        } finally {
+            for (DefaultHttpObject object : result) {
+                if (object instanceof ReferenceCounted) {
+                    ((ReferenceCounted) object).release();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void shouldForceChunkedAndDropContentLengthOverrideWhenTrailers() {
+        // given -- contentLengthHeaderOverride must likewise be ignored for framing (COR-10)
+        HttpResponse httpResponse = response()
+            .withStatusCode(200)
+            .withBody("body")
+            .withTrailer("x-checksum", "abc123")
+            .withConnectionOptions(new ConnectionOptions().withContentLengthHeaderOverride(99));
+
+        // when
+        List<DefaultHttpObject> result = mapper.mapMockServerResponseToNettyResponse(httpResponse);
+
+        // then -- chunked, no Content-Length, trailers preserved
+        try {
+            assertThat(result, hasSize(3));
+            DefaultHttpResponse head = (DefaultHttpResponse) result.get(0);
+            assertThat(head.headers().get(HttpHeaderNames.TRANSFER_ENCODING), equalTo("chunked"));
+            assertThat(head.headers().contains(HttpHeaderNames.CONTENT_LENGTH), is(false));
+            LastHttpContent last = (LastHttpContent) result.get(result.size() - 1);
+            assertThat(last.trailingHeaders().get("x-checksum"), equalTo("abc123"));
+        } finally {
+            for (DefaultHttpObject object : result) {
+                if (object instanceof ReferenceCounted) {
+                    ((ReferenceCounted) object).release();
+                }
+            }
         }
     }
 }

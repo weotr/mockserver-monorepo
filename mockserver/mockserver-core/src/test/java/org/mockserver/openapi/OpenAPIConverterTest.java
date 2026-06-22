@@ -8,6 +8,7 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.AfterAction;
 import org.mockserver.model.HttpRequest;
+import org.mockserver.model.OpenAPIDefinition;
 
 import java.util.List;
 
@@ -23,6 +24,23 @@ import static org.mockserver.model.JsonBody.json;
 public class OpenAPIConverterTest {
 
     MockServerLogger mockServerLogger = new MockServerLogger(OpenAPIConverterTest.class);
+
+    @Test
+    public void shouldDetectXmlContentTypes() {
+        // xml content types route a generated example through XmlExampleSerializer
+        assertThat(OpenAPIConverter.isXmlContentType("application/xml"), is(true));
+        assertThat(OpenAPIConverter.isXmlContentType("application/xml; charset=utf-8"), is(true));
+        assertThat(OpenAPIConverter.isXmlContentType("text/xml"), is(true));
+        assertThat(OpenAPIConverter.isXmlContentType("application/atom+xml"), is(true));
+        assertThat(OpenAPIConverter.isXmlContentType("application/vnd.api+xml"), is(true));
+        assertThat(OpenAPIConverter.isXmlContentType("APPLICATION/XML"), is(true));
+        // non-xml content types are not treated as xml
+        assertThat(OpenAPIConverter.isXmlContentType("application/json"), is(false));
+        assertThat(OpenAPIConverter.isXmlContentType("application/vnd.api+json"), is(false));
+        assertThat(OpenAPIConverter.isXmlContentType("text/plain"), is(false));
+        assertThat(OpenAPIConverter.isXmlContentType(""), is(false));
+        assertThat(OpenAPIConverter.isXmlContentType(null), is(false));
+    }
 
     @Test
     public void shouldHandleAddOpenAPIJson() {
@@ -56,6 +74,24 @@ public class OpenAPIConverterTest {
 
         // then
         shouldBuildPetStoreExpectationsWithSpecificResponses(specUrlOrPayload, actualExpectations);
+    }
+
+    @Test
+    public void shouldBuildExpectationsForWebhooksOnlySpecWithoutNpe() {
+        // given - a valid OAS 3.1 spec that omits paths entirely and declares only webhooks;
+        // openAPI.getPaths() returns null and must not NPE (the NPE previously escaped the
+        // control-plane PUT /mockserver/openapi handler as a server error)
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_31_webhooks_only.yaml";
+
+        // when
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(
+            specUrlOrPayload,
+            null
+        );
+
+        // then - the single webhook operation is generated as an expectation, no exception thrown
+        assertThat(actualExpectations, hasSize(1));
+        assertThat(((OpenAPIDefinition) actualExpectations.get(0).getHttpRequest()).getOperationId(), is("onNewPet"));
     }
 
     @Test
@@ -835,7 +871,8 @@ public class OpenAPIConverterTest {
 
     @Test
     public void shouldHandleUnresolvableExampleRef() {
-        // given - issue #1474 (unresolvable $ref returns literal $ref object)
+        // given - issue #1474 (unresolvable $ref). The unresolved reference must be DROPPED (logged at
+        // WARN), never leaked as a literal {"$ref": ...} node into the generated response body.
         String specUrlOrPayload = "org/mockserver/openapi/openapi_petstore_example_with_reusable_examples.yaml";
 
         // when
@@ -844,7 +881,7 @@ public class OpenAPIConverterTest {
             ImmutableMap.<String, Object>of("getTaskUnresolvable", "200")
         );
 
-        // then
+        // then - the unresolvable $ref element is dropped (null) rather than leaking the literal $ref
         assertThat(actualExpectations.size(), is(1));
         assertThat(actualExpectations.get(0), is(
             when(specUrlOrPayload, "getTaskUnresolvable")
@@ -853,9 +890,7 @@ public class OpenAPIConverterTest {
                         .withStatusCode(200)
                         .withHeader("content-type", "application/json")
                         .withBody(json("{" + NEW_LINE +
-                            "  \"data\" : [ {" + NEW_LINE +
-                            "    \"$ref\" : \"#/components/examples/nonExistentExample/value\"" + NEW_LINE +
-                            "  } ]" + NEW_LINE +
+                            "  \"data\" : [ null ]" + NEW_LINE +
                             "}"))
                 )
         ));
@@ -1191,11 +1226,14 @@ public class OpenAPIConverterTest {
         // when
         List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
 
-        // then - ids should be openapi:swagger_petstore:<operationId>
-        assertThat(expectations.get(0).getId(), is("openapi:swagger_petstore:listPets"));
-        assertThat(expectations.get(1).getId(), is("openapi:swagger_petstore:createPets"));
-        assertThat(expectations.get(2).getId(), is("openapi:swagger_petstore:showPetById"));
-        assertThat(expectations.get(3).getId(), is("openapi:swagger_petstore:somePath"));
+        // then - ids should be openapi:swagger_petstore_<hash>:<operationId>
+        // the key embeds a short hash of the spec source identity to avoid cross-spec collisions
+        String prefix = "openapi:" + OpenApiSyncPlanner.deriveSpecKey("Swagger Petstore", specUrlOrPayload) + ":";
+        assertThat(prefix, startsWith("openapi:swagger_petstore_"));
+        assertThat(expectations.get(0).getId(), is(prefix + "listPets"));
+        assertThat(expectations.get(1).getId(), is(prefix + "createPets"));
+        assertThat(expectations.get(2).getId(), is(prefix + "showPetById"));
+        assertThat(expectations.get(3).getId(), is(prefix + "somePath"));
     }
 
     @Test
@@ -1225,7 +1263,9 @@ public class OpenAPIConverterTest {
 
         // then
         assertThat(expectations.size(), is(1));
-        assertThat(expectations.get(0).getId(), is("openapi:simple_openapi:listPets"));
+        String prefix = "openapi:" + OpenApiSyncPlanner.deriveSpecKey("Simple OpenAPI", specUrlOrPayload) + ":";
+        assertThat(prefix, startsWith("openapi:simple_openapi_"));
+        assertThat(expectations.get(0).getId(), is(prefix + "listPets"));
     }
 
     @Test
@@ -1243,10 +1283,11 @@ public class OpenAPIConverterTest {
             )
         );
 
-        // then - ids should be based on spec title + operationId, regardless of response selection
-        assertThat(expectations.get(0).getId(), is("openapi:swagger_petstore:listPets"));
-        assertThat(expectations.get(1).getId(), is("openapi:swagger_petstore:createPets"));
-        assertThat(expectations.get(2).getId(), is("openapi:swagger_petstore:showPetById"));
+        // then - ids should be based on spec key (title + source hash) + operationId, regardless of response selection
+        String prefix = "openapi:" + OpenApiSyncPlanner.deriveSpecKey("Swagger Petstore", specUrlOrPayload) + ":";
+        assertThat(expectations.get(0).getId(), is(prefix + "listPets"));
+        assertThat(expectations.get(1).getId(), is(prefix + "createPets"));
+        assertThat(expectations.get(2).getId(), is(prefix + "showPetById"));
     }
 
     @Test
@@ -1270,7 +1311,53 @@ public class OpenAPIConverterTest {
 
         // then
         assertThat(expectations.size(), is(1));
-        assertThat(expectations.get(0).getId(), is("openapi:my_inline_api:sayHello"));
+        String prefix = "openapi:" + OpenApiSyncPlanner.deriveSpecKey("My Inline API", specUrlOrPayload) + ":";
+        assertThat(prefix, startsWith("openapi:my_inline_api_"));
+        assertThat(expectations.get(0).getId(), is(prefix + "sayHello"));
+    }
+
+    @Test
+    public void shouldGenerateDistinctSpecKeysForDifferentSpecsWithSameTitle() {
+        // given - two DIFFERENT inline specs that share the same info.title "Shared Title"
+        String specA =
+            "openapi: 3.0.0\n" +
+            "info:\n" +
+            "  title: Shared Title\n" +
+            "  version: 1.0.0\n" +
+            "paths:\n" +
+            "  /a:\n" +
+            "    get:\n" +
+            "      operationId: opA\n" +
+            "      responses:\n" +
+            "        '200':\n" +
+            "          description: OK\n";
+        String specB =
+            "openapi: 3.0.0\n" +
+            "info:\n" +
+            "  title: Shared Title\n" +
+            "  version: 1.0.0\n" +
+            "paths:\n" +
+            "  /b:\n" +
+            "    get:\n" +
+            "      operationId: opB\n" +
+            "      responses:\n" +
+            "        '200':\n" +
+            "          description: OK\n";
+
+        // when
+        OpenAPIConverter converter = new OpenAPIConverter(mockServerLogger);
+        List<Expectation> expectationsA = converter.buildExpectations(specA, null);
+        List<Expectation> expectationsB = converter.buildExpectations(specB, null);
+
+        // then - both sanitize to "shared_title" but the source hash differs, so the
+        // namespaces are distinct (no cross-spec collision -> no cross-spec data loss)
+        String idA = expectationsA.get(0).getId();
+        String idB = expectationsB.get(0).getId();
+        assertThat(idA, startsWith("openapi:shared_title_"));
+        assertThat(idB, startsWith("openapi:shared_title_"));
+        String prefixA = idA.substring(0, idA.lastIndexOf(':') + 1);
+        String prefixB = idB.substring(0, idB.lastIndexOf(':') + 1);
+        assertThat("distinct specs with the same title must get distinct namespaces", prefixA, is(not(prefixB)));
     }
 
     private void shouldBuildPetStoreExpectationsWithExamplesAndSpecificResponses(String specUrlOrPayload, List<Expectation> actualExpectations) {
@@ -1312,6 +1399,146 @@ public class OpenAPIConverterTest {
                             "}"))
                 )
         ));
+    }
+
+    @Test
+    public void shouldBuildExpectationForStatusCodeRangeKey() {
+        // given - spec defines responses keyed only by the range bucket "2XX" (legal per OpenAPI 3.x)
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_status_code_range.yaml");
+
+        // when - must NOT throw NumberFormatException for the "2XX" key
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(
+            specUrlOrPayload,
+            ImmutableMap.<String, Object>of("rangeOnly", "2XX")
+        );
+
+        // then - the range key "2XX" resolves to status code 200
+        assertThat(actualExpectations, hasSize(1));
+        assertThat(actualExpectations.get(0).getHttpResponse().getStatusCode(), is(200));
+    }
+
+    @Test
+    public void shouldNotThrowWhenBuildingAllExpectationsForSpecWithRangeKeys() {
+        // given - a spec whose operations use range status-code keys throughout
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_status_code_range.yaml");
+
+        // when - building every expectation (operationsAndResponses == null) must not throw
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(
+            specUrlOrPayload,
+            null
+        );
+
+        // then - "2XX" -> 200 and "4XX" -> 400 (exactAndRange prefers exact "200")
+        assertThat(actualExpectations, hasSize(3));
+        Integer rangeOnlyStatus = actualExpectations.stream()
+            .filter(e -> "rangeOnly".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getStatusCode();
+        assertThat(rangeOnlyStatus, is(200));
+        Integer notFoundStatus = actualExpectations.stream()
+            .filter(e -> "notFoundRange".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getStatusCode();
+        assertThat(notFoundStatus, is(400));
+    }
+
+    @Test
+    public void shouldStillHandleNumericAndDefaultStatusCodeKeys() {
+        // given - regression: a spec mixing a numeric "200" and a "default" key behaves as before
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+
+        // when
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(
+            specUrlOrPayload,
+            ImmutableMap.<String, Object>of(
+                "showPetById", "200",
+                "createPets", "default"
+            )
+        );
+
+        // then - "200" sets status 200, "default" leaves the status unset (null), exactly as before this fix
+        Integer showPetByIdStatus = actualExpectations.stream()
+            .filter(e -> "showPetById".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getStatusCode();
+        assertThat(showPetByIdStatus, is(200));
+        Integer createPetsStatus = actualExpectations.stream()
+            .filter(e -> "createPets".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getStatusCode();
+        assertThat(createPetsStatus, is(nullValue()));
+    }
+
+    @Test
+    public void shouldGenerateDistinctElementNamesForRecursiveXmlSchema() {
+        // a recursive XML schema (Node{left:$ref Node, right:$ref Node}) reuses one cached Example for both
+        // properties; the XML body must render BOTH <left> and <right>, not rename the shared instance so
+        // one property is dropped/duplicated
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_recursive_xml.yaml");
+
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        String body = actualExpectations.stream()
+            .filter(e -> "getNode".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getBodyAsString();
+        assertThat("recursive XML must keep the 'left' element", body, containsString("<left>"));
+        assertThat("recursive XML must keep the 'right' element (shared Example not renamed)", body, containsString("<right>"));
+    }
+
+    @Test
+    public void shouldNameXmlArrayItemsAfterTheArrayPropertyNotTheLiteralArray() {
+        // arrays whose items have no items.xml.name must render each item under the array PROPERTY name
+        // (tags -> <tags>, animals -> <animals>), never the literal element name <array>
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_xml_arrays.yaml");
+
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        String body = actualExpectations.stream()
+            .filter(e -> "getZoo".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getBodyAsString();
+        assertThat("array of scalars renders items under the property name", body, containsString("<tags>"));
+        assertThat("array of objects renders items under the property name", body, containsString("<animals>"));
+        assertThat("array items must NOT be named after the literal type 'array'", body, not(containsString("<array>")));
+    }
+
+    @Test
+    public void shouldNameXmlElementsAfterPropertiesNotSchemaRefForRecursiveSchema() {
+        // a recursive $ref (Tree{children: array of $ref Tree}) cannot be inlined by the parser, so it
+        // hits the ExampleBuilder $ref-resolution path. The child array items must render under the
+        // PROPERTY name (<children>), never the schema component name (<Tree>).
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_recursive_xml_ref.yaml");
+
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        String body = actualExpectations.stream()
+            .filter(e -> "getTree".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getBodyAsString();
+        assertThat("recursive array $ref item renders under the property name", body, containsString("<children>"));
+        assertThat("must NOT render the schema component name as an element", body, not(containsString("<Tree>")));
+    }
+
+    @Test
+    public void shouldRenderXmlAttributeDeclaredAfterElementProperty() {
+        // an object whose element property (name) is declared BEFORE its attribute property (id,
+        // xml.attribute: true). StAX requires attributes be written immediately after the start
+        // element and before any child element — so the serializer must write attribute children
+        // first regardless of declaration order, otherwise it throws "Attribute not associated with
+        // any element", the write is aborted and the whole response body comes back null/empty.
+        String specUrlOrPayload = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_xml_attribute_ordering.yaml");
+
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        String body = actualExpectations.stream()
+            .filter(e -> "getTag".equals(((OpenAPIDefinition) e.getHttpRequest()).getOperationId()))
+            .findFirst().orElseThrow(AssertionError::new)
+            .getHttpResponse().getBodyAsString();
+        assertThat("attribute-after-element must not abort the write to an empty body", body, is(notNullValue()));
+        assertThat("body must carry the wrapping element", body, containsString("<Tag"));
+        assertThat("the attribute must be rendered on the element", body, containsString("id=\""));
+        assertThat("the element child must still be present", body, containsString("<name>"));
     }
 
 }

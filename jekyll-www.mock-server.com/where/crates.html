@@ -1,0 +1,70 @@
+---
+title: crates.io
+description: Add the mockserver-client crate from crates.io to drive MockServer from Rust tests — fluent builder API, synchronous reqwest client, and an on-demand binary launcher.
+layout: page
+pageOrder: 6.5
+section: 'Where'
+subsection: true
+sitemap:
+  priority: 0.6
+  changefreq: 'monthly'
+  lastmod: 2026-06-11T08:00:00+01:00
+---
+
+<h2>crates.io &nbsp;&nbsp;<a target="_blank" href="https://crates.io/crates/mockserver-client" rel="noopener noreferrer"><img src="https://img.shields.io/crates/v/mockserver-client.svg" alt="crates.io version" style="max-width:100%;"></a></h2>
+
+<p>The <a target="_blank" href="https://crates.io/crates/mockserver-client" rel="noopener noreferrer"><code>mockserver-client</code></a> crate provides an idiomatic Rust client for MockServer's control-plane REST API. It uses a blocking <code>reqwest</code> client (no async runtime required) and includes an on-demand binary launcher that starts MockServer without Java or Docker.</p>
+
+<h3>Install</h3>
+
+<p>Add to <code>Cargo.toml</code>. For a test-only dependency, use <code>[dev-dependencies]</code>:</p>
+
+<pre><code class="code toml">[dev-dependencies]
+mockserver-client = "7.0"</code></pre>
+
+<p>For use in non-test code, use <code>[dependencies]</code>:</p>
+
+<pre><code class="code toml">[dependencies]
+mockserver-client = "7.0"</code></pre>
+
+<h3>Quick start</h3>
+
+<pre><code class="code rust">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse, VerificationTimes};
+
+fn main() -> mockserver_client::Result&lt;()&gt; {
+    let client = ClientBuilder::new("localhost", 1080).build()?;
+
+    // Create an expectation
+    client.when(HttpRequest::new().method("GET").path("/hello"))
+        .respond(HttpResponse::new().status_code(200).body("world"))?;
+
+    // Verify the request was received
+    client.verify(
+        HttpRequest::new().path("/hello"),
+        VerificationTimes::at_least(1),
+    )?;
+
+    // Reset
+    client.reset()?;
+    Ok(())
+}</code></pre>
+
+<h3>Launch MockServer from Rust</h3>
+
+<p>The crate includes a binary launcher — no Java installation or Docker required:</p>
+
+<pre><code class="code rust">use mockserver_client::launcher;
+
+fn main() -> Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let mut handle = launcher::start(1080)?;
+    println!("MockServer running on port {}", handle.port());
+
+    // ... use MockServer ...
+
+    handle.stop()?;
+    Ok(())
+}</code></pre>
+
+<p>See <a href="/mock_server/running_mock_server.html#client_library_launcher">Running MockServer &mdash; client library launcher</a> for full launcher options (version pinning, cache directory, air-gapped networks).</p>
+
+<p>For the full Rust client API, see <a href="/mock_server/mockserver_clients.html">MockServer clients</a>.</p>

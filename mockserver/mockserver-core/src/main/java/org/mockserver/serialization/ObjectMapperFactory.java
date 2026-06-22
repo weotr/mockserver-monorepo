@@ -38,7 +38,6 @@ import org.mockserver.serialization.serializers.string.NottableStringSerializer;
 
 import java.util.*;
 
-import static org.mockserver.exception.ExceptionHandling.handleThrowable;
 
 /**
  * @author jamesdbloom
@@ -69,6 +68,27 @@ public class ObjectMapperFactory {
     private static final ObjectWriter prettyPrintWriterThatSerialisesDefaultFields = buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Collections.emptyList(), true).writerWithDefaultPrettyPrinter();
     private static final ObjectWriter writer = buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Collections.emptyList(), false).writer();
 
+    // Cache of ObjectMappers built with extra custom serializers, keyed by the serializer-set
+    // signature (the sorted set of serializer concrete classes) plus the serialiseDefaultValues
+    // flag. The custom serializers in practice are a tiny, stable set (e.g. JsonNodeExampleSerializer,
+    // TimeToLiveDTOPersistenceSerializer), so without a cache every export rebuilt a full ObjectMapper
+    // — registering every (de)serializer module — on each call. An ObjectMapper is thread-safe once
+    // configured and only read (serialised) afterwards, and the cache is a ConcurrentHashMap built via
+    // computeIfAbsent, so reuse is thread-safe.
+    private static final java.util.concurrent.ConcurrentMap<String, ObjectMapper> serializerObjectMapperCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static ObjectMapper objectMapperWithSerializers(List<JsonSerializer> additionJsonSerializers, boolean serialiseDefaultValues) {
+        // Stable key independent of the JsonSerializer instance identities: the serializers are
+        // stateless and selected purely by type, so two calls with the same serializer classes (and
+        // the same serialiseDefaultValues flag) are interchangeable.
+        String key = serialiseDefaultValues + "|" + additionJsonSerializers.stream()
+            .map(serializer -> serializer.getClass().getName())
+            .sorted()
+            .collect(java.util.stream.Collectors.joining(","));
+        return serializerObjectMapperCache.computeIfAbsent(key, k ->
+            buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), additionJsonSerializers, serialiseDefaultValues));
+    }
+
     public static ObjectMapper createObjectMapper() {
         if (objectMapper == null) {
             objectMapper = buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Collections.emptyList(), false);
@@ -83,7 +103,7 @@ public class ObjectMapperFactory {
             }
             return objectMapper;
         } else {
-            return buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Arrays.asList(additionJsonSerializers), false);
+            return objectMapperWithSerializers(Arrays.asList(additionJsonSerializers), false);
         }
     }
 
@@ -108,10 +128,11 @@ public class ObjectMapperFactory {
                 return writer;
             }
         } else {
+            ObjectMapper mapper = objectMapperWithSerializers(Arrays.asList(additionJsonSerializers), serialiseDefaultValues);
             if (pretty) {
-                return buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Arrays.asList(additionJsonSerializers), serialiseDefaultValues).writerWithDefaultPrettyPrinter();
+                return mapper.writerWithDefaultPrettyPrinter();
             } else {
-                return buildObjectMapperWithDeserializerAndSerializers(Collections.emptyList(), Arrays.asList(additionJsonSerializers), serialiseDefaultValues).writer();
+                return mapper.writer();
             }
         }
     }
@@ -237,6 +258,8 @@ public class ObjectMapperFactory {
             new HttpRequestDTOSerializer(),
             new OpenAPIDefinitionSerializer(),
             new OpenAPIDefinitionDTOSerializer(),
+            new org.mockserver.serialization.serializers.request.ConditionalRequestDefinitionSerializer(),
+            new org.mockserver.serialization.serializers.request.ConditionalRequestDefinitionDTOSerializer(),
             // request body
             new BinaryBodySerializer(),
             new BinaryBodyDTOSerializer(),
@@ -248,8 +271,12 @@ public class ObjectMapperFactory {
             new JsonPathBodyDTOSerializer(),
             new ParameterBodySerializer(),
             new ParameterBodyDTOSerializer(),
+            new MultipartBodySerializer(),
+            new MultipartBodyDTOSerializer(),
             new RegexBodySerializer(),
             new RegexBodyDTOSerializer(),
+            new FuzzyBodySerializer(),
+            new FuzzyBodyDTOSerializer(),
             new StringBodySerializer(serialiseDefaultValues),
             new StringBodyDTOSerializer(serialiseDefaultValues),
             new XmlBodySerializer(),

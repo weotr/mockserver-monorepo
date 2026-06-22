@@ -142,7 +142,7 @@ public class BookServer {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            cause.printStackTrace();
+            cause.printStackTrace(System.err);
             ctx.close();
         }
     }

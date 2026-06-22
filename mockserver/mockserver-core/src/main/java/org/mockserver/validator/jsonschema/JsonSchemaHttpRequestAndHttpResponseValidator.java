@@ -15,6 +15,7 @@ public class JsonSchemaHttpRequestAndHttpResponseValidator extends JsonSchemaVal
             "org/mockserver/model/schema/",
             "httpRequestAndHttpResponse",
             "requestDefinition",
+            "conditionalRequestDefinition",
             "openAPIDefinition",
             "httpRequest",
             "stringOrJsonSchema",
@@ -27,6 +28,7 @@ public class JsonSchemaHttpRequestAndHttpResponseValidator extends JsonSchemaVal
             "bodyWithContentType",
             "delay",
             "connectionOptions",
+            "recoverAfter",
             "draft-07"
         );
     }

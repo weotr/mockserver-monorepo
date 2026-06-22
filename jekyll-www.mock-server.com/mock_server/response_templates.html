@@ -2,7 +2,7 @@
 title: Response Templates
 description: Generate dynamic mock responses using Mustache, Velocity, or JavaScript templates with access to request data, UUIDs, timestamps, and helper objects.
 layout: page
-pageOrder: 2
+pageOrder: 3
 section: 'Creating Mocks'
 subsection: true
 sitemap:
@@ -10,6 +10,24 @@ priority: 0.8
 changefreq: 'monthly'
 lastmod: 2019-11-10T08:00:00+01:00
 ---
+
+<a id="why_response_templates" class="anchor" href="#why_response_templates">&nbsp;</a>
+
+<h2>Why use response templates?</h2>
+
+<p>A static mock always returns the same body regardless of what the client sent. Response templates let the mock <strong>react to the incoming request</strong> &mdash; echoing a request field back in the response, generating a unique ID, or returning different data depending on a query parameter. This makes a single expectation cover an entire family of requests without enumerating every combination.</p>
+
+<p>For example, a Mustache template can echo the requested user ID straight back in the response body:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest":  { "path": "/users/{id}" },
+  "httpResponseTemplate": {
+    "templateType": "MUSTACHE",
+    "template": "{\"id\": \"{% raw %}{{request.pathParameters.id.[0]}}{% endraw %}\", \"name\": \"User {% raw %}{{request.pathParameters.id.[0]}}{% endraw %}\"}"
+  }
+}</code></pre>
+
+<p>Templates are evaluated at request time, so the response is always fresh. See the sections below for the full template format reference, available variables, and helper objects.</p>
 
 <a id="response_templates" class="anchor" href="#response_templates">&nbsp;</a>
 
@@ -22,10 +40,12 @@ lastmod: 2019-11-10T08:00:00+01:00
         <ul>
             <li><a href="#mustache_templates">Mustache</a> &mdash; simple syntax, conditional logic, JsonPath and XPath extraction</li>
             <li><a href="#velocity_templates">Velocity</a> &mdash; Apache Velocity engine with conditionals, loops, math, and JSON/XML body parsing</li>
-            <li><a href="#javascript_templates">JavaScript</a> &mdash; full ES2023+ JavaScript via the GraalVM Polyglot engine (bundled)</li>
+            <li><a href="#javascript_templates">JavaScript</a> &mdash; full ES2023+ JavaScript via the GraalVM Polyglot engine (requires the <code>graaljs</code> Docker image variant or adding GraalVM Polyglot dependencies to the classpath)</li>
         </ul>
     </li>
     <li><a href="#templates_in_json_files"><strong>Templates in JSON Initializer Files</strong></a> &mdash; defining templates in JSON expectation files</li>
+    <li><a href="#templates_from_files"><strong>Loading Templates From Files</strong></a> &mdash; reference a template stored in a separate file with <code>templateFile</code></li>
+    <li><a href="#templating_a_response_body_file"><strong>Templating A Response Body File</strong></a> &mdash; render a <code>FILE</code> response body as a template with <code>templateType</code></li>
     <li><a href="#response_template_testing"><strong>Response Template Testing</strong></a> &mdash; test templates locally using <code>ResponseTemplateTester</code></li>
     <li><a href="#request_model_variables"><strong>Request Model Variables</strong></a> &mdash; access request fields (method, path, headers, body, etc.) in templates</li>
     <li><a href="#request_multi_value_maps"><strong>Multi-Value And Single Value Maps</strong></a> &mdash; access headers, parameters, and cookies by key, entry set, values, or key set</li>
@@ -37,10 +57,167 @@ lastmod: 2019-11-10T08:00:00+01:00
             <li><a href="#json_helper">JSON Transform Helper</a> &mdash; merge, sort, extract fields, add/remove elements, pretty-print</li>
             <li><a href="#dates_helper">Date Helper</a> &mdash; date formatting, arithmetic, and epoch conversion</li>
             <li><a href="#math_helper">Calc Helper</a> &mdash; random numbers, rounding, min/max, abs, ceil/floor, number formatting</li>
+            <li><a href="#crypto_helper">Crypto Helper</a> &mdash; MD5, SHA-1, SHA-256, SHA-512 digests and HMAC-SHA-256 signatures, all as lowercase hex</li>
+            <li><a href="#regex_helper">Regex Helper</a> &mdash; test patterns, capture groups, and replace substrings using Java regex</li>
+            <li><a href="#html_helper">HTML Helper</a> &mdash; escape and unescape HTML entities</li>
+            <li><a href="#csv_helper">CSV Helper</a> &mdash; parse CSV text into rows and format a row back to CSV</li>
+            <li><a href="#xpath_helper">XPath Helper</a> &mdash; evaluate an XPath expression against an XML document (XXE-safe)</li>
+            <li><a href="#yaml_helper">YAML Helper</a> &mdash; convert YAML to JSON and read a field from a YAML document</li>
         </ul>
     </li>
     <li><a href="#response_template_security"><strong>Security Considerations</strong></a> &mdash; restrict the Java classes templates can reach via <code class="inline code">velocityDisallowClassLoading</code> and <code class="inline code">javascriptDisallowedClasses</code></li>
 </ul>
+
+<a id="template_feature_overview" class="anchor" href="#template_feature_overview">&nbsp;</a>
+
+<h2>Template Feature Overview</h2>
+
+<p>The table below is a one-look index of every template feature on this page. Click the link in the <strong>Section</strong> column to jump straight to the reference.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Feature / Object</th>
+            <th>What it provides</th>
+            <th>Section</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td colspan="3"><strong>Template Formats</strong></td>
+        </tr>
+        <tr>
+            <td>Mustache</td>
+            <td>Logic-less templates with sections, loops, JsonPath, and XPath extraction</td>
+            <td><a href="#mustache_templates">Mustache Templates</a></td>
+        </tr>
+        <tr>
+            <td>Velocity</td>
+            <td>Apache Velocity engine &mdash; conditionals, loops, math, JSON/XML body parsing</td>
+            <td><a href="#velocity_templates">Velocity Templates</a></td>
+        </tr>
+        <tr>
+            <td>JavaScript</td>
+            <td>Full ES2023+ via GraalVM Polyglot &mdash; requires the <code>graaljs</code> image variant</td>
+            <td><a href="#javascript_templates">JavaScript Templates</a></td>
+        </tr>
+        <tr>
+            <td colspan="3"><strong>Template Sources</strong></td>
+        </tr>
+        <tr>
+            <td>Templates in JSON Files</td>
+            <td>Embedding templates in JSON initializer files; newline escaping rules</td>
+            <td><a href="#templates_in_json_files">Templates in JSON Initializer Files</a></td>
+        </tr>
+        <tr>
+            <td>Templates from Files</td>
+            <td>Reference a template stored in a file with <code>templateFile</code></td>
+            <td><a href="#templates_from_files">Loading Templates From Files</a></td>
+        </tr>
+        <tr>
+            <td>Body File Templating</td>
+            <td>Render a <code>FILE</code> response body as a Mustache or Velocity template</td>
+            <td><a href="#templating_a_response_body_file">Templating A Response Body File</a></td>
+        </tr>
+        <tr>
+            <td>Template Testing</td>
+            <td>Test templates locally with <code>ResponseTemplateTester</code></td>
+            <td><a href="#response_template_testing">Response Template Testing</a></td>
+        </tr>
+        <tr>
+            <td colspan="3"><strong>Request Variables</strong></td>
+        </tr>
+        <tr>
+            <td>Request Model Variables</td>
+            <td>Access method, path, headers, cookies, body, remoteAddress, and more</td>
+            <td><a href="#request_model_variables">Request Model Variables</a></td>
+        </tr>
+        <tr>
+            <td>Multi-Value Maps</td>
+            <td>Access headers, path parameters, and query parameters by key, entry set, values, or key set</td>
+            <td><a href="#request_multi_value_maps">Multi-Value And Single Value Maps</a></td>
+        </tr>
+        <tr>
+            <td colspan="3"><strong>Built-in Dynamic Variables</strong></td>
+        </tr>
+        <tr>
+            <td>Dynamic Variables</td>
+            <td>Timestamps (<code>now_iso_8601</code>, <code>now_epoch</code>, <code>now_rfc_1123</code>), UUID, random integers, random bytes</td>
+            <td><a href="#dynamic_model_variables">Dynamic Model Variables</a></td>
+        </tr>
+        <tr>
+            <td colspan="3"><strong>Helper Objects</strong></td>
+        </tr>
+        <tr>
+            <td><code>jwt</code></td>
+            <td>Generate signed JWTs and JWKS for testing OAuth2/OIDC flows</td>
+            <td><a href="#jwt_helper">JWT Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>strings</code></td>
+            <td>Trim, capitalize, URL/Base64 encode/decode, substring, replace, length, contains</td>
+            <td><a href="#strings_helper">String Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>jsonTransform</code></td>
+            <td>Merge, sort, extract fields, add/remove elements, pretty-print JSON strings</td>
+            <td><a href="#json_helper">JSON Transform Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>dates</code></td>
+            <td>Date formatting, arithmetic (plus/minus seconds/minutes/hours/days), epoch conversion</td>
+            <td><a href="#dates_helper">Date Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>calc</code></td>
+            <td>Random numbers, rounding, min/max, abs, ceil/floor, number formatting</td>
+            <td><a href="#math_helper">Calc Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>faker</code></td>
+            <td>Realistic fake data — names, addresses, emails, phone numbers, 250+ categories</td>
+            <td><a href="#faker_helper">Faker Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>crypto</code></td>
+            <td>MD5, SHA-1, SHA-256, SHA-512 digests and HMAC-SHA-256 signatures, all as lowercase hex</td>
+            <td><a href="#crypto_helper">Crypto Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>regex</code></td>
+            <td>Test patterns, capture groups, and replace substrings using Java regex</td>
+            <td><a href="#regex_helper">Regex Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>html</code></td>
+            <td>Escape and unescape HTML entities (HTML 4.0)</td>
+            <td><a href="#html_helper">HTML Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>csv</code></td>
+            <td>Parse CSV text into rows and format a row back to CSV (RFC 4180)</td>
+            <td><a href="#csv_helper">CSV Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>xpath</code></td>
+            <td>Evaluate an XPath expression against an XML document (XXE-safe)</td>
+            <td><a href="#xpath_helper">XPath Helper</a></td>
+        </tr>
+        <tr>
+            <td><code>yaml</code></td>
+            <td>Convert YAML to JSON and read a top-level field from a YAML document</td>
+            <td><a href="#yaml_helper">YAML Helper</a></td>
+        </tr>
+        <tr>
+            <td colspan="3"><strong>Security</strong></td>
+        </tr>
+        <tr>
+            <td>Security Considerations</td>
+            <td>Restrict Java class access via <code>velocityDisallowClassLoading</code> and <code>javascriptDisallowedClasses</code></td>
+            <td><a href="#response_template_security">Security Considerations</a></td>
+        </tr>
+    </tbody>
+</table>
 
 <a id="templates_in_json_files" class="anchor" href="#templates_in_json_files">&nbsp;</a>
 
@@ -61,6 +238,51 @@ lastmod: 2019-11-10T08:00:00+01:00
 <p>Complex multi-line templates can become difficult to read and maintain in JSON format. For templates with significant logic or formatting, consider using a class-based <span class="inline_code">ExpectationInitializer</span> instead. A Java class initializer allows you to define templates as normal multi-line strings and provides full IDE support for editing and debugging.</p>
 
 <p>See <a href="/mock_server/initializing_expectations.html">initializing expectations</a> for details on both JSON and class-based initializers.</p>
+
+<a id="templates_from_files" class="anchor" href="#templates_from_files">&nbsp;</a>
+
+<h2>Loading Templates From Files</h2>
+
+<p>Instead of embedding the template inline, the template can be stored in a separate file and referenced with <span class="inline_code">templateFile</span> (a path resolved from the classpath or the filesystem). This keeps large templates out of the expectation JSON and lets you edit them with proper syntax highlighting. If both <span class="inline_code">template</span> and <span class="inline_code">templateFile</span> are provided, the inline <span class="inline_code">template</span> takes precedence.</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponseTemplate": {
+    "templateType": "MUSTACHE",
+    "templateFile": "templates/some_response.mustache"
+  }
+}</code></pre>
+
+<p>The same <span class="inline_code">templateFile</span> option is available on <span class="inline_code">httpForwardTemplate</span> for templated request forwarding.</p>
+
+<a id="templating_a_response_body_file" class="anchor" href="#templating_a_response_body_file">&nbsp;</a>
+
+<h2>Templating A Response Body File</h2>
+
+<p>A static response can already serve its body from a file using a <span class="inline_code">FILE</span> body (see <a href="/mock_server/creating_expectations.html">creating expectations</a>). To make that file dynamic, add a <span class="inline_code">templateType</span> of <span class="inline_code">MUSTACHE</span> or <span class="inline_code">VELOCITY</span> &mdash; the file contents are then rendered as a template against the request before being returned as the response body. The status code, headers, and content type still come from the static response, while only the body file is templated:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{
+  "httpRequest": {
+    "path": "/some/path"
+  },
+  "httpResponse": {
+    "statusCode": 200,
+    "body": {
+      "type": "FILE",
+      "filePath": "responses/order.json",
+      "templateType": "MUSTACHE",
+      "contentType": "application/json"
+    }
+  }
+}</code></pre>
+
+<p>With the body file <span class="inline_code">responses/order.json</span> containing template placeholders, for example:</p>
+
+<pre class="prettyprint lang-json code"><code class="code">{ "method": "{{ request.method }}", "path": "{{ request.path }}" }</code></pre>
+
+<p>Body-file templating uses the text-based engines (<span class="inline_code">MUSTACHE</span> and <span class="inline_code">VELOCITY</span>) because they render text directly. JavaScript templates build a full response object rather than a text fragment, so for JavaScript use an <span class="inline_code">httpResponseTemplate</span> (optionally with <span class="inline_code">templateFile</span>) instead.</p>
 
 <a id="response_template_testing" class="anchor" href="#response_template_testing">&nbsp;</a>
 
@@ -189,6 +411,46 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
             <tr>
                 <td style="padding-left: 20px; width: 100px;">javascript:</td>
                 <td><code class="inline code">request.pathParameters[&lt;key&gt;][&lt;index&gt;]</code></td>
+            </tr>
+        </table>
+    </li>
+    <li><strong>path regex capture groups</strong>&nbsp;&nbsp;<span>(when the expectation matched the request path with a regular expression containing capture groups; <code class="inline code">pathGroups</code> is 1&#8209;based, so index <code class="inline code">0</code> is the whole match and index <code class="inline code">1</code> is the first capture group, and is empty when the matched path had no capture groups. Path&#8209;parameter <code class="inline code">{name}</code> captures are exposed via <code class="inline code">pathParameters</code> instead, so a path mixing <code class="inline code">{name}</code> templates with regex <code class="inline code">(...)</code> groups does not populate <code class="inline code">pathGroups</code>.)</span>
+        <table>
+            <tr>
+                <td style="padding-left: 20px; width: 100px">mustache:</td>
+                <td><code class="inline code">&lbrace;&lbrace; request.pathGroups.&lt;index&gt; &rbrace;&rbrace;</code></td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td style="padding-left: 20px; width: 100px;">velocity:</td>
+                <td><code class="inline code">$!request.pathGroups[&lt;index&gt;]</code></td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td style="padding-left: 20px; width: 100px;">javascript:</td>
+                <td><code class="inline code">request.pathGroups[&lt;index&gt;]</code></td>
+            </tr>
+        </table>
+    </li>
+    <li><strong>named path regex capture groups</strong>&nbsp;&nbsp;<span>(Java named groups <code class="inline code">(?&lt;name&gt;...)</code> in the matched path regex, keyed by name; empty when the matched path had no named groups)</span>
+        <table>
+            <tr>
+                <td style="padding-left: 20px; width: 100px">mustache:</td>
+                <td><code class="inline code">&lbrace;&lbrace; request.namedPathGroups.&lt;name&gt; &rbrace;&rbrace;</code></td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td style="padding-left: 20px; width: 100px;">velocity:</td>
+                <td><code class="inline code">$!request.namedPathGroups.&lt;name&gt;</code></td>
+            </tr>
+        </table>
+        <table>
+            <tr>
+                <td style="padding-left: 20px; width: 100px;">javascript:</td>
+                <td><code class="inline code">request.namedPathGroups.&lt;name&gt;</code></td>
             </tr>
         </table>
     </li>
@@ -865,6 +1127,131 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
 
 <p>The full list of available providers (name, address, internet, company, finance, medical, etc.) is documented in the <a target="_blank" href="https://www.datafaker.net/documentation/providers/" rel="noopener noreferrer">DataFaker providers reference</a>.</p>
 
+<a id="crypto_helper" class="anchor" href="#crypto_helper">&nbsp;</a>
+
+<h3>Crypto Helper (<code>crypto</code>)</h3>
+
+<p>Computes cryptographic digests and HMAC signatures. All methods return lowercase hex strings. Use this to generate request signatures, verify webhook payloads, or add content-hashing headers in templated responses.</p>
+
+<table class="table">
+    <thead><tr><th>Method</th><th>Description</th><th>Example</th></tr></thead>
+    <tbody>
+        <tr><td><code>crypto.md5(s)</code></td><td>MD5 digest of a string</td><td><code>crypto.md5("hello")</code> &rarr; <code>"5d41402abc4b2a76b9719d911017c592"</code></td></tr>
+        <tr><td><code>crypto.sha1(s)</code></td><td>SHA-1 digest</td><td><code>crypto.sha1("hello")</code> &rarr; <code>"aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"</code></td></tr>
+        <tr><td><code>crypto.sha256(s)</code></td><td>SHA-256 digest</td><td><code>crypto.sha256("hello")</code> &rarr; <code>"2cf24dba5fb0a30e26e83b2ac5b9e29e..."</code></td></tr>
+        <tr><td><code>crypto.sha512(s)</code></td><td>SHA-512 digest</td><td><code>crypto.sha512("hello")</code> &rarr; <code>"9b71d224bd62f3785d96d46ad3ea3d..."</code></td></tr>
+        <tr><td><code>crypto.hmacSha256(key, data)</code></td><td>HMAC-SHA-256 of <code>data</code> using <code>key</code></td><td><code>crypto.hmacSha256("secret", "payload")</code> &rarr; lowercase hex</td></tr>
+    </tbody>
+</table>
+
+<p>Usage examples:</p>
+<ul>
+    <li><strong>Velocity:</strong> <code class="inline code">$crypto.sha256($!request.body)</code> (hash the request body into a response field)</li>
+    <li><strong>Mustache:</strong> <code class="inline code">&lbrace;&lbrace; crypto.sha256 &rbrace;&rbrace;</code> is not directly callable with arguments in Mustache &mdash; use Velocity or JavaScript when you need to pass a value to a crypto method</li>
+    <li><strong>JavaScript:</strong> <code class="inline code">crypto.hmacSha256("my-secret", request.body)</code></li>
+</ul>
+
+<a id="regex_helper" class="anchor" href="#regex_helper">&nbsp;</a>
+
+<h3>Regex Helper (<code>regex</code>)</h3>
+
+<p>Applies Java regular expressions to strings inside a template. Use this to extract captured groups from request data or rewrite parts of a value before including it in the response.</p>
+
+<table class="table">
+    <thead><tr><th>Method</th><th>Description</th><th>Example</th></tr></thead>
+    <tbody>
+        <tr><td><code>regex.matches(input, pattern)</code></td><td>Returns <code>true</code> if the pattern matches anywhere in the input</td><td><code>regex.matches("hello world", "\\bworld\\b")</code> &rarr; <code>true</code></td></tr>
+        <tr><td><code>regex.replaceAll(input, pattern, replacement)</code></td><td>Replaces all matches of the pattern with the replacement string; supports <code>$1</code> back-references</td><td><code>regex.replaceAll("foo123bar", "[0-9]+", "NUM")</code> &rarr; <code>"fooNUMbar"</code></td></tr>
+        <tr><td><code>regex.group(input, pattern, groupIndex)</code></td><td>Returns the captured group at <code>groupIndex</code> (1-based) from the first match, or <code>""</code> if there is no match</td><td><code>regex.group("user-42", "user-([0-9]+)", 1)</code> &rarr; <code>"42"</code></td></tr>
+    </tbody>
+</table>
+
+<p>Usage examples:</p>
+<ul>
+    <li><strong>Velocity:</strong> <code class="inline code">$regex.group($!request.path, "/orders/([^/]+)", 1)</code> (extract the order ID from the path)</li>
+    <li><strong>JavaScript:</strong> <code class="inline code">regex.replaceAll(request.headers["Authorization"][0], "^Bearer ", "")</code> (strip the Bearer prefix from a token)</li>
+    <li><strong>Mustache:</strong> regex helper methods require arguments and cannot be invoked from Mustache &mdash; use Velocity or JavaScript instead</li>
+</ul>
+
+<a id="html_helper" class="anchor" href="#html_helper">&nbsp;</a>
+
+<h3>HTML Helper (<code>html</code>)</h3>
+
+<p>Escapes and unescapes HTML entities (HTML 4.0). Use this to safely embed request data in an HTML response body, or to recover the original text from an escaped value.</p>
+
+<table class="table">
+    <thead><tr><th>Method</th><th>Description</th><th>Example</th></tr></thead>
+    <tbody>
+        <tr><td><code>html.escape(value)</code></td><td>Escapes characters using HTML entities</td><td><code>html.escape("&lt;a&gt; &amp; &lt;b&gt;")</code> &rarr; <code>"&amp;lt;a&amp;gt; &amp;amp; &amp;lt;b&amp;gt;"</code></td></tr>
+        <tr><td><code>html.unescape(value)</code></td><td>Reverses HTML entity escaping</td><td><code>html.unescape("&amp;lt;a&amp;gt;")</code> &rarr; <code>"&lt;a&gt;"</code></td></tr>
+    </tbody>
+</table>
+
+<p>Usage examples:</p>
+<ul>
+    <li><strong>Velocity:</strong> <code class="inline code">$html.escape($!request.body)</code> (safely embed the request body in HTML)</li>
+    <li><strong>JavaScript:</strong> <code class="inline code">html.unescape(request.queryStringParameters["q"][0])</code></li>
+</ul>
+
+<a id="csv_helper" class="anchor" href="#csv_helper">&nbsp;</a>
+
+<h3>CSV Helper (<code>csv</code>)</h3>
+
+<p>Parses CSV text into rows (each row a list of fields) and formats a list of fields back into a CSV line. Quoting and quote-doubling follow RFC 4180: fields containing a comma, double-quote, or newline are wrapped in double quotes and embedded quotes are doubled.</p>
+
+<table class="table">
+    <thead><tr><th>Method</th><th>Description</th><th>Example</th></tr></thead>
+    <tbody>
+        <tr><td><code>csv.parse(text)</code></td><td>Parses CSV text into a list of rows, each a list of fields</td><td><code>csv.parse("a,b\n1,2")</code> &rarr; <code>[["a","b"],["1","2"]]</code></td></tr>
+        <tr><td><code>csv.row(list)</code></td><td>Formats a list of fields into a single CSV line, quoting where required</td><td><code>csv.row(["a","b,c"])</code> &rarr; <code>"a,\"b,c\""</code></td></tr>
+    </tbody>
+</table>
+
+<p>Usage examples:</p>
+<ul>
+    <li><strong>JavaScript:</strong> <code class="inline code">csv.parse(request.body)[0][1]</code> (read the second field of the first CSV row)</li>
+    <li><strong>JavaScript:</strong> <code class="inline code">csv.row(["id","name","total"])</code> (build a CSV header line for a response)</li>
+</ul>
+
+<a id="xpath_helper" class="anchor" href="#xpath_helper">&nbsp;</a>
+
+<h3>XPath Helper (<code>xpath</code>)</h3>
+
+<p>Evaluates an XPath expression against an XML document and returns the string result. The XML parser disables DOCTYPE declarations and external entity resolution, so it is safe against XXE; an unparseable document or invalid expression yields <code>""</code>.</p>
+
+<table class="table">
+    <thead><tr><th>Method</th><th>Description</th><th>Example</th></tr></thead>
+    <tbody>
+        <tr><td><code>xpath.evaluate(xml, expression)</code></td><td>Returns the string result of the XPath expression against the XML</td><td><code>xpath.evaluate("&lt;o&gt;&lt;id&gt;42&lt;/id&gt;&lt;/o&gt;", "/o/id")</code> &rarr; <code>"42"</code></td></tr>
+    </tbody>
+</table>
+
+<p>Usage examples:</p>
+<ul>
+    <li><strong>Velocity:</strong> <code class="inline code">$xpath.evaluate($!request.body, "/order/id")</code> (extract an element from an XML request body)</li>
+    <li><strong>JavaScript:</strong> <code class="inline code">xpath.evaluate(request.body, "/order/@status")</code> (read an attribute value)</li>
+</ul>
+
+<a id="yaml_helper" class="anchor" href="#yaml_helper">&nbsp;</a>
+
+<h3>YAML Helper (<code>yaml</code>)</h3>
+
+<p>Converts a YAML document to JSON and reads a top-level field out of a YAML document. Scalar fields are returned verbatim; object/array fields are returned as JSON.</p>
+
+<table class="table">
+    <thead><tr><th>Method</th><th>Description</th><th>Example</th></tr></thead>
+    <tbody>
+        <tr><td><code>yaml.toJson(yaml)</code></td><td>Converts a YAML document to its JSON representation</td><td><code>yaml.toJson("name: Bob")</code> &rarr; <code>"{\"name\":\"Bob\"}"</code></td></tr>
+        <tr><td><code>yaml.parse(yaml, field)</code></td><td>Returns a top-level field value (scalars verbatim, objects/arrays as JSON)</td><td><code>yaml.parse("name: Bob", "name")</code> &rarr; <code>"Bob"</code></td></tr>
+    </tbody>
+</table>
+
+<p>Usage examples:</p>
+<ul>
+    <li><strong>Velocity:</strong> <code class="inline code">$yaml.toJson($!request.body)</code> (turn a YAML request body into a JSON response)</li>
+    <li><strong>JavaScript:</strong> <code class="inline code">yaml.parse(request.body, "version")</code></li>
+</ul>
+
 <a id="mustache_templates" class="anchor" href="#mustache_templates">&nbsp;</a>
 
 <h2>Mustache Response Templates</h2>
@@ -1279,6 +1666,17 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
   "body" : "{'key': 'some_key', 'value': 'some_value'}"
 }</code></pre>
 
+<h4>JsonPath and XPath helpers</h4>
+
+<p>As a quicker alternative to <code class="inline_code">$xml.parse()</code> / <code class="inline_code">$json.parse()</code>, Velocity templates can extract a single value directly from the request body using the same JsonPath and XPath support as Mustache templates, via the <code class="inline_code">$jsonPath</code> and <code class="inline_code">$xPath</code> helpers:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">{
+    'statusCode': 200,
+    'body': "{'title': '$jsonPath.find('$.store.book[0].title')', 'key': '$xPath.find('/element/key')'}"
+}</code></pre>
+
+<p><code class="inline_code">$jsonPath.find(...)</code> evaluates a JsonPath expression against a JSON request body and <code class="inline_code">$xPath.find(...)</code> evaluates an XPath expression against an XML request body. A missing path or invalid expression resolves to an empty value (the error is logged, not thrown), exactly as in Mustache templates.</p>
+
 <h4>Velocity Tools</h4>
 
 <p>The following velocity tools are available for velocity response templates:</p>
@@ -1323,7 +1721,7 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
 
 <h4>JavaScript Engine Support</h4>
 
-<p>MockServer uses the <strong>GraalVM Polyglot JavaScript engine</strong> for JavaScript templates. The engine is bundled with all official Docker images and the standalone JAR. It supports ES2023+ syntax, including template literals, async/await, destructuring, optional chaining, and the full modern JavaScript language.</p>
+<p>MockServer uses the <strong>GraalVM Polyglot JavaScript engine</strong> for JavaScript templates. The engine is <strong>not</strong> bundled with the standard Docker image or the standalone JAR. To use JavaScript templates, either run the <code>graaljs</code> Docker image variant (e.g. <code>mockserver/mockserver:{{ site.mockserver_version }}-graaljs</code>) or add <code>org.graalvm.polyglot:polyglot</code> and <code>org.graalvm.polyglot:js</code> to your classpath (see below). It supports ES2023+ syntax, including template literals, async/await, destructuring, optional chaining, and the full modern JavaScript language.</p>
 
 <p>If you are embedding MockServer as a library and need JavaScript templating, add <code>org.graalvm.polyglot:polyglot</code> and <code>org.graalvm.polyglot:js</code> (both at version 25.0.3 or later) to your classpath. Nashorn (<code>org.openjdk.nashorn:nashorn-core</code>) is no longer supported; the JSR-223 bridge was dropped in GraalJS 25.x and Nashorn was removed from MockServer.</p>
 
@@ -1337,6 +1735,17 @@ System.out.println("httpResponse = " + httpResponse);</code></pre>
     'statusCode': 200,
     'body': '{\'method\': \'' + request.method + '\', \'path\': \'' + request.path + '\', \'header\': \'' + request.headers.host[0] + '\'}'
 };</code></pre>
+
+<h4>JsonPath and XPath helpers</h4>
+
+<p>As an alternative to <code class="inline code">JSON.parse(request.body)</code>, JavaScript templates can extract a single value directly from the request body using the same JsonPath and XPath support as Mustache templates, via the <code class="inline code">jsonPath(...)</code> and <code class="inline code">xPath(...)</code> functions:</p>
+
+<pre class="prettyprint lang-java code"><code class="code">return {
+    'statusCode': 200,
+    'body': '{\'title\': \'' + jsonPath('$.store.book[0].title') + '\', \'key\': \'' + xPath('/element/key') + '\'}'
+};</code></pre>
+
+<p><code class="inline code">jsonPath(...)</code> evaluates a JsonPath expression against a JSON request body and <code class="inline code">xPath(...)</code> evaluates an XPath expression against an XML request body. A missing path or invalid expression returns an empty value (the error is logged, not thrown), exactly as in Mustache templates.</p>
 
 <h4>Conditionals</h4>
 

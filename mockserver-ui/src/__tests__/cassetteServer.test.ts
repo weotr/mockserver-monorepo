@@ -58,8 +58,15 @@ describe('cassetteServer client', () => {
     expect((init as RequestInit).method).toBe('DELETE');
   });
 
-  it('throws on a non-ok list response', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' }));
-    await expect(listServerCassettes(params)).rejects.toThrow('HTTP 500');
+  it('throws in the standard "MockServer returned <status>: <body>" shape on a non-ok list response', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error', text: async () => 'boom' }));
+    await expect(listServerCassettes(params)).rejects.toThrow('MockServer returned 500: boom');
+  });
+
+  it('throws the standard shape with an empty body when the error body is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 409, statusText: 'Conflict', text: async () => '' }));
+    await expect(
+      registerServerCassette(params, { path: '/c/a.json' }),
+    ).rejects.toThrow('MockServer returned 409: ');
   });
 });

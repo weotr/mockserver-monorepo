@@ -8,22 +8,34 @@ import io.netty.handler.ssl.SslContextBuilder;
 import org.mockserver.authentication.AuthenticationException;
 import org.mockserver.client.MockServerEventBus.EventType;
 import org.mockserver.closurecallback.websocketregistry.LocalCallbackRegistry;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.configuration.ClientConfiguration;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.file.FileReader;
 import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.httpclient.SocketConnectionException;
+import org.mockserver.load.LoadScenario;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.OpenAPIExpectation;
+import org.mockserver.mock.breakpoint.BreakpointPhase;
+import org.mockserver.oidc.OidcProviderConfiguration;
 import org.mockserver.model.*;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
+import org.mockserver.saml.SamlProviderConfiguration;
+import org.mockserver.scim.ScimProviderConfiguration;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.*;
+import org.mockserver.serialization.model.HttpChaosProfileDTO;
 import org.mockserver.socket.tls.NettySslContextFactory;
 import org.mockserver.stop.Stoppable;
+import org.mockserver.uuid.UUIDService;
 import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationSequence;
 import org.mockserver.verify.VerificationTimes;
@@ -36,7 +48,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
-import java.util.Arrays;
+import java.time.Duration;
+import java.util.*;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -45,10 +58,12 @@ import java.util.function.Supplier;
 
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
+import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
 import static io.netty.handler.codec.http.HttpResponseStatus.UNAUTHORIZED;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.StringUtils.*;
+import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.configuration.ClientConfiguration.clientConfiguration;
 import static org.mockserver.formatting.StringFormatter.formatLogMessage;
 import static org.mockserver.mock.HttpState.LOG_SEPARATOR;
@@ -59,6 +74,8 @@ import static org.mockserver.model.PortBinding.portBinding;
 import static org.mockserver.socket.tls.PEMToFile.privateKeyFromPEMFile;
 import static org.mockserver.socket.tls.PEMToFile.x509ChainFromPEMFile;
 import static org.mockserver.verify.Verification.verification;
+import static org.mockserver.verify.VerificationSequence.verificationSequence;
+import static org.mockserver.verify.VerificationTimes.atLeast;
 import static org.mockserver.verify.VerificationTimes.exactly;
 import static org.slf4j.event.Level.*;
 
@@ -94,7 +111,9 @@ public class MockServerClient implements Stoppable {
     private LogEntrySerializer logEntrySerializer = new LogEntrySerializer(MOCK_SERVER_LOGGER);
     private HttpRequestSerializer httpRequestSerializer = new HttpRequestSerializer(MOCK_SERVER_LOGGER);
     private HttpResponseSerializer httpResponseSerializer = new HttpResponseSerializer(MOCK_SERVER_LOGGER);
+    private LoadScenarioSerializer loadScenarioSerializer = new LoadScenarioSerializer(MOCK_SERVER_LOGGER);
     private final CompletableFuture<MockServerClient> stopFuture = new CompletableFuture<>();
+    private volatile BreakpointWebSocketClient breakpointWebSocketClient;
 
     /**
      * Start the client communicating to a MockServer on localhost at the port
@@ -703,6 +722,10 @@ public class MockServerClient implements Stoppable {
                         );
                     }
                 }
+                // stopClient is handled by the event bus subscription (STOP event above
+                // triggers the lambda registered in ensureBreakpointWebSocketClient), so
+                // we do NOT call stopClient again here to avoid a double-stop. The field
+                // is nulled by the same lambda.
                 if (!eventLoopGroup.isShuttingDown()) {
                     eventLoopGroup.shutdownGracefully();
                 }
@@ -788,6 +811,30 @@ public class MockServerClient implements Stoppable {
                 .withPath(calculatePath("clear"))
                 .withQueryStringParameter("type", type.name().toLowerCase())
                 .withBody(requestDefinition != null ? requestDefinitionSerializer.serialize(requestDefinition) : "", StandardCharsets.UTF_8),
+            true
+        );
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Clear only the expectations belonging to a single namespace (tenant), leaving
+     * expectations in other namespaces and global (no-namespace) expectations intact.
+     * <p>
+     * This is the primary multi-tenancy teardown call: a CI job that registers its
+     * expectations under its own namespace can clean up after itself on a shared
+     * MockServer instance without disturbing other tenants. The event log is not
+     * namespaced, so logs are left untouched (only {@code expectations} are cleared).
+     *
+     * @param namespace the namespace (tenant) whose expectations to clear
+     */
+    public MockServerClient clearByNamespace(String namespace) {
+        sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("clear"))
+                .withQueryStringParameter("type", ClearType.EXPECTATIONS.name().toLowerCase())
+                .withQueryStringParameter("namespace", namespace),
             true
         );
         return clientClass.cast(this);
@@ -1002,7 +1049,7 @@ public class MockServerClient implements Stoppable {
      */
     @SuppressWarnings("DuplicatedCode")
     public MockServerClient verify(RequestDefinition requestDefinition, VerificationTimes times) throws AssertionError {
-        return verify(requestDefinition, times, null);
+        return verify(requestDefinition, times, (Integer) null);
     }
 
     /**
@@ -1170,6 +1217,59 @@ public class MockServerClient implements Stoppable {
     }
 
     /**
+     * Verify multiple verifications, collecting <b>all</b> failures and throwing a single
+     * {@link AssertionError} that lists every mismatch. Unlike {@link #verify(Verification...)}
+     * and the other {@code verify(...)} methods (which throw on the first failure), this runs
+     * every supplied {@link Verification} and only throws once all have been evaluated, so a
+     * test sees all failures at once. For example:
+     * <pre>
+     * mockServerClient
+     *  .verifyAll(
+     *      verification().withRequest(request().withPath("/one")).withTimes(once()),
+     *      verification().withRequest(request().withPath("/two")).withTimes(once())
+     *  );
+     * </pre>
+     *
+     * @param verifications the verifications that must all pass
+     * @throws AssertionError if any verification fails, with a message listing every failure
+     */
+    @SuppressWarnings({"DuplicatedCode", "UnusedReturnValue"})
+    public MockServerClient verifyAll(Verification... verifications) throws AssertionError {
+        if (verifications == null || verifications.length == 0) {
+            throw new IllegalArgumentException("verifyAll(Verification...) requires a non-null non-empty array of Verification objects");
+        }
+
+        List<String> failures = new ArrayList<>();
+        for (Verification verification : verifications) {
+            if (verification == null) {
+                throw new IllegalArgumentException("verifyAll(Verification...) requires non-null Verification objects");
+            }
+            try {
+                String result = sendRequest(
+                    request()
+                        .withMethod("PUT")
+                        .withContentType(APPLICATION_JSON_UTF_8)
+                        .withPath(calculatePath("verify"))
+                        .withBody(verificationSerializer.serialize(verification), StandardCharsets.UTF_8),
+                    false
+                ).getBodyAsString();
+                if (result != null && !result.isEmpty()) {
+                    failures.add(result);
+                }
+            } catch (AuthenticationException authenticationException) {
+                throw authenticationException;
+            } catch (Throwable throwable) {
+                failures.add(throwable.getMessage());
+            }
+        }
+
+        if (!failures.isEmpty()) {
+            throw new AssertionError(String.join(System.lineSeparator() + System.lineSeparator(), failures));
+        }
+        return clientClass.cast(this);
+    }
+
+    /**
      * Verify no requests have been sent.
      *
      * @throws AssertionError if any request has been found
@@ -1184,6 +1284,372 @@ public class MockServerClient implements Stoppable {
                     .withContentType(APPLICATION_JSON_UTF_8)
                     .withPath(calculatePath("verify"))
                     .withBody(verificationSerializer.serialize(verification), StandardCharsets.UTF_8),
+                false
+            ).getBodyAsString();
+
+            if (result != null && !result.isEmpty()) {
+                throw new AssertionError(result);
+            }
+        } catch (AuthenticationException authenticationException) {
+            throw authenticationException;
+        } catch (Throwable throwable) {
+            throw new AssertionError(throwable.getMessage());
+        }
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Default interval used between verification poll attempts by the timeout-aware
+     * {@code verify(..., Duration)} and {@code verifyNever(..., Duration)} methods.
+     */
+    private static final Duration DEFAULT_VERIFY_POLL_INTERVAL = Duration.ofMillis(100);
+
+    /**
+     * Eventual verification: poll the event log, retrying the supplied verification until it
+     * passes or the timeout expires. This is useful when the application under test sends
+     * requests asynchronously (fire-and-forget, background workers), so the request may not
+     * have arrived at MockServer at the instant the test calls verify. Instead of a single
+     * snapshot check (like {@link #verify(Verification)}), this re-runs the verification with a
+     * small backoff until it passes or the window elapses, throwing the last failure on timeout.
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      request().withPath("/some_path"),
+     *      VerificationTimes.once(),
+     *      Duration.ofSeconds(5)
+     *  );
+     * </pre>
+     * This is implemented purely client-side (a poll loop over the standard verify endpoint);
+     * no server-side change or wait is involved.
+     *
+     * @param requestDefinition the http request that must be matched for this verification to pass
+     * @param times             the number of times this request must be matched
+     * @param timeout           the maximum time to wait for the verification to pass
+     * @throws AssertionError if the verification does not pass before the timeout expires
+     */
+    @SuppressWarnings("UnusedReturnValue")
+    public MockServerClient verify(RequestDefinition requestDefinition, VerificationTimes times, Duration timeout) throws AssertionError {
+        if (requestDefinition == null) {
+            throw new IllegalArgumentException("verify(RequestDefinition, VerificationTimes, Duration) requires a non null RequestDefinition object");
+        }
+        if (times == null) {
+            throw new IllegalArgumentException("verify(RequestDefinition, VerificationTimes, Duration) requires a non null VerificationTimes object");
+        }
+        return verify(verification().withRequest(requestDefinition).withTimes(times), timeout);
+    }
+
+    /**
+     * Eventual verification: poll the event log, retrying the supplied {@link Verification} until
+     * it passes or the timeout expires. See {@link #verify(RequestDefinition, VerificationTimes, Duration)}
+     * for the rationale; this generic overload accepts a fully built {@link Verification} (so it
+     * also covers response and expectation-id verifications).
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      verification()
+     *          .withRequest(request().withPath("/some_path"))
+     *          .withTimes(VerificationTimes.atLeast(1)),
+     *      Duration.ofSeconds(5)
+     *  );
+     * </pre>
+     *
+     * @param verification the verification object containing the request, response, and/or times to verify
+     * @param timeout      the maximum time to wait for the verification to pass
+     * @throws AssertionError if the verification does not pass before the timeout expires
+     */
+    @SuppressWarnings("UnusedReturnValue")
+    public MockServerClient verify(Verification verification, Duration timeout) throws AssertionError {
+        if (verification == null) {
+            throw new IllegalArgumentException("verify(Verification, Duration) requires a non null Verification object");
+        }
+        if (timeout == null || timeout.isNegative()) {
+            throw new IllegalArgumentException("verify(Verification, Duration) requires a non null non-negative Duration object");
+        }
+
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        String lastFailure;
+        while (true) {
+            lastFailure = attemptVerification(verification);
+            if (lastFailure == null) {
+                return clientClass.cast(this);
+            }
+            if (System.nanoTime() - deadlineNanos >= 0) {
+                throw new AssertionError(lastFailure);
+            }
+            sleepBeforeNextPoll(deadlineNanos);
+        }
+    }
+
+    /**
+     * Negative-within-timeout verification: assert that the supplied verification stays
+     * <b>unsatisfied</b> for the whole window. This is useful for asserting "no matching request
+     * was made within N seconds" — the opposite of eventual verification. The verification is
+     * polled repeatedly for the duration of the window; if it ever passes (the condition becomes
+     * met), an {@link AssertionError} is thrown immediately. If the window elapses without the
+     * verification ever passing, the method returns normally.
+     * <pre>
+     * mockServerClient
+     *  .verifyNever(
+     *      request().withPath("/should_not_be_called"),
+     *      Duration.ofSeconds(2)
+     *  );
+     * </pre>
+     * The supplied request is verified with {@link VerificationTimes#atLeast(int)} {@code (1)} —
+     * i.e. the window fails the moment one matching request is observed. Implemented purely
+     * client-side (a poll loop over the standard verify endpoint).
+     *
+     * @param requestDefinition the http request that must <b>not</b> be matched during the window
+     * @param window            the time to keep checking that no matching request arrives
+     * @throws AssertionError if a matching request is observed before the window elapses
+     */
+    @SuppressWarnings("UnusedReturnValue")
+    public MockServerClient verifyNever(RequestDefinition requestDefinition, Duration window) throws AssertionError {
+        if (requestDefinition == null) {
+            throw new IllegalArgumentException("verifyNever(RequestDefinition, Duration) requires a non null RequestDefinition object");
+        }
+        return verifyNever(verification().withRequest(requestDefinition).withTimes(VerificationTimes.atLeast(1)), window);
+    }
+
+    /**
+     * Negative-within-timeout verification: assert that the supplied {@link Verification} stays
+     * <b>unsatisfied</b> for the whole window. See {@link #verifyNever(RequestDefinition, Duration)}
+     * for the rationale; this generic overload accepts a fully built {@link Verification} so the
+     * caller controls the matched condition (e.g. {@code atLeast(1)} to fail on the first match,
+     * or another {@link VerificationTimes} to fail when a threshold is reached).
+     *
+     * @param verification the verification that must <b>not</b> pass during the window
+     * @param window       the time to keep checking that the verification does not pass
+     * @throws AssertionError if the verification passes before the window elapses
+     */
+    @SuppressWarnings("UnusedReturnValue")
+    public MockServerClient verifyNever(Verification verification, Duration window) throws AssertionError {
+        if (verification == null) {
+            throw new IllegalArgumentException("verifyNever(Verification, Duration) requires a non null Verification object");
+        }
+        if (window == null || window.isNegative()) {
+            throw new IllegalArgumentException("verifyNever(Verification, Duration) requires a non null non-negative Duration object");
+        }
+
+        long deadlineNanos = System.nanoTime() + window.toNanos();
+        while (true) {
+            if (attemptVerification(verification) == null) {
+                throw new AssertionError("Found request matching verification within the " + window + " window that was expected to find no match" + NEW_LINE + verificationSerializer.serialize(verification));
+            }
+            if (System.nanoTime() - deadlineNanos >= 0) {
+                return clientClass.cast(this);
+            }
+            sleepBeforeNextPoll(deadlineNanos);
+        }
+    }
+
+    /**
+     * Run a single verification attempt against the server, returning the failure message
+     * (the verify endpoint's non-empty response body) or {@code null} when the verification passes.
+     * Authentication failures are rethrown rather than treated as a verification failure so that
+     * the poll loop does not silently retry an unauthorized client.
+     */
+    private String attemptVerification(Verification verification) throws AssertionError {
+        try {
+            String result = sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("verify"))
+                    .withBody(verificationSerializer.serialize(verification), StandardCharsets.UTF_8),
+                false
+            ).getBodyAsString();
+            return result == null || result.isEmpty() ? null : result;
+        } catch (AuthenticationException authenticationException) {
+            throw authenticationException;
+        } catch (Throwable throwable) {
+            // never return null here: a null would be read as "verification passed" by the poll loop,
+            // turning an exception into a silent false-positive
+            String message = throwable.getMessage();
+            return message != null ? message : throwable.getClass().getName();
+        }
+    }
+
+    /**
+     * Sleep for the poll interval, clamped so it never overshoots the deadline. Restores the
+     * interrupt flag and aborts the poll loop if the thread is interrupted while waiting.
+     */
+    private void sleepBeforeNextPoll(long deadlineNanos) throws AssertionError {
+        long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
+        long sleepMillis = Math.min(DEFAULT_VERIFY_POLL_INTERVAL.toMillis(), Math.max(0L, remainingMillis));
+        if (sleepMillis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(sleepMillis);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Verification polling was interrupted", interruptedException);
+        }
+    }
+
+    /**
+     * Verify a request-response pair has been recorded for example:
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      request()
+     *          .withPath("/some_path"),
+     *      response()
+     *          .withStatusCode(200),
+     *      VerificationTimes.atLeast(1)
+     *  );
+     * </pre>
+     * VerificationTimes supports multiple static factory methods:
+     * <p>
+     * once()      - verify the request-response pair was matched only once
+     * exactly(n)  - verify the request-response pair was matched exactly n times
+     * atLeast(n)  - verify the request-response pair was matched at least n times
+     *
+     * @param requestDefinition the http request that must be matched for this verification to pass (may be null to match any request)
+     * @param httpResponse      the http response that must be matched for this verification to pass
+     * @param times             the number of times this request-response pair must be matched
+     * @throws AssertionError if the request-response pair has not been found
+     */
+    public MockServerClient verify(RequestDefinition requestDefinition, org.mockserver.model.HttpResponse httpResponse, VerificationTimes times) throws AssertionError {
+        if (httpResponse == null) {
+            throw new IllegalArgumentException("verify(RequestDefinition, HttpResponse, VerificationTimes) requires a non null HttpResponse object");
+        }
+        if (times == null) {
+            throw new IllegalArgumentException("verify(RequestDefinition, HttpResponse, VerificationTimes) requires a non null VerificationTimes object");
+        }
+
+        try {
+            Verification verificationObj = verification()
+                .withRequest(requestDefinition)
+                .withResponse(httpResponse)
+                .withTimes(times);
+            String result = sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("verify"))
+                    .withBody(verificationSerializer.serialize(verificationObj), StandardCharsets.UTF_8),
+                false
+            ).getBodyAsString();
+
+            if (result != null && !result.isEmpty()) {
+                throw new AssertionError(result);
+            }
+        } catch (AuthenticationException authenticationException) {
+            throw authenticationException;
+        } catch (Throwable throwable) {
+            throw new AssertionError(throwable.getMessage());
+        }
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Verify a response has been recorded (matching any request) for example:
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      response()
+     *          .withStatusCode(200),
+     *      VerificationTimes.atLeast(1)
+     *  );
+     * </pre>
+     *
+     * @param httpResponse the http response that must be matched for this verification to pass
+     * @param times        the number of times this response must be matched
+     * @throws AssertionError if the response has not been found
+     */
+    public MockServerClient verify(org.mockserver.model.HttpResponse httpResponse, VerificationTimes times) throws AssertionError {
+        return verify((RequestDefinition) null, httpResponse, times);
+    }
+
+    /**
+     * Verify a response has been recorded (matching any request), defaulting to at least once
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      response()
+     *          .withStatusCode(200)
+     *  );
+     * </pre>
+     *
+     * @param httpResponse the http response that must be matched for this verification to pass
+     * @throws AssertionError if the response has not been found
+     */
+    public MockServerClient verify(org.mockserver.model.HttpResponse httpResponse) throws AssertionError {
+        return verify((RequestDefinition) null, httpResponse, atLeast(1));
+    }
+
+    /**
+     * Verify using a pre-built Verification object for advanced use cases such as
+     * request-response pair verification:
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      verification()
+     *          .withRequest(request().withPath("/some_path"))
+     *          .withResponse(response().withStatusCode(200))
+     *          .withTimes(VerificationTimes.atLeast(1))
+     *  );
+     * </pre>
+     *
+     * @param verification the verification object containing the request, response, and/or times to verify
+     * @throws AssertionError if the verification fails
+     */
+    @SuppressWarnings("DuplicatedCode")
+    public MockServerClient verify(Verification verification) throws AssertionError {
+        if (verification == null) {
+            throw new IllegalArgumentException("verify(Verification) requires a non null Verification object");
+        }
+
+        try {
+            String result = sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("verify"))
+                    .withBody(verificationSerializer.serialize(verification), StandardCharsets.UTF_8),
+                false
+            ).getBodyAsString();
+
+            if (result != null && !result.isEmpty()) {
+                throw new AssertionError(result);
+            }
+        } catch (AuthenticationException authenticationException) {
+            throw authenticationException;
+        } catch (Throwable throwable) {
+            throw new AssertionError(throwable.getMessage());
+        }
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Verify using a pre-built VerificationSequence object for advanced use cases such as
+     * request-response sequence verification:
+     * <pre>
+     * mockServerClient
+     *  .verify(
+     *      verificationSequence()
+     *          .withRequests(request().withPath("/first"), request().withPath("/second"))
+     *          .withResponses(response().withStatusCode(200), response().withStatusCode(201))
+     *  );
+     * </pre>
+     *
+     * @param verificationSequence the verification sequence object containing the requests, responses, and/or expectation ids to verify
+     * @throws AssertionError if the verification sequence fails
+     */
+    @SuppressWarnings("DuplicatedCode")
+    public MockServerClient verify(VerificationSequence verificationSequence) throws AssertionError {
+        if (verificationSequence == null) {
+            throw new IllegalArgumentException("verify(VerificationSequence) requires a non null VerificationSequence object");
+        }
+
+        try {
+            String result = sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("verifySequence"))
+                    .withBody(verificationSequenceSerializer.serialize(verificationSequence), StandardCharsets.UTF_8),
                 false
             ).getBodyAsString();
 
@@ -1511,6 +1977,73 @@ public class MockServerClient implements Stoppable {
     }
 
     /**
+     * Mock a complete OpenID Connect / OAuth2 identity provider with a single call, using the default
+     * configuration (issuer {@code http://localhost:1080}, standard endpoint paths, RS256 signing).
+     *
+     * <p>This generates and upserts the discovery document, JWKS, token, authorize, userinfo,
+     * introspection, revocation, and end-session endpoints, all signed with a freshly generated key
+     * pair whose public key is published at the JWKS endpoint so issued tokens verify end-to-end.
+     *
+     * @return the upserted OIDC provider expectations
+     */
+    public Expectation[] mockOpenIdProvider() {
+        return mockOpenIdProvider(null);
+    }
+
+    /**
+     * Mock a complete OpenID Connect / OAuth2 identity provider with a single call.
+     *
+     * <p>This generates and upserts the discovery document, JWKS, token, authorize, userinfo,
+     * introspection, revocation, and end-session endpoints. Tokens are minted at request time and
+     * signed with the configured (or generated) key pair, whose public key is published at the JWKS
+     * endpoint so issued tokens verify end-to-end. The configuration controls the issuer, endpoint
+     * paths, subject / clientId / audience / scopes, token expiry, additional claims, signing
+     * algorithm and key material, and the negative-testing flags.
+     *
+     * @param configuration the OIDC provider configuration, or {@code null} to use the defaults
+     * @return the upserted OIDC provider expectations
+     */
+    public Expectation[] mockOpenIdProvider(OidcProviderConfiguration configuration) {
+        String body = "";
+        if (configuration != null) {
+            try {
+                ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                ObjectNode configNode = objectMapper.valueToTree(configuration);
+                // clientSecret and privateKeyPem are WRITE_ONLY on the configuration so the SERVER
+                // never serializes the secret back out (no credential / key leak via JSON / discovery /
+                // response). That same annotation, however, excludes them from this outbound
+                // serialization, which would silently drop a user-supplied value. Re-add them
+                // explicitly for this CLIENT -> server control-plane PUT only, so a supplied secret
+                // actually reaches the provider.
+                if (isNotBlank(configuration.getClientSecret())) {
+                    configNode.put("clientSecret", configuration.getClientSecret());
+                }
+                if (isNotBlank(configuration.getPrivateKeyPem())) {
+                    configNode.put("privateKeyPem", configuration.getPrivateKeyPem());
+                }
+                body = objectMapper.writeValueAsString(configNode);
+            } catch (Throwable throwable) {
+                throw new ClientException(formatLogMessage("error:{}while serializing OIDC provider configuration:{}", throwable.getMessage(), configuration), throwable);
+            }
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("oidc"))
+                .withBody(body, StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && httpResponse.getStatusCode() != 201) {
+            throw new ClientException(formatLogMessage("error:{}while submitting OIDC provider configuration:{}", httpResponse, configuration));
+        }
+        if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+            return expectationSerializer.deserializeArray(httpResponse.getBodyAsString(), true);
+        }
+        return new Expectation[0];
+    }
+
+    /**
      * Specify OpenAPI and operations and responses to create matchers and example responses
      *
      * @param openAPIExpectations the OpenAPI and operations and responses to create matchers and example responses
@@ -1549,6 +2082,64 @@ public class MockServerClient implements Stoppable {
             if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
                 return expectationSerializer.deserializeArray(httpResponse.getBodyAsString(), true);
             }
+        }
+        return new Expectation[0];
+    }
+
+    /**
+     * Stand up a complete mock SAML 2.0 Identity Provider with default settings: a metadata endpoint,
+     * an SP-initiated Web-Browser-SSO POST endpoint, and a Single-Logout endpoint, signed with a
+     * freshly generated self-signed RSA credential whose certificate is published in the metadata.
+     *
+     * @return the upserted expectations (metadata + SSO + SLO)
+     */
+    public Expectation[] mockSamlProvider() {
+        return mockSamlProvider(new SamlProviderConfiguration());
+    }
+
+    /**
+     * Stand up a complete mock SAML 2.0 Identity Provider from the given configuration. The
+     * configuration controls the IdP/SP entity ids, endpoint paths, the asserted subject and
+     * attributes, the signing algorithm, and the negative-test flags (expired assertion, wrong
+     * audience, tampered signature) for exercising an SP's rejection paths.
+     *
+     * @param samlProviderConfiguration the SAML provider configuration (defaults applied for unset fields)
+     * @return the upserted expectations (metadata + SSO + SLO)
+     */
+    public Expectation[] mockSamlProvider(SamlProviderConfiguration samlProviderConfiguration) {
+        if (samlProviderConfiguration == null) {
+            samlProviderConfiguration = new SamlProviderConfiguration();
+        }
+        String body;
+        try {
+            ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode configNode = objectMapper.valueToTree(samlProviderConfiguration);
+            // signingPrivateKeyPem is WRITE_ONLY on the configuration so the SERVER never serializes
+            // the private key back out (no key leak via JSON / metadata / response). That same
+            // annotation, however, excludes it from this outbound serialization, which would silently
+            // drop a user-supplied PEM credential. Re-add it explicitly for this CLIENT -> server
+            // control-plane PUT only, so a supplied signing key actually reaches the IdP.
+            if (isNotBlank(samlProviderConfiguration.getSigningPrivateKeyPem())) {
+                configNode.put("signingPrivateKeyPem", samlProviderConfiguration.getSigningPrivateKeyPem());
+            }
+            body = objectMapper.writeValueAsString(configNode);
+        } catch (Exception e) {
+            throw new ClientException(formatLogMessage("error:{}while serializing SAML provider configuration:{}", e.getMessage(), samlProviderConfiguration), e);
+        }
+        HttpResponse httpResponse =
+            sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("saml"))
+                    .withBody(body, StandardCharsets.UTF_8),
+                false
+            );
+        if (httpResponse != null && httpResponse.getStatusCode() != 201) {
+            throw new ClientException(formatLogMessage("error:{}while submitting SAML provider configuration:{}", httpResponse, samlProviderConfiguration));
+        }
+        if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+            return expectationSerializer.deserializeArray(httpResponse.getBodyAsString(), true);
         }
         return new Expectation[0];
     }
@@ -1620,6 +2211,43 @@ public class MockServerClient implements Stoppable {
     }
 
     /**
+     * Import one or more expectations from a JSON document into a running MockServer.
+     * <p>
+     * The JSON may be a single expectation object or an array of expectations — the same
+     * format produced by {@link #retrieveActiveExpectations(RequestDefinition)} with
+     * {@link Format#JSON}, persisted via the <code>--persist</code> flag, or exported from
+     * the dashboard. Each imported expectation is created, or updated if its <code>id</code>
+     * matches an existing expectation (an upsert).
+     *
+     * @param expectationsJson a JSON expectation object or array of expectation objects
+     * @return the imported (created or updated) expectations
+     */
+    public Expectation[] importExpectations(String expectationsJson) {
+        if (isBlank(expectationsJson)) {
+            return new Expectation[0];
+        }
+        Expectation[] expectations = expectationSerializer.deserializeArray(expectationsJson, false);
+        return upsert(expectations);
+    }
+
+    /**
+     * Import one or more expectations from a JSON file into a running MockServer.
+     * <p>
+     * The file may contain a single expectation object or an array of expectations — the same
+     * format produced by {@link #retrieveActiveExpectations(RequestDefinition)} with
+     * {@link Format#JSON}, persisted via the <code>--persist</code> flag, or exported from
+     * the dashboard. Each imported expectation is created, or updated if its <code>id</code>
+     * matches an existing expectation (an upsert). The path is resolved from the classpath or
+     * the filesystem.
+     *
+     * @param filePath path to a JSON file containing an expectation object or array of expectation objects
+     * @return the imported (created or updated) expectations
+     */
+    public Expectation[] importExpectationsFromFile(String filePath) {
+        return importExpectations(FileReader.readFileFromClassPathOrPath(filePath));
+    }
+
+    /**
      * Register a CRUD simulation that auto-generates RESTful endpoints for a given base path.
      * <p>
      * For example, with basePath "/api/users", MockServer will automatically handle:
@@ -1644,6 +2272,69 @@ public class MockServerClient implements Stoppable {
             true
         );
         return clientClass.cast(this);
+    }
+
+    /**
+     * Register a mock SCIM 2.0 provider that auto-generates a complete set of SCIM endpoints for the
+     * configured base path (default {@code /scim/v2}).
+     * <p>
+     * For example, with the default configuration MockServer will serve:
+     * <ul>
+     *     <li>{@code GET/POST /scim/v2/Users} and {@code GET/PUT/PATCH/DELETE /scim/v2/Users/{id}}</li>
+     *     <li>{@code GET/POST /scim/v2/Groups} and {@code GET/PUT/PATCH/DELETE /scim/v2/Groups/{id}}</li>
+     *     <li>{@code GET /scim/v2/ServiceProviderConfig}, {@code /ResourceTypes}, {@code /Schemas}</li>
+     * </ul>
+     * Responses use the {@code application/scim+json} media type, the SCIM ListResponse/Error
+     * envelopes, and inject {@code schemas}/{@code id}/{@code meta} on every resource.
+     *
+     * @param scimConfiguration the SCIM provider configuration (basePath, idStrategy, initial data, enforcement flags)
+     * @return the upserted SCIM provider expectations
+     */
+    public Expectation[] mockScimProvider(ScimProviderConfiguration scimConfiguration) {
+        if (scimConfiguration == null) {
+            scimConfiguration = new ScimProviderConfiguration();
+        }
+        String body;
+        try {
+            ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode configNode = objectMapper.valueToTree(scimConfiguration);
+            // expectedBearerToken is WRITE_ONLY on the configuration so the SERVER never serializes
+            // the token back out (no credential leak via JSON / response). That same annotation,
+            // however, excludes it from this outbound serialization, which would silently drop a
+            // user-supplied token. Re-add it explicitly for this CLIENT -> server control-plane PUT
+            // only, so a supplied token actually reaches the provider.
+            if (isNotBlank(scimConfiguration.getExpectedBearerToken())) {
+                configNode.put("expectedBearerToken", scimConfiguration.getExpectedBearerToken());
+            }
+            body = objectMapper.writeValueAsString(configNode);
+        } catch (Exception e) {
+            throw new ClientException(formatLogMessage("error:{}while serializing SCIM provider configuration:{}", e.getMessage(), scimConfiguration), e);
+        }
+        HttpResponse httpResponse =
+            sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("scim"))
+                    .withBody(body, StandardCharsets.UTF_8),
+                false
+            );
+        if (httpResponse != null && httpResponse.getStatusCode() != 201) {
+            throw new ClientException(formatLogMessage("error:{}while submitting SCIM provider configuration:{}", httpResponse, scimConfiguration));
+        }
+        if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+            return expectationSerializer.deserializeArray(httpResponse.getBodyAsString(), true);
+        }
+        return new Expectation[0];
+    }
+
+    /**
+     * Register a mock SCIM 2.0 provider using the default configuration (base path {@code /scim/v2}).
+     *
+     * @return the upserted SCIM provider expectations
+     */
+    public Expectation[] mockScimProvider() {
+        return mockScimProvider(new ScimProviderConfiguration());
     }
 
     /**
@@ -1682,6 +2373,38 @@ public class MockServerClient implements Stoppable {
      */
     public Expectation[] retrieveActiveExpectations(RequestDefinition requestDefinition) {
         String activeExpectations = retrieveActiveExpectations(requestDefinition, Format.JSON);
+        if (isNotBlank(activeExpectations) && !activeExpectations.equals("[]")) {
+            return expectationSerializer.deserializeArray(activeExpectations, true);
+        } else {
+            return new Expectation[0];
+        }
+    }
+
+    /**
+     * Retrieve the active expectations visible to a single namespace (tenant): the
+     * expectations registered under {@code namespace} plus all global (no-namespace)
+     * expectations. Other tenants' expectations are hidden.
+     * <p>
+     * Use null for {@code requestDefinition} to retrieve all of this namespace's
+     * expectations regardless of request matcher.
+     *
+     * @param requestDefinition the http request matched against when deciding whether to return each expectation, or null for all
+     * @param namespace         the namespace (tenant) whose expectations to view
+     * @return an array of the active expectations visible to the given namespace
+     */
+    public Expectation[] retrieveActiveExpectations(RequestDefinition requestDefinition, String namespace) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("retrieve"))
+                .withQueryStringParameter("type", RetrieveType.ACTIVE_EXPECTATIONS.name())
+                .withQueryStringParameter("format", Format.JSON.name())
+                .withQueryStringParameter("namespace", namespace)
+                .withBody(requestDefinition != null ? requestDefinitionSerializer.serialize(requestDefinition) : "", StandardCharsets.UTF_8),
+            false
+        );
+        String activeExpectations = httpResponse.getBodyAsString();
         if (isNotBlank(activeExpectations) && !activeExpectations.equals("[]")) {
             return expectationSerializer.deserializeArray(activeExpectations, true);
         } else {
@@ -1930,10 +2653,10 @@ public class MockServerClient implements Stoppable {
      */
     public MockServerClient setServiceChaos(String host, HttpChaosProfile chaos, long ttlMillis) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
+            ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode body = objectMapper.createObjectNode();
             body.put("host", host);
-            body.set("chaos", objectMapper.valueToTree(new org.mockserver.serialization.model.HttpChaosProfileDTO(chaos)));
+            body.set("chaos", objectMapper.valueToTree(new HttpChaosProfileDTO(chaos)));
             if (ttlMillis > 0) {
                 body.put("ttlMillis", ttlMillis);
             }
@@ -1959,8 +2682,8 @@ public class MockServerClient implements Stoppable {
      */
     public MockServerClient removeServiceChaos(String host) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
+            ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode body = objectMapper.createObjectNode();
             body.put("host", host);
             body.put("remove", true);
             sendRequest(
@@ -2008,6 +2731,188 @@ public class MockServerClient implements Stoppable {
             false
         );
         return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    // load-scenario (load injection) registry control-plane helpers
+
+    /**
+     * Register (load) a load-injection scenario into the load-scenario registry via
+     * {@code PUT /mockserver/loadScenario}. Registration does <em>not</em> start the
+     * scenario — it is loaded in the {@code LOADED} state and driving no traffic. Each
+     * scenario is identified by its unique {@code name}; registering a scenario with an
+     * existing name replaces it.
+     *
+     * <p>Registration is always permitted, even when {@code loadGenerationEnabled} is
+     * off on the server — only {@link #startLoadScenarios(String...) starting} requires
+     * load generation to be enabled.
+     *
+     * @param scenario the load scenario to register (see {@link org.mockserver.load.LoadScenario})
+     * @return JSON string describing the registered scenario ({@code {"name":...,"state":...}})
+     */
+    public String loadScenario(LoadScenario scenario) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("loadScenario"))
+                .withBody(loadScenarioSerializer.serialize(scenario), StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && httpResponse.getStatusCode() != null && httpResponse.getStatusCode() >= 400) {
+            throw new ClientException(formatLogMessage("error:{}while registering load scenario", httpResponse.getBodyAsString()));
+        }
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * List all registered load scenarios via {@code GET /mockserver/loadScenario}. The
+     * response body is a JSON object {@code {"scenarios":[{"name":...,"state":...,"definition":...,"status":...}]}}
+     * where each entry carries the scenario name, lifecycle state (one of {@code LOADED},
+     * {@code PENDING}, {@code RUNNING}, {@code COMPLETED}, {@code STOPPED}), its definition,
+     * and live status for running scenarios.
+     *
+     * @return JSON string listing all registered load scenarios
+     */
+    public String loadScenarios() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("loadScenario")),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Retrieve a single registered load scenario by name via
+     * {@code GET /mockserver/loadScenario/{name}}. The server responds {@code 404} if no
+     * scenario with that name is registered.
+     *
+     * @param name the unique name of the registered load scenario
+     * @return JSON string describing the named load scenario (name, state, definition, status)
+     */
+    public String getLoadScenario(String name) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("loadScenario/" + name)),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Remove a single registered load scenario by name via
+     * {@code DELETE /mockserver/loadScenario/{name}}. If the scenario is running it is
+     * stopped before removal.
+     *
+     * @param name the unique name of the load scenario to remove
+     * @return this MockServerClient
+     */
+    public MockServerClient deleteLoadScenario(String name) {
+        sendRequest(
+            request()
+                .withMethod("DELETE")
+                .withPath(calculatePath("loadScenario/" + name)),
+            true
+        );
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Remove all registered load scenarios via {@code DELETE /mockserver/loadScenario}.
+     * Any running scenarios are stopped before the registry is cleared.
+     *
+     * @return this MockServerClient
+     */
+    public MockServerClient clearLoadScenarios() {
+        sendRequest(
+            request()
+                .withMethod("DELETE")
+                .withPath(calculatePath("loadScenario")),
+            true
+        );
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Start one or more previously-registered load scenarios by name via
+     * {@code PUT /mockserver/loadScenario/start} with body {@code {"names":[...]}}. Each
+     * named scenario begins running (honouring its {@code startDelayMillis}, which holds
+     * the scenario in {@code PENDING} until the delay elapses).
+     *
+     * <p>Starting requires {@code loadGenerationEnabled} on the server — if it is off the
+     * server responds {@code 403} and this throws a {@link ClientException} with a helpful
+     * message. An unknown scenario name causes the server to respond {@code 404}, which is
+     * also surfaced as a {@link ClientException}.
+     *
+     * @param names the names of the registered scenarios to start
+     * @return JSON string describing the started scenarios ({@code {"started":[...],"status":...}})
+     */
+    public String startLoadScenarios(String... names) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("loadScenario/start"))
+                .withBody(namesBody(names), StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && httpResponse.getStatusCode() != null) {
+            if (httpResponse.getStatusCode() == FORBIDDEN.code()) {
+                throw new ClientException("load generation is disabled on this MockServer; set loadGenerationEnabled=true to enable load scenarios - server responded: " + httpResponse.getBodyAsString());
+            } else if (httpResponse.getStatusCode() >= 400) {
+                throw new ClientException(formatLogMessage("error:{}while starting load scenarios", httpResponse.getBodyAsString()));
+            }
+        }
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Stop one or more running load scenarios via {@code PUT /mockserver/loadScenario/stop}.
+     * When {@code names} are supplied the body is {@code {"names":[...]}} and only those
+     * scenarios are stopped; when called with no arguments the body is empty, which stops
+     * all running scenarios. Stopped scenarios transition to the {@code STOPPED} state but
+     * remain registered (and can be re-started).
+     *
+     * @param names the names of the scenarios to stop, or none to stop all running scenarios
+     * @return JSON string describing the stopped scenarios ({@code {"stopped":[...],"status":...}})
+     */
+    public String stopLoadScenarios(String... names) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("loadScenario/stop"))
+                .withBody(names != null && names.length > 0 ? namesBody(names) : "", StandardCharsets.UTF_8),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Convenience helper that registers the given scenario and then immediately starts it,
+     * combining {@link #loadScenario(LoadScenario)} and {@link #startLoadScenarios(String...)}.
+     * Starting requires {@code loadGenerationEnabled} on the server (see
+     * {@link #startLoadScenarios(String...)} for the {@code 403} behaviour).
+     *
+     * @param scenario the load scenario to register and start
+     * @return JSON string describing the started scenario ({@code {"started":[...],"status":...}})
+     */
+    public String runLoadScenario(LoadScenario scenario) {
+        loadScenario(scenario);
+        return startLoadScenarios(scenario.getName());
+    }
+
+    private static String namesBody(String... names) {
+        StringBuilder body = new StringBuilder("{\"names\":[");
+        for (int i = 0; i < names.length; i++) {
+            if (i > 0) {
+                body.append(',');
+            }
+            body.append('"').append(names[i] != null ? names[i].replace("\\", "\\\\").replace("\"", "\\\"") : "").append('"');
+        }
+        return body.append("]}").toString();
     }
 
     // asyncapi control-plane helpers
@@ -2088,146 +2993,297 @@ public class MockServerClient implements Stoppable {
     }
 
     // -------------------------------------------------------------------
-    // Breakpoint Control
+    // Breakpoint Matcher Registration (WS-callback)
     // -------------------------------------------------------------------
 
     /**
-     * List all currently paused request exchanges (breakpoints).
+     * Ensure the breakpoint callback WebSocket is connected, returning the
+     * {@link BreakpointWebSocketClient} instance. The caller should capture the
+     * returned reference to a local variable and use that throughout its method
+     * to avoid a data race with the STOP/RESET lambda that nulls the field.
+     * The WS connection is reused across all breakpoints registered by this client.
+     */
+    private synchronized BreakpointWebSocketClient ensureBreakpointWebSocketClient() {
+        if (breakpointWebSocketClient != null) {
+            return breakpointWebSocketClient;
+        }
+        try {
+            String bpClientId = UUIDService.getUUID();
+            BreakpointWebSocketClient wsClient = new BreakpointWebSocketClient(
+                new NioEventLoopGroup(
+                    configuration.webSocketClientEventLoopThreadCount(),
+                    new Scheduler.SchedulerThreadFactory("BreakpointWSClient-eventLoop")
+                ),
+                bpClientId,
+                MOCK_SERVER_LOGGER
+            );
+            wsClient.register(
+                remoteAddress(),
+                contextPath(),
+                isSecure()
+            ).get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+            this.breakpointWebSocketClient = wsClient;
+            // Subscribe a lambda (not a method ref) so we can null the field AND
+            // clear the handler map on both STOP and RESET. This ensures the next
+            // addBreakpoint after reset/stop transparently re-establishes the WS.
+            getMockServerEventBus().subscribe(() -> {
+                BreakpointWebSocketClient client = breakpointWebSocketClient;
+                breakpointWebSocketClient = null;
+                if (client != null) {
+                    try {
+                        client.clearHandlers();
+                        client.stopClient();
+                    } catch (Exception ignored) {
+                        // best-effort cleanup
+                    }
+                }
+            }, EventType.STOP, EventType.RESET);
+            return wsClient;
+        } catch (Exception e) {
+            throw new ClientException("Unable to establish breakpoint WebSocket connection", e);
+        }
+    }
+
+    /**
+     * Register a breakpoint matcher with request/response/stream-frame handlers.
+     * The client's callback WebSocket is opened if not already connected.
+     *
+     * <p>Handlers are stored per breakpoint id (the id returned by the server), so
+     * multiple concurrent breakpoints each route to their own handler. If a handler
+     * is null for a phase that is in the phase set, items for that phase will be
+     * auto-continued.
+     *
+     * @param matcher           the request definition to match against (same shape as an
+     *                          expectation request matcher)
+     * @param phases            the set of phases to intercept
+     * @param requestHandler    handler for REQUEST phase (may be null if REQUEST not in phases)
+     * @param responseHandler   handler for RESPONSE phase (may be null if RESPONSE not in phases)
+     * @param streamFrameHandler handler for RESPONSE_STREAM / INBOUND_STREAM phases (may be null
+     *                          if neither streaming phase is in phases)
+     * @return the breakpoint matcher id assigned by the server
+     */
+    public String addBreakpoint(RequestDefinition matcher,
+                                Set<BreakpointPhase> phases,
+                                BreakpointRequestHandler requestHandler,
+                                BreakpointResponseHandler responseHandler,
+                                BreakpointStreamFrameHandler streamFrameHandler) {
+        if (matcher == null) {
+            throw new IllegalArgumentException("addBreakpoint requires a non-null matcher");
+        }
+        if (phases == null || phases.isEmpty()) {
+            throw new IllegalArgumentException("addBreakpoint requires a non-null non-empty set of phases");
+        }
+
+        // Capture the WS client instance to a local to avoid data race (MAJOR C)
+        BreakpointWebSocketClient wsClient = ensureBreakpointWebSocketClient();
+        String wsClientId = wsClient.getClientId();
+
+        // register the breakpoint matcher on the server first to get the id
+        String breakpointId;
+        try {
+            ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode body = objectMapper.createObjectNode();
+            String serializedMatcher = requestDefinitionSerializer.serialize(matcher);
+            body.set("httpRequest", objectMapper.readTree(serializedMatcher));
+            ArrayNode phasesArray = objectMapper.createArrayNode();
+            for (BreakpointPhase phase : phases) {
+                phasesArray.add(phase.name());
+            }
+            body.set("phases", phasesArray);
+            body.put("clientId", wsClientId);
+
+            HttpResponse httpResponse = sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath("breakpoint/matcher"))
+                    .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
+                true
+            );
+
+            // parse the response to get the id
+            if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+                JsonNode responseNode = objectMapper.readTree(httpResponse.getBodyAsString());
+                if (responseNode.has("id")) {
+                    breakpointId = responseNode.get("id").asText();
+                } else {
+                    throw new ClientException("Server did not return a breakpoint id");
+                }
+            } else {
+                throw new ClientException("Server did not return a breakpoint id");
+            }
+        } catch (IllegalArgumentException iae) {
+            throw iae;
+        } catch (ClientException ce) {
+            throw ce;
+        } catch (Exception exception) {
+            throw new RuntimeException("Exception registering breakpoint matcher", exception);
+        }
+
+        // Install handlers keyed by the server-assigned breakpoint id (MAJOR A)
+        wsClient.setRequestHandler(breakpointId, requestHandler);
+        wsClient.setResponseHandler(breakpointId, responseHandler);
+        wsClient.setStreamFrameHandler(breakpointId, streamFrameHandler);
+
+        return breakpointId;
+    }
+
+    /**
+     * Register a breakpoint matcher with a single request handler (REQUEST phase only).
+     *
+     * @param matcher        the request definition to match against
+     * @param requestHandler handler for REQUEST phase breakpoints
+     * @return the breakpoint matcher id
+     */
+    public String addBreakpoint(RequestDefinition matcher, BreakpointRequestHandler requestHandler) {
+        return addBreakpoint(matcher, EnumSet.of(BreakpointPhase.REQUEST), requestHandler, null, null);
+    }
+
+    /**
+     * Register a breakpoint matcher with request and response handlers.
+     *
+     * @param matcher         the request definition to match against
+     * @param requestHandler  handler for REQUEST phase
+     * @param responseHandler handler for RESPONSE phase
+     * @return the breakpoint matcher id
+     */
+    public String addBreakpoint(RequestDefinition matcher,
+                                BreakpointRequestHandler requestHandler,
+                                BreakpointResponseHandler responseHandler) {
+        return addBreakpoint(matcher, EnumSet.of(BreakpointPhase.REQUEST, BreakpointPhase.RESPONSE),
+            requestHandler, responseHandler, null);
+    }
+
+    /**
+     * Register a breakpoint matcher with a stream frame handler.
+     *
+     * @param matcher            the request definition to match against
+     * @param phases             the set of streaming phases to intercept
+     * @param streamFrameHandler handler for RESPONSE_STREAM / INBOUND_STREAM phases
+     * @return the breakpoint matcher id
+     */
+    public String addBreakpoint(RequestDefinition matcher, Set<BreakpointPhase> phases,
+                                BreakpointStreamFrameHandler streamFrameHandler) {
+        return addBreakpoint(matcher, phases, null, null, streamFrameHandler);
+    }
+
+    /**
+     * Register a breakpoint matcher with varargs phases and all handlers.
+     * If zero phases are passed, phases are inferred from the non-null handlers:
+     * requestHandler implies REQUEST, responseHandler implies RESPONSE,
+     * streamFrameHandler implies RESPONSE_STREAM and INBOUND_STREAM.
+     *
+     * @param matcher            the request definition to match against
+     * @param requestHandler     handler for REQUEST phase (may be null)
+     * @param responseHandler    handler for RESPONSE phase (may be null)
+     * @param streamFrameHandler handler for streaming phases (may be null)
+     * @param phases             the phases to intercept (if empty, inferred from handlers)
+     * @return the breakpoint matcher id
+     * @throws IllegalArgumentException if no phases can be determined
+     */
+    public String addBreakpoint(RequestDefinition matcher,
+                                BreakpointRequestHandler requestHandler,
+                                BreakpointResponseHandler responseHandler,
+                                BreakpointStreamFrameHandler streamFrameHandler,
+                                BreakpointPhase... phases) {
+        Set<BreakpointPhase> phaseSet;
+        if (phases.length > 0) {
+            phaseSet = EnumSet.copyOf(Arrays.asList(phases));
+        } else {
+            // Infer phases from non-null handlers
+            phaseSet = EnumSet.noneOf(BreakpointPhase.class);
+            if (requestHandler != null) {
+                phaseSet.add(BreakpointPhase.REQUEST);
+            }
+            if (responseHandler != null) {
+                phaseSet.add(BreakpointPhase.RESPONSE);
+            }
+            if (streamFrameHandler != null) {
+                phaseSet.add(BreakpointPhase.RESPONSE_STREAM);
+                phaseSet.add(BreakpointPhase.INBOUND_STREAM);
+            }
+            if (phaseSet.isEmpty()) {
+                throw new IllegalArgumentException("at least one phase or handler is required");
+            }
+        }
+        return addBreakpoint(matcher, phaseSet, requestHandler, responseHandler, streamFrameHandler);
+    }
+
+    /**
+     * List all registered breakpoint matchers.
      * Returns a JSON string with the structure:
      * <pre>
      * {
-     *   "pausedExchanges": [
-     *     { "id": "...", "ageMillis": 1234, "expectationId": "...", "request": { "method": "GET", "path": "/..." } }
-     *   ],
-     *   "count": 1
+     *   "matchers": [
+     *     { "id": "...", "httpRequest": {...}, "phases": [...], "clientId": "..." }
+     *   ]
      * }
      * </pre>
      *
-     * @return JSON string describing all paused exchanges
+     * @return JSON string describing all registered breakpoint matchers
      */
-    public String listBreakpoints() {
+    public String listBreakpointMatchers() {
         HttpResponse httpResponse = sendRequest(
             request()
                 .withMethod("GET")
-                .withPath(calculatePath("breakpoint")),
+                .withPath(calculatePath("breakpoint/matchers")),
             false
         );
         return httpResponse != null ? httpResponse.getBodyAsString() : "";
     }
 
     /**
-     * Continue a paused breakpoint exchange, allowing the original request to proceed
-     * unmodified to the expectation's action (response/forward).
+     * Remove a breakpoint matcher by id.
      *
-     * @param id the correlation id of the paused exchange to continue
+     * @param id the breakpoint matcher id to remove
      * @return this MockServerClient
-     * @throws IllegalArgumentException if the id is blank or the server rejects the request
+     * @throws IllegalArgumentException if the id is blank
      */
-    public MockServerClient continueBreakpoint(String id) {
+    public MockServerClient removeBreakpointMatcher(String id) {
         if (isBlank(id)) {
-            throw new IllegalArgumentException("continueBreakpoint requires a non-blank id");
+            throw new IllegalArgumentException("removeBreakpointMatcher requires a non-blank id");
         }
         try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
+            ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            ObjectNode body = objectMapper.createObjectNode();
             body.put("id", id);
             sendRequest(
                 request()
                     .withMethod("PUT")
                     .withContentType(APPLICATION_JSON_UTF_8)
-                    .withPath(calculatePath("breakpoint/continue"))
+                    .withPath(calculatePath("breakpoint/matcher/remove"))
                     .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
                 true
             );
         } catch (IllegalArgumentException iae) {
             throw iae;
         } catch (Exception exception) {
-            throw new RuntimeException("Exception continuing breakpoint with id \"" + id + "\"", exception);
+            throw new RuntimeException("Exception removing breakpoint matcher with id \"" + id + "\"", exception);
+        }
+        // Remove client-side handlers for this breakpoint
+        BreakpointWebSocketClient wsClient = breakpointWebSocketClient;
+        if (wsClient != null) {
+            wsClient.removeHandlers(id);
         }
         return clientClass.cast(this);
     }
 
     /**
-     * Modify a paused breakpoint exchange by replacing the captured request with
-     * a modified version, then allow it to proceed to the expectation's action.
+     * Clear all registered breakpoint matchers.
      *
-     * @param id              the correlation id of the paused exchange to modify
-     * @param modifiedRequest the modified request that replaces the originally captured one
      * @return this MockServerClient
-     * @throws IllegalArgumentException if the id is blank, modifiedRequest is null, or the server rejects the request
      */
-    public MockServerClient modifyBreakpoint(String id, HttpRequest modifiedRequest) {
-        if (isBlank(id)) {
-            throw new IllegalArgumentException("modifyBreakpoint requires a non-blank id");
-        }
-        if (modifiedRequest == null) {
-            throw new IllegalArgumentException("modifyBreakpoint requires a non-null modifiedRequest");
-        }
-        try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
-            body.put("id", id);
-            String serializedRequest = httpRequestSerializer.serialize(modifiedRequest);
-            body.set("httpRequest", objectMapper.readTree(serializedRequest));
-            sendRequest(
-                request()
-                    .withMethod("PUT")
-                    .withContentType(APPLICATION_JSON_UTF_8)
-                    .withPath(calculatePath("breakpoint/modify"))
-                    .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
-                true
-            );
-        } catch (IllegalArgumentException iae) {
-            throw iae;
-        } catch (Exception exception) {
-            throw new RuntimeException("Exception modifying breakpoint with id \"" + id + "\"", exception);
-        }
-        return clientClass.cast(this);
-    }
-
-    /**
-     * Abort a paused breakpoint exchange, returning a default error response to the caller.
-     *
-     * @param id the correlation id of the paused exchange to abort
-     * @return this MockServerClient
-     * @throws IllegalArgumentException if the id is blank or the server rejects the request
-     */
-    public MockServerClient abortBreakpoint(String id) {
-        return abortBreakpoint(id, null);
-    }
-
-    /**
-     * Abort a paused breakpoint exchange, optionally returning the specified response to the caller.
-     *
-     * @param id       the correlation id of the paused exchange to abort
-     * @param response the response to return to the caller, or null for a default error response
-     * @return this MockServerClient
-     * @throws IllegalArgumentException if the id is blank or the server rejects the request
-     */
-    public MockServerClient abortBreakpoint(String id, HttpResponse response) {
-        if (isBlank(id)) {
-            throw new IllegalArgumentException("abortBreakpoint requires a non-blank id");
-        }
-        try {
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper();
-            com.fasterxml.jackson.databind.node.ObjectNode body = objectMapper.createObjectNode();
-            body.put("id", id);
-            if (response != null) {
-                String serializedResponse = httpResponseSerializer.serialize(response);
-                body.set("httpResponse", objectMapper.readTree(serializedResponse));
-            }
-            sendRequest(
-                request()
-                    .withMethod("PUT")
-                    .withContentType(APPLICATION_JSON_UTF_8)
-                    .withPath(calculatePath("breakpoint/abort"))
-                    .withBody(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8),
-                true
-            );
-        } catch (IllegalArgumentException iae) {
-            throw iae;
-        } catch (Exception exception) {
-            throw new RuntimeException("Exception aborting breakpoint with id \"" + id + "\"", exception);
+    public MockServerClient clearBreakpointMatchers() {
+        sendRequest(
+            request()
+                .withMethod("PUT")
+                .withPath(calculatePath("breakpoint/matcher/clear")),
+            true
+        );
+        // Clear all client-side handlers
+        BreakpointWebSocketClient wsClient = breakpointWebSocketClient;
+        if (wsClient != null) {
+            wsClient.clearHandlers();
         }
         return clientClass.cast(this);
     }
@@ -2261,5 +3317,168 @@ public class MockServerClient implements Stoppable {
             return httpResponseSerializer.deserialize(httpResponse.getBodyAsString());
         }
         return httpResponse;
+    }
+
+    // -------------------------------------------------------------------
+    // Stateful scenarios
+    // -------------------------------------------------------------------
+
+    private static final ObjectMapper SCENARIO_OBJECT_MAPPER = new ObjectMapper();
+
+    /**
+     * A scenario and its current state, as returned by the scenario control-plane endpoints.
+     *
+     * @param scenarioName the name of the scenario state-machine
+     * @param currentState the scenario's current state, or {@code null} if it has never been set
+     */
+    public record Scenario(String scenarioName, String currentState) {
+    }
+
+    /**
+     * Obtain a typed handle for inspecting and driving a stateful scenario by name. The handle
+     * wraps the {@code /mockserver/scenario/{name}} control-plane endpoints.
+     *
+     * @param name the scenario name
+     * @return a handle for the named scenario
+     */
+    public ScenarioHandle scenario(String name) {
+        if (isBlank(name)) {
+            throw new IllegalArgumentException("scenario name can not be null or empty");
+        }
+        return new ScenarioHandle(name);
+    }
+
+    /**
+     * List every known scenario and its current state.
+     *
+     * @return the list of scenarios, empty if none are known
+     */
+    public List<Scenario> scenarios() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("scenario")),
+            true
+        );
+        List<Scenario> scenarios = new ArrayList<>();
+        String body = httpResponse != null ? httpResponse.getBodyAsString() : null;
+        if (isNotBlank(body)) {
+            try {
+                JsonNode root = SCENARIO_OBJECT_MAPPER.readTree(body);
+                JsonNode array = root.path("scenarios");
+                if (array.isArray()) {
+                    for (JsonNode node : array) {
+                        scenarios.add(parseScenario(node));
+                    }
+                }
+            } catch (Exception e) {
+                throw new ClientException("Unable to parse scenarios response: " + body, e);
+            }
+        }
+        return scenarios;
+    }
+
+    private Scenario parseScenario(JsonNode node) {
+        String scenarioName = node.path("scenarioName").isMissingNode() ? null : node.path("scenarioName").asText(null);
+        String currentState = node.path("currentState").isNull() || node.path("currentState").isMissingNode()
+            ? null : node.path("currentState").asText(null);
+        return new Scenario(scenarioName, currentState);
+    }
+
+    /**
+     * Typed handle that wraps the scenario control-plane endpoints for a single named scenario.
+     */
+    public class ScenarioHandle {
+
+        private final String name;
+
+        private ScenarioHandle(String name) {
+            this.name = name;
+        }
+
+        /**
+         * Get the current state of this scenario via {@code GET /mockserver/scenario/{name}}.
+         *
+         * @return the current state, or {@code null} if the scenario has never had a state set
+         */
+        public String state() {
+            HttpResponse httpResponse = sendRequest(
+                request()
+                    .withMethod("GET")
+                    .withPath(calculatePath("scenario/" + name)),
+                true
+            );
+            String body = httpResponse != null ? httpResponse.getBodyAsString() : null;
+            if (isNotBlank(body)) {
+                try {
+                    return parseScenario(SCENARIO_OBJECT_MAPPER.readTree(body)).currentState();
+                } catch (Exception e) {
+                    throw new ClientException("Unable to parse scenario state response: " + body, e);
+                }
+            }
+            return null;
+        }
+
+        /**
+         * Set this scenario's state via {@code PUT /mockserver/scenario/{name}}.
+         *
+         * @param state the new state
+         * @return this handle for chaining
+         */
+        public ScenarioHandle set(String state) {
+            return set(state, null, null);
+        }
+
+        /**
+         * Set this scenario's state and optionally schedule a timed transition to {@code nextState}
+         * via {@code PUT /mockserver/scenario/{name}}.
+         *
+         * @param state              the new state
+         * @param transitionAfterMs  delay before transitioning to {@code nextState}, or {@code null} for none
+         * @param nextState          the state to transition to after {@code transitionAfterMs}, or {@code null} for none
+         * @return this handle for chaining
+         */
+        public ScenarioHandle set(String state, Long transitionAfterMs, String nextState) {
+            ObjectNode requestBody = SCENARIO_OBJECT_MAPPER.createObjectNode();
+            requestBody.put("state", state);
+            if (transitionAfterMs != null) {
+                requestBody.put("transitionAfterMs", transitionAfterMs);
+            }
+            if (isNotBlank(nextState)) {
+                requestBody.put("nextState", nextState);
+            }
+            sendScenarioPut("scenario/" + name, requestBody);
+            return this;
+        }
+
+        /**
+         * Externally trigger a state transition via {@code PUT /mockserver/scenario/{name}/trigger}.
+         *
+         * @param newState the state to transition to
+         * @return this handle for chaining
+         */
+        public ScenarioHandle trigger(String newState) {
+            ObjectNode requestBody = SCENARIO_OBJECT_MAPPER.createObjectNode();
+            requestBody.put("newState", newState);
+            sendScenarioPut("scenario/" + name + "/trigger", requestBody);
+            return this;
+        }
+
+        private void sendScenarioPut(String path, ObjectNode requestBody) {
+            String body;
+            try {
+                body = SCENARIO_OBJECT_MAPPER.writeValueAsString(requestBody);
+            } catch (Exception e) {
+                throw new ClientException("Unable to serialize scenario request", e);
+            }
+            sendRequest(
+                request()
+                    .withMethod("PUT")
+                    .withContentType(APPLICATION_JSON_UTF_8)
+                    .withPath(calculatePath(path))
+                    .withBody(body, StandardCharsets.UTF_8),
+                true
+            );
+        }
     }
 }

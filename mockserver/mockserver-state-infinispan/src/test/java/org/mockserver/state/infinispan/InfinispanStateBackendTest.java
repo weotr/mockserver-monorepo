@@ -89,6 +89,22 @@ class InfinispanStateBackendTest {
     }
 
     @Test
+    void shouldReportSingleNodeClusterInfoInLocalMode() {
+        // LOCAL mode has no JGroups transport, so clusterInfo() falls back to
+        // the degenerate single-node snapshot (this node only, not clustered).
+        ClusterInfo info = backend.clusterInfo();
+        assertNotNull(info);
+        assertFalse(info.clustered(), "LOCAL mode is not clustered");
+        assertThat(info.nodeId(), is(backend.nodeId()));
+        assertThat(info.coordinator(), is(backend.nodeId()));
+        assertThat(info.members(), hasSize(1));
+        ClusterInfo.Member member = info.members().get(0);
+        assertThat(member.id(), is(backend.nodeId()));
+        assertTrue(member.coordinator(), "the single member is the coordinator");
+        assertTrue(member.local(), "the single member is local");
+    }
+
+    @Test
     void shouldCloseWithoutError() {
         backend.close();
         // second close should not throw

@@ -5,7 +5,9 @@ import com.google.common.net.InetAddresses;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.model.BinaryProxyListener;
 import org.mockserver.model.Delay;
+import org.mockserver.model.Header;
 import org.mockserver.model.ProxyPassMapping;
+import org.mockserver.responseheaders.DefaultResponseHeaders;
 import org.mockserver.socket.tls.ForwardProxyTLSX509CertificatesTrustManager;
 import org.slf4j.event.Level;
 
@@ -13,6 +15,7 @@ import java.net.InetSocketAddress;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -43,11 +46,34 @@ public class Configuration {
     private Boolean chaosAutoHaltEnabled;
     private Long chaosAutoHaltErrorThreshold;
     private Long chaosAutoHaltWindowMillis;
+    private Integer rateLimitMaxNamedQuotas;
+    private Boolean connectionLifecycleChaosEnabled;
+    private Long preemptionSimulationMaxDrainMillis;
+    private Boolean connectionLifecycleAutoHaltCountsRst;
+    private Boolean sloTrackingEnabled;
+    private Long sloWindowRetentionMillis;
+    private Integer sloWindowMaxSamples;
+    private Boolean loadGenerationEnabled;
+    private Integer loadGenerationMaxVirtualUsers;
+    private Integer loadGenerationMaxInFlightRequests;
+    private Integer loadGenerationMaxRequestsPerSecond;
+    private Long loadGenerationMaxDurationMillis;
+    private Integer loadGenerationMaxSteps;
+    private Double loadGenerationMaxRate;
+    private Integer loadGenerationMaxStages;
+    private Integer loadGenerationMaxConcurrentScenarios;
+    private java.util.List<String> loadGenerationMetricLabels;
+    private String loadScenarioInitializationJsonPath;
+    private Boolean llmMetricsEnabled;
+    private Boolean perExpectationMetricsEnabled;
+    private Boolean deduplicateRecordedExpectations;
+    private Boolean templatizeRecordedValues;
+    private Boolean redactSecretsInRecordedExpectations;
+    private Boolean redactSecretsInLog;
+    private Double llmCostBudgetUsd;
     private Boolean otelPropagateTraceContext;
     private Boolean otelGenerateTraceId;
     private Boolean mcpEnabled;
-    private Boolean breakpointEnabled;
-    private Boolean breakpointResponseEnabled;
     private Long breakpointTimeoutMillis;
     private Integer breakpointMaxHeld;
     private Boolean wasmEnabled;
@@ -89,6 +115,16 @@ public class Configuration {
     private Integer webSocketClientEventLoopThreadCount;
     private Long maxFutureTimeoutInMillis;
     private Boolean matchersFailFast;
+    private Boolean matchExactCase;
+    private Boolean forwardConnectionPoolEnabled;
+    private Integer forwardConnectionPoolMaxIdlePerKey;
+    private Long forwardConnectionPoolIdleTimeoutMillis;
+    private Integer forwardProxyRetryCount;
+    private Long forwardProxyRetryBackoffMillis;
+    private Boolean forwardProxyCircuitBreakerEnabled;
+    private Integer forwardProxyCircuitBreakerFailureThreshold;
+    private Long forwardProxyCircuitBreakerWindowMillis;
+    private Boolean enforceResponseValidationForMocks;
 
     // socket
     private Long maxSocketTimeoutInMillis;
@@ -106,6 +142,13 @@ public class Configuration {
     private Integer maxLlmConversationBodySize;
     private Boolean driftSemanticAnalysisEnabled;
     private Long driftResponseTimeThresholdMs;
+    private Boolean driftAlertWebhookEnabled;
+    private String driftAlertWebhookUrl;
+    private String driftAlertSeverityThreshold;
+    private Long driftAlertCooldownMillis;
+    private Boolean controlPlaneAuditEnabled;
+    private Integer controlPlaneAuditMaxEntries;
+    private Boolean controlPlaneAuditReads;
     private Boolean useSemicolonAsQueryParameterSeparator;
     private Boolean assumeAllRequestsAreHttp;
     private Boolean http2Enabled;
@@ -132,6 +175,13 @@ public class Configuration {
     private Boolean corsAllowCredentials;
     private Integer corsMaxAgeInSeconds;
 
+    // default response headers
+    private String defaultResponseHeaders;
+    // memoised parse of defaultResponseHeaders() so the pipe-split parse runs once per distinct
+    // resolved value rather than per HTTP request (DefaultResponseHeaders is constructed per request)
+    private volatile List<Header> parsedDefaultResponseHeaders;
+    private volatile String parsedDefaultResponseHeadersSource;
+
     // template restrictions
     private String javascriptDisallowedClasses;
     private String javascriptDisallowedText;
@@ -145,10 +195,12 @@ public class Configuration {
     private String initializationOpenAPIPath;
     private String openAPIContextPathPrefix;
     private Boolean openAPIResponseValidation;
+    private Boolean validateRequestsAgainstOpenApiSpec;
     private String validateProxyOpenAPISpec;
     private Boolean validateProxyEnforce;
     private Boolean generateRealisticExampleValues;
     private Boolean watchInitializationJson;
+    private Boolean failOnInitializationError;
 
     // mock persistence
     private Boolean persistExpectations;
@@ -177,6 +229,7 @@ public class Configuration {
     private Boolean clusterEnabled;
     private String clusterName;
     private String clusterTransportConfig;
+    private Boolean clusterSharedTimesEnabled;
 
     // verification
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
@@ -196,8 +249,12 @@ public class Configuration {
     private String proxyAuthenticationUsername;
     private String proxyAuthenticationPassword;
     private String noProxyHosts;
-    private String proxyRemoteHost;
-    private Integer proxyRemotePort;
+    // volatile: proxyRemoteHost/proxyRemotePort can be set at runtime via the
+    // retrieve ?forwardUnmatchedTo= record-and-forward convenience (control-plane
+    // thread) and are read on the Netty request path (HttpActionHandler), so the
+    // write must be visible across I/O threads.
+    private volatile String proxyRemoteHost;
+    private volatile Integer proxyRemotePort;
     private Boolean forwardAdjustHostHeader;
     private String forwardDefaultHostHeader;
     private List<ProxyPassMapping> proxyPassMappings;
@@ -207,6 +264,9 @@ public class Configuration {
 
     // liveness
     private String livenessHttpGetPath;
+
+    // expectation namespacing / multi-tenancy
+    private String matchNamespaceHeader;
 
     // control plane authentication
     private Boolean controlPlaneTLSMutualAuthenticationRequired;
@@ -218,6 +278,14 @@ public class Configuration {
     private String controlPlaneJWTAuthenticationExpectedAudience;
     private Map<String, String> controlPlaneJWTAuthenticationMatchingClaims;
     private Set<String> controlPlaneJWTAuthenticationRequiredClaims;
+    private Boolean controlPlaneOidcAuthenticationRequired;
+    private String controlPlaneOidcIssuer;
+    private String controlPlaneOidcJwksUri;
+    private String controlPlaneOidcAudience;
+    private Set<String> controlPlaneOidcRequiredScopes;
+    private String controlPlaneOidcScopeClaim;
+    private Boolean controlPlaneAuthorizationEnabled;
+    private Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping;
 
     // TLS
     private Boolean proactivelyInitialiseTLS;
@@ -270,6 +338,7 @@ public class Configuration {
     // async messaging defaults
     private String asyncKafkaBootstrapServers;
     private String asyncMqttBrokerUrl;
+    private String asyncAmqpUri;
     private Integer asyncRecordedMessageMaxEntries;
 
 
@@ -396,6 +465,140 @@ public class Configuration {
         return this;
     }
 
+    public Boolean llmMetricsEnabled() {
+        if (llmMetricsEnabled == null) {
+            return ConfigurationProperties.llmMetricsEnabled();
+        }
+        return llmMetricsEnabled;
+    }
+
+    /**
+     * Enable LLM token and cost metrics.
+     *
+     * @param llmMetricsEnabled enable LLM metrics
+     */
+    public Configuration llmMetricsEnabled(Boolean llmMetricsEnabled) {
+        this.llmMetricsEnabled = llmMetricsEnabled;
+        return this;
+    }
+
+    public Boolean perExpectationMetricsEnabled() {
+        if (perExpectationMetricsEnabled == null) {
+            return ConfigurationProperties.perExpectationMetricsEnabled();
+        }
+        return perExpectationMetricsEnabled;
+    }
+
+    /**
+     * Enable the opt-in per-expectation Prometheus match counter.
+     *
+     * @param perExpectationMetricsEnabled enable per-expectation metrics
+     */
+    public Configuration perExpectationMetricsEnabled(Boolean perExpectationMetricsEnabled) {
+        this.perExpectationMetricsEnabled = perExpectationMetricsEnabled;
+        return this;
+    }
+
+    public Boolean deduplicateRecordedExpectations() {
+        if (deduplicateRecordedExpectations == null) {
+            return ConfigurationProperties.deduplicateRecordedExpectations();
+        }
+        return deduplicateRecordedExpectations;
+    }
+
+    /**
+     * Enable opt-in deduplication and templatization of retrieved recorded expectations.
+     *
+     * @param deduplicateRecordedExpectations enable deduplication of recorded expectations
+     */
+    public Configuration deduplicateRecordedExpectations(Boolean deduplicateRecordedExpectations) {
+        this.deduplicateRecordedExpectations = deduplicateRecordedExpectations;
+        return this;
+    }
+
+    public Boolean templatizeRecordedValues() {
+        if (templatizeRecordedValues == null) {
+            return ConfigurationProperties.templatizeRecordedValues();
+        }
+        return templatizeRecordedValues;
+    }
+
+    /**
+     * Enable opt-in generalization of volatile-looking query parameter, header and JSON
+     * body leaf values (ids, UUIDs, timestamps, tokens) into regex matchers when
+     * retrieved recorded expectations are post-processed. Only takes effect when
+     * {@link #deduplicateRecordedExpectations()} is also enabled (the post-processor only
+     * runs then). Off by default so recorded output is unchanged unless explicitly enabled.
+     *
+     * @param templatizeRecordedValues enable value templatization of recorded expectations
+     */
+    public Configuration templatizeRecordedValues(Boolean templatizeRecordedValues) {
+        this.templatizeRecordedValues = templatizeRecordedValues;
+        return this;
+    }
+
+    public Boolean redactSecretsInRecordedExpectations() {
+        if (redactSecretsInRecordedExpectations == null) {
+            return ConfigurationProperties.redactSecretsInRecordedExpectations();
+        }
+        return redactSecretsInRecordedExpectations;
+    }
+
+    /**
+     * Enable opt-in redaction of secrets in retrieved recorded expectations. When enabled,
+     * sensitive header values (such as {@code Authorization}, {@code Cookie}, {@code x-api-key}
+     * and bearer/token credentials) are masked before recorded expectations are returned,
+     * generated as client code, or persisted to JSON.
+     * <p>
+     * Trade-off: a redacted recorded expectation can no longer replay against an upstream that
+     * requires that credential, so this is off by default.
+     *
+     * @param redactSecretsInRecordedExpectations enable redaction of secrets in recorded expectations
+     */
+    public Configuration redactSecretsInRecordedExpectations(Boolean redactSecretsInRecordedExpectations) {
+        this.redactSecretsInRecordedExpectations = redactSecretsInRecordedExpectations;
+        return this;
+    }
+
+    public Boolean redactSecretsInLog() {
+        if (redactSecretsInLog == null) {
+            return ConfigurationProperties.redactSecretsInLog();
+        }
+        return redactSecretsInLog;
+    }
+
+    /**
+     * Enable opt-in redaction of secrets in the live event log and dashboard. When enabled,
+     * sensitive request/response header values (such as {@code Authorization}, {@code Cookie},
+     * {@code x-api-key} and bearer/token credentials) are masked in the logged requests returned by
+     * {@code retrieveLogMessages}/{@code retrieveRecordedRequests} and in the dashboard event view.
+     * Redaction is applied only to the displayed/retrieved copies — matching and verification still
+     * see the original values — so off by default.
+     *
+     * @param redactSecretsInLog enable redaction of secrets in the event log and dashboard
+     */
+    public Configuration redactSecretsInLog(Boolean redactSecretsInLog) {
+        this.redactSecretsInLog = redactSecretsInLog;
+        return this;
+    }
+
+    public Double llmCostBudgetUsd() {
+        if (llmCostBudgetUsd == null) {
+            return ConfigurationProperties.llmCostBudgetUsd();
+        }
+        return llmCostBudgetUsd;
+    }
+
+    /**
+     * Set cumulative LLM cost budget in USD. Negative or null to disable.
+     *
+     * @param llmCostBudgetUsd the budget in USD
+     */
+    public Configuration llmCostBudgetUsd(Double llmCostBudgetUsd) {
+        this.llmCostBudgetUsd = llmCostBudgetUsd;
+        return this;
+    }
+
     public Long slowRequestThresholdMillis() {
         if (slowRequestThresholdMillis == null) {
             return ConfigurationProperties.slowRequestThresholdMillis();
@@ -478,6 +681,25 @@ public class Configuration {
         return chaosAutoHaltWindowMillis;
     }
 
+    public Integer rateLimitMaxNamedQuotas() {
+        if (rateLimitMaxNamedQuotas == null) {
+            return ConfigurationProperties.rateLimitMaxNamedQuotas();
+        }
+        return rateLimitMaxNamedQuotas;
+    }
+
+    /**
+     * The maximum number of distinct named rate-limit counters held in the in-process
+     * rate-limit registry. Once this cap is reached a request for a new counter key
+     * fails open (is allowed). Default is 10000.
+     *
+     * @param rateLimitMaxNamedQuotas maximum number of distinct named rate-limit counters
+     */
+    public Configuration rateLimitMaxNamedQuotas(Integer rateLimitMaxNamedQuotas) {
+        this.rateLimitMaxNamedQuotas = rateLimitMaxNamedQuotas;
+        return this;
+    }
+
     /**
      * The sliding window duration in milliseconds over which chaos-injected errors are
      * counted for the auto-halt circuit-breaker. Default is 60000 (60 seconds).
@@ -486,6 +708,326 @@ public class Configuration {
      */
     public Configuration chaosAutoHaltWindowMillis(Long chaosAutoHaltWindowMillis) {
         this.chaosAutoHaltWindowMillis = chaosAutoHaltWindowMillis;
+        return this;
+    }
+
+    public Boolean connectionLifecycleChaosEnabled() {
+        if (connectionLifecycleChaosEnabled == null) {
+            return ConfigurationProperties.connectionLifecycleChaosEnabled();
+        }
+        return connectionLifecycleChaosEnabled;
+    }
+
+    /**
+     * Master switch for connection-lifecycle / graceful-shutdown fault injection (mid-response RST,
+     * host-scoped slow close, HTTP/2 GOAWAY, and the preemption/SIGTERM simulator). Default true.
+     * The response-path lookups are gated on the active registration count, so when no
+     * connection-lifecycle faults and no preemption are configured the feature adds nothing to the
+     * hot path even when enabled — set this to false only to hard-disable the feature.
+     *
+     * @param connectionLifecycleChaosEnabled enable connection-lifecycle chaos
+     */
+    public Configuration connectionLifecycleChaosEnabled(Boolean connectionLifecycleChaosEnabled) {
+        this.connectionLifecycleChaosEnabled = connectionLifecycleChaosEnabled;
+        return this;
+    }
+
+    public Long preemptionSimulationMaxDrainMillis() {
+        if (preemptionSimulationMaxDrainMillis == null) {
+            return ConfigurationProperties.preemptionSimulationMaxDrainMillis();
+        }
+        return preemptionSimulationMaxDrainMillis;
+    }
+
+    /**
+     * Hard upper bound (in milliseconds) on a preemption simulation's drain window and TTL. A
+     * {@code PUT /mockserver/preemption} request asking for a larger value is clamped to this cap, so
+     * a forgotten or runaway simulation cannot cordon the server indefinitely. Default is 86400000
+     * (24 hours).
+     *
+     * @param preemptionSimulationMaxDrainMillis maximum drain/TTL milliseconds
+     */
+    public Configuration preemptionSimulationMaxDrainMillis(Long preemptionSimulationMaxDrainMillis) {
+        this.preemptionSimulationMaxDrainMillis = preemptionSimulationMaxDrainMillis;
+        return this;
+    }
+
+    public Boolean connectionLifecycleAutoHaltCountsRst() {
+        if (connectionLifecycleAutoHaltCountsRst == null) {
+            return ConfigurationProperties.connectionLifecycleAutoHaltCountsRst();
+        }
+        return connectionLifecycleAutoHaltCountsRst;
+    }
+
+    /**
+     * When true, a connection-lifecycle RST (the mid-response RST) counts as a destructive "drop"
+     * fault for the chaos auto-halt circuit-breaker, so a RST storm trips the breaker and halts
+     * chaos. Default true.
+     *
+     * @param connectionLifecycleAutoHaltCountsRst count lifecycle RSTs toward auto-halt
+     */
+    public Configuration connectionLifecycleAutoHaltCountsRst(Boolean connectionLifecycleAutoHaltCountsRst) {
+        this.connectionLifecycleAutoHaltCountsRst = connectionLifecycleAutoHaltCountsRst;
+        return this;
+    }
+
+    public Boolean sloTrackingEnabled() {
+        if (sloTrackingEnabled == null) {
+            return ConfigurationProperties.sloTrackingEnabled();
+        }
+        return sloTrackingEnabled;
+    }
+
+    /**
+     * Enable SLO sample tracking. When enabled, MockServer records a windowed
+     * sample (latency, error flag, scope, host) for each forwarded upstream
+     * round-trip so that {@code PUT /mockserver/verifySLO} can compute resilience
+     * verdicts. Off by default — when disabled the forward path records nothing.
+     *
+     * @param sloTrackingEnabled enable SLO sample tracking
+     */
+    public Configuration sloTrackingEnabled(Boolean sloTrackingEnabled) {
+        this.sloTrackingEnabled = sloTrackingEnabled;
+        return this;
+    }
+
+    public Long sloWindowRetentionMillis() {
+        if (sloWindowRetentionMillis == null) {
+            return ConfigurationProperties.sloWindowRetentionMillis();
+        }
+        return sloWindowRetentionMillis;
+    }
+
+    /**
+     * The maximum age in milliseconds of SLO samples retained for verdict
+     * evaluation. Samples older than this (relative to the newest sample) are
+     * evicted. Default is 600000 (10 minutes).
+     *
+     * @param sloWindowRetentionMillis sample retention window in milliseconds
+     */
+    public Configuration sloWindowRetentionMillis(Long sloWindowRetentionMillis) {
+        this.sloWindowRetentionMillis = sloWindowRetentionMillis;
+        return this;
+    }
+
+    public Integer sloWindowMaxSamples() {
+        if (sloWindowMaxSamples == null) {
+            return ConfigurationProperties.sloWindowMaxSamples();
+        }
+        return sloWindowMaxSamples;
+    }
+
+    /**
+     * The maximum number of SLO samples retained for verdict evaluation. When the
+     * store is full the oldest sample is evicted. Default is 50000.
+     *
+     * @param sloWindowMaxSamples maximum number of retained samples
+     */
+    public Configuration sloWindowMaxSamples(Integer sloWindowMaxSamples) {
+        this.sloWindowMaxSamples = sloWindowMaxSamples;
+        return this;
+    }
+
+    public Boolean loadGenerationEnabled() {
+        if (loadGenerationEnabled == null) {
+            return ConfigurationProperties.loadGenerationEnabled();
+        }
+        return loadGenerationEnabled;
+    }
+
+    /**
+     * Enable API-driven load generation. When enabled, {@code PUT /mockserver/loadScenario}
+     * starts an in-process load scenario that drives templated request steps at a target
+     * concurrency, producing latency/error samples for the SLO verdict feature. Off by
+     * default — when disabled the endpoint returns 403 so MockServer never self-loads
+     * unless explicitly opted in.
+     *
+     * @param loadGenerationEnabled enable load generation
+     */
+    public Configuration loadGenerationEnabled(Boolean loadGenerationEnabled) {
+        this.loadGenerationEnabled = loadGenerationEnabled;
+        return this;
+    }
+
+    public Integer loadGenerationMaxVirtualUsers() {
+        if (loadGenerationMaxVirtualUsers == null) {
+            return ConfigurationProperties.loadGenerationMaxVirtualUsers();
+        }
+        return loadGenerationMaxVirtualUsers;
+    }
+
+    /**
+     * Hard cap on the number of concurrent virtual users a load scenario may drive. A
+     * scenario profile asking for more is rejected at validation. Default is 50.
+     *
+     * @param loadGenerationMaxVirtualUsers maximum concurrent virtual users
+     */
+    public Configuration loadGenerationMaxVirtualUsers(Integer loadGenerationMaxVirtualUsers) {
+        this.loadGenerationMaxVirtualUsers = loadGenerationMaxVirtualUsers;
+        return this;
+    }
+
+    public Integer loadGenerationMaxInFlightRequests() {
+        if (loadGenerationMaxInFlightRequests == null) {
+            return ConfigurationProperties.loadGenerationMaxInFlightRequests();
+        }
+        return loadGenerationMaxInFlightRequests;
+    }
+
+    /**
+     * Hard cap on the number of in-flight (not-yet-completed) requests a load scenario may
+     * have outstanding at once. Enforced live by an in-flight semaphore. Default is 200.
+     *
+     * @param loadGenerationMaxInFlightRequests maximum concurrent in-flight requests
+     */
+    public Configuration loadGenerationMaxInFlightRequests(Integer loadGenerationMaxInFlightRequests) {
+        this.loadGenerationMaxInFlightRequests = loadGenerationMaxInFlightRequests;
+        return this;
+    }
+
+    public Integer loadGenerationMaxRequestsPerSecond() {
+        if (loadGenerationMaxRequestsPerSecond == null) {
+            return ConfigurationProperties.loadGenerationMaxRequestsPerSecond();
+        }
+        return loadGenerationMaxRequestsPerSecond;
+    }
+
+    /**
+     * Hard cap on the request rate (requests per second) a load scenario may dispatch.
+     * Enforced live by a token bucket. Default is 500.
+     *
+     * @param loadGenerationMaxRequestsPerSecond maximum requests dispatched per second
+     */
+    public Configuration loadGenerationMaxRequestsPerSecond(Integer loadGenerationMaxRequestsPerSecond) {
+        this.loadGenerationMaxRequestsPerSecond = loadGenerationMaxRequestsPerSecond;
+        return this;
+    }
+
+    public Long loadGenerationMaxDurationMillis() {
+        if (loadGenerationMaxDurationMillis == null) {
+            return ConfigurationProperties.loadGenerationMaxDurationMillis();
+        }
+        return loadGenerationMaxDurationMillis;
+    }
+
+    /**
+     * Hard cap on the duration (in milliseconds) a load scenario may run. A profile asking
+     * for a longer run is rejected at validation. Default is 3600000 (1 hour).
+     *
+     * @param loadGenerationMaxDurationMillis maximum scenario duration in milliseconds
+     */
+    public Configuration loadGenerationMaxDurationMillis(Long loadGenerationMaxDurationMillis) {
+        this.loadGenerationMaxDurationMillis = loadGenerationMaxDurationMillis;
+        return this;
+    }
+
+    public Integer loadGenerationMaxSteps() {
+        if (loadGenerationMaxSteps == null) {
+            return ConfigurationProperties.loadGenerationMaxSteps();
+        }
+        return loadGenerationMaxSteps;
+    }
+
+    /**
+     * Hard cap on the number of request steps a single load scenario may define. A scenario
+     * with more steps is rejected at validation. Default is 50.
+     *
+     * @param loadGenerationMaxSteps maximum number of steps per scenario
+     */
+    public Configuration loadGenerationMaxSteps(Integer loadGenerationMaxSteps) {
+        this.loadGenerationMaxSteps = loadGenerationMaxSteps;
+        return this;
+    }
+
+    public Double loadGenerationMaxRate() {
+        if (loadGenerationMaxRate == null) {
+            return ConfigurationProperties.loadGenerationMaxRate();
+        }
+        return loadGenerationMaxRate;
+    }
+
+    /**
+     * Hard cap on the arrival rate (iterations per second) a {@code RATE} load stage may request.
+     * A stage asking for a higher rate is rejected at validation. Default is 5000.
+     *
+     * @param loadGenerationMaxRate maximum arrival rate in iterations per second
+     */
+    public Configuration loadGenerationMaxRate(Double loadGenerationMaxRate) {
+        this.loadGenerationMaxRate = loadGenerationMaxRate;
+        return this;
+    }
+
+    public Integer loadGenerationMaxStages() {
+        if (loadGenerationMaxStages == null) {
+            return ConfigurationProperties.loadGenerationMaxStages();
+        }
+        return loadGenerationMaxStages;
+    }
+
+    /**
+     * Hard cap on the number of stages a single load profile may define. A profile with more stages
+     * is rejected at validation. Default is 20.
+     *
+     * @param loadGenerationMaxStages maximum number of stages per profile
+     */
+    public Configuration loadGenerationMaxStages(Integer loadGenerationMaxStages) {
+        this.loadGenerationMaxStages = loadGenerationMaxStages;
+        return this;
+    }
+
+    public Integer loadGenerationMaxConcurrentScenarios() {
+        if (loadGenerationMaxConcurrentScenarios == null) {
+            return ConfigurationProperties.loadGenerationMaxConcurrentScenarios();
+        }
+        return loadGenerationMaxConcurrentScenarios;
+    }
+
+    /**
+     * Hard cap on the number of concurrently active (PENDING or RUNNING) load scenarios. A start
+     * trigger that would exceed this is rejected. Default is 10.
+     *
+     * @param loadGenerationMaxConcurrentScenarios maximum concurrently active load scenarios
+     */
+    public Configuration loadGenerationMaxConcurrentScenarios(Integer loadGenerationMaxConcurrentScenarios) {
+        this.loadGenerationMaxConcurrentScenarios = loadGenerationMaxConcurrentScenarios;
+        return this;
+    }
+
+    public String loadScenarioInitializationJsonPath() {
+        if (loadScenarioInitializationJsonPath == null) {
+            return ConfigurationProperties.loadScenarioInitializationJsonPath();
+        }
+        return loadScenarioInitializationJsonPath;
+    }
+
+    /**
+     * Path to a JSON file containing an array of load scenario definitions to load (register) into the
+     * registry in the {@code LOADED} state at startup. See
+     * {@link ConfigurationProperties#loadScenarioInitializationJsonPath(String)}.
+     *
+     * @param loadScenarioInitializationJsonPath path to the load scenario definitions JSON file
+     */
+    public Configuration loadScenarioInitializationJsonPath(String loadScenarioInitializationJsonPath) {
+        this.loadScenarioInitializationJsonPath = loadScenarioInitializationJsonPath;
+        return this;
+    }
+
+    public java.util.List<String> loadGenerationMetricLabels() {
+        if (loadGenerationMetricLabels == null) {
+            return ConfigurationProperties.loadGenerationMetricLabels();
+        }
+        return loadGenerationMetricLabels;
+    }
+
+    /**
+     * Allowlist of custom load-scenario label names exposed as extra fixed Prometheus labels on
+     * the {@code mock_server_load_*} metrics. See
+     * {@link ConfigurationProperties#loadGenerationMetricLabels(String)}.
+     *
+     * @param loadGenerationMetricLabels custom label names to expose as Prometheus labels
+     */
+    public Configuration loadGenerationMetricLabels(java.util.List<String> loadGenerationMetricLabels) {
+        this.loadGenerationMetricLabels = loadGenerationMetricLabels;
         return this;
     }
 
@@ -534,39 +1076,6 @@ public class Configuration {
 
     public Configuration mcpEnabled(Boolean mcpEnabled) {
         this.mcpEnabled = mcpEnabled;
-        return this;
-    }
-
-    public Boolean breakpointEnabled() {
-        if (breakpointEnabled == null) {
-            return ConfigurationProperties.breakpointEnabled();
-        }
-        return breakpointEnabled;
-    }
-
-    /**
-     * Enable interactive request breakpoints for proxied/forwarded requests.
-     * Default is false (off).
-     */
-    public Configuration breakpointEnabled(Boolean breakpointEnabled) {
-        this.breakpointEnabled = breakpointEnabled;
-        return this;
-    }
-
-    public Boolean breakpointResponseEnabled() {
-        if (breakpointResponseEnabled == null) {
-            return ConfigurationProperties.breakpointResponseEnabled();
-        }
-        return breakpointResponseEnabled;
-    }
-
-    /**
-     * Enable interactive response breakpoints for proxied/forwarded requests.
-     * Holds the upstream response before writing it to the client. Independent
-     * of {@link #breakpointEnabled()} (request breakpoints). Default is false (off).
-     */
-    public Configuration breakpointResponseEnabled(Boolean breakpointResponseEnabled) {
-        this.breakpointResponseEnabled = breakpointResponseEnabled;
         return this;
     }
 
@@ -1116,6 +1625,184 @@ public class Configuration {
         return this;
     }
 
+    public Boolean matchExactCase() {
+        if (matchExactCase == null) {
+            return ConfigurationProperties.matchExactCase();
+        }
+        return matchExactCase;
+    }
+
+    /**
+     * If false (the default) request matching for the method, path and string body is case-insensitive,
+     * matching the historical behaviour. If true matching of those three fields becomes case-sensitive
+     * (exact case). Header names and values, cookie names and values, and query string parameters are
+     * always matched case-insensitively regardless of this setting.
+     *
+     * @param matchExactCase enabled exact-case (case-sensitive) matching of method, path and string body
+     */
+    public Configuration matchExactCase(Boolean matchExactCase) {
+        this.matchExactCase = matchExactCase;
+        return this;
+    }
+
+    public Boolean forwardConnectionPoolEnabled() {
+        if (forwardConnectionPoolEnabled == null) {
+            return ConfigurationProperties.forwardConnectionPoolEnabled();
+        }
+        return forwardConnectionPoolEnabled;
+    }
+
+    /**
+     * If false (the default) every forwarded or proxied request opens a fresh upstream connection
+     * that is closed once the response is received. If true idle keep-alive HTTP/1.1 upstream
+     * connections are pooled (keyed by host, port and scheme) and reused for subsequent requests
+     * to the same upstream. Only plain HTTP/1.1 keep-alive connections are pooled; HTTP/2, HTTP/3,
+     * binary forwarding, streaming responses, proxy-tunnelled connections and connections the
+     * upstream closed or that returned "Connection: close" are never pooled.
+     *
+     * @param forwardConnectionPoolEnabled enable pooling of idle keep-alive upstream HTTP/1.1 connections
+     */
+    public Configuration forwardConnectionPoolEnabled(Boolean forwardConnectionPoolEnabled) {
+        this.forwardConnectionPoolEnabled = forwardConnectionPoolEnabled;
+        return this;
+    }
+
+    public Integer forwardConnectionPoolMaxIdlePerKey() {
+        if (forwardConnectionPoolMaxIdlePerKey == null) {
+            return ConfigurationProperties.forwardConnectionPoolMaxIdlePerKey();
+        }
+        return forwardConnectionPoolMaxIdlePerKey;
+    }
+
+    /**
+     * Maximum number of idle keep-alive upstream connections retained per upstream (host, port,
+     * scheme) when {@code forwardConnectionPoolEnabled} is true. Surplus connections are closed
+     * rather than pooled. Default is 8.
+     *
+     * @param forwardConnectionPoolMaxIdlePerKey maximum idle connections retained per upstream
+     */
+    public Configuration forwardConnectionPoolMaxIdlePerKey(Integer forwardConnectionPoolMaxIdlePerKey) {
+        this.forwardConnectionPoolMaxIdlePerKey = forwardConnectionPoolMaxIdlePerKey;
+        return this;
+    }
+
+    public Long forwardConnectionPoolIdleTimeoutMillis() {
+        if (forwardConnectionPoolIdleTimeoutMillis == null) {
+            return ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis();
+        }
+        return forwardConnectionPoolIdleTimeoutMillis;
+    }
+
+    /**
+     * How long in milliseconds an idle pooled upstream connection is retained before it is closed
+     * and evicted when {@code forwardConnectionPoolEnabled} is true. Default is 30,000 ms; 0
+     * disables idle eviction.
+     *
+     * @param forwardConnectionPoolIdleTimeoutMillis idle retention time in milliseconds, 0 to disable
+     */
+    public Configuration forwardConnectionPoolIdleTimeoutMillis(Long forwardConnectionPoolIdleTimeoutMillis) {
+        this.forwardConnectionPoolIdleTimeoutMillis = forwardConnectionPoolIdleTimeoutMillis;
+        return this;
+    }
+
+    public Integer forwardProxyRetryCount() {
+        if (forwardProxyRetryCount == null) {
+            return ConfigurationProperties.forwardProxyRetryCount();
+        }
+        return forwardProxyRetryCount;
+    }
+
+    /**
+     * Maximum number of times a forwarded or proxied request to an upstream is retried after a
+     * transient failure (connection refused/reset, timeout, or a 502/503/504 from the upstream).
+     * Only idempotent HTTP methods (GET, HEAD, OPTIONS, PUT, DELETE, TRACE) are retried. Default is
+     * 0 (no retry — each request is forwarded exactly once, as before).
+     *
+     * @param forwardProxyRetryCount maximum retries for idempotent forwarded/proxied requests, 0 to disable
+     */
+    public Configuration forwardProxyRetryCount(Integer forwardProxyRetryCount) {
+        this.forwardProxyRetryCount = forwardProxyRetryCount;
+        return this;
+    }
+
+    public Long forwardProxyRetryBackoffMillis() {
+        if (forwardProxyRetryBackoffMillis == null) {
+            return ConfigurationProperties.forwardProxyRetryBackoffMillis();
+        }
+        return forwardProxyRetryBackoffMillis;
+    }
+
+    /**
+     * Base linear back-off in milliseconds between forward/proxy retry attempts (attempt n waits n
+     * base delays). Only relevant when {@code forwardProxyRetryCount} is greater than 0. Default is
+     * 100 ms; 0 retries immediately with no back-off.
+     *
+     * @param forwardProxyRetryBackoffMillis base back-off in milliseconds, 0 to disable
+     */
+    public Configuration forwardProxyRetryBackoffMillis(Long forwardProxyRetryBackoffMillis) {
+        this.forwardProxyRetryBackoffMillis = forwardProxyRetryBackoffMillis;
+        return this;
+    }
+
+    public Boolean forwardProxyCircuitBreakerEnabled() {
+        if (forwardProxyCircuitBreakerEnabled == null) {
+            return ConfigurationProperties.forwardProxyCircuitBreakerEnabled();
+        }
+        return forwardProxyCircuitBreakerEnabled;
+    }
+
+    /**
+     * If false (the default) every forwarded or proxied request is attempted against its upstream.
+     * If true a per-upstream circuit breaker (keyed by host and port) trips open after
+     * {@code forwardProxyCircuitBreakerFailureThreshold} consecutive failures, failing subsequent
+     * requests fast with a 503 for {@code forwardProxyCircuitBreakerWindowMillis} before allowing a
+     * single half-open trial request.
+     *
+     * @param forwardProxyCircuitBreakerEnabled enable the per-upstream forward/proxy circuit breaker
+     */
+    public Configuration forwardProxyCircuitBreakerEnabled(Boolean forwardProxyCircuitBreakerEnabled) {
+        this.forwardProxyCircuitBreakerEnabled = forwardProxyCircuitBreakerEnabled;
+        return this;
+    }
+
+    public Integer forwardProxyCircuitBreakerFailureThreshold() {
+        if (forwardProxyCircuitBreakerFailureThreshold == null) {
+            return ConfigurationProperties.forwardProxyCircuitBreakerFailureThreshold();
+        }
+        return forwardProxyCircuitBreakerFailureThreshold;
+    }
+
+    /**
+     * Number of consecutive failures to a single upstream (host and port) that trips the
+     * forward/proxy circuit breaker open. Only relevant when
+     * {@code forwardProxyCircuitBreakerEnabled} is true. Default is 5.
+     *
+     * @param forwardProxyCircuitBreakerFailureThreshold consecutive failures that open the breaker
+     */
+    public Configuration forwardProxyCircuitBreakerFailureThreshold(Integer forwardProxyCircuitBreakerFailureThreshold) {
+        this.forwardProxyCircuitBreakerFailureThreshold = forwardProxyCircuitBreakerFailureThreshold;
+        return this;
+    }
+
+    public Long forwardProxyCircuitBreakerWindowMillis() {
+        if (forwardProxyCircuitBreakerWindowMillis == null) {
+            return ConfigurationProperties.forwardProxyCircuitBreakerWindowMillis();
+        }
+        return forwardProxyCircuitBreakerWindowMillis;
+    }
+
+    /**
+     * How long in milliseconds the forward/proxy circuit breaker stays open (failing requests fast
+     * with a 503) for an upstream before transitioning to half-open. Only relevant when
+     * {@code forwardProxyCircuitBreakerEnabled} is true. Default is 30,000 ms.
+     *
+     * @param forwardProxyCircuitBreakerWindowMillis open-state duration in milliseconds
+     */
+    public Configuration forwardProxyCircuitBreakerWindowMillis(Long forwardProxyCircuitBreakerWindowMillis) {
+        this.forwardProxyCircuitBreakerWindowMillis = forwardProxyCircuitBreakerWindowMillis;
+        return this;
+    }
+
     public Long maxSocketTimeoutInMillis() {
         if (maxSocketTimeoutInMillis == null) {
             return ConfigurationProperties.maxSocketTimeout();
@@ -1336,6 +2023,72 @@ public class Configuration {
         return this;
     }
 
+    public Boolean controlPlaneAuditEnabled() {
+        if (controlPlaneAuditEnabled == null) {
+            return ConfigurationProperties.controlPlaneAuditEnabled();
+        }
+        return controlPlaneAuditEnabled;
+    }
+
+    /**
+     * Whether to record an append-only, bounded, in-memory audit log of
+     * control-plane mutations (who/what/when/where/outcome). Off by default. When
+     * disabled, control-plane operations behave byte-for-byte identically and no
+     * audit entries are stored. The audit log never stores request headers or
+     * bodies — only redacted, structural metadata. Retrieve via
+     * {@code GET /mockserver/audit}.
+     *
+     * @param controlPlaneAuditEnabled true to enable control-plane audit logging
+     */
+    public Configuration controlPlaneAuditEnabled(Boolean controlPlaneAuditEnabled) {
+        this.controlPlaneAuditEnabled = controlPlaneAuditEnabled;
+        return this;
+    }
+
+    public Integer controlPlaneAuditMaxEntries() {
+        if (controlPlaneAuditMaxEntries == null) {
+            return ConfigurationProperties.controlPlaneAuditMaxEntries();
+        }
+        return controlPlaneAuditMaxEntries;
+    }
+
+    /**
+     * Maximum number of control-plane audit entries retained in the bounded
+     * in-memory ring buffer. Once full, the oldest entry is evicted on each new
+     * record. Default 1000.
+     * <p>
+     * Note: the underlying {@code AuditStore} singleton reads this value once at
+     * construction (fixed capacity, like {@code DriftStore}); changing it at
+     * runtime via this setter does not resize an already-constructed store.
+     *
+     * @param controlPlaneAuditMaxEntries maximum retained audit entries
+     */
+    public Configuration controlPlaneAuditMaxEntries(Integer controlPlaneAuditMaxEntries) {
+        this.controlPlaneAuditMaxEntries = controlPlaneAuditMaxEntries;
+        return this;
+    }
+
+    public Boolean controlPlaneAuditReads() {
+        if (controlPlaneAuditReads == null) {
+            return ConfigurationProperties.controlPlaneAuditReads();
+        }
+        return controlPlaneAuditReads;
+    }
+
+    /**
+     * Whether to also audit control-plane READ operations (e.g. GET requests and
+     * read-only PUTs such as {@code /retrieve} and {@code /verify}). Default
+     * false — only mutations (and {@code reset}) are audited, to keep the audit
+     * log focused on state changes. Has no effect unless
+     * {@code controlPlaneAuditEnabled} is true.
+     *
+     * @param controlPlaneAuditReads true to also audit control-plane reads
+     */
+    public Configuration controlPlaneAuditReads(Boolean controlPlaneAuditReads) {
+        this.controlPlaneAuditReads = controlPlaneAuditReads;
+        return this;
+    }
+
     public Long driftResponseTimeThresholdMs() {
         if (driftResponseTimeThresholdMs == null) {
             return ConfigurationProperties.driftResponseTimeThresholdMs();
@@ -1352,6 +2105,80 @@ public class Configuration {
      */
     public Configuration driftResponseTimeThresholdMs(Long driftResponseTimeThresholdMs) {
         this.driftResponseTimeThresholdMs = driftResponseTimeThresholdMs;
+        return this;
+    }
+
+    public Boolean driftAlertWebhookEnabled() {
+        if (driftAlertWebhookEnabled == null) {
+            return ConfigurationProperties.driftAlertWebhookEnabled();
+        }
+        return driftAlertWebhookEnabled;
+    }
+
+    /**
+     * Whether to fire a fire-and-forget HTTP POST webhook when a drift record of sufficient
+     * severity is stored. Off by default (opt-in). A webhook failure never affects drift
+     * analysis or the served response.
+     *
+     * @param driftAlertWebhookEnabled true to enable the drift-alert webhook
+     */
+    public Configuration driftAlertWebhookEnabled(Boolean driftAlertWebhookEnabled) {
+        this.driftAlertWebhookEnabled = driftAlertWebhookEnabled;
+        return this;
+    }
+
+    public String driftAlertWebhookUrl() {
+        if (driftAlertWebhookUrl == null) {
+            return ConfigurationProperties.driftAlertWebhookUrl();
+        }
+        return driftAlertWebhookUrl;
+    }
+
+    /**
+     * The URL the drift-alert webhook POSTs to. Empty by default; an empty URL leaves the
+     * webhook disabled even when enabled is true.
+     *
+     * @param driftAlertWebhookUrl the webhook URL
+     */
+    public Configuration driftAlertWebhookUrl(String driftAlertWebhookUrl) {
+        this.driftAlertWebhookUrl = driftAlertWebhookUrl;
+        return this;
+    }
+
+    public String driftAlertSeverityThreshold() {
+        if (driftAlertSeverityThreshold == null) {
+            return ConfigurationProperties.driftAlertSeverityThreshold();
+        }
+        return driftAlertSeverityThreshold;
+    }
+
+    /**
+     * Minimum effective severity (BREAKING, WARNING or INFORMATIONAL) at which a stored drift
+     * record fires the webhook. BREAKING is the most severe; INFORMATIONAL fires on every drift.
+     * Default BREAKING.
+     *
+     * @param driftAlertSeverityThreshold the severity threshold name
+     */
+    public Configuration driftAlertSeverityThreshold(String driftAlertSeverityThreshold) {
+        this.driftAlertSeverityThreshold = driftAlertSeverityThreshold;
+        return this;
+    }
+
+    public Long driftAlertCooldownMillis() {
+        if (driftAlertCooldownMillis == null) {
+            return ConfigurationProperties.driftAlertCooldownMillis();
+        }
+        return driftAlertCooldownMillis;
+    }
+
+    /**
+     * De-dup cooldown window in milliseconds: a webhook fires at most once per
+     * expectation/driftType/field signature within this window. Default 60000 (60s).
+     *
+     * @param driftAlertCooldownMillis the cooldown window in milliseconds
+     */
+    public Configuration driftAlertCooldownMillis(Long driftAlertCooldownMillis) {
+        this.driftAlertCooldownMillis = driftAlertCooldownMillis;
         return this;
     }
 
@@ -1636,6 +2463,57 @@ public class Configuration {
         return corsMaxAgeInSeconds;
     }
 
+    public String defaultResponseHeaders() {
+        if (defaultResponseHeaders == null) {
+            return ConfigurationProperties.defaultResponseHeaders();
+        }
+        return defaultResponseHeaders;
+    }
+
+    /**
+     * Returns the parsed {@code defaultResponseHeaders} as an immutable list of {@link Header}s,
+     * memoised so the pipe-split parse runs once per distinct resolved value rather than on every
+     * response. {@link org.mockserver.responseheaders.DefaultResponseHeaders} is constructed per
+     * HTTP request, so without this cache the parse would run on the hot path for every response.
+     *
+     * <p>The cache is keyed on the resolved value returned by {@link #defaultResponseHeaders()}, so
+     * it is transparently invalidated both when {@link #defaultResponseHeaders(String)} is set to a
+     * new value and when the value resolves to the global {@code ConfigurationProperties} default
+     * and that changes. The empty/default case returns a shared empty list, allocating nothing.</p>
+     *
+     * @return an immutable list of parsed default response headers (empty when none are configured)
+     */
+    public List<Header> parsedDefaultResponseHeaders() {
+        String source = defaultResponseHeaders();
+        // equality on the source string is the cache validity check; the two volatiles are not read
+        // or written atomically, but the parse is a pure deterministic function of source, so a race
+        // can at worst cause a redundant recompute (never a wrong result) and is self-correcting
+        List<Header> cached = parsedDefaultResponseHeaders;
+        if (cached == null || !Objects.equals(source, parsedDefaultResponseHeadersSource)) {
+            cached = DefaultResponseHeaders.parse(source);
+            parsedDefaultResponseHeaders = cached;
+            parsedDefaultResponseHeadersSource = source;
+        }
+        return cached;
+    }
+
+    /**
+     * <p>Default response headers that MockServer stamps onto every response it returns (mock responses, control-plane / dashboard responses, and forwarded / proxied responses) using add-if-absent semantics, so a header explicitly set on the matched response always wins.</p>
+     * <p>The format is a pipe (<code>|</code>) separated list of <code>name=value</code> pairs, e.g. <code>Server=MockServer|X-Trace-Id=abc123</code>. A header value may itself contain commas; only <code>|</code> separates headers and only the first <code>=</code> in each pair separates the name from the value.</p>
+     * <p>The default is "" (no default response headers are added, so behaviour is unchanged).</p>
+     * <p>Passing {@code null} clears the per-instance override so the value reverts to the global {@link ConfigurationProperties#defaultResponseHeaders()} property default (consistent with other nullable string properties such as {@code corsAllowOrigin} and {@code localBoundIP}).</p>
+     *
+     * @param defaultResponseHeaders pipe separated list of name=value header pairs added to responses if not already present
+     */
+    public Configuration defaultResponseHeaders(String defaultResponseHeaders) {
+        this.defaultResponseHeaders = defaultResponseHeaders;
+        // invalidate the memoised parse; parsedDefaultResponseHeaders() will recompute lazily,
+        // also picking up any change in the global property when defaultResponseHeaders is null
+        this.parsedDefaultResponseHeaders = null;
+        this.parsedDefaultResponseHeadersSource = null;
+        return this;
+    }
+
     /**
      * The value used for CORS in the access-control-max-age header.
      * <p>
@@ -1840,6 +2718,50 @@ public class Configuration {
         return this;
     }
 
+    public Boolean enforceResponseValidationForMocks() {
+        if (enforceResponseValidationForMocks == null) {
+            return ConfigurationProperties.enforceResponseValidationForMocks();
+        }
+        return enforceResponseValidationForMocks;
+    }
+
+    /**
+     * <p>If false (the default) OpenAPI response validation of mock responses is advisory only -
+     * validation failures are logged but the response is still returned to the client.</p>
+     * <p>If true a mock response that fails OpenAPI response validation is replaced with a 502 error
+     * describing the violations, matching the enforcement already available on the validation-proxy
+     * path ({@code validateProxyEnforce}).</p>
+     * <p>This flag only has any effect when {@code openAPIResponseValidation} is also enabled.</p>
+     *
+     * @param enforceResponseValidationForMocks if enabled mock responses that fail OpenAPI response validation are replaced with a 502 error
+     */
+    public Configuration enforceResponseValidationForMocks(Boolean enforceResponseValidationForMocks) {
+        this.enforceResponseValidationForMocks = enforceResponseValidationForMocks;
+        return this;
+    }
+
+    public Boolean validateRequestsAgainstOpenApiSpec() {
+        if (validateRequestsAgainstOpenApiSpec == null) {
+            return ConfigurationProperties.validateRequestsAgainstOpenApiSpec();
+        }
+        return validateRequestsAgainstOpenApiSpec;
+    }
+
+    /**
+     * <p>If false (the default) incoming requests matched by an OpenAPI-backed mock expectation are
+     * not validated against the spec — behaviour is exactly as before.</p>
+     * <p>If true, when a request matches an expectation created from an OpenAPI spec
+     * ({@code specUrlOrPayload}), the incoming request is validated against that spec before the
+     * matched action is dispatched. A request that violates the spec is rejected with a 400 status
+     * code describing the violations, instead of the mock response.</p>
+     *
+     * @param validateRequestsAgainstOpenApiSpec if enabled, requests matched by an OpenAPI-backed mock that violate the spec are rejected with a 400 error
+     */
+    public Configuration validateRequestsAgainstOpenApiSpec(Boolean validateRequestsAgainstOpenApiSpec) {
+        this.validateRequestsAgainstOpenApiSpec = validateRequestsAgainstOpenApiSpec;
+        return this;
+    }
+
     public String validateProxyOpenAPISpec() {
         if (validateProxyOpenAPISpec == null) {
             return ConfigurationProperties.validateProxyOpenAPISpec();
@@ -1918,6 +2840,25 @@ public class Configuration {
      */
     public Configuration watchInitializationJson(Boolean watchInitializationJson) {
         this.watchInitializationJson = watchInitializationJson;
+        return this;
+    }
+
+    public Boolean failOnInitializationError() {
+        if (failOnInitializationError == null) {
+            return ConfigurationProperties.failOnInitializationError();
+        }
+        return failOnInitializationError;
+    }
+
+    /**
+     * <p>If enabled a failure to load any expectation initializer (a malformed initialization JSON / OpenAPI file or a broken initialization class) will fail server startup with an exception rather than logging a warning and continuing with zero expectations from that source.</p>
+     *
+     * <p>The default is false (a failed initializer is logged at WARN and startup continues).</p>
+     *
+     * @param failOnInitializationError if enabled a failed expectation initializer load fails server startup
+     */
+    public Configuration failOnInitializationError(Boolean failOnInitializationError) {
+        this.failOnInitializationError = failOnInitializationError;
         return this;
     }
 
@@ -2250,6 +3191,39 @@ public class Configuration {
      */
     public Configuration clusterTransportConfig(String clusterTransportConfig) {
         this.clusterTransportConfig = clusterTransportConfig;
+        return this;
+    }
+
+    /**
+     * Returns whether per-expectation {@code Times} limits are enforced
+     * cluster-wide via a shared backend compare-and-set (CAS). Default is
+     * {@code true} — a {@code Times.exactly(N)} expectation serves exactly N
+     * times across the whole fleet. Only relevant when a clustered backend
+     * is active.
+     * <p>
+     * When {@code false}, limited-{@code Times} matching falls back to the
+     * node-local fast path (no synchronous backend round-trip on the request
+     * worker thread), trading the fleet-wide exactly-N guarantee for lower,
+     * more predictable matching latency. See
+     * {@code RequestMatchers.consumeTimesViaBackendCas}.
+     */
+    public boolean clusterSharedTimesEnabled() {
+        if (clusterSharedTimesEnabled == null) {
+            return ConfigurationProperties.clusterSharedTimesEnabled();
+        }
+        return clusterSharedTimesEnabled;
+    }
+
+    /**
+     * Enables or disables cluster-wide shared-{@code Times} CAS enforcement.
+     *
+     * @param clusterSharedTimesEnabled {@code true} (default) to enforce
+     *                                  {@code Times} limits fleet-wide via
+     *                                  backend CAS; {@code false} for
+     *                                  node-local {@code Times}
+     */
+    public Configuration clusterSharedTimesEnabled(boolean clusterSharedTimesEnabled) {
+        this.clusterSharedTimesEnabled = clusterSharedTimesEnabled;
         return this;
     }
 
@@ -2625,6 +3599,32 @@ public class Configuration {
         return this;
     }
 
+    public String matchNamespaceHeader() {
+        if (matchNamespaceHeader == null) {
+            return ConfigurationProperties.matchNamespaceHeader();
+        }
+        return matchNamespaceHeader;
+    }
+
+    /**
+     * The name of the request header used to scope expectation matching to a namespace (tenant),
+     * enabling multiple teams or test-suites to share a single MockServer instance without their
+     * expectations colliding.
+     * <p>
+     * When a request carries this header with value {@code T}, matching considers expectations whose
+     * {@code namespace} equals {@code T} <em>plus</em> all global (no-namespace) expectations — and
+     * never expectations belonging to other namespaces. A request with no namespace header matches
+     * only global (no-namespace) expectations.
+     * <p>
+     * The default is {@code X-MockServer-Namespace}.
+     *
+     * @param matchNamespaceHeader the request header name carrying the namespace
+     */
+    public Configuration matchNamespaceHeader(String matchNamespaceHeader) {
+        this.matchNamespaceHeader = matchNamespaceHeader;
+        return this;
+    }
+
     public Boolean controlPlaneTLSMutualAuthenticationRequired() {
         if (controlPlaneTLSMutualAuthenticationRequired == null) {
             return ConfigurationProperties.controlPlaneTLSMutualAuthenticationRequired();
@@ -2816,6 +3816,164 @@ public class Configuration {
      */
     public Configuration controlPlaneJWTAuthenticationRequiredClaims(Set<String> controlPlaneJWTAuthenticationRequiredClaims) {
         this.controlPlaneJWTAuthenticationRequiredClaims = controlPlaneJWTAuthenticationRequiredClaims;
+        return this;
+    }
+
+    public Boolean controlPlaneOidcAuthenticationRequired() {
+        if (controlPlaneOidcAuthenticationRequired == null) {
+            return ConfigurationProperties.controlPlaneOidcAuthenticationRequired();
+        }
+        return controlPlaneOidcAuthenticationRequired;
+    }
+
+    /**
+     * <p>
+     * Require verified OIDC bearer-token authentication for all control plane requests, validating tokens issued by an external OIDC IdP
+     * </p>
+     *
+     * @param controlPlaneOidcAuthenticationRequired verified OIDC authentication for all control plane requests
+     */
+    public Configuration controlPlaneOidcAuthenticationRequired(Boolean controlPlaneOidcAuthenticationRequired) {
+        this.controlPlaneOidcAuthenticationRequired = controlPlaneOidcAuthenticationRequired;
+        return this;
+    }
+
+    public String controlPlaneOidcIssuer() {
+        if (controlPlaneOidcIssuer == null) {
+            return ConfigurationProperties.controlPlaneOidcIssuer();
+        }
+        return controlPlaneOidcIssuer;
+    }
+
+    /**
+     * <p>
+     * OIDC issuer (i.e. iss) required on control plane tokens; also used to discover the JWKS URI via {issuer}/.well-known/openid-configuration when controlPlaneOidcJwksUri is not set
+     * </p>
+     *
+     * @param controlPlaneOidcIssuer required value for issuer claim (i.e. iss)
+     */
+    public Configuration controlPlaneOidcIssuer(String controlPlaneOidcIssuer) {
+        this.controlPlaneOidcIssuer = controlPlaneOidcIssuer;
+        return this;
+    }
+
+    public String controlPlaneOidcJwksUri() {
+        if (controlPlaneOidcJwksUri == null) {
+            return ConfigurationProperties.controlPlaneOidcJwksUri();
+        }
+        return controlPlaneOidcJwksUri;
+    }
+
+    /**
+     * <p>
+     * JWKS URI used to verify control plane OIDC token signatures; if not set it is discovered from the issuer's OIDC discovery document
+     * </p>
+     *
+     * @param controlPlaneOidcJwksUri URL (or file/classpath path) of the JWK source
+     */
+    public Configuration controlPlaneOidcJwksUri(String controlPlaneOidcJwksUri) {
+        this.controlPlaneOidcJwksUri = controlPlaneOidcJwksUri;
+        return this;
+    }
+
+    public String controlPlaneOidcAudience() {
+        if (controlPlaneOidcAudience == null) {
+            return ConfigurationProperties.controlPlaneOidcAudience();
+        }
+        return controlPlaneOidcAudience;
+    }
+
+    /**
+     * <p>
+     * Audience claim (i.e. aud) required on control plane OIDC tokens
+     * </p>
+     *
+     * @param controlPlaneOidcAudience required value for audience claim (i.e. aud)
+     */
+    public Configuration controlPlaneOidcAudience(String controlPlaneOidcAudience) {
+        this.controlPlaneOidcAudience = controlPlaneOidcAudience;
+        return this;
+    }
+
+    public Set<String> controlPlaneOidcRequiredScopes() {
+        if (controlPlaneOidcRequiredScopes == null) {
+            return ConfigurationProperties.controlPlaneOidcRequiredScopes();
+        }
+        return controlPlaneOidcRequiredScopes;
+    }
+
+    /**
+     * <p>
+     * Scopes that must all be present in a control plane OIDC token before it is accepted
+     * </p>
+     * <p>
+     * Value should be a string with comma separated values, for example: mockserver.read,mockserver.write
+     * </p>
+     *
+     * @param controlPlaneOidcRequiredScopes required scopes
+     */
+    public Configuration controlPlaneOidcRequiredScopes(Set<String> controlPlaneOidcRequiredScopes) {
+        this.controlPlaneOidcRequiredScopes = controlPlaneOidcRequiredScopes;
+        return this;
+    }
+
+    public String controlPlaneOidcScopeClaim() {
+        if (controlPlaneOidcScopeClaim == null) {
+            return ConfigurationProperties.controlPlaneOidcScopeClaim();
+        }
+        return controlPlaneOidcScopeClaim;
+    }
+
+    /**
+     * <p>
+     * Name of the claim holding granted scopes on a control plane OIDC token, default "scope" (space-delimited); array claims such as scp, roles or groups are also supported
+     * </p>
+     *
+     * @param controlPlaneOidcScopeClaim name of the scope claim
+     */
+    public Configuration controlPlaneOidcScopeClaim(String controlPlaneOidcScopeClaim) {
+        this.controlPlaneOidcScopeClaim = controlPlaneOidcScopeClaim;
+        return this;
+    }
+
+    public Boolean controlPlaneAuthorizationEnabled() {
+        if (controlPlaneAuthorizationEnabled == null) {
+            return ConfigurationProperties.controlPlaneAuthorizationEnabled();
+        }
+        return controlPlaneAuthorizationEnabled;
+    }
+
+    /**
+     * <p>
+     * Enable coarse role-based authorization of control plane requests, mapping a verified principal's scopes/groups to read/mutate/admin roles via controlPlaneScopeMapping; requires a verified principal (i.e. control plane OIDC authentication should be enabled). Default false.
+     * </p>
+     *
+     * @param controlPlaneAuthorizationEnabled true to enforce control plane authorization
+     */
+    public Configuration controlPlaneAuthorizationEnabled(Boolean controlPlaneAuthorizationEnabled) {
+        this.controlPlaneAuthorizationEnabled = controlPlaneAuthorizationEnabled;
+        return this;
+    }
+
+    public Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping() {
+        if (controlPlaneScopeMapping == null) {
+            return ConfigurationProperties.controlPlaneScopeMapping();
+        }
+        return controlPlaneScopeMapping;
+    }
+
+    /**
+     * <p>
+     * Mapping from a verified scope/group value to a coarse control plane role (read, mutate or admin). Roles are hierarchical: admin satisfies mutate satisfies read.
+     * </p>
+     * <p>
+     * Value should be a comma separated list of value=role pairs, for example: platform-admins=admin,qa-team=mutate,viewers=read
+     * </p>
+     *
+     * @param controlPlaneScopeMapping mapping from scope/group value to role
+     */
+    public Configuration controlPlaneScopeMapping(Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping) {
+        this.controlPlaneScopeMapping = controlPlaneScopeMapping;
         return this;
     }
 
@@ -3396,6 +4554,24 @@ public class Configuration {
      */
     public Configuration asyncMqttBrokerUrl(String asyncMqttBrokerUrl) {
         this.asyncMqttBrokerUrl = asyncMqttBrokerUrl;
+        return this;
+    }
+
+    public String asyncAmqpUri() {
+        if (asyncAmqpUri == null) {
+            return ConfigurationProperties.asyncAmqpUri();
+        }
+        return asyncAmqpUri;
+    }
+
+    /**
+     * Default AMQP (RabbitMQ) connection URI for async messaging. Used when a
+     * {@code PUT /mockserver/asyncapi} request omits {@code brokerConfig.amqpUri}.
+     *
+     * @param asyncAmqpUri the default AMQP connection URI
+     */
+    public Configuration asyncAmqpUri(String asyncAmqpUri) {
+        this.asyncAmqpUri = asyncAmqpUri;
         return this;
     }
 

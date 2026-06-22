@@ -4,7 +4,7 @@ servers:
   - url: 'https://localhost:1080/'
 info:
   title: MockServer API
-  version: 7.0.0
+  version: 7.1.0
   description: >-
     MockServer enables easy mocking of any system you integrate with via HTTP or HTTPS with clients written in Java, JavaScript and Ruby and a simple REST API (as shown below).
 
@@ -88,6 +88,148 @@ paths:
               $ref: "#/components/schemas/OpenAPIExpectations"
         description: expectation(s) to create
         required: true
+  /mockserver/oidc:
+    put:
+      tags:
+        - expectation
+      operationId: mockOidcProvider
+      summary: generate a turnkey OIDC / OAuth2 provider
+      description: >-
+        Generates a set of expectations that emulate an OpenID Connect / OAuth2 provider (discovery document,
+        JWKS, token, authorize, userinfo and related endpoints) and adds them. An empty body uses the default
+        provider configuration.
+      responses:
+        '201':
+          description: OIDC provider expectations created
+          content:
+            application/json:
+              schema:
+                description: "list of upserted expectations"
+                type: array
+                additionalProperties: false
+                items:
+                  $ref: "#/components/schemas/Expectation"
+        '400':
+          description: incorrect request format
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: OIDC provider configuration; an empty body uses defaults
+              properties:
+                issuer:
+                  type: string
+                  description: issuer URL advertised in the discovery document and token claims
+                clientId:
+                  type: string
+                  description: OAuth2 client identifier
+                clientSecret:
+                  type: string
+                  writeOnly: true
+                  description: OAuth2 client secret
+                privateKeyPem:
+                  type: string
+                  writeOnly: true
+                  description: PEM-encoded signing private key (never serialized back in responses)
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                  description: supported OAuth2 / OIDC scopes
+                tokenExpirySeconds:
+                  type: integer
+                  description: lifetime of issued access tokens in seconds
+        description: OIDC provider configuration
+        required: false
+  /mockserver/saml:
+    put:
+      tags:
+        - expectation
+      operationId: mockSamlProvider
+      summary: generate a turnkey SAML identity provider
+      description: >-
+        Generates a set of expectations that emulate a SAML 2.0 identity provider (metadata, single sign-on and
+        single logout endpoints) and adds them. An empty body uses the default provider configuration.
+      responses:
+        '201':
+          description: SAML provider expectations created
+          content:
+            application/json:
+              schema:
+                description: "list of upserted expectations"
+                type: array
+                additionalProperties: false
+                items:
+                  $ref: "#/components/schemas/Expectation"
+        '400':
+          description: incorrect request format
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: SAML provider configuration; an empty body uses defaults
+              properties:
+                idpEntityId:
+                  type: string
+                  description: identity provider entity ID advertised in metadata
+                spEntityId:
+                  type: string
+                  description: service provider entity ID the assertions are issued for
+                signingCertificatePem:
+                  type: string
+                  description: PEM-encoded X.509 certificate used to verify signed assertions
+                signingPrivateKeyPem:
+                  type: string
+                  writeOnly: true
+                  description: PEM-encoded private key used to sign assertions
+        description: SAML provider configuration
+        required: false
+  /mockserver/scim:
+    put:
+      tags:
+        - expectation
+      operationId: mockScimProvider
+      summary: generate a turnkey SCIM provisioning provider
+      description: >-
+        Generates a set of expectations that emulate a SCIM 2.0 provisioning provider (Users, Groups and
+        ServiceProviderConfig endpoints) and adds them. An empty body uses the default provider configuration.
+      responses:
+        '201':
+          description: SCIM provider expectations created
+          content:
+            application/json:
+              schema:
+                description: "list of upserted expectations"
+                type: array
+                additionalProperties: false
+                items:
+                  $ref: "#/components/schemas/Expectation"
+        '400':
+          description: incorrect request format
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: SCIM provider configuration; an empty body uses defaults
+              properties:
+                basePath:
+                  type: string
+                  description: base path the SCIM endpoints are served under
+                requireBearerToken:
+                  type: boolean
+                  description: whether requests must present a bearer token
+                expectedBearerToken:
+                  type: string
+                  writeOnly: true
+                  description: bearer token that incoming requests must present when required
+        description: SCIM provider configuration
+        required: false
   /mockserver/clear:
     put:
       tags:
@@ -133,9 +275,9 @@ paths:
           name: format
           schema:
             type: string
-            enum: [ "java", "json", "log_entries" ]
+            enum: [ "java", "javascript", "python", "go", "csharp", "ruby", "rust", "php", "json", "log_entries", "har", "openapi", "postman", "bruno", "curl" ]
           required: false
-          description: changes response format, default if not specified is "json", supported values are "java", "json", "log_entries"
+          description: changes response format, default if not specified is "json", supported values are "java", "javascript", "python", "go", "csharp", "ruby", "rust", "php", "json", "log_entries", "har", "openapi", "postman", "bruno", "curl"
         - in: query
           name: type
           schema:
@@ -317,6 +459,8 @@ components:
           maximum: 100
         chaos:
           $ref: "#/components/schemas/HttpChaosProfile"
+        rateLimit:
+          $ref: "#/components/schemas/RateLimit"
         httpRequest:
           $ref: "#/components/schemas/RequestDefinition"
         httpResponse:
@@ -347,6 +491,9 @@ components:
           $ref: "#/components/schemas/Times"
         timeToLive:
           $ref: "#/components/schemas/TimeToLive"
+        namespace:
+          type: string
+          description: optional namespace (tenant) this expectation belongs to; when set, the expectation only matches requests carrying the configured matchNamespaceHeader with this value, isolated from other namespaces
         scenarioName:
           type: string
         scenarioState:
@@ -361,6 +508,38 @@ components:
           enum:
             - SEQUENTIAL
             - RANDOM
+            - WEIGHTED
+            - SWITCH
+        responseWeights:
+          type: array
+          items:
+            type: integer
+            minimum: 1
+        switchAfter:
+          type: integer
+          minimum: 1
+        crossProtocolScenarios:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              trigger:
+                enum:
+                  - DNS_QUERY
+                  - WEBSOCKET_CONNECT
+                  - GRPC_REQUEST
+                  - HTTP_REQUEST
+              matchPattern:
+                type: string
+              scenarioName:
+                type: string
+              targetState:
+                type: string
+            required:
+              - trigger
+              - scenarioName
+              - targetState
       oneOf:
         - required:
             - httpResponse
@@ -417,7 +596,18 @@ components:
         operationsAndResponses:
           type: object
           additionalProperties:
-            type: string
+            oneOf:
+              - type: string
+              - type: object
+                properties:
+                  statusCode:
+                    type: string
+                  exampleName:
+                    type: string
+                required:
+                  - statusCode
+        contextPathPrefix:
+          type: string
       required:
         - specUrlOrPayload
     RequestDefinition:
@@ -430,6 +620,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        not:
+          type: boolean
         secure:
           type: boolean
         keepAlive:
@@ -460,9 +652,15 @@ components:
       type: object
       additionalProperties: false
       properties:
+        not:
+          type: boolean
         specUrlOrPayload:
-          type: string
+          anyOf:
+            - type: string
+            - type: object
         operationId:
+          type: string
+        contextPathPrefix:
           type: string
     HttpResponse:
       description: "response to return"
@@ -479,10 +677,16 @@ components:
           $ref: "#/components/schemas/ConnectionOptions"
         headers:
           $ref: "#/components/schemas/KeyToMultiValue"
+        trailers:
+          $ref: "#/components/schemas/KeyToMultiValue"
         statusCode:
           type: integer
+        statusCodeRange:
+          type: string
         reasonPhrase:
           type: string
+        recoverAfter:
+          $ref: "#/components/schemas/RecoverAfter"
     HttpTemplate:
       description: "template to generate response / request"
       type: object
@@ -496,6 +700,8 @@ components:
             - JAVASCRIPT
             - MUSTACHE
         template:
+          type: string
+        templateFile:
           type: string
         responseOverride:
           $ref: "#/components/schemas/HttpResponse"
@@ -677,8 +883,13 @@ components:
           $ref: "#/components/schemas/Delay"
         dropConnection:
           type: boolean
+          description: "drop the connection; ignored when streamError is set (streamError takes precedence)"
         responseBytes:
           type: string
+        streamError:
+          type: integer
+          format: int64
+          description: "reset the matched request stream with this error code (HTTP/2 RST_STREAM / HTTP/3 RESET_STREAM) instead of returning a response; HTTP/1.1 has no stream concept so this falls back to dropping the connection"
     HttpSseResponse:
       description: "SSE response to return"
       type: object
@@ -880,6 +1091,7 @@ components:
       enum:
         - HTTP_1_1
         - HTTP_2
+        - HTTP_3
     Body:
       description: "request body matcher"
       anyOf:
@@ -960,6 +1172,23 @@ components:
               enum:
                 - PARAMETERS
             parameters:
+              $ref: "#/components/schemas/KeyToMultiValue"
+        - type: object
+          description: "multipart form-data body matcher"
+          additionalProperties: false
+          properties:
+            not:
+              type: boolean
+            optional:
+              type: boolean
+            type:
+              enum:
+                - MULTIPART
+            fields:
+              $ref: "#/components/schemas/KeyToMultiValue"
+            filenames:
+              $ref: "#/components/schemas/KeyToMultiValue"
+            partContentTypes:
               $ref: "#/components/schemas/KeyToMultiValue"
         - type: object
           description: "regex body matcher"
@@ -1137,6 +1366,25 @@ components:
               type: string
             contentType:
               type: string
+        - type: object
+          description: "file response body — served from a file, optionally rendered as a template against the request"
+          additionalProperties: false
+          properties:
+            not:
+              type: boolean
+            optional:
+              type: boolean
+            type:
+              enum:
+                - FILE
+            filePath:
+              type: string
+            templateType:
+              enum:
+                - VELOCITY
+                - MUSTACHE
+            contentType:
+              type: string
     HttpChaosProfile:
       description: "declarative HTTP chaos/fault injection profile for mocked responses"
       type: object
@@ -1215,6 +1463,45 @@ components:
           format: int64
           minimum: 1
           description: "Gradual degradation: ramp errorProbability and dropConnectionProbability linearly from 0 to their configured values over this many milliseconds from the first match"
+    RateLimit:
+      description: "declarative protocol-agnostic rate limit / quota"
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: "Shared counter key; expectations with the same name share one rate-limit counter. When omitted the expectation id is used as the key"
+        algorithm:
+          type: string
+          enum:
+            - fixed_window
+            - token_bucket
+          description: "Rate-limiting algorithm; defaults to fixed_window"
+        limit:
+          type: integer
+          minimum: 1
+          description: "fixed_window: maximum requests allowed per window before requests are rejected"
+        windowMillis:
+          type: integer
+          minimum: 1
+          description: "fixed_window: fixed-window length in milliseconds"
+        burst:
+          type: integer
+          minimum: 1
+          description: "token_bucket: bucket capacity in tokens"
+        refillPerSecond:
+          type: number
+          exclusiveMinimum: 0
+          description: "token_bucket: token refill rate per second"
+        errorStatus:
+          type: integer
+          minimum: 100
+          maximum: 599
+          description: "Status returned when the request is over-limit (default 429)"
+        retryAfter:
+          type: string
+          maxLength: 100
+          description: "Literal Retry-After header value; when omitted it is computed from the window/bucket reset time"
     Delay:
       description: "response delay"
       type: object
@@ -1224,6 +1511,15 @@ components:
           type: string
         value:
           type: integer
+        template:
+          type: string
+          description: "opt-in template rendered against the request whose output is parsed as a millisecond delay (e.g. respond more slowly for larger payloads); falls back to value/timeUnit on a non-numeric or blank result"
+        templateType:
+          type: string
+          description: "template engine used to evaluate the delay template; only VELOCITY and MUSTACHE are supported"
+          enum:
+            - VELOCITY
+            - MUSTACHE
         distribution:
           type: object
           additionalProperties: false
@@ -1255,6 +1551,19 @@ components:
             stdDev:
               type: integer
               minimum: 0
+    RecoverAfter:
+      description: "fail the first failTimes matches then serve the configured response (deterministic retry/backoff recovery primitive)"
+      type: object
+      additionalProperties: false
+      properties:
+        failTimes:
+          type: integer
+          description: "number of leading matches that serve the failure response before the configured response is served; null or <= 0 makes this inert"
+        failResponse:
+          $ref: "#/components/schemas/HttpResponse"
+        idempotencyHeader:
+          type: string
+          description: "optional request header whose value keys an independent failure window per (expectation, header-value); when absent on a request the per-expectation match count is used"
     ConnectionOptions:
       description: "connection options"
       type: object
@@ -1283,6 +1592,8 @@ components:
           $ref: "#/components/schemas/ExpectationId"
         httpRequest:
           $ref: "#/components/schemas/RequestDefinition"
+        httpResponse:
+          $ref: "#/components/schemas/HttpResponse"
         times:
           $ref: "#/components/schemas/VerificationTimes"
         maximumNumberOfRequestToReturnInVerificationFailure:
@@ -1292,6 +1603,14 @@ components:
             - expectationId
         - required:
             - httpRequest
+        - required:
+            - httpResponse
+          not:
+            anyOf:
+              - required:
+                  - expectationId
+              - required:
+                  - httpRequest
     VerificationTimes:
       description: "number of request to verify"
       type: object
@@ -1315,6 +1634,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/RequestDefinition"
+        httpResponses:
+          type: array
+          items:
+            $ref: "#/components/schemas/HttpResponse"
         maximumNumberOfRequestToReturnInVerificationFailure:
           type: integer
       oneOf:
@@ -1322,6 +1645,14 @@ components:
             - expectationIds
         - required:
             - httpRequests
+        - required:
+            - httpResponses
+          not:
+            anyOf:
+              - required:
+                  - expectationIds
+              - required:
+                  - httpRequests
     Ports:
       description: "list of ports"
       type: object

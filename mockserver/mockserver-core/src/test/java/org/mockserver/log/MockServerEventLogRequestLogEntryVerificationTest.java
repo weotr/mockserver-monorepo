@@ -7,21 +7,31 @@ import org.mockserver.configuration.Configuration;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.model.HttpRequest;
+import org.mockserver.model.HttpResponse;
+import org.mockserver.model.LogEventRequestAndResponse;
+import org.mockserver.model.OpenAPIDefinition;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationSequence;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.Assert.fail;
+import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.collection.IsCollectionWithSize.hasSize;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.log.model.LogEntry.LogMessageType.EXPECTATION_RESPONSE;
+import static org.mockserver.log.model.LogEntry.LogMessageType.FORWARDED_REQUEST;
+import static org.mockserver.log.model.LogEntry.LogMessageType.NO_MATCH_RESPONSE;
 import static org.mockserver.log.model.LogEntry.LogMessageType.RECEIVED_REQUEST;
 import static org.mockserver.model.HttpRequest.request;
+import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.verify.Verification.verification;
 import static org.mockserver.verify.VerificationTimes.atLeast;
 import static org.mockserver.verify.VerificationTimes.exactly;
@@ -60,6 +70,17 @@ public class MockServerEventLogRequestLogEntryVerificationTest {
     public String verify(VerificationSequence verificationSequence) {
         CompletableFuture<String> result = new CompletableFuture<>();
         mockServerEventLog.verify(verificationSequence, result::complete);
+        try {
+            return result.get(10, SECONDS);
+        } catch (Exception e) {
+            fail(e.getMessage());
+            return null;
+        }
+    }
+
+    public List<LogEventRequestAndResponse> retrieveRequestResponses(HttpRequest httpRequest) {
+        CompletableFuture<List<LogEventRequestAndResponse>> result = new CompletableFuture<>();
+        mockServerEventLog.retrieveRequestResponses(httpRequest, result::complete);
         try {
             return result.get(10, SECONDS);
         } catch (Exception e) {
@@ -692,5 +713,664 @@ public class MockServerEventLogRequestLogEntryVerificationTest {
         );
         assertThat(result, org.hamcrest.CoreMatchers.containsString("Request not found"));
         assertThat(result, org.hamcrest.CoreMatchers.not(org.hamcrest.CoreMatchers.containsString("closest match diff:")));
+    }
+
+    // --- Response Verification Tests ---
+
+    @Test
+    public void shouldPassResponseVerificationWithMatchingStatusCode() {
+        // given
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then
+        assertThat(verify(
+            verification()
+                .withResponse(response().withStatusCode(200))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldFailResponseVerificationWithNonMatchingStatusCode() {
+        // given
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(404))
+        );
+        assertThat(result, containsString("Response not found"));
+    }
+
+    @Test
+    public void shouldIncludeClosestResponseDiffInResponseVerificationFailureWhenEnabled() {
+        // given
+        configuration.detailedVerificationFailures(true);
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- verifying 404 against a recorded 200 should fail and append the closest response diff,
+        // naming the differing statusCode (recorded under MatchDifference.Field.OPERATION -> "operation")
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(404))
+        );
+        assertThat(result, containsString("Response not found"));
+        assertThat(result, containsString("closest match diff:"));
+        assertThat(result, containsString("operation:"));
+        assertThat(result, containsString("statusCode match failed"));
+    }
+
+    @Test
+    public void shouldIncludeClosestResponseBodyDiffInResponseVerificationFailureWhenEnabled() {
+        // given
+        configuration.detailedVerificationFailures(true);
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse = new HttpResponse().withStatusCode(200).withBody("recorded body");
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- the status matches but the body differs, so the diff names the body field
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(200).withBody("expected body"))
+        );
+        assertThat(result, containsString("Response not found"));
+        assertThat(result, containsString("closest match diff:"));
+        assertThat(result, containsString("body:"));
+    }
+
+    @Test
+    public void shouldNotIncludeClosestResponseDiffInResponseVerificationFailureWhenDisabled() {
+        // given
+        configuration.detailedVerificationFailures(false);
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- no diff appended when detailed verification failures is off; message unchanged
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(404))
+        );
+        assertThat(result, containsString("Response not found"));
+        assertThat(result, org.hamcrest.CoreMatchers.not(containsString("closest match diff:")));
+    }
+
+    @Test
+    public void shouldNotIncludeClosestResponseDiffWhenNoResponsesRecorded() {
+        // given -- detailed failures on but nothing recorded, so there is no closest response
+        configuration.detailedVerificationFailures(true);
+
+        // then
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(404))
+        );
+        assertThat(result, containsString("Response not found"));
+        assertThat(result, org.hamcrest.CoreMatchers.not(containsString("closest match diff:")));
+    }
+
+    @Test
+    public void shouldIncludeClosestResponseDiffWithoutNpeUnderTraceLogging() {
+        // given -- TRACE logging makes MatchDifference dereference its request when recording a
+        // difference; the closest-response diff must construct MatchDifference with a non-null request
+        // (here a response-only verify, so it falls back to the empty request() placeholder) and must
+        // not NPE. Use a fresh event log whose logger sees the TRACE configuration.
+        configuration.detailedVerificationFailures(true);
+        configuration.logLevel(org.slf4j.event.Level.TRACE);
+        MockServerEventLog traceEventLog = new MockServerEventLog(configuration, new MockServerLogger(configuration, MockServerLogger.class), scheduler, true);
+        try {
+            HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+            HttpResponse httpResponse = new HttpResponse().withStatusCode(200);
+
+            // when
+            traceEventLog.add(
+                new LogEntry()
+                    .setHttpRequest(httpRequest)
+                    .setHttpResponse(httpResponse)
+                    .setType(FORWARDED_REQUEST)
+            );
+
+            // then -- response-only verify (no request) so the diff uses the placeholder request; no NPE
+            CompletableFuture<String> resultFuture = new CompletableFuture<>();
+            traceEventLog.verify(
+                verification().withResponse(response().withStatusCode(404)),
+                resultFuture::complete
+            );
+            String result;
+            try {
+                result = resultFuture.get(10, SECONDS);
+            } catch (Exception e) {
+                fail(e.getMessage());
+                return;
+            }
+            assertThat(result, containsString("Response not found"));
+            assertThat(result, containsString("closest match diff:"));
+            assertThat(result, containsString("operation:"));
+        } finally {
+            traceEventLog.stop();
+        }
+    }
+
+    @Test
+    public void shouldPickClosestResponseByFewestDifferingFields() {
+        // given
+        configuration.detailedVerificationFailures(true);
+        // farMatch differs on both statusCode and body; closeMatch matches statusCode and differs only
+        // on body -> fewer differing fields, so it must be selected as the closest response
+        HttpResponse farMatch = new HttpResponse().withStatusCode(500).withBody("wrong body");
+        HttpResponse closeMatch = new HttpResponse().withStatusCode(200).withBody("almost right");
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("p1"))
+                .setHttpResponse(farMatch)
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("p2"))
+                .setHttpResponse(closeMatch)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- verifying status 200 + a specific body; closeMatch is closest (only body differs),
+        // so the appended diff names body but NOT the operation/statusCode field
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(200).withBody("expected body"))
+        );
+        assertThat(result, containsString("closest match diff:"));
+        assertThat(result, containsString("body:"));
+        assertThat(result, org.hamcrest.CoreMatchers.not(containsString("statusCode match failed")));
+    }
+
+    @Test
+    public void shouldPassResponseVerificationWithRequestAndResponseFilter() {
+        // given
+        HttpRequest httpRequest1 = new HttpRequest().withPath("path_one");
+        HttpResponse httpResponse1 = new HttpResponse().withStatusCode(200);
+        HttpRequest httpRequest2 = new HttpRequest().withPath("path_two");
+        HttpResponse httpResponse2 = new HttpResponse().withStatusCode(404);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest1)
+                .setHttpResponse(httpResponse1)
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest2)
+                .setHttpResponse(httpResponse2)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- match request path AND response status code
+        assertThat(verify(
+            verification()
+                .withRequest(request().withPath("path_one"))
+                .withResponse(response().withStatusCode(200))
+        ), is(""));
+
+        // cross-check: wrong combination should fail
+        String result = verify(
+            verification()
+                .withRequest(request().withPath("path_one"))
+                .withResponse(response().withStatusCode(404))
+        );
+        assertThat(result, containsString("Response not found"));
+    }
+
+    @Test
+    public void shouldPassResponseVerificationWithExactlyTimes() {
+        // given
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse200 = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse200)
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse200)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then
+        assertThat(verify(
+            verification()
+                .withResponse(response().withStatusCode(200))
+                .withTimes(exactly(2))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldFailResponseVerificationWithExactlyTimesWrong() {
+        // given
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+        HttpResponse httpResponse200 = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setHttpResponse(httpResponse200)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- expecting exactly 2 but only 1 recorded
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(200))
+                .withTimes(exactly(2))
+        );
+        assertThat(result, containsString("Response not found"));
+    }
+
+    @Test
+    public void shouldPassResponseVerificationWithResponseOnlyNoRequest() {
+        // given -- response verification without httpRequest should match any request
+        HttpRequest httpRequest1 = new HttpRequest().withPath("path_one");
+        HttpRequest httpRequest2 = new HttpRequest().withPath("path_two");
+        HttpResponse httpResponse = new HttpResponse().withStatusCode(200);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest1)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest2)
+                .setHttpResponse(httpResponse)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then
+        assertThat(verify(
+            verification()
+                .withResponse(response().withStatusCode(200))
+                .withTimes(exactly(2))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldNotAffectExistingRequestVerification() {
+        // given -- standard request-only verification should still work the same
+        HttpRequest httpRequest = new HttpRequest().withPath("some_path");
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(httpRequest)
+                .setType(RECEIVED_REQUEST)
+        );
+
+        // then -- no response set, should use existing request path
+        assertThat(verify(
+            verification()
+                .withRequest(request().withPath("some_path"))
+        ), is(""));
+    }
+
+    // --- Response-aware Sequence Verification Tests ---
+
+    @Test
+    public void shouldPassResponseSequenceVerification() {
+        // given
+        HttpRequest request1 = new HttpRequest().withPath("path_one");
+        HttpResponse response1 = new HttpResponse().withStatusCode(200);
+        HttpRequest request2 = new HttpRequest().withPath("path_two");
+        HttpResponse response2 = new HttpResponse().withStatusCode(404);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request1)
+                .setHttpResponse(response1)
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request2)
+                .setHttpResponse(response2)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then
+        assertThat(verify(
+            new VerificationSequence()
+                .withRequests(request().withPath("path_one"), request().withPath("path_two"))
+                .withResponses(response().withStatusCode(200), response().withStatusCode(404))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldFailResponseSequenceVerificationWithWrongOrder() {
+        // given
+        HttpRequest request1 = new HttpRequest().withPath("path_one");
+        HttpResponse response1 = new HttpResponse().withStatusCode(200);
+        HttpRequest request2 = new HttpRequest().withPath("path_two");
+        HttpResponse response2 = new HttpResponse().withStatusCode(404);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request1)
+                .setHttpResponse(response1)
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(request2)
+                .setHttpResponse(response2)
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // then -- reversed response order should fail
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(request().withPath("path_one"), request().withPath("path_two"))
+                .withResponses(response().withStatusCode(404), response().withStatusCode(200))
+        );
+        assertThat(result, containsString("Response sequence not found"));
+    }
+
+    // --- Fix #1: response verification must exclude NO_MATCH_RESPONSE auto-404s ---
+
+    @Test
+    public void shouldNotCountNoMatchResponseInResponseVerificationButRetrieveStillReturnsIt() {
+        // given -- a request that matched no expectation, so MockServer auto-generated a 404
+        HttpRequest unmatchedRequest = new HttpRequest().withPath("some_path");
+        HttpResponse autoNotFound = new HttpResponse().withStatusCode(404);
+
+        // when
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(unmatchedRequest)
+                .setHttpResponse(autoNotFound)
+                .setType(NO_MATCH_RESPONSE)
+        );
+
+        // then -- response verification of a 404 must NOT count the auto-generated no-match 404
+        String result = verify(
+            verification()
+                .withResponse(response().withStatusCode(404))
+        );
+        assertThat(result, containsString("Response not found"));
+
+        // but /retrieve must still return the NO_MATCH_RESPONSE pair (it is excluded only from verification)
+        List<LogEventRequestAndResponse> retrieved = retrieveRequestResponses(null);
+        assertThat(retrieved, hasSize(1));
+        assertThat(retrieved.get(0).getHttpResponse().getStatusCode(), is(404));
+    }
+
+    @Test
+    public void shouldCountExpectationResponseAndForwardedRequestInResponseVerification() {
+        // given -- one mock-produced response and one forwarded response, both 200
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("a"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(EXPECTATION_RESPONSE)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("b"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+        // and a no-match 200 that must be ignored by verification
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("c"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(NO_MATCH_RESPONSE)
+        );
+
+        // then -- exactly the two mock-produced responses are counted
+        assertThat(verify(
+            verification()
+                .withResponse(response().withStatusCode(200))
+                .withTimes(exactly(2))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldNotCountNoMatchResponseInResponseSequenceVerification() {
+        // given -- a NO_MATCH_RESPONSE 404 followed by a real EXPECTATION_RESPONSE 200
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("unmatched"))
+                .setHttpResponse(new HttpResponse().withStatusCode(404))
+                .setType(NO_MATCH_RESPONSE)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("matched"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(EXPECTATION_RESPONSE)
+        );
+
+        // then -- a response-only sequence of [200] passes (the 404 no-match is invisible)
+        assertThat(verify(
+            new VerificationSequence()
+                .withResponses(response().withStatusCode(200))
+        ), is(""));
+
+        // and a sequence demanding the 404 first then 200 must fail (404 is not counted)
+        String result = verify(
+            new VerificationSequence()
+                .withResponses(response().withStatusCode(404), response().withStatusCode(200))
+        );
+        assertThat(result, containsString("Response sequence not found"));
+    }
+
+    // --- Fix #2: response-aware sequence with mismatched non-empty list lengths is rejected ---
+
+    @Test
+    public void shouldPassResponseSequenceWithMatchedLengthRequestResponsePairs() {
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_one"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_two"))
+                .setHttpResponse(new HttpResponse().withStatusCode(201))
+                .setType(FORWARDED_REQUEST)
+        );
+
+        assertThat(verify(
+            new VerificationSequence()
+                .withRequests(request().withPath("path_one"), request().withPath("path_two"))
+                .withResponses(response().withStatusCode(200), response().withStatusCode(201))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldPassResponseOnlySequenceWithEmptyRequests() {
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_one"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_two"))
+                .setHttpResponse(new HttpResponse().withStatusCode(201))
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // response-only sequence (no requests) is valid
+        assertThat(verify(
+            new VerificationSequence()
+                .withResponses(response().withStatusCode(200), response().withStatusCode(201))
+        ), is(""));
+    }
+
+    @Test
+    public void shouldRejectResponseSequenceWithMismatchedNonEmptyListLengths() {
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_one"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_two"))
+                .setHttpResponse(new HttpResponse().withStatusCode(201))
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // two requests but only one response — must be a clear error, NOT a silent pass
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(request().withPath("path_one"), request().withPath("path_two"))
+                .withResponses(response().withStatusCode(200))
+        );
+        assertThat(result, containsString("Request and response sequences must be the same length"));
+        assertThat(result, containsString("2 request(s) and 1 response(s)"));
+    }
+
+    // --- Fix #3: a pair with a null recorded request must not NPE in a request-constrained step ---
+
+    @Test
+    public void shouldTreatNullRequestPairAsNonMatchingInResponseSequence() {
+        // given -- a recorded pair whose request is null but whose response is present
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // when -- a request-constrained response-sequence step is verified
+        String result = verify(
+            new VerificationSequence()
+                .withRequests(request().withPath("some_path"))
+                .withResponses(response().withStatusCode(200))
+        );
+
+        // then -- it must report a normal sequence-not-found failure, not an exception/hang
+        assertThat(result, containsString("Response sequence not found"));
+        assertThat(result, is(org.hamcrest.CoreMatchers.not(containsString("exception"))));
+    }
+
+    // --- Fix #5: a failing response sequence reports the RESPONSES, not the requests ---
+
+    @Test
+    public void shouldReportResponsesInFailingResponseSequenceMessage() {
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("path_one"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // expect a 503 in the sequence that was never recorded
+        String result = verify(
+            new VerificationSequence()
+                .withResponses(response().withStatusCode(503))
+        );
+        assertThat(result, containsString("Response sequence not found"));
+        // the expected sequence (503) and the recorded response (200) must appear, as RESPONSES
+        assertThat(result, containsString("503"));
+        assertThat(result, containsString("200"));
+    }
+
+    // --- Fix #6: an entirely-empty verification sequence is rejected, not vacuously passed ---
+
+    @Test
+    public void shouldRejectEntirelyEmptyVerificationSequence() {
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("some_path"))
+                .setType(RECEIVED_REQUEST)
+        );
+
+        String result = verify(new VerificationSequence());
+        assertThat(result, containsString("No expectations, requests or responses specified"));
+    }
+
+    // --- Fix #4: a verification whose filter build throws still completes (no hang) ---
+
+    @Test
+    public void shouldCompleteResponseVerificationWhenRequestFilterBuildThrows() {
+        // given -- a recorded response
+        mockServerEventLog.add(
+            new LogEntry()
+                .setHttpRequest(new HttpRequest().withPath("some_path"))
+                .setHttpResponse(new HttpResponse().withStatusCode(200))
+                .setType(FORWARDED_REQUEST)
+        );
+
+        // when -- the request filter is an invalid OpenAPI definition whose matcher build throws
+        OpenAPIDefinition invalidOpenAPI = OpenAPIDefinition.openAPI("{\"this\":\"is not a valid openapi spec\"}");
+        String result = verify(
+            verification()
+                .withRequest(invalidOpenAPI)
+                .withResponse(response().withStatusCode(200))
+        );
+
+        // then -- the verify future completes within the helper's 10s timeout. Without the fix the
+        // matcher-build IllegalArgumentException is swallowed by the disruptor and the future never
+        // completes, so result.get(10, SECONDS) would time out and fail() the test. With the fix the
+        // build failure routes an empty result, so verification finishes as a "Response not found".
+        assertThat(result, is(org.hamcrest.CoreMatchers.notNullValue()));
+        assertThat(result, containsString("Response not found"));
     }
 }

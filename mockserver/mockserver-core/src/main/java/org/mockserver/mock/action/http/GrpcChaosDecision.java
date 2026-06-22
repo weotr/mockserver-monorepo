@@ -1,9 +1,8 @@
 package org.mockserver.mock.action.http;
 
 import org.mockserver.grpc.GrpcStatusMapper;
+import org.mockserver.model.ChaosProbability;
 import org.mockserver.model.GrpcChaosProfile;
-
-import java.util.Random;
 
 /**
  * Evaluates a {@link GrpcChaosProfile} against the current request context
@@ -73,11 +72,15 @@ public class GrpcChaosDecision {
             }
         }
 
-        // 3. Probabilistic error injection
+        // 3. Probabilistic error injection.
+        //    Route through the shared ChaosProbability helper so the draw is sampled
+        //    consistently with the HTTP/TCP/LLM chaos paths: an unseeded profile uses
+        //    ThreadLocalRandom (so a 0.5 probability injects ~50% of the time rather than
+        //    always drawing the same first value from a per-request Random), and a seeded
+        //    profile remains reproducible.
         Double errorProbability = profile.getErrorProbability();
         if (errorProbability != null && errorProbability > 0.0) {
-            Random rng = profile.getSeed() != null ? new Random(profile.getSeed()) : new Random();
-            if (rng.nextDouble() < errorProbability) {
+            if (ChaosProbability.shouldInject(errorProbability, profile.getSeed())) {
                 GrpcStatusMapper.GrpcStatusCode statusCode = GrpcStatusMapper.GrpcStatusCode.UNAVAILABLE;
                 if (profile.getErrorStatusCode() != null) {
                     statusCode = GrpcStatusMapper.GrpcStatusCode.valueOf(profile.getErrorStatusCode().toUpperCase());

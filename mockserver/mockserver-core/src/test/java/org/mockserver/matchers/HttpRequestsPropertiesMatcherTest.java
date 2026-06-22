@@ -36,7 +36,12 @@ import static org.junit.Assert.fail;
  */
 public class HttpRequestsPropertiesMatcherTest {
 
-    private final Configuration configuration = configuration();
+    // Pin matchersFailFast/detailedMatchFailures on this instance (both default true) so the
+    // field-difference assertions below do not read the mutable global ConfigurationProperties
+    // defaults. Otherwise a concurrently-running test that flips the global matchersFailFast to
+    // false makes every field (not just the first mismatch) record a difference, intermittently
+    // breaking the "only PATH differs" assertions (parallel-state contamination, see commit log).
+    private final Configuration configuration = configuration().matchersFailFast(true).detailedMatchFailures(true);
     private final MockServerLogger mockServerLogger = new MockServerLogger(HttpRequestsPropertiesMatcherTest.class);
 
     /**
@@ -2815,7 +2820,7 @@ public class HttpRequestsPropertiesMatcherTest {
     // BODY
 
     @Test
-    public void shouldThrowExceptionForRequestBodyWithMultipartForm() {
+    public void shouldBuildMatcherForRequestBodyWithMultipartForm() {
         // given
         HttpRequestsPropertiesMatcher httpRequestsPropertiesMatcher = new HttpRequestsPropertiesMatcher(configuration, mockServerLogger);
 
@@ -2857,16 +2862,9 @@ public class HttpRequestsPropertiesMatcherTest {
                 "                  type: string" + NEW_LINE);
         httpRequestsPropertiesMatcher.apply(requestDefinition, logEntries);
 
-        // then - multipart/form-data adds a path+method matcher (without body schema), plus the XML one
+        // then - multipart/form-data now builds a multipart field matcher (no longer unsupported), plus the XML one
         assertThat(httpRequestsPropertiesMatcher.getHttpRequestPropertiesMatchers().size(), equalTo(2));
-        assertThat(logEntries.size(), equalTo(1));
-        assertThat(logEntries.get(0), equalTo(
-            new LogEntry()
-                .setEpochTime(logEntries.get(0).getEpochTime())
-                .setLogLevel(WARN)
-                .setMessageFormat("multipart form data is not supported on requestBody, matching on path and method only for operation:{}method:{}in open api:{}")
-                .setArguments("someOperation", "POST", requestDefinition)
-        ));
+        assertThat(logEntries.size(), equalTo(0));
     }
 
     @Test

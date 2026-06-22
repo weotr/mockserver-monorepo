@@ -10,6 +10,7 @@ describe('LogPanel', () => {
       logMessages: [],
       logSearch: '',
       autoScroll: true,
+      logShowForwarded: true,
     });
   });
 
@@ -59,6 +60,44 @@ describe('LogPanel', () => {
     await user.type(searchInput, 'xyz-nonexistent');
 
     expect(screen.getByText('No matching log messages')).toBeInTheDocument();
+  });
+
+  it('hides forwarded request entries when "Show forwarded" is off', () => {
+    useDashboardStore.setState({
+      logShowForwarded: false,
+      logMessages: [
+        {
+          key: 'fwd',
+          value: {
+            style: { color: 'rgb(152, 208, 255)' },
+            messageParts: [{ key: 'm', value: 'forwarded entry' }],
+          },
+        },
+        { key: 'normal', value: { messageParts: [{ key: 'm', value: 'received entry' }] } },
+      ],
+    });
+
+    render(<LogPanel />);
+    expect(screen.queryByText('forwarded entry')).not.toBeInTheDocument();
+    expect(screen.getByText('received entry')).toBeInTheDocument();
+  });
+
+  it('shows forwarded entries when "Show forwarded" is on', () => {
+    useDashboardStore.setState({
+      logShowForwarded: true,
+      logMessages: [
+        {
+          key: 'fwd',
+          value: {
+            style: { color: 'rgb(152, 208, 255)' },
+            messageParts: [{ key: 'm', value: 'forwarded entry' }],
+          },
+        },
+      ],
+    });
+
+    render(<LogPanel />);
+    expect(screen.getByText('forwarded entry')).toBeInTheDocument();
   });
 
   it('renders log groups', () => {

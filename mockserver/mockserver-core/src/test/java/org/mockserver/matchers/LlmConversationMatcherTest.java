@@ -786,4 +786,80 @@ public class LlmConversationMatcherTest {
                 new org.mockserver.llm.client.LlmCompletionService(transport),
                 org.mockserver.llm.client.LlmBackend.of(Provider.OLLAMA, null)));
     }
+
+    // --- thread-safety: a shared matcher lazily compiles its regex on the concurrent match path ---
+
+    @Test
+    public void shouldMatchConsistentlyUnderConcurrentMatchesOnSharedMatcher() throws Exception {
+        // given — a single matcher whose regex pattern is compiled lazily (from source) on first
+        // use, shared across many threads. This exercises the volatile latestMessageMatches field
+        // (FIX 1): concurrent matchers() must never throw and must agree on the result.
+        final LlmConversationMatcher matcher = new LlmConversationMatcher()
+            .withProvider(Provider.ANTHROPIC)
+            .withLatestMessageMatches("weather.*paris");
+        final HttpRequest matching = request().withBody(
+            "{\"messages\":[{\"role\":\"user\",\"content\":\"the weather in paris today\"}]}");
+        final HttpRequest notMatching = request().withBody(
+            "{\"messages\":[{\"role\":\"user\",\"content\":\"the weather in london today\"}]}");
+
+        final int threads = 8;
+        final int iterations = 50;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        final java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            final boolean useMatching = (t % 2 == 0);
+            futures.add(pool.submit(() -> {
+                start.await();
+                for (int i = 0; i < iterations; i++) {
+                    boolean result = matcher.matches(useMatching ? matching : notMatching);
+                    if (result != useMatching) {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+        }
+        start.countDown();
+        for (java.util.concurrent.Future<Boolean> f : futures) {
+            assertThat(f.get(30, java.util.concurrent.TimeUnit.SECONDS), is(true));
+        }
+        pool.shutdownNow();
+    }
+
+    @Test
+    public void shouldLazilyBuildConversationMatcherSafelyUnderConcurrency() throws Exception {
+        // given — a shared HttpLlmResponse carrying conversation predicates only; the
+        // LlmConversationMatcher is reconstructed lazily from those predicates on the concurrent
+        // match path. This exercises the volatile conversationMatcher field (FIX 1).
+        final org.mockserver.model.HttpLlmResponse llmResponse = org.mockserver.model.HttpLlmResponse.llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withConversationPredicates(new org.mockserver.model.ConversationPredicates()
+                .withLatestMessageMatches("weather.*paris"));
+        final HttpRequest matching = request().withBody(
+            "{\"messages\":[{\"role\":\"user\",\"content\":\"the weather in paris today\"}]}");
+
+        final int threads = 8;
+        final int iterations = 50;
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        final java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            futures.add(pool.submit(() -> {
+                start.await();
+                for (int i = 0; i < iterations; i++) {
+                    LlmConversationMatcher m = llmResponse.getConversationMatcher();
+                    if (m == null || !m.matches(matching)) {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+        }
+        start.countDown();
+        for (java.util.concurrent.Future<Boolean> f : futures) {
+            assertThat(f.get(30, java.util.concurrent.TimeUnit.SECONDS), is(true));
+        }
+        pool.shutdownNow();
+    }
 }

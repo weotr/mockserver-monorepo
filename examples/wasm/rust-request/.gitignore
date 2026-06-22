@@ -1,0 +1,3 @@
+# Rust build output — the prebuilt match-request.wasm is committed separately at the crate root.
+/target
+Cargo.lock

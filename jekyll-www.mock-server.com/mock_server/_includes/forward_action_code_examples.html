@@ -36,6 +36,78 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpForward, HttpRequest
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/some/path")
+).forward(
+    HttpForward(host="mock-server.com", port=80, scheme="HTTP")
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.new(path: '/some/path')
+).forward(
+    MockServer::HttpForward.new(host: 'mock-server.com', port: 80, scheme: 'HTTP')
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().Path("/some/path"),
+).Forward(
+    mockserver.Forward().Host("mock-server.com").Port(80).Scheme("HTTP"),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request().WithPath("/some/path")
+).Forward(
+    HttpForward.Forward().WithHost("mock-server.com").WithPort(80).WithScheme("HTTP")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpForward};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(HttpRequest::new().path("/some/path"))
+    .forward(HttpForward::new("mock-server.com", 80).scheme("HTTP"))
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpForward;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;path('/some/path')
+)-&gt;forward(
+    HttpForward::forward()
+        -&gt;host('mock-server.com')
+        -&gt;port(80)
+        -&gt;scheme('HTTP')
+);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -88,6 +160,78 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpForward, HttpRequest
+
+client = MockServerClient("localhost", 1080)
+client.when(
+    HttpRequest.request("/some/path")
+).forward(
+    HttpForward(host="mock-server.com", port=443, scheme="HTTPS")
+)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.when(
+    MockServer::HttpRequest.new(path: '/some/path')
+).forward(
+    MockServer::HttpForward.new(host: 'mock-server.com', port: 443, scheme: 'HTTPS')
+)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+
+client := mockserver.New("localhost", 1080)
+client.When(
+    mockserver.Request().Path("/some/path"),
+).Forward(
+    mockserver.Forward().Host("mock-server.com").Port(443).Scheme("HTTPS"),
+)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+client.When(
+    HttpRequest.Request().WithPath("/some/path")
+).Forward(
+    HttpForward.Forward().WithHost("mock-server.com").WithPort(443).WithScheme("HTTPS")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpForward};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.when(HttpRequest::new().path("/some/path"))
+    .forward(HttpForward::new("mock-server.com", 443).scheme("HTTPS"))
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpForward;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;path('/some/path')
+)-&gt;forward(
+    HttpForward::forward()
+        -&gt;host('mock-server.com')
+        -&gt;port(443)
+        -&gt;scheme('HTTPS')
+);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -145,6 +289,151 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""httpRequest"": {
+            ""path"": ""/some/other/path"",
+            ""headers"": {
+                ""Host"": [""target.host.com""]
+            }
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -210,6 +499,169 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "httpResponse": {
+            "body": "some_overridden_body"
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "httpResponse": {
+            "body": "some_overridden_body"
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "httpResponse": {
+            "body": "some_overridden_body"
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""httpRequest"": {
+            ""path"": ""/some/other/path"",
+            ""headers"": {
+                ""Host"": [""target.host.com""]
+            }
+        },
+        ""httpResponse"": {
+            ""body"": ""some_overridden_body""
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "httpResponse": {
+            "body": "some_overridden_body"
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "httpResponse": {
+            "body": "some_overridden_body"
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -401,6 +853,589 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""requestOverride"": {
+            ""headers"": {
+                ""Host"": [
+                    ""target.host.com""
+                ]
+            },
+            ""body"": ""some_overridden_body""
+        },
+        ""requestModifier"": {
+            ""cookies"": {
+                ""add"": {
+                    ""cookieToAddOne"": ""addedValue"",
+                    ""cookieToAddTwo"": ""addedValue""
+                },
+                ""remove"": [
+                    ""overrideCookieToRemove"",
+                    ""requestCookieToRemove""
+                ],
+                ""replace"": {
+                    ""overrideCookieToReplace"": ""replacedValue"",
+                    ""requestCookieToReplace"": ""replacedValue"",
+                    ""extraCookieToReplace"": ""shouldBeIgnore""
+                }
+            },
+            ""headers"": {
+                ""add"": {
+                    ""headerToAddTwo"": [
+                        ""addedValue""
+                    ],
+                    ""headerToAddOne"": [
+                        ""addedValue""
+                    ]
+                },
+                ""remove"": [
+                    ""overrideHeaderToRemove"",
+                    ""requestHeaderToRemove""
+                ],
+                ""replace"": {
+                    ""requestHeaderToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""overrideHeaderToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""extraHeaderToReplace"": [
+                        ""shouldBeIgnore""
+                    ]
+                }
+            },
+            ""path"": {
+                ""regex"": ""^/(.+)/(.+)$"",
+                ""substitution"": ""/prefix/$1/infix/$2/postfix""
+            },
+            ""queryStringParameters"": {
+                ""add"": {
+                    ""parameterToAddTwo"": [
+                        ""addedValue""
+                    ],
+                    ""parameterToAddOne"": [
+                        ""addedValue""
+                    ]
+                },
+                ""remove"": [
+                    ""overrideParameterToRemove"",
+                    ""requestParameterToRemove""
+                ],
+                ""replace"": {
+                    ""requestParameterToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""overrideParameterToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""extraParameterToReplace"": [
+                        ""shouldBeIgnore""
+                    ]
+                }
+            }
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -752,6 +1787,694 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        },
+        "responseOverride": {
+            "body": "some_overridden_body"
+        },
+        "responseModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        },
+        "responseOverride": {
+            "body": "some_overridden_body"
+        },
+        "responseModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        },
+        "responseOverride": {
+            "body": "some_overridden_body"
+        },
+        "responseModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""requestOverride"": {
+            ""headers"": {
+                ""Host"": [
+                    ""target.host.com""
+                ]
+            },
+            ""body"": ""some_overridden_body""
+        },
+        ""requestModifier"": {
+            ""cookies"": {
+                ""add"": {
+                    ""cookieToAddOne"": ""addedValue"",
+                    ""cookieToAddTwo"": ""addedValue""
+                },
+                ""remove"": [
+                    ""overrideCookieToRemove"",
+                    ""requestCookieToRemove""
+                ],
+                ""replace"": {
+                    ""overrideCookieToReplace"": ""replacedValue"",
+                    ""requestCookieToReplace"": ""replacedValue"",
+                    ""extraCookieToReplace"": ""shouldBeIgnore""
+                }
+            },
+            ""headers"": {
+                ""add"": {
+                    ""headerToAddTwo"": [
+                        ""addedValue""
+                    ],
+                    ""headerToAddOne"": [
+                        ""addedValue""
+                    ]
+                },
+                ""remove"": [
+                    ""overrideHeaderToRemove"",
+                    ""requestHeaderToRemove""
+                ],
+                ""replace"": {
+                    ""requestHeaderToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""overrideHeaderToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""extraHeaderToReplace"": [
+                        ""shouldBeIgnore""
+                    ]
+                }
+            },
+            ""path"": {
+                ""regex"": ""^/(.+)/(.+)$"",
+                ""substitution"": ""/prefix/$1/infix/$2/postfix""
+            },
+            ""queryStringParameters"": {
+                ""add"": {
+                    ""parameterToAddTwo"": [
+                        ""addedValue""
+                    ],
+                    ""parameterToAddOne"": [
+                        ""addedValue""
+                    ]
+                },
+                ""remove"": [
+                    ""overrideParameterToRemove"",
+                    ""requestParameterToRemove""
+                ],
+                ""replace"": {
+                    ""requestParameterToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""overrideParameterToReplace"": [
+                        ""replacedValue""
+                    ],
+                    ""extraParameterToReplace"": [
+                        ""shouldBeIgnore""
+                    ]
+                }
+            }
+        },
+        ""responseOverride"": {
+            ""body"": ""some_overridden_body""
+        },
+        ""responseModifier"": {
+            ""cookies"": {
+                ""add"": {
+                    ""cookieToAddOne"": ""addedValue"",
+                    ""cookieToAddTwo"": ""addedValue""
+                },
+                ""remove"": [
+                    ""overrideCookieToRemove"",
+                    ""requestCookieToRemove""
+                ],
+                ""replace"": {";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        },
+        "responseOverride": {
+            "body": "some_overridden_body"
+        },
+        "responseModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": [
+                    "target.host.com"
+                ]
+            },
+            "body": "some_overridden_body"
+        },
+        "requestModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            },
+            "path": {
+                "regex": "^/(.+)/(.+)$",
+                "substitution": "/prefix/$1/infix/$2/postfix"
+            },
+            "queryStringParameters": {
+                "add": {
+                    "parameterToAddTwo": [
+                        "addedValue"
+                    ],
+                    "parameterToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideParameterToRemove",
+                    "requestParameterToRemove"
+                ],
+                "replace": {
+                    "requestParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideParameterToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraParameterToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        },
+        "responseOverride": {
+            "body": "some_overridden_body"
+        },
+        "responseModifier": {
+            "cookies": {
+                "add": {
+                    "cookieToAddOne": "addedValue",
+                    "cookieToAddTwo": "addedValue"
+                },
+                "remove": [
+                    "overrideCookieToRemove",
+                    "requestCookieToRemove"
+                ],
+                "replace": {
+                    "overrideCookieToReplace": "replacedValue",
+                    "requestCookieToReplace": "replacedValue",
+                    "extraCookieToReplace": "shouldBeIgnore"
+                }
+            },
+            "headers": {
+                "add": {
+                    "headerToAddTwo": [
+                        "addedValue"
+                    ],
+                    "headerToAddOne": [
+                        "addedValue"
+                    ]
+                },
+                "remove": [
+                    "overrideHeaderToRemove",
+                    "requestHeaderToRemove"
+                ],
+                "replace": {
+                    "requestHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "overrideHeaderToReplace": [
+                        "replacedValue"
+                    ],
+                    "extraHeaderToReplace": [
+                        "shouldBeIgnore"
+                    ]
+                }
+            }
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -936,6 +2659,181 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["any.host.com"]
+            },
+            "socketAddress": {
+                "host": "target.host.com",
+                "port": 1234,
+                "scheme": "HTTPS"
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["any.host.com"]
+            },
+            "socketAddress": {
+                "host": "target.host.com",
+                "port": 1234,
+                "scheme": "HTTPS"
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["any.host.com"]
+            },
+            "socketAddress": {
+                "host": "target.host.com",
+                "port": 1234,
+                "scheme": "HTTPS"
+            }
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""httpRequest"": {
+            ""path"": ""/some/other/path"",
+            ""headers"": {
+                ""Host"": [""any.host.com""]
+            },
+            ""socketAddress"": {
+                ""host"": ""target.host.com"",
+                ""port"": 1234,
+                ""scheme"": ""HTTPS""
+            }
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["any.host.com"]
+            },
+            "socketAddress": {
+                "host": "target.host.com",
+                "port": 1234,
+                "scheme": "HTTPS"
+            }
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "headers": {
+                "Host": ["any.host.com"]
+            },
+            "socketAddress": {
+                "host": "target.host.com",
+                "port": 1234,
+                "scheme": "HTTPS"
+            }
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -1005,6 +2903,181 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 10
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 10
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 10
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""httpRequest"": {
+            ""path"": ""/some/other/path"",
+            ""body"": ""some_overridden_body"",
+            ""headers"": {
+                ""Host"": [""target.host.com""]
+            }
+        },
+        ""delay"": {
+            ""timeUnit"": ""SECONDS"",
+            ""value"": 10
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 10
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "SECONDS",
+            "value": 10
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -1080,6 +3153,205 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "MILLISECONDS",
+            "distribution": {
+                "type": "LOG_NORMAL",
+                "median": 200,
+                "p99": 800
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "MILLISECONDS",
+            "distribution": {
+                "type": "LOG_NORMAL",
+                "median": 200,
+                "p99": 800
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "MILLISECONDS",
+            "distribution": {
+                "type": "LOG_NORMAL",
+                "median": 200,
+                "p99": 800
+            }
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""httpRequest"": {
+            ""path"": ""/some/other/path"",
+            ""body"": ""some_overridden_body"",
+            ""headers"": {
+                ""Host"": [""target.host.com""]
+            }
+        },
+        ""delay"": {
+            ""timeUnit"": ""MILLISECONDS"",
+            ""distribution"": {
+                ""type"": ""LOG_NORMAL"",
+                ""median"": 200,
+                ""p99"": 800
+            }
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "MILLISECONDS",
+            "distribution": {
+                "type": "LOG_NORMAL",
+                "median": 200,
+                "p99": 800
+            }
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "httpRequest": {
+            "path": "/some/other/path",
+            "body": "some_overridden_body",
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "delay": {
+            "timeUnit": "MILLISECONDS",
+            "distribution": {
+                "type": "LOG_NORMAL",
+                "median": 200,
+                "p99": 800
+            }
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -1167,6 +3439,181 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : request.queryStringParameters && request.queryStringParameters['userId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': JSON.stringify({'name': 'value'})\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : request.queryStringParameters && request.queryStringParameters['userId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': JSON.stringify({'name': 'value'})\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : request.queryStringParameters && request.queryStringParameters['userId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': JSON.stringify({'name': 'value'})\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpForwardTemplate"": {
+        ""template"": ""return {\n"" +
+        ""    'path' : \""/somePath\"",\n"" +
+        ""    'queryStringParameters' : {\n"" +
+        ""        'userId' : request.queryStringParameters && request.queryStringParameters['userId']\n"" +
+        ""    },\n"" +
+        ""    'headers' : {\n"" +
+        ""        'Host' : [ \""localhost:1081\"" ]\n"" +
+        ""    },\n"" +
+        ""    'body': JSON.stringify({'name': 'value'})\n"" +
+        ""};"",
+        ""templateType"": ""JAVASCRIPT""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : request.queryStringParameters && request.queryStringParameters['userId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': JSON.stringify({'name': 'value'})\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : request.queryStringParameters &amp;&amp; request.queryStringParameters['userId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': JSON.stringify({'name': 'value'})\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -1238,6 +3685,157 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/somePrefix*"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : request.path.substring(request.path.indexOf('/somePrefix')+'/somePrefix'.length,request.path.length),\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    }\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/somePrefix*"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : request.path.substring(request.path.indexOf('/somePrefix')+'/somePrefix'.length,request.path.length),\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    }\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/somePrefix*"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : request.path.substring(request.path.indexOf('/somePrefix')+'/somePrefix'.length,request.path.length),\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    }\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/somePrefix*""
+    },
+    ""httpForwardTemplate"": {
+        ""template"": ""return {\n"" +
+        ""    'path' : request.path.substring(request.path.indexOf('/somePrefix')+'/somePrefix'.length,request.path.length),\n"" +
+        ""    'headers' : {\n"" +
+        ""        'Host' : [ \""localhost:1081\"" ]\n"" +
+        ""    }\n"" +
+        ""};"",
+        ""templateType"": ""JAVASCRIPT""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/somePrefix*"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : request.path.substring(request.path.indexOf('/somePrefix')+'/somePrefix'.length,request.path.length),\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    }\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/somePrefix*"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : request.path.substring(request.path.indexOf('/somePrefix')+'/somePrefix'.length,request.path.length),\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    }\n" +
+        "};",
+        "templateType": "JAVASCRIPT"
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -1320,6 +3918,199 @@ mockServerClient("localhost", 1080).mockAnyResponse({
     }
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : request.cookies && request.cookies['SessionId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'keepAlive' : True,\n" +
+        "    'secure' : True,\n" +
+        "    'body' : \"some_body\"\n" +
+        "};",
+        "templateType": "JAVASCRIPT",
+        "delay": {"timeUnit": "SECONDS", "value": 20}
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : request.cookies && request.cookies['SessionId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'keepAlive' : true,\n" +
+        "    'secure' : true,\n" +
+        "    'body' : \"some_body\"\n" +
+        "};",
+        "templateType": "JAVASCRIPT",
+        "delay": {"timeUnit": "SECONDS", "value": 20}
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : request.cookies && request.cookies['SessionId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'keepAlive' : true,\n" +
+        "    'secure' : true,\n" +
+        "    'body' : \"some_body\"\n" +
+        "};",
+        "templateType": "JAVASCRIPT",
+        "delay": {"timeUnit": "SECONDS", "value": 20}
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpForwardTemplate"": {
+        ""template"": ""return {\n"" +
+        ""    'path' : \""/somePath\"",\n"" +
+        ""    'cookies' : {\n"" +
+        ""        'SessionId' : request.cookies && request.cookies['SessionId']\n"" +
+        ""    },\n"" +
+        ""    'headers' : {\n"" +
+        ""        'Host' : [ \""localhost:1081\"" ]\n"" +
+        ""    },\n"" +
+        ""    'keepAlive' : true,\n"" +
+        ""    'secure' : true,\n"" +
+        ""    'body' : \""some_body\""\n"" +
+        ""};"",
+        ""templateType"": ""JAVASCRIPT"",
+        ""delay"": {""timeUnit"": ""SECONDS"", ""value"": 20}
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : request.cookies && request.cookies['SessionId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'keepAlive' : true,\n" +
+        "    'secure' : true,\n" +
+        "    'body' : \"some_body\"\n" +
+        "};",
+        "templateType": "JAVASCRIPT",
+        "delay": {"timeUnit": "SECONDS", "value": 20}
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "return {\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : request.cookies &amp;&amp; request.cookies['SessionId']\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'keepAlive' : true,\n" +
+        "    'secure' : true,\n" +
+        "    'body' : \"some_body\"\n" +
+        "};",
+        "templateType": "JAVASCRIPT",
+        "delay": {"timeUnit": "SECONDS", "value": 20}
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -1412,6 +4203,199 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 );</code></pre>
         <p>See <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/expectation/put_expectation" target="_blank" rel="noopener noreferrer">REST API</a> for full JSON specification</p>
     </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "{\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : [ \"$!request.queryStringParameters['userId'][0]\" ]\n" +
+        "    },\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : \"$!request.cookies['SessionId']\"\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': \"{'name': 'value'}\"\n" +
+        "}",
+        "templateType": "VELOCITY"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "{\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : [ \"$!request.queryStringParameters['userId'][0]\" ]\n" +
+        "    },\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : \"$!request.cookies['SessionId']\"\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': \"{'name': 'value'}\"\n" +
+        "}",
+        "templateType": "VELOCITY"
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "{\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : [ \"$!request.queryStringParameters['userId'][0]\" ]\n" +
+        "    },\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : \"$!request.cookies['SessionId']\"\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': \"{'name': 'value'}\"\n" +
+        "}",
+        "templateType": "VELOCITY"
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpForwardTemplate"": {
+        ""template"": ""{\n"" +
+        ""    'path' : \""/somePath\"",\n"" +
+        ""    'queryStringParameters' : {\n"" +
+        ""        'userId' : [ \""$!request.queryStringParameters['userId'][0]\"" ]\n"" +
+        ""    },\n"" +
+        ""    'cookies' : {\n"" +
+        ""        'SessionId' : \""$!request.cookies['SessionId']\""\n"" +
+        ""    },\n"" +
+        ""    'headers' : {\n"" +
+        ""        'Host' : [ \""localhost:1081\"" ]\n"" +
+        ""    },\n"" +
+        ""    'body': \""{'name': 'value'}\""\n"" +
+        ""}"",
+        ""templateType"": ""VELOCITY""
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "{\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : [ \"$!request.queryStringParameters['userId'][0]\" ]\n" +
+        "    },\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : \"$!request.cookies['SessionId']\"\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': \"{'name': 'value'}\"\n" +
+        "}",
+        "templateType": "VELOCITY"
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "template": "{\n" +
+        "    'path' : \"/somePath\",\n" +
+        "    'queryStringParameters' : {\n" +
+        "        'userId' : [ \"$!request.queryStringParameters['userId'][0]\" ]\n" +
+        "    },\n" +
+        "    'cookies' : {\n" +
+        "        'SessionId' : \"$!request.cookies['SessionId']\"\n" +
+        "    },\n" +
+        "    'headers' : {\n" +
+        "        'Host' : [ \"localhost:1081\" ]\n" +
+        "    },\n" +
+        "    'body': \"{'name': 'value'}\"\n" +
+        "}",
+        "templateType": "VELOCITY"
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -1442,6 +4426,169 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 <div class="panel">
     <p>A <strong>response template</strong> allows you to transform the response returned from the upstream server using a template that has access to both the original <strong>request</strong> and the upstream <strong>response</strong>. This is useful when you need to dynamically modify responses based on request context — for example, injecting request headers into the response body or conditionally changing the status code.</p>
     <p>The template receives two objects: <span class="inline_code">request</span> (the original request) and <span class="inline_code">response</span> (the upstream response). The template must return a valid HTTP response JSON object.</p>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "responseTemplate": {
+            "templateType": "JAVASCRIPT",
+            "template": "return { 'statusCode': response.statusCode, 'headers': response.headers, 'body': JSON.stringify({ 'originalBody': response.body, 'requestPath': request.path }) };"
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "responseTemplate": {
+            "templateType": "JAVASCRIPT",
+            "template": "return { 'statusCode': response.statusCode, 'headers': response.headers, 'body': JSON.stringify({ 'originalBody': response.body, 'requestPath': request.path }) };"
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "responseTemplate": {
+            "templateType": "JAVASCRIPT",
+            "template": "return { 'statusCode': response.statusCode, 'headers': response.headers, 'body': JSON.stringify({ 'originalBody': response.body, 'requestPath': request.path }) };"
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpOverrideForwardedRequest"": {
+        ""requestOverride"": {
+            ""headers"": {
+                ""Host"": [""target.host.com""]
+            }
+        },
+        ""responseTemplate"": {
+            ""templateType"": ""JAVASCRIPT"",
+            ""template"": ""return { 'statusCode': response.statusCode, 'headers': response.headers, 'body': JSON.stringify({ 'originalBody': response.body, 'requestPath': request.path }) };""
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "responseTemplate": {
+            "templateType": "JAVASCRIPT",
+            "template": "return { 'statusCode': response.statusCode, 'headers': response.headers, 'body': JSON.stringify({ 'originalBody': response.body, 'requestPath': request.path }) };"
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpOverrideForwardedRequest": {
+        "requestOverride": {
+            "headers": {
+                "Host": ["target.host.com"]
+            }
+        },
+        "responseTemplate": {
+            "templateType": "JAVASCRIPT",
+            "template": "return { 'statusCode': response.statusCode, 'headers': response.headers, 'body': JSON.stringify({ 'originalBody': response.body, 'requestPath': request.path }) };"
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -1466,6 +4613,157 @@ mockServerClient("localhost", 1080).mockAnyResponse({
 <button id="button_response_override_template_forward" class="accordion">templated forward with response override</button>
 <div class="panel">
     <p>When using a <strong>templated forward</strong> (JavaScript, Velocity, or Mustache), you can also specify a <span class="inline_code">responseOverride</span> and/or <span class="inline_code">responseModifier</span> to statically modify the response returned from the upstream server — without needing a separate response template.</p>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import Expectation
+
+client = MockServerClient("localhost", 1080)
+client.upsert(Expectation.from_dict({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "templateType": "JAVASCRIPT",
+        "template": "return { 'path': '/target' + request.path, 'headers': { 'Host': ['target.host.com'] } };",
+        "responseOverride": {
+            "headers": {
+                "x-proxy": ["mockserver"]
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.upsert(MockServer::Expectation.from_hash({
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "templateType": "JAVASCRIPT",
+        "template": "return { 'path': '/target' + request.path, 'headers': { 'Host': ['target.host.com'] } };",
+        "responseOverride": {
+            "headers": {
+                "x-proxy": ["mockserver"]
+            }
+        }
+    }
+}))</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "templateType": "JAVASCRIPT",
+        "template": "return { 'path': '/target' + request.path, 'headers': { 'Host': ['target.host.com'] } };",
+        "responseOverride": {
+            "headers": {
+                "x-proxy": ["mockserver"]
+            }
+        }
+    }
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/expectation",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(req)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""httpRequest"": {
+        ""path"": ""/some/path""
+    },
+    ""httpForwardTemplate"": {
+        ""templateType"": ""JAVASCRIPT"",
+        ""template"": ""return { 'path': '/target' + request.path, 'headers': { 'Host': ['target.host.com'] } };"",
+        ""responseOverride"": {
+            ""headers"": {
+                ""x-proxy"": [""mockserver""]
+            }
+        }
+    }
+}";
+await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/expectation",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+let client = Client::new();
+let body = r#"{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "templateType": "JAVASCRIPT",
+        "template": "return { 'path': '/target' + request.path, 'headers': { 'Host': ['target.host.com'] } };",
+        "responseOverride": {
+            "headers": {
+                "x-proxy": ["mockserver"]
+            }
+        }
+    }
+}"#;
+client.put("http://localhost:1080/mockserver/expectation")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest": {
+        "path": "/some/path"
+    },
+    "httpForwardTemplate": {
+        "templateType": "JAVASCRIPT",
+        "template": "return { 'path': '/target' + request.path, 'headers': { 'Host': ['target.host.com'] } };",
+        "responseOverride": {
+            "headers": {
+                "x-proxy": ["mockserver"]
+            }
+        }
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
@@ -1539,6 +4837,29 @@ mockServerClient("localhost", 1080).mockAnyResponse({
         console.log(error);
     }
 );</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "httpRequest" : {
+        "path" : "/some.*"
+    },
+    "httpForwardClassCallback" : {
+        "callbackClass" : "org.mockserver.examples.mockserver.CallbackActionExamples$TestExpectationForwardCallback"
+    }
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/expectation');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+curl_exec($ch);
+curl_close($ch);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">

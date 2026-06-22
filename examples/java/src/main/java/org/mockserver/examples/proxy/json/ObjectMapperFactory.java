@@ -8,7 +8,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.mockserver.exception.ExceptionHandling;
 
-import static org.mockserver.exception.ExceptionHandling.handleThrowable;
 
 /**
  * @author jamesdbloom

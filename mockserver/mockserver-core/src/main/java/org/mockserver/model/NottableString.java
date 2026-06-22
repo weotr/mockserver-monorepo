@@ -24,7 +24,15 @@ public class NottableString extends ObjectWithJsonToString implements Comparable
     private final Boolean not;
     private final int hashCode;
     private final String json;
-    private Pattern pattern;
+    // volatile so the lazily-compiled patterns are safely published across threads. The matcher is
+    // called concurrently from request-matching worker threads on a single shared NottableString;
+    // without volatile the non-final writes here can be seen as a half-constructed/never-visible
+    // Pattern by another thread (unsafe publication) and every racing thread recompiles on the first
+    // burst (thundering herd). Pattern is itself immutable and safely publishable, so a rare
+    // duplicate Pattern.compile under a race is harmless — the last writer wins and all readers then
+    // see a fully-built Pattern.
+    private volatile Pattern pattern;
+    private volatile Pattern caseSensitivePattern;
     private ParameterStyle parameterStyle;
     private String schemaType;
 
@@ -99,15 +107,15 @@ public class NottableString extends ObjectWithJsonToString implements Comparable
         Boolean not = null;
         boolean optional = false;
         if (isNotBlank(value)) {
-            if (value.charAt(0) == OPTIONAL_CHAR) {
+            if (!value.isEmpty() && value.charAt(0) == OPTIONAL_CHAR) {
                 optional = true;
                 value = value.substring(1);
             }
-            if (value.charAt(0) == NOT_CHAR) {
+            if (!value.isEmpty() && value.charAt(0) == NOT_CHAR) {
                 not = true;
                 value = value.substring(1);
             }
-            if (value.charAt(0) == OPTIONAL_CHAR) {
+            if (!value.isEmpty() && value.charAt(0) == OPTIONAL_CHAR) {
                 optional = true;
                 value = value.substring(1);
             }
@@ -219,6 +227,36 @@ public class NottableString extends ObjectWithJsonToString implements Comparable
     private static final int MAX_REGEX_LENGTH = 8192;
 
     public boolean matches(String input) {
+        return matches(input, false);
+    }
+
+    /**
+     * Compile this value as a regex and test it against {@code input}.
+     * <p>
+     * When {@code caseSensitive} is {@code false} (the default — every pre-existing caller) the
+     * pattern is compiled with {@code DOTALL | CASE_INSENSITIVE | UNICODE_CASE}, exactly as before,
+     * so behaviour is byte-for-byte unchanged. When {@code caseSensitive} is {@code true} (only the
+     * method/path/string-body matchers, and only when the opt-in {@code matchExactCase} flag is on)
+     * the pattern is compiled with {@code DOTALL} alone, so matching is case-sensitive. The two
+     * compiled patterns are cached independently so a value can be used both ways without recompiling.
+     */
+    public boolean matches(String input, boolean caseSensitive) {
+        if (caseSensitive) {
+            if (caseSensitivePattern == null) {
+                String regex = getValue();
+                // a null value can never be compiled as a regex; treat it as a non-match rather than
+                // letting Pattern.compile(null, ...) throw an NPE that the catch below would not handle
+                if (regex == null || regex.length() > MAX_REGEX_LENGTH) {
+                    return false;
+                }
+                try {
+                    caseSensitivePattern = Pattern.compile(regex, Pattern.DOTALL);
+                } catch (PatternSyntaxException e) {
+                    return false;
+                }
+            }
+            return caseSensitivePattern.matcher(input).matches();
+        }
         if (pattern == null) {
             String regex = getValue();
             if (regex != null && regex.length() > MAX_REGEX_LENGTH) {

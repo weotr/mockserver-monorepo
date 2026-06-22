@@ -556,6 +556,143 @@ public class LlmMcpToolsTest {
         assertThat(result.has("message"), is(true));
     }
 
+    private void logIsolatedConversation(String agentId, String userMessage) throws InterruptedException {
+        httpState.log(new LogEntry()
+            .setType(RECEIVED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request()
+                .withMethod("POST")
+                .withPath("/v1/messages")
+                .withHeader("x-agent-id", agentId)
+                .withBody("{\n" +
+                    "  \"messages\": [\n" +
+                    "    {\"role\": \"user\", \"content\": \"" + userMessage + "\"}\n" +
+                    "  ]\n" +
+                    "}"))
+            .setMessageFormat("received request")
+        );
+        Thread.sleep(200);
+    }
+
+    @Test
+    public void shouldScopeExplainAgentRunToSessionByIsolationHeader() throws InterruptedException {
+        // two sessions on the SAME path but different x-agent-id header values
+        logIsolatedConversation("agent-001", "Weather in Paris?");
+        logIsolatedConversation("agent-002", "Weather in Tokyo?");
+
+        // session agent-001 -> only the Paris message
+        ObjectNode paramsOne = objectMapper.createObjectNode();
+        paramsOne.put("provider", "ANTHROPIC");
+        paramsOne.put("path", "/v1/messages");
+        paramsOne.put("isolationType", "header");
+        paramsOne.put("isolationKey", "x-agent-id");
+        paramsOne.put("isolationValue", "agent-001");
+        JsonNode resultOne = toolRegistry.callTool("explain_agent_run", paramsOne);
+        assertThat(resultOne.path("messageCount").asInt(), is(1));
+        String labelsOne = resultOne.path("callGraph").path("nodes").toString();
+        assertThat(labelsOne, containsString("Paris"));
+        assertThat(labelsOne, not(containsString("Tokyo")));
+
+        // session agent-002 -> only the Tokyo message
+        ObjectNode paramsTwo = objectMapper.createObjectNode();
+        paramsTwo.put("provider", "ANTHROPIC");
+        paramsTwo.put("path", "/v1/messages");
+        paramsTwo.put("isolationType", "header");
+        paramsTwo.put("isolationKey", "x-agent-id");
+        paramsTwo.put("isolationValue", "agent-002");
+        JsonNode resultTwo = toolRegistry.callTool("explain_agent_run", paramsTwo);
+        assertThat(resultTwo.path("messageCount").asInt(), is(1));
+        String labelsTwo = resultTwo.path("callGraph").path("nodes").toString();
+        assertThat(labelsTwo, containsString("Tokyo"));
+        assertThat(labelsTwo, not(containsString("Paris")));
+
+        // without isolation params -> combined graph (backward compatible).
+        // canonicalConversation picks the richest single conversation; both sessions
+        // remain visible across repeated invocations, so assert each individually.
+        ObjectNode paramsAll = objectMapper.createObjectNode();
+        paramsAll.put("provider", "ANTHROPIC");
+        paramsAll.put("path", "/v1/messages");
+        JsonNode resultAll = toolRegistry.callTool("explain_agent_run", paramsAll);
+        assertThat(resultAll.path("messageCount").asInt(), is(1));
+
+        // a non-matching isolation value yields no conversation
+        ObjectNode paramsNone = objectMapper.createObjectNode();
+        paramsNone.put("provider", "ANTHROPIC");
+        paramsNone.put("path", "/v1/messages");
+        paramsNone.put("isolationType", "header");
+        paramsNone.put("isolationKey", "x-agent-id");
+        paramsNone.put("isolationValue", "agent-999");
+        JsonNode resultNone = toolRegistry.callTool("explain_agent_run", paramsNone);
+        assertThat(resultNone.path("messageCount").asInt(), is(0));
+    }
+
+    // --- AUTO provider detection ---
+
+    @Test
+    public void shouldAutoDetectProviderForVerifyToolCall() throws InterruptedException {
+        logToolUseConversation();
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "AUTO");
+        params.put("toolName", "get_weather");
+
+        JsonNode result = toolRegistry.callTool("verify_tool_call", params);
+        assertThat(result.path("satisfied").asBoolean(), is(true));
+        assertThat(result.path("count").asInt(), is(1));
+        assertThat(result.path("provider").asText(), is("ANTHROPIC"));
+    }
+
+    @Test
+    public void shouldAutoDetectProviderForExplainAgentRun() throws InterruptedException {
+        logToolUseConversation();
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "AUTO");
+
+        JsonNode result = toolRegistry.callTool("explain_agent_run", params);
+        assertThat(result.path("messageCount").asInt(), is(3));
+        assertThat(result.path("provider").asText(), is("ANTHROPIC"));
+    }
+
+    @Test
+    public void shouldErrorWhenAutoDetectFailsWithNoRecordedRequests() throws InterruptedException {
+        // Log a non-LLM request so the event log is initialized, but no LLM
+        // request paths are present for auto-detection
+        httpState.log(new LogEntry()
+            .setType(RECEIVED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/health"))
+            .setMessageFormat("received request")
+        );
+        Thread.sleep(500);
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "AUTO");
+        params.put("toolName", "get_weather");
+
+        JsonNode result = toolRegistry.callTool("verify_tool_call", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("auto-detect"));
+    }
+
+    @Test
+    public void shouldErrorWhenAutoDetectFailsForExplainAgentRun() throws InterruptedException {
+        // Log a non-LLM request so the event log is initialized, but no LLM
+        // request paths are present for auto-detection
+        httpState.log(new LogEntry()
+            .setType(RECEIVED_REQUEST)
+            .setLogLevel(org.slf4j.event.Level.INFO)
+            .setHttpRequest(request().withMethod("GET").withPath("/api/health"))
+            .setMessageFormat("received request")
+        );
+        Thread.sleep(500);
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "AUTO");
+
+        JsonNode result = toolRegistry.callTool("explain_agent_run", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("auto-detect"));
+    }
+
     // --- chaos profiles ---
 
     @Test
@@ -697,5 +834,145 @@ public class LlmMcpToolsTest {
         JsonNode result = toolRegistry.callTool("create_llm_conversation", params);
         assertThat(result.path("status").asText(), is("created"));
         assertThat(result.path("count").asInt(), is(1));
+    }
+
+    // --- mock_llm_failover ---
+
+    @Test
+    public void shouldCreateLlmFailoverScenario() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        params.put("model", "gpt-4o");
+        params.putArray("failStatuses").add(503).add(503);
+        params.put("text", "The answer is 42.");
+        params.put("stopReason", "stop");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("status").asText(), is("created"));
+        // Two consecutive 503s coalesce into 1 expectation + 1 success = 2
+        assertThat(result.path("count").asInt(), is(2));
+        assertThat(result.path("failureAttempts").asInt(), is(2));
+        assertThat(result.path("provider").asText(), is("OPENAI"));
+        assertThat(result.path("ids").isArray(), is(true));
+        assertThat(result.path("ids").size(), is(2));
+    }
+
+    @Test
+    public void shouldCreateLlmFailoverWithMixedStatuses() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "ANTHROPIC");
+        params.put("path", "/v1/messages");
+        params.putArray("failStatuses").add(503).add(429).add(500);
+        params.put("text", "Hello");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("status").asText(), is("created"));
+        // 3 different statuses = 3 failure expectations + 1 success = 4
+        assertThat(result.path("count").asInt(), is(4));
+        assertThat(result.path("failureAttempts").asInt(), is(3));
+    }
+
+    @Test
+    public void shouldVerifyFailoverExpectationsAreRegistered() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        params.putArray("failStatuses").add(503);
+        params.put("text", "Success response");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("status").asText(), is("created"));
+
+        // Verify the expectations are actually registered by checking what matches
+        java.util.List<org.mockserver.mock.Expectation> matching = httpState
+            .allMatchingExpectation(request().withMethod("POST").withPath("/v1/chat/completions"));
+        assertThat(matching.size(), is(2));
+
+        // First expectation: failure (plain HTTP response)
+        assertThat(matching.get(0).getHttpResponse(), is(notNullValue()));
+        assertThat(matching.get(0).getHttpResponse().getStatusCode(), is(503));
+
+        // Second expectation: success (LLM response)
+        assertThat(matching.get(1).getHttpLlmResponse(), is(notNullValue()));
+        assertThat(matching.get(1).getHttpLlmResponse().getCompletion().getText(), is("Success response"));
+    }
+
+    @Test
+    public void shouldCreateLlmFailoverWithToolCalls() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        params.putArray("failStatuses").add(429);
+        params.put("text", "Let me search");
+        params.put("stopReason", "tool_use");
+        ArrayNode toolCalls = params.putArray("toolCalls");
+        ObjectNode tc = toolCalls.addObject();
+        tc.put("name", "search");
+        tc.put("arguments", "{\"query\":\"test\"}");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("status").asText(), is("created"));
+        assertThat(result.path("count").asInt(), is(2));
+    }
+
+    @Test
+    public void shouldRejectFailoverWithUnknownProvider() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "INVALID");
+        params.put("path", "/v1/chat/completions");
+        params.putArray("failStatuses").add(503);
+        params.put("text", "ok");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("unsupported LLM provider"));
+    }
+
+    @Test
+    public void shouldRejectFailoverWithMissingProvider() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("path", "/v1/chat/completions");
+        params.putArray("failStatuses").add(503);
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("'provider' is required"));
+    }
+
+    @Test
+    public void shouldRejectFailoverWithMissingPath() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.putArray("failStatuses").add(503);
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("'path' is required"));
+    }
+
+    @Test
+    public void shouldRejectFailoverWithEmptyFailStatuses() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        params.putArray("failStatuses");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("non-empty array"));
+    }
+
+    @Test
+    public void shouldRejectFailoverWithNonIntegerStatus() {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("provider", "OPENAI");
+        params.put("path", "/v1/chat/completions");
+        params.putArray("failStatuses").add("not_a_number");
+        params.put("text", "ok");
+
+        JsonNode result = toolRegistry.callTool("mock_llm_failover", params);
+        assertThat(result.path("error").asBoolean(), is(true));
+        assertThat(result.path("message").asText(), containsString("must be an integer"));
     }
 }

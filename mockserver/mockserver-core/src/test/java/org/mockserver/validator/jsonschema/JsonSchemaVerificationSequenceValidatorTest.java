@@ -86,7 +86,7 @@ public class JsonSchemaVerificationSequenceValidatorTest {
             "]}");
 
         // then
-        assertThat(result, startsWith("5 error"));
+        assertThat(result, startsWith("6 error"));
         assertThat(result, containsString("$.httpRequests[0].body: should match one of its valid types"));
         assertThat(result, containsString("$.httpRequests[0].binaryData: is missing, but is required"));
         assertThat(result, containsString("$.httpRequests[0].dnsName: is missing, but is required"));
@@ -106,7 +106,7 @@ public class JsonSchemaVerificationSequenceValidatorTest {
             "]}");
 
         // then
-        assertThat(result, startsWith("5 error"));
+        assertThat(result, startsWith("6 error"));
         assertThat(result, containsString("$.httpRequests[0].invalidField: is not defined in the schema and the schema does not allow additional properties"));
         assertThat(result, containsString("$.httpRequests[0].binaryData: is missing, but is required"));
         assertThat(result, containsString("$.httpRequests[0].dnsName: is missing, but is required"));
@@ -124,7 +124,7 @@ public class JsonSchemaVerificationSequenceValidatorTest {
             "]}");
 
         // then
-        assertThat(result, startsWith("8 error"));
+        assertThat(result, startsWith("9 error"));
         assertThat(result, containsString("$.httpRequests[0].method: integer found, string expected"));
         assertThat(result, containsString("$.httpRequests[0].method: should be valid to one and only one schema, but 0 are valid"));
         assertThat(result, containsString("$.httpRequests[0].path: boolean found, string expected"));
@@ -144,7 +144,7 @@ public class JsonSchemaVerificationSequenceValidatorTest {
             "]}");
 
         // then
-        assertThat(result, startsWith("8 error"));
+        assertThat(result, startsWith("9 error"));
         assertThat(result, containsString("$.httpRequests[0].headers: array found, object expected"));
         assertThat(result, containsString("$.httpRequests[0].headers: should be valid to one and only one schema, but 0 are valid"));
         assertThat(result, containsString("$.httpRequests[0].headers[0]: string found, object expected"));

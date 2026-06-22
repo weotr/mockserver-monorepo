@@ -208,8 +208,13 @@ public class LlmClientTest {
     // --- registry ---
 
     @Test
-    public void registryHasAllSevenProviders() {
+    public void registryHasAllChatProviders() {
+        // Rerank-only providers (COHERE, VOYAGE) are not runtime-LLM chat backends,
+        // so they have no LlmClient — every other provider must have one.
         for (Provider provider : Provider.values()) {
+            if (provider == Provider.COHERE || provider == Provider.VOYAGE) {
+                continue;
+            }
             assertThat("client for " + provider, LlmClientRegistry.getInstance().lookup(provider).isPresent(), is(true));
         }
     }

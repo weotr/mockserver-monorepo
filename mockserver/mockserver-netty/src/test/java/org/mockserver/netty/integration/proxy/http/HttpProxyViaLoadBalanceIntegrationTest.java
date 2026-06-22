@@ -173,12 +173,16 @@ public class HttpProxyViaLoadBalanceIntegrationTest {
 
             // and - logs hide proxied request
             String[] logMessages = loadBalancerClientAndServer.retrieveLogMessagesArray(null);
+            // the forward action injects a non-deterministic "x-mockserver-response-time-ms" header
+            // (first in the headers block) and a "timing" block after the body, so assert the
+            // deterministic parts either side without binding to the variable values
             assertThat(logMessages[2], containsString("returning response:" + NEW_LINE +
                 NEW_LINE +
                 "  {" + NEW_LINE +
                 "    \"statusCode\" : 200," + NEW_LINE +
                 "    \"reasonPhrase\" : \"OK\"," + NEW_LINE +
-                "    \"headers\" : {" + NEW_LINE +
+                "    \"headers\" : {"));
+            assertThat(logMessages[2], containsString(
                 "      \"content-length\" : [ \"15\" ]," + NEW_LINE +
                 "      \"connection\" : [ \"keep-alive\" ]" + NEW_LINE +
                 "    }," + NEW_LINE +
@@ -426,12 +430,16 @@ public class HttpProxyViaLoadBalanceIntegrationTest {
 
             // and - logs hide proxied request
             String[] logMessages = loadBalancerClientAndServer.retrieveLogMessagesArray(null);
+            // the forward action injects a non-deterministic "x-mockserver-response-time-ms" header
+            // (first in the headers block) and a "timing" block after the body, so assert the
+            // deterministic parts either side without binding to the variable values
             assertThat(logMessages[2], containsString("returning response:" + NEW_LINE +
                 NEW_LINE +
                 "  {" + NEW_LINE +
                 "    \"statusCode\" : 200," + NEW_LINE +
                 "    \"reasonPhrase\" : \"OK\"," + NEW_LINE +
-                "    \"headers\" : {" + NEW_LINE +
+                "    \"headers\" : {"));
+            assertThat(logMessages[2], containsString(
                 "      \"content-length\" : [ \"15\" ]," + NEW_LINE +
                 "      \"connection\" : [ \"keep-alive\" ]" + NEW_LINE +
                 "    }," + NEW_LINE +

@@ -3,7 +3,6 @@ package org.mockserver.serialization.serializers.certificate;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.ser.std.StdSerializer;
-import org.mockserver.model.HttpRequest;
 import org.mockserver.model.X509Certificate;
 
 import java.io.IOException;

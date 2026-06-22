@@ -25,6 +25,7 @@ import org.slf4j.event.Level;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -70,6 +71,39 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     // only non-sort fields (e.g. response body) — without this, such updates
     // would leave a stale matcher serving the old behaviour.
     private final ConcurrentHashMap<String, Long> lastReconciledVersion = new ConcurrentHashMap<>();
+    // The match fields a plain HTTP request can actually exercise. Used as the
+    // denominator of the closest-expectation "matched X/Y fields" diagnostic so
+    // it is not inflated by the DNS/binary/OpenAPI/operation enum constants that
+    // an HttpRequest never touches. DNS and binary requests report against their
+    // own field sets (see applicableFieldCount).
+    private static final MatchDifference.Field[] HTTP_APPLICABLE_FIELDS = {
+        MatchDifference.Field.METHOD,
+        MatchDifference.Field.PATH,
+        MatchDifference.Field.PATH_PARAMETERS,
+        MatchDifference.Field.QUERY_PARAMETERS,
+        MatchDifference.Field.COOKIES,
+        MatchDifference.Field.HEADERS,
+        MatchDifference.Field.BODY,
+        MatchDifference.Field.SECURE,
+        MatchDifference.Field.PROTOCOL,
+        MatchDifference.Field.KEEP_ALIVE,
+    };
+    private static final MatchDifference.Field[] DNS_APPLICABLE_FIELDS = {
+        MatchDifference.Field.DNS_NAME,
+        MatchDifference.Field.DNS_TYPE,
+        MatchDifference.Field.DNS_CLASS,
+    };
+    private static final MatchDifference.Field[] BINARY_APPLICABLE_FIELDS = {
+        MatchDifference.Field.BINARY_BODY,
+    };
+    // A non-fail-fast matcher builder used exclusively by the cold-path closest-match
+    // diagnostic to obtain a non-collapsed field-difference count. Lazily created
+    // (never on the hot serving path). Note: countMatchedApplicableFields builds the
+    // one-off matcher via transformsToMatcher(Expectation), which always compiles a
+    // fresh matcher (the MatcherBuilder LRU cache is keyed on RequestDefinition and is
+    // not consulted for the Expectation overload), so each cold-path diagnostic
+    // allocates a matcher — acceptable on this already-gated, no-match cold path.
+    private volatile MatcherBuilder nonFailFastMatcherBuilder;
 
     public RequestMatchers(Configuration configuration, MockServerLogger mockServerLogger, Scheduler scheduler, WebSocketClientRegistry webSocketClientRegistry) {
         super(scheduler);
@@ -378,11 +412,46 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     public Expectation firstMatchingExpectation(RequestDefinition requestDefinition) {
         Expectation matchedExpectation = null;
         Expectation closestMatchExpectation = null;
+        HttpRequestMatcher closestMatchMatcher = null;
         int closestMatchFailures = Integer.MAX_VALUE;
-        int totalFields = MatchDifference.Field.values().length;
+        String requestNamespace = extractRequestNamespace(requestDefinition);
+        // Count expectations skipped purely by the namespace gate, but only when
+        // the request actually carries a namespace — the common no-namespace hot
+        // path does no extra work (the counter stays 0 and is never read).
+        int namespaceSkipped = 0;
+
+        // Allocation optimisation: with detailedMatchFailures OFF (the default), a
+        // MatchDifference records NOTHING — addDifference(Field,...) is gated entirely
+        // on the flag, so its lazily-allocated differences map is never created and
+        // getAllDifferences() always returns the empty map. The only per-match mutable
+        // state, the currentField marker, is overwritten at the start of every field
+        // match and is never read by this loop, so a SINGLE reusable instance is
+        // behaviourally identical across the whole scan (and never escapes this method).
+        // This removes the per-candidate MatchDifference shell that a large no-match scan
+        // would otherwise allocate (e.g. 1000 throwaway objects for a 1000-expectation
+        // miss). When the flag is ON, each matcher still gets its OWN MatchDifference so
+        // the recorded per-field differences (and the closest-match diagnostic that reads
+        // getAllDifferences().size()) are exactly as before.
+        final boolean detailedMatchFailures = configuration.detailedMatchFailures();
+        final MatchDifference sharedMatchDifference = detailedMatchFailures
+            ? null
+            : new MatchDifference(false, requestDefinition);
 
         for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
-            MatchDifference matchDifference = new MatchDifference(configuration.detailedMatchFailures(), requestDefinition);
+            // Namespace (multi-tenancy) gate: skip expectations belonging to a
+            // different namespace than the request's. Global (null-namespace)
+            // expectations always pass; a request with no namespace sees only
+            // global expectations. Applied before matching so a foreign-namespace
+            // expectation never participates (and never pollutes closest-match).
+            if (!matchesNamespace(httpRequestMatcher.getExpectation(), requestNamespace)) {
+                if (requestNamespace != null) {
+                    namespaceSkipped++;
+                }
+                continue;
+            }
+            MatchDifference matchDifference = detailedMatchFailures
+                ? new MatchDifference(true, requestDefinition)
+                : sharedMatchDifference;
             if (httpRequestMatcher.matches(matchDifference, requestDefinition)) {
                 Expectation expectation = httpRequestMatcher.getExpectation();
 
@@ -402,8 +471,13 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                 // Extract isolation key for scenario state management
                 String isolationKey = extractIsolationKey(expectation, requestDefinition);
 
+                // Scenario gate: check the required state WITHOUT transitioning.
+                // The transition is a side-effect that must only happen once the
+                // expectation is actually committed (after percentage AND Times
+                // consumption succeed) — otherwise a skipped expectation would
+                // advance the scenario without ever being served (consume-then-skip).
                 if (expectation.getScenarioName() != null && expectation.getScenarioState() != null) {
-                    if (!scenarioManager.matchesAndTransition(expectation.getScenarioName(), isolationKey, expectation.getScenarioState(), expectation.getNewScenarioState())) {
+                    if (!scenarioManager.matchesState(expectation.getScenarioName(), isolationKey, expectation.getScenarioState())) {
                         continue;
                     }
                 }
@@ -438,7 +512,44 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                         continue;
                     }
                 }
+                // COMMIT POINT: the expectation is now definitely being served.
+                // Apply the scenario transition here (not at the gate above) so it
+                // only advances when the expectation is actually consumed. Guarded
+                // by getNewScenarioState() != null so non-transitioning expectations
+                // are unaffected.
+                //
+                // For an expectation with a REQUIRED scenario state, transition
+                // ATOMICALLY via matchesAndTransition (a CAS on the scenario-state
+                // KV store) rather than an unconditional put. This re-checks the
+                // required state at the commit point and advances it in a single
+                // step, preserving the documented cross-node "exactly one winner"
+                // guarantee (docs/code/clustered-state.md): when two nodes race the
+                // same step (both passed the pure matchesState gate above, both read
+                // "Started"), exactly one CAS succeeds. matchesAndTransition is the
+                // correct primitive for BOTH the local in-memory backend (where it
+                // is a single-writer ConcurrentHashMap.compute — always succeeds, no
+                // single-node regression) AND clustered backends, so it is used
+                // unconditionally with no isClustered() branch.
+                //
+                // Times interaction: this CAS runs AFTER consumeMatch() succeeded.
+                // For the dominant unlimited-Times scenario case consumeMatch is a
+                // no-op success, so a lost scenario CAS loses nothing. For the rare
+                // limited-Times + scenario case, losing the CAS means a Times unit
+                // was already consumed on THIS node — an accepted tradeoff that is
+                // strictly better than double-serving the same scenario step.
+                if (expectation.getScenarioName() != null && expectation.getScenarioState() != null && expectation.getNewScenarioState() != null) {
+                    if (!scenarioManager.matchesAndTransition(expectation.getScenarioName(), isolationKey, expectation.getScenarioState(), expectation.getNewScenarioState())) {
+                        // Lost the cross-node race: another node already advanced the
+                        // scenario past the required state. This node must NOT serve —
+                        // fall through to the next expectation (mirrors the Times-CAS
+                        // lost-race handling above).
+                        httpRequestMatcher.setResponseInProgress(false);
+                        continue;
+                    }
+                }
                 if (expectation.getScenarioName() != null && expectation.getScenarioState() == null && expectation.getNewScenarioState() != null) {
+                    // Entry-state expectation (no required state to CAS against) —
+                    // an unconditional transition is correct here.
                     scenarioManager.transitionState(expectation.getScenarioName(), isolationKey, expectation.getNewScenarioState());
                 }
                 boolean remainingMatchesDecremented = expectation.getTimes() != null && !expectation.getTimes().isUnlimited();
@@ -449,18 +560,31 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                 break;
             } else {
                 if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
-                    scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                    scheduleLazyRemoval(httpRequestMatcher);
                 }
                 int failures = matchDifference.getAllDifferences().size();
                 if (failures < closestMatchFailures && httpRequestMatcher.getExpectation() != null) {
                     closestMatchFailures = failures;
                     closestMatchExpectation = httpRequestMatcher.getExpectation();
+                    closestMatchMatcher = httpRequestMatcher;
                 }
             }
         }
 
         if (matchedExpectation == null && closestMatchExpectation != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
-            int matchedFields = totalFields - closestMatchFailures;
+            // Cold path only (no match AND INFO logging on): compute a MEANINGFUL
+            // matched/total ratio. The denominator is the number of match fields
+            // APPLICABLE to this request's protocol (an HttpRequest never exercises
+            // the DNS/binary/OpenAPI/operation fields, so counting all 16 enum
+            // constants inflated it). The numerator is computed by re-evaluating the
+            // closest matcher WITHOUT fail-fast so the count reflects every applicable
+            // field — under the default fail-fast the hot-path MatchDifference collapses
+            // to at most one recorded failure, which would report "matched N-1/N" for
+            // almost any mismatch. This extra evaluation is intentionally confined to
+            // this already-gated cold path; the hot serving scan above is untouched and
+            // keeps fail-fast.
+            int totalFields = applicableFieldCount(requestDefinition);
+            int matchedFields = countMatchedApplicableFields(closestMatchMatcher, requestDefinition, totalFields, closestMatchFailures);
             mockServerLogger.logEvent(
                 new LogEntry()
                     .setType(EXPECTATION_NOT_MATCHED)
@@ -473,6 +597,24 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             );
         }
 
+        // Namespace-gated silence diagnostic: when a namespaced request matched
+        // nothing AND at least one expectation was excluded SOLELY by the namespace
+        // gate, surface a DEBUG entry so the "no expectation, no closest match"
+        // silence is explained. DEBUG-only so default-level behaviour is unchanged
+        // and there is no noise on the common no-namespace path (namespaceSkipped
+        // stays 0 unless the request carried a namespace).
+        if (matchedExpectation == null && namespaceSkipped > 0 && mockServerLogger.isEnabledForInstance(Level.DEBUG)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(EXPECTATION_NOT_MATCHED)
+                    .setLogLevel(Level.DEBUG)
+                    .setCorrelationId(requestDefinition.getLogCorrelationId())
+                    .setHttpRequest(requestDefinition)
+                    .setMessageFormat("request in namespace:{}did not match any expectation; " + namespaceSkipped + " expectation(s) skipped due to namespace mismatch")
+                    .setArguments(requestNamespace)
+            );
+        }
+
         if (configuration.metricsEnabled()) {
             if (matchedExpectation == null || matchedExpectation.getAction() == null) {
                 metrics.increment(EXPECTATIONS_NOT_MATCHED_COUNT);
@@ -481,14 +623,24 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             } else {
                 metrics.increment(RESPONSE_EXPECTATIONS_MATCHED_COUNT);
             }
+            if (matchedExpectation != null && matchedExpectation.getAction() != null) {
+                // Opt-in per-expectation counter (perExpectationMetricsEnabled).
+                // No-op unless the counter is registered; labeled by the stable
+                // expectation id to bound Prometheus cardinality.
+                Metrics.incrementExpectationMatched(matchedExpectation.getId());
+            }
         }
         return matchedExpectation;
     }
 
     public Expectation firstMatchingEarlyExpectation(HttpRequest headersOnlyRequest) {
+        String requestNamespace = extractRequestNamespace(headersOnlyRequest);
         for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
             Expectation expectation = httpRequestMatcher.getExpectation();
             if (expectation == null || !(expectation.getHttpRequest() instanceof HttpRequest)) {
+                continue;
+            }
+            if (!matchesNamespace(expectation, requestNamespace)) {
                 continue;
             }
             HttpRequest expectationRequest = (HttpRequest) expectation.getHttpRequest();
@@ -501,8 +653,12 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             }
             if (httpRequestMatcher.matches(null, headersOnlyRequest)) {
                 String isolationKey = extractIsolationKey(expectation, headersOnlyRequest);
+                // Scenario gate: check the required state WITHOUT transitioning.
+                // The transition happens only at the commit point below, once the
+                // expectation is actually consumed — see firstMatchingExpectation
+                // for the consume-then-skip rationale.
                 if (expectation.getScenarioName() != null && expectation.getScenarioState() != null) {
-                    if (!scenarioManager.matchesAndTransition(expectation.getScenarioName(), isolationKey, expectation.getScenarioState(), expectation.getNewScenarioState())) {
+                    if (!scenarioManager.matchesState(expectation.getScenarioName(), isolationKey, expectation.getScenarioState())) {
                         continue;
                     }
                 }
@@ -527,11 +683,36 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                         continue;
                     }
                 }
+                // COMMIT POINT: apply the scenario transition only now that the
+                // expectation is definitely being served (post-consume).
+                //
+                // For an expectation with a REQUIRED scenario state, transition
+                // ATOMICALLY via matchesAndTransition (a CAS) — see the detailed
+                // rationale on the firstMatchingExpectation commit point. This keeps
+                // the cross-node "exactly one winner" guarantee on clustered backends
+                // while being a no-op-equivalent single-writer compute on the local
+                // backend (no single-node regression). The same accepted limited-
+                // Times tradeoff applies: a lost CAS means a Times unit was already
+                // consumed on this node, which is strictly better than double-serving.
+                if (expectation.getScenarioName() != null && expectation.getScenarioState() != null && expectation.getNewScenarioState() != null) {
+                    if (!scenarioManager.matchesAndTransition(expectation.getScenarioName(), isolationKey, expectation.getScenarioState(), expectation.getNewScenarioState())) {
+                        // Lost the cross-node race — do not serve, fall through.
+                        httpRequestMatcher.setResponseInProgress(false);
+                        continue;
+                    }
+                }
                 if (expectation.getScenarioName() != null && expectation.getScenarioState() == null && expectation.getNewScenarioState() != null) {
+                    // Entry-state expectation (no required state to CAS against).
                     scenarioManager.transitionState(expectation.getScenarioName(), isolationKey, expectation.getNewScenarioState());
                 }
                 if (expectation.getTimes() != null && !expectation.getTimes().isUnlimited()) {
                     notifyListeners(this, Cause.API);
+                }
+                if (configuration.metricsEnabled() && expectation.getAction() != null) {
+                    // Opt-in per-expectation counter (perExpectationMetricsEnabled).
+                    // No-op unless the counter is registered; count early-matched
+                    // (respondBeforeBody) expectations consistently with the normal path.
+                    Metrics.incrementExpectationMatched(expectation.getId());
                 }
                 return expectation;
             }
@@ -568,6 +749,44 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             }
         } else {
             reset();
+        }
+    }
+
+    /**
+     * Clears only the expectations belonging to the given namespace (tenant),
+     * leaving expectations in other namespaces (and global expectations) intact.
+     * This lets a tenant clean up after itself on a shared MockServer instance.
+     * <p>
+     * When {@code namespace} is blank this is a no-op (use {@link #reset()} or a
+     * request-matcher clear for a full clear) so that a blank namespace filter
+     * never accidentally clears global expectations.
+     *
+     * @param namespace        the namespace whose expectations to clear
+     * @param logCorrelationId correlation id for the resulting CLEARED log entry
+     */
+    public void clearByNamespace(String namespace, String logCorrelationId) {
+        if (isBlank(namespace)) {
+            return;
+        }
+        AtomicBoolean removedAny = new AtomicBoolean(false);
+        getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
+            Expectation expectation = httpRequestMatcher.getExpectation();
+            if (expectation != null && namespace.equals(expectation.getNamespace())) {
+                removeHttpRequestMatcher(httpRequestMatcher, logCorrelationId);
+                removedAny.set(true);
+            }
+        });
+        // Only emit a CLEARED event when at least one expectation was actually
+        // removed; an idempotent CI teardown clearing an empty namespace stays quiet.
+        if (removedAny.get() && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(CLEARED)
+                    .setLogLevel(Level.INFO)
+                    .setCorrelationId(logCorrelationId)
+                    .setMessageFormat("cleared expectations in namespace:{}")
+                    .setArguments(namespace)
+            );
         }
     }
 
@@ -627,6 +846,20 @@ public class RequestMatchers extends MockServerMatcherNotifier {
      */
     public synchronized void reconcileFromBackend() {
         if (expectationBackend == null) {
+            return;
+        }
+        // Fast path: for the non-clustered (in-memory default) backend, all
+        // mutations originate locally and the node-local CPQ is already in sync
+        // except for backend eviction. The full reconcile below snapshots the
+        // ENTIRE backend into a HashMap and walks every entry on every add/update
+        // — and InMemoryExpectationKeyValueStore.put() also fires an invalidation
+        // listener that calls back into this method, so an unconditional full
+        // reconcile costs TWO O(n) passes per mutation → O(n^2) registration.
+        // A cheap eviction-only trim is all that is needed here; the expensive
+        // remote-add/remote-update reconciliation is required only for a
+        // clustered backend (where entries can appear/change on other nodes).
+        if (stateBackend == null || !stateBackend.isClustered()) {
+            trimEvictedFromBackend();
             return;
         }
         // Snapshot backend state
@@ -692,6 +925,52 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     }
 
     /**
+     * Cheap eviction-only trim for the non-clustered (in-memory default)
+     * backend. The node-local cache is already in sync with the backend for
+     * every add/update (those mutations are mirrored synchronously into the
+     * CPQ), so the ONLY divergence to reconcile after a local mutation is
+     * backend-side eviction: when the backend's own CPQ self-evicts the oldest
+     * entry past {@code maxExpectations}, the node-local cache (whose CPQ is at
+     * {@code Integer.MAX_VALUE} — see {@link #setStateBackend}) still holds that
+     * now-evicted id and must drop it.
+     * <p>
+     * Common-case fast exit: if the node-local cache holds no more ids than the
+     * backend, nothing was evicted and this returns immediately without
+     * iterating. Only when {@code matcherCacheById.size() > backend.size()} —
+     * i.e. an eviction actually happened — does it walk the cached ids and drop
+     * those no longer present in the backend. This keeps registration O(n)
+     * overall instead of the O(n^2) caused by a full snapshot-and-walk reconcile
+     * on every add.
+     */
+    private void trimEvictedFromBackend() {
+        if (expectationBackend == null) {
+            return;
+        }
+        if (matcherCacheById.size() <= expectationBackend.size()) {
+            // Nothing was evicted — the common case. No iteration needed.
+            return;
+        }
+        // An eviction happened: build the set of ids still present in the
+        // backend, then drop any cached id no longer present.
+        Set<String> backendIds = new HashSet<>();
+        expectationBackend.entries().forEach(e -> backendIds.add(e.getKey()));
+        List<String> evictedIds = new ArrayList<>();
+        for (String cachedId : matcherCacheById.keySet()) {
+            if (!backendIds.contains(cachedId)) {
+                evictedIds.add(cachedId);
+            }
+        }
+        for (String evictedId : evictedIds) {
+            HttpRequestMatcher evictedMatcher = matcherCacheById.remove(evictedId);
+            if (evictedMatcher != null) {
+                httpRequestMatchers.remove(evictedMatcher);
+            }
+            expectationRequestDefinitions.remove(evictedId);
+            lastReconciledVersion.remove(evictedId);
+        }
+    }
+
+    /**
      * Backward-compatible alias: reconciles evictions only. Called after
      * local mutations where the node-local CPQ is already up-to-date
      * except for backend eviction. Delegates to the full reconcile.
@@ -717,6 +996,25 @@ public class RequestMatchers extends MockServerMatcherNotifier {
 
     private void removeHttpRequestMatcher(HttpRequestMatcher httpRequestMatcher, String logCorrelationId) {
         removeHttpRequestMatcher(httpRequestMatcher, Cause.API, true, logCorrelationId);
+    }
+
+    /**
+     * Schedules the lazy async removal of an inactive matcher AT MOST ONCE.
+     * Several data-plane scans independently observe a matcher as
+     * {@code !responseInProgress && !active} and would each submit a removal task
+     * for it. The removal itself is idempotent, but the duplicate submissions add
+     * needless scheduler and backend load under churn. {@link HttpRequestMatcher}
+     * (via {@code AbstractHttpRequestMatcher}) CAS-guards the claim so only the
+     * first observer actually schedules the task. A matcher that is not an
+     * {@code AbstractHttpRequestMatcher} (none in practice) falls back to scheduling
+     * unconditionally so removal is never lost.
+     */
+    private void scheduleLazyRemoval(HttpRequestMatcher httpRequestMatcher) {
+        boolean shouldSchedule = !(httpRequestMatcher instanceof org.mockserver.matchers.AbstractHttpRequestMatcher)
+            || ((org.mockserver.matchers.AbstractHttpRequestMatcher) httpRequestMatcher).tryScheduleRemoval();
+        if (shouldSchedule) {
+            scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+        }
     }
 
     @SuppressWarnings("rawtypes")
@@ -799,7 +1097,7 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             return httpRequestMatchers.stream()
                 .filter(httpRequestMatcher -> {
                     if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
-                        scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                        scheduleLazyRemoval(httpRequestMatcher);
                         return false;
                     }
                     return true;
@@ -811,7 +1109,7 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             HttpRequestMatcher requestMatcher = matcherBuilder.transformsToMatcher(requestDefinition);
             getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
                 if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
-                    scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                    scheduleLazyRemoval(httpRequestMatcher);
                 } else {
                     RequestDefinition expectationDefinition = httpRequestMatcher.getExpectation().getHttpRequest();
                     if (notFilterableByRequest(requestDefinition, expectationDefinition) || requestMatcher.matches(expectationDefinition)) {
@@ -912,7 +1210,7 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             return httpRequestMatchers.stream()
                 .filter(httpRequestMatcher -> {
                     if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
-                        scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                        scheduleLazyRemoval(httpRequestMatcher);
                         return false;
                     }
                     return true;
@@ -923,7 +1221,7 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             HttpRequestMatcher requestMatcher = matcherBuilder.transformsToMatcher(requestDefinition);
             getHttpRequestMatchersCopy().forEach(httpRequestMatcher -> {
                 if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
-                    scheduler.submit(() -> removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID()));
+                    scheduleLazyRemoval(httpRequestMatcher);
                 } else {
                     RequestDefinition expectationDefinition = httpRequestMatcher.getExpectation().getHttpRequest();
                     if (notFilterableByRequest(requestDefinition, expectationDefinition) || requestMatcher.matches(expectationDefinition)) {
@@ -933,6 +1231,117 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             });
             return httpRequestMatchers;
         }
+    }
+
+    /**
+     * Number of match fields APPLICABLE to the given request's protocol — the
+     * correct denominator for the closest-expectation "matched X/Y fields"
+     * diagnostic. An {@link HttpRequest} (the common case) exercises the ten HTTP
+     * fields only; a {@link DnsRequestDefinition} exercises the three DNS fields;
+     * a {@link BinaryRequestDefinition} exercises the single binary-body field.
+     * Anything else (e.g. OpenAPI) falls back to the full enum size.
+     */
+    private static int applicableFieldCount(RequestDefinition requestDefinition) {
+        MatchDifference.Field[] applicable = applicableFields(requestDefinition);
+        return applicable != null ? applicable.length : MatchDifference.Field.values().length;
+    }
+
+    /**
+     * Computes how many of the request's applicable fields the closest expectation
+     * actually matched, for the cold-path "matched X/Y fields" diagnostic only.
+     * <p>
+     * The hot-path {@link MatchDifference} that produced {@code closestMatchFailures}
+     * was evaluated with the default fail-fast matching, which stops at the first
+     * failing field and therefore records at most one difference — so a naive
+     * {@code applicable - closestMatchFailures} would report an almost-perfect match
+     * for nearly any mismatch. To get a real count this re-evaluates the closest
+     * matcher with fail-fast DISABLED (via {@link #nonFailFastMatcherBuilder}) and a
+     * detailed {@link MatchDifference}, then counts the applicable fields that appear
+     * in the difference map as failures. This runs ONLY in the already-gated cold
+     * path (no match AND INFO logging on); the hot serving scan is untouched and keeps
+     * fail-fast.
+     * <p>
+     * For request/expectation protocols where a non-fail-fast rebuild is not safe or
+     * not meaningful (e.g. OpenAPI, whose matcher also consults context-path config),
+     * this falls back to the fail-fast-collapsed count, clamped to be non-negative.
+     */
+    private int countMatchedApplicableFields(HttpRequestMatcher closestMatchMatcher, RequestDefinition requestDefinition, int applicableFields, int collapsedFailures) {
+        MatchDifference.Field[] applicable = applicableFields(requestDefinition);
+        if (applicable != null && closestMatchMatcher != null && closestMatchMatcher.getExpectation() != null) {
+            RequestDefinition expectationDefinition = closestMatchMatcher.getExpectation().getHttpRequest();
+            // Only re-evaluate the protocols whose matchers do not depend on extra
+            // configuration beyond fail-fast (HTTP, DNS, binary). OpenAPI expectations
+            // compile against context-path config, so a fresh non-fail-fast builder
+            // could diverge — those take the conservative fallback below.
+            boolean safeToRebuild = expectationDefinition instanceof HttpRequest
+                || expectationDefinition instanceof DnsRequestDefinition
+                || expectationDefinition instanceof BinaryRequestDefinition;
+            if (safeToRebuild) {
+                try {
+                    HttpRequestMatcher nonFailFastMatcher = nonFailFastMatcherBuilder().transformsToMatcher(closestMatchMatcher.getExpectation());
+                    // suppressMatchResultLogging: this re-evaluation is diagnostic-only — it must
+                    // NOT write EXPECTATION_MATCHED / EXPECTATION_NOT_MATCHED events into the event
+                    // log (those would be uncorrelated duplicates of the not-matched scan above).
+                    MatchDifference detailed = new MatchDifference(true, requestDefinition).suppressMatchResultLogging();
+                    nonFailFastMatcher.matches(detailed, requestDefinition);
+                    Map<MatchDifference.Field, List<String>> differences = detailed.getAllDifferences();
+                    int failed = 0;
+                    for (MatchDifference.Field field : applicable) {
+                        if (differences.containsKey(field)) {
+                            failed++;
+                        }
+                    }
+                    return Math.max(0, applicableFields - failed);
+                } catch (Throwable throwable) {
+                    if (mockServerLogger.isEnabledForInstance(TRACE)) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(TRACE)
+                                .setMessageFormat("exception computing non-fail-fast closest-match field count:{}")
+                                .setArguments(throwable.getMessage())
+                                .setThrowable(throwable)
+                        );
+                    }
+                    // fall through to the conservative fail-fast-collapsed estimate
+                }
+            }
+        }
+        return Math.max(0, applicableFields - collapsedFailures);
+    }
+
+    private static MatchDifference.Field[] applicableFields(RequestDefinition requestDefinition) {
+        if (requestDefinition instanceof HttpRequest) {
+            return HTTP_APPLICABLE_FIELDS;
+        }
+        if (requestDefinition instanceof DnsRequestDefinition) {
+            return DNS_APPLICABLE_FIELDS;
+        }
+        if (requestDefinition instanceof BinaryRequestDefinition) {
+            return BINARY_APPLICABLE_FIELDS;
+        }
+        return null;
+    }
+
+    private MatcherBuilder nonFailFastMatcherBuilder() {
+        MatcherBuilder builder = nonFailFastMatcherBuilder;
+        if (builder == null) {
+            synchronized (this) {
+                builder = nonFailFastMatcherBuilder;
+                if (builder == null) {
+                    // A configuration identical to the operator's for matching purposes,
+                    // except fail-fast is OFF so all fields are evaluated for the count.
+                    // HTTP/DNS/binary property matchers consult no other configuration at
+                    // match time, so a fresh default config differing only in fail-fast is
+                    // semantically equivalent for the protocols this builder is used for.
+                    Configuration nonFailFastConfiguration = Configuration.configuration()
+                        .matchersFailFast(false)
+                        .detailedMatchFailures(true);
+                    builder = new MatcherBuilder(nonFailFastConfiguration, mockServerLogger);
+                    nonFailFastMatcherBuilder = builder;
+                }
+            }
+        }
+        return builder;
     }
 
     public Map<MatchDifference.Field, List<String>> findClosestMatchDiff(HttpRequest httpRequest) {
@@ -1012,23 +1421,96 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         return value;
     }
 
+    // --- Namespace (multi-tenancy) helpers ---
+
+    /**
+     * Extracts the namespace (tenant) a request belongs to from the configured
+     * {@code matchNamespaceHeader} header. Only HTTP requests carry a namespace
+     * header; non-HTTP request definitions (binary, DNS) always resolve to the
+     * global namespace (null).
+     *
+     * @return the request namespace, or null when no namespace header is present
+     * (which scopes matching to global expectations only)
+     */
+    String extractRequestNamespace(RequestDefinition requestDefinition) {
+        if (!(requestDefinition instanceof HttpRequest)) {
+            return null;
+        }
+        String headerName = configuration.matchNamespaceHeader();
+        if (isBlank(headerName)) {
+            return null;
+        }
+        String value = ((HttpRequest) requestDefinition).getFirstHeader(headerName);
+        return isBlank(value) ? null : value;
+    }
+
+    /**
+     * Namespace isolation rule: an expectation matches a request's namespace when
+     * the expectation is global (null namespace) OR its namespace equals the
+     * request's namespace. A request with no namespace ({@code requestNamespace ==
+     * null}) therefore matches only global expectations — true tenant isolation.
+     */
+    private static boolean matchesNamespace(Expectation expectation, String requestNamespace) {
+        if (expectation == null) {
+            return true;
+        }
+        String expectationNamespace = expectation.getNamespace();
+        if (isBlank(expectationNamespace)) {
+            return true;
+        }
+        return expectationNamespace.equals(requestNamespace);
+    }
+
     // --- Clustered shared-Times CAS helpers ---
 
     /**
      * Returns {@code true} when the expectation has LIMITED Times AND a
-     * clustered backend is active. Only in this case does the match
-     * consume path need to go through the shared backend CAS.
+     * clustered backend is active AND cluster-wide shared-Times enforcement
+     * is enabled (the default). Only in this case does the match consume
+     * path go through the shared backend CAS.
      * <p>
      * Unlimited Times, no-backend (in-memory default), or non-clustered
      * backends all return {@code false}, keeping the fast path identical
      * to the pre-clustering single-node behaviour.
+     * <p>
+     * <b>Event-loop blocking trade-off.</b> When this returns {@code true},
+     * {@link #consumeTimesViaBackendCas(Expectation)} runs on the Netty
+     * request-worker thread and performs up to {@code MAX_CAS_RETRIES}
+     * synchronous backend writes (a clustered Infinispan {@code REPL_SYNC}
+     * {@code compareAndSet} is a network round-trip that waits for
+     * replication acks from all members). The backend {@code get()} reads
+     * from the node-local replica (no network), but each retried CAS
+     * <i>write</i> blocks the worker until replication completes. The
+     * worst-case bound is {@code MAX_CAS_RETRIES} (10) replicated writes
+     * under extreme cross-node contention on the SAME expectation; in
+     * practice limited-Times expectations are low-count and contention is
+     * rare, so the common case is a single CAS write. Latency-sensitive
+     * clustered deployments that can tolerate approximate (per-node) Times
+     * may disable this via
+     * {@code Configuration.clusterSharedTimesEnabled(false)} /
+     * {@code -Dmockserver.clusterSharedTimesEnabled=false}, which restores
+     * the node-local fast path with no backend round-trip on the worker.
+     * See docs/code/clustered-state.md ("Clustered Times Counters").
      */
     private boolean isClusteredLimitedTimes(Expectation expectation) {
         if (stateBackend == null || !stateBackend.isClustered()) {
             return false;
         }
+        if (!configuration.clusterSharedTimesEnabled()) {
+            // Opt-out: fall back to node-local Times enforcement (no
+            // synchronous backend CAS on the request worker thread).
+            return false;
+        }
         return expectation.getTimes() != null && !expectation.getTimes().isUnlimited();
     }
+
+    /**
+     * Maximum number of CAS retry attempts for clustered shared-Times
+     * consumption. Bounds the worst-case number of synchronous replicated
+     * writes performed on the request-worker thread per match (see
+     * {@link #consumeTimesViaBackendCas(Expectation)}).
+     */
+    private static final int MAX_CAS_RETRIES = 10;
 
     /**
      * Result of a shared-Times CAS attempt on the backend.
@@ -1069,12 +1551,22 @@ public class RequestMatchers extends MockServerMatcherNotifier {
      * This is a conservative choice: the expectation is not served rather
      * than risking a double-serve. In practice, CAS contention is rare
      * because limited-Times expectations are low-count by nature.
+     * <p>
+     * <b>Runs on the request-worker (event-loop) thread.</b> Each
+     * {@code compareAndSet} on a clustered {@code REPL_SYNC} backend is a
+     * synchronous replicated write (a network round-trip awaiting acks from
+     * all cluster members). The {@code get()} reads from the local replica
+     * and does not hit the network. The worst-case blocking on the worker
+     * is therefore {@code MAX_CAS_RETRIES} (10)
+     * replicated writes; the common (uncontended) case is a single write.
+     * This path is gated by {@link #isClusteredLimitedTimes(Expectation)},
+     * which can be disabled via {@code clusterSharedTimesEnabled=false} for
+     * latency-sensitive deployments (see that method's javadoc).
      *
      * @param expectation the expectation whose shared Times to consume
      * @return the CAS result indicating success or failure/exhaustion
      */
     ConsumeTimesResult consumeTimesViaBackendCas(Expectation expectation) {
-        final int MAX_CAS_RETRIES = 10;
         final String id = expectation.getId();
 
         for (int attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
