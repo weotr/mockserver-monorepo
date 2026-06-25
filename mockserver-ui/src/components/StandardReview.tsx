@@ -16,7 +16,7 @@ import {
   type StandardMatcher,
 } from '../lib/standardCodegen';
 import CopyButton from './CopyButton';
-import JsonDiffViewer from './JsonDiffViewer';
+import JsonDiffViewer from './JsonDiffViewerLazy';
 import { monospaceFontFamily } from '../theme';
 
 export interface StandardReviewProps {

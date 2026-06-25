@@ -119,7 +119,8 @@ public abstract class Action<T extends Action> extends ObjectWithJsonToString {
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(delay, primary);
+            int computed = Objects.hash(delay, primary);
+            hashCode = computed != 0 ? computed : 1;
         }
         return hashCode;
     }

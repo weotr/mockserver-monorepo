@@ -4,6 +4,8 @@
 
 MockServer supports mocking AI protocol servers including MCP (Model Context Protocol) and A2A (Agent-to-Agent Protocol). This is distinct from MockServer's own MCP control plane (`/mockserver/mcp`) — these features enable mocking *other people's* MCP and A2A servers for testing.
 
+**MockServer's own MCP control plane** (`/mockserver/mcp`) enforces both authentication and per-tool authorization when `controlPlaneAuthorizationEnabled=true`. `McpToolRegistry` classifies every tool as read or mutate (fail-closed — unclassified tools default to MUTATE), and `McpRequestProcessor` calls `HttpState.controlPlaneToolAuthorized` before executing any `tools/call`. A principal with only the READ role is `403`'d on mutating tools (`create_expectation`, `clear_expectations`, `reset`, etc.). See [tls-and-security.md](tls-and-security.md#control-plane-authentication) for the full authorization model.
+
 ## Architecture
 
 ### Core Building Blocks

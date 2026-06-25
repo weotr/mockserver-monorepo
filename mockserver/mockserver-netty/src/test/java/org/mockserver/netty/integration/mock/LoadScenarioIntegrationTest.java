@@ -143,9 +143,32 @@ public class LoadScenarioIntegrationTest {
         // then the driver dispatched a meaningful number of requests
         assertThat("driver should have sent load requests", requestsSent, greaterThanOrEqualTo(20L));
 
-        // and the target actually received them (verify at least N landed)
-        targetClient.verify(request().withPath("/load/.*"),
-            org.mockserver.verify.VerificationTimes.atLeast(15));
+        // and the target actually received them (verify at least N landed) — proving the
+        // load-generation marker is in-process only and never leaks onto the wire to disable the
+        // target's own event log. Bounded retry because requests may still be in flight when the
+        // driver's requestsSent counter crosses the threshold.
+        long verifyDeadline = System.currentTimeMillis() + 15_000L;
+        AssertionError lastVerifyFailure = null;
+        while (System.currentTimeMillis() < verifyDeadline) {
+            try {
+                targetClient.verify(request().withPath("/load/.*"),
+                    org.mockserver.verify.VerificationTimes.atLeast(15));
+                lastVerifyFailure = null;
+                break;
+            } catch (AssertionError e) {
+                lastVerifyFailure = e;
+                Thread.sleep(100);
+            }
+        }
+        if (lastVerifyFailure != null) {
+            throw lastVerifyFailure;
+        }
+
+        // and the driver did NOT record the load traffic in its OWN event log — the in-process
+        // marker suppresses logging on the driver through the real Netty forward path with the
+        // default (loadGenerationSuppressEventLog=true) configuration.
+        assertThat("driver event log should not contain load-generation traffic",
+            driverClient.retrieveRecordedRequests(request().withPath("/load/.*")).length, is(0));
 
         // and the status reports RUNNING/COMPLETED with succeeded counters populated
         HttpResponse<String> finalStatus = send("GET", "/mockserver/loadScenario/integration-constant", null);

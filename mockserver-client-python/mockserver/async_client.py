@@ -600,6 +600,131 @@ class AsyncMockServerClient:
             )
         return await self.start_load_scenarios(name)
 
+    async def get_load_scenario_report(
+        self, name: str, format: str | None = None
+    ) -> dict | str:
+        """Fetch the end-of-run summary report for a load scenario run.
+
+        Returns the JSON report (a dict with counts, latency percentiles, the
+        threshold ``verdict`` and per-threshold ``thresholdResults``) by default.
+        Pass ``format="junit"`` to instead receive the JUnit-XML ``<testsuite>``
+        document as a string (so a load run becomes a first-class CI artifact).
+
+        Raises :class:`MockServerError` if the scenario never ran (``404``).
+        """
+        query_params = {"format": format} if format else None
+        status, response_body = await self._request(
+            "GET",
+            f"/mockserver/loadScenario/{urllib.parse.quote(name, safe='')}/report",
+            query_params=query_params,
+        )
+        if status == 404:
+            raise MockServerError(
+                f"No load scenario run for '{name}' (status=404): {response_body}"
+            )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to get load scenario report for '{name}' "
+                f"(status={status}): {response_body}"
+            )
+        if format == "junit":
+            return response_body
+        return json.loads(response_body) if response_body else {}
+
+    async def generate_load_scenario_from_openapi(
+        self,
+        name: str | None = None,
+        spec_url_or_payload: str | None = None,
+        *,
+        target: dict | None = None,
+        profile: LoadProfile | dict | None = None,
+        body: dict | None = None,
+    ) -> dict:
+        """Seed a load scenario from an OpenAPI specification.
+
+        Generates an editable scenario (one step per OpenAPI operation) and loads
+        (registers) it in the ``LOADED`` state — it generates no traffic and is
+        allowed even when ``loadGenerationEnabled`` is off. *spec_url_or_payload*
+        is the spec as an inline JSON/YAML payload, a URL, or a file/classpath
+        reference. *target* is an optional ``{host, port, scheme}`` override and
+        *profile* an optional :class:`LoadProfile` (a conservative default is
+        applied when omitted). Pass a fully-formed *body* dict to override the
+        individual arguments.
+
+        Returns ``{"status": "loaded", "name", "state", "scenario"}``.
+        """
+        if body is None:
+            body = {"name": name, "specUrlOrPayload": spec_url_or_payload}
+            if target is not None:
+                body["target"] = target
+            if profile is not None:
+                body["profile"] = (
+                    profile.to_dict() if hasattr(profile, "to_dict") else profile
+                )
+        status, response_body = await self._request(
+            "PUT", "/mockserver/loadScenario/generateFromOpenAPI", json.dumps(body)
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to generate load scenario from OpenAPI "
+                f"(status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def generate_load_scenario_from_recording(
+        self,
+        name: str | None = None,
+        *,
+        mode: str | None = None,
+        request_filter: HttpRequest | dict | None = None,
+        target: dict | None = None,
+        max_steps: int | None = None,
+        profile: LoadProfile | dict | None = None,
+        body: dict | None = None,
+    ) -> dict:
+        """Seed a load scenario from recorded proxy traffic.
+
+        Generates an editable scenario from requests held by the event log and
+        loads (registers) it in the ``LOADED`` state — it generates no traffic
+        and is allowed even when ``loadGenerationEnabled`` is off. *mode* is
+        ``VERBATIM`` (default, one step per recorded request) or ``TEMPLATIZED``
+        (one step per unique route, by descending frequency). *request_filter*
+        (an :class:`HttpRequest` matcher) selects which recorded requests to
+        include; *max_steps* caps VERBATIM steps; *target* (``{host, port,
+        scheme}``) overrides each request's routing; *profile* overrides the
+        conservative default. Pass a fully-formed *body* dict to override the
+        individual arguments.
+
+        Returns ``{"status": "loaded", "name", "state", "scenario"}``.
+        """
+        if body is None:
+            body = {"name": name}
+            if mode is not None:
+                body["mode"] = mode
+            if request_filter is not None:
+                body["requestFilter"] = (
+                    request_filter.to_dict()
+                    if hasattr(request_filter, "to_dict")
+                    else request_filter
+                )
+            if max_steps is not None:
+                body["maxSteps"] = max_steps
+            if target is not None:
+                body["target"] = target
+            if profile is not None:
+                body["profile"] = (
+                    profile.to_dict() if hasattr(profile, "to_dict") else profile
+                )
+        status, response_body = await self._request(
+            "PUT", "/mockserver/loadScenario/generateFromRecording", json.dumps(body)
+        )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to generate load scenario from recording "
+                f"(status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
     async def verify(
         self,
         request: HttpRequest | None = None,

@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>7.1.1-SNAPSHOT</version>
+        <version>7.2.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -98,12 +98,12 @@
             <dependency>
                 <groupId>org.eclipse.sisu</groupId>
                 <artifactId>org.eclipse.sisu.inject</artifactId>
-                <version>1.0.0</version>
+                <version>1.0.1</version>
             </dependency>
             <dependency>
                 <groupId>com.google.inject</groupId>
                 <artifactId>guice</artifactId>
-                <version>7.1.1-SNAPSHOT</version>
+                <version>7.2.1-SNAPSHOT</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -271,7 +271,8 @@
                                     <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>scripts/stop_MockServer.sh</executable>
+                                    <!-- single canonical copy at the repo root (basedir is this module dir) -->
+                                    <executable>../../scripts/stop_MockServer.sh</executable>
                                 </configuration>
                             </execution>
                         </executions>

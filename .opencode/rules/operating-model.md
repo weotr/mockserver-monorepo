@@ -56,7 +56,7 @@ flowchart LR
 | **Review** | Subject each unit to adversarial review on a fresh context / different model, applying the 8-lens constitution. The reviewer tries to *disprove* the change, not bless it. Repeat until no major (CRITICAL/MAJOR) findings remain **or 8 review iterations are reached** — at the cap, record residual risk and escalate rather than reintegrate as if converged (see [[review-constitution]] Iteration Protocol). | [[review-constitution]]; commit gate uses `review-cheap` (per [[commit-workflow]] Step 4), merge-to-master escalates to `review-final`; `code-reviewer` is the quick pre-commit check only |
 | **Re-verify** | Any review-driven change re-triggers the relevant verification — fixes regress. No unit is complete until post-review verification passes. | [[commit-workflow]] (Step 4 — re-run on BLOCK) |
 | **Commit** | One coherent unit → one commit. Never bundle unrelated changes. Preserves traceability, reviewability, and clean rollback. | [[commit-workflow]] |
-| **Reintegrate** | Rebase the unit onto the latest `master` and push. Conflicts surface here; resolve them, then re-verify. Concurrent rebases serialise through the `flock` rebase lock. | [[worktree-workflow]] (steps 7–8), `/worktree-merge` |
+| **Reintegrate** | Rebase the unit onto the latest `master` and fast-forward push — **linear history, no merge commit** (never `git merge`/`--no-ff`/non-`--rebase` pull/integration branch). Conflicts surface here; resolve them, then re-verify. Concurrent rebases serialise through the `flock` rebase lock. | [[worktree-workflow]] (steps 7–8), `/worktree-merge` |
 
 ## Parallelism Limits (Hard Caps)
 

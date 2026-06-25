@@ -48,6 +48,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
 import static org.mockserver.log.model.LogEntry.LogMessageType.*;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.netty.unification.PortUnificationHandler.isHttp2Enabled;
@@ -65,8 +66,19 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
     private static final AttributeKey<Boolean> CHANNEL_UPGRADED_FOR_UI_WEB_SOCKET = AttributeKey.valueOf("CHANNEL_UPGRADED_FOR_UI_WEB_SOCKET");
     private static final String UPGRADE_CHANNEL_FOR_UI_WEB_SOCKET_URI = "/_mockserver_ui_websocket";
     private static final int UI_UPDATE_ITEM_LIMIT = 100;
-    private static ObjectWriter objectWriter;
-    private static ObjectMapper objectMapper;
+    // Eagerly initialised and safely published via static-final so reads from the off-event-loop
+    // scheduler threads see a fully constructed mapper without a data race. The mapper is stateless
+    // and thread-safe once configured, so a single shared instance is correct.
+    private static final ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper(
+        new DashboardLogEntryDTOSerializer(),
+        new DashboardLogEntryDTOGroupSerializer(),
+        new DescriptionSerializer(),
+        new ThrowableSerializer()
+    );
+    // Instance-scoped because the writer's pretty-printing depends on the per-instance prettyPrint
+    // flag; written once on the event loop in registerListeners() before any scheduler task that
+    // reads it is submitted, so it is safely published to those tasks.
+    private ObjectWriter objectWriter;
     private final boolean prettyPrint;
     private final MockServerLogger mockServerLogger;
     private final boolean sslEnabledUpstream;
@@ -87,8 +99,12 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
         this.prettyPrint = prettyPrint;
     }
 
+    // clientRegistry (a non-thread-safe CircularHashMap) is mutated from channelRead / write-future
+    // listeners (event loop) and iterated from updated(...) callbacks that run on scheduler threads
+    // (MockServerMatcherNotifier / MockServerEventLog notify via Scheduler.submit). All access is
+    // serialised on the map instance below to keep it thread-safe.
     @VisibleForTesting
-    public Map<ChannelOutboundInvoker, HttpRequest> getClientRegistry() {
+    public synchronized Map<ChannelOutboundInvoker, HttpRequest> getClientRegistry() {
         if (clientRegistry == null) {
             clientRegistry = new CircularHashMap<>(100);
         }
@@ -190,7 +206,12 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
                 httpRequest,
                 new DefaultHttpHeaders(),
                 ctx.channel().newPromise()
-            ).addListener((ChannelFutureListener) future -> getClientRegistry().put(ctx, request()));
+            ).addListener((ChannelFutureListener) future -> {
+                Map<ChannelOutboundInvoker, HttpRequest> registry = getClientRegistry();
+                synchronized (registry) {
+                    registry.put(ctx, request());
+                }
+            });
         }
         registerListeners();
     }
@@ -198,12 +219,6 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
     @VisibleForTesting
     protected DashboardWebSocketHandler registerListeners() {
         if (objectWriter == null) {
-            objectMapper = ObjectMapperFactory.createObjectMapper(
-                new DashboardLogEntryDTOSerializer(),
-                new DashboardLogEntryDTOGroupSerializer(),
-                new DescriptionSerializer(),
-                new ThrowableSerializer()
-            );
             if (prettyPrint) {
                 objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
             } else {
@@ -255,11 +270,19 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
 
     private void handleWebSocketFrame(final ChannelHandlerContext ctx, WebSocketFrame frame) {
         if (frame instanceof CloseWebSocketFrame) {
-            handshaker.close(ctx.channel(), (CloseWebSocketFrame) frame.retain()).addListener((ChannelFutureListener) future -> getClientRegistry().remove(ctx));
+            handshaker.close(ctx.channel(), (CloseWebSocketFrame) frame.retain()).addListener((ChannelFutureListener) future -> {
+                Map<ChannelOutboundInvoker, HttpRequest> registry = getClientRegistry();
+                synchronized (registry) {
+                    registry.remove(ctx);
+                }
+            });
         } else if (frame instanceof TextWebSocketFrame) {
             try {
                 HttpRequest httpRequest = httpRequestSerializer.deserialize(((TextWebSocketFrame) frame).text());
-                getClientRegistry().put(ctx, httpRequest);
+                Map<ChannelOutboundInvoker, HttpRequest> registry = getClientRegistry();
+                synchronized (registry) {
+                    registry.put(ctx, httpRequest);
+                }
                 sendUpdate(ctx, httpRequest);
             } catch (IllegalArgumentException iae) {
                 sendMessage(ctx, null, ImmutableMap.of("error", iae.getMessage()), 2);
@@ -312,6 +335,13 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
                     .setMessageFormat("web socket server caught exception")
                     .setThrowable(cause)
             );
+        } else if (isSslOrDecoderFault(cause)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("web socket server caught SSL or decoder fault")
+                    .setThrowable(cause)
+            );
         }
         ctx.close();
     }
@@ -329,15 +359,25 @@ public class DashboardWebSocketHandler extends ChannelInboundHandlerAdapter impl
 
     @Override
     public void updated(MockServerEventLog mockServerLog) {
-        for (Map.Entry<ChannelOutboundInvoker, HttpRequest> registryEntry : getClientRegistry().entrySet()) {
+        for (Map.Entry<ChannelOutboundInvoker, HttpRequest> registryEntry : clientRegistrySnapshot()) {
             sendUpdate(registryEntry.getKey(), registryEntry.getValue());
         }
     }
 
     @Override
     public void updated(RequestMatchers requestMatchers, MockServerMatcherNotifier.Cause cause) {
-        for (Map.Entry<ChannelOutboundInvoker, HttpRequest> registryEntry : getClientRegistry().entrySet()) {
+        for (Map.Entry<ChannelOutboundInvoker, HttpRequest> registryEntry : clientRegistrySnapshot()) {
             sendUpdate(registryEntry.getKey(), registryEntry.getValue());
+        }
+    }
+
+    // Snapshot the registry under its lock so the (off-event-loop) updated(...) callbacks iterate a
+    // stable copy without holding the lock across the heavyweight sendUpdate calls and without racing
+    // the event-loop put/remove mutations.
+    private List<Map.Entry<ChannelOutboundInvoker, HttpRequest>> clientRegistrySnapshot() {
+        Map<ChannelOutboundInvoker, HttpRequest> registry = getClientRegistry();
+        synchronized (registry) {
+            return new ArrayList<>(registry.entrySet());
         }
     }
 

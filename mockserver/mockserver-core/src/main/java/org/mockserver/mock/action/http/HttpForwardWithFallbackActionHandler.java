@@ -59,10 +59,12 @@ public class HttpForwardWithFallbackActionHandler extends HttpForwardAction {
             return badGatewayFuture(httpRequest);
         }
 
-        // Send the upstream request
+        // Send the upstream request. SSRF validation above has already resolved and vetted the host;
+        // an unresolved address lets Netty's event-loop resolver do the (blocking) DNS lookup off the
+        // calling thread rather than resolving synchronously in the InetSocketAddress constructor.
         HttpForwardActionResult forwardResult = sendRequest(
             httpRequest,
-            new InetSocketAddress(httpForward.getHost(), httpForward.getPort()),
+            InetSocketAddress.createUnresolved(httpForward.getHost(), httpForward.getPort()),
             null
         );
 
@@ -116,7 +118,7 @@ public class HttpForwardWithFallbackActionHandler extends HttpForwardAction {
             httpRequest,
             wrappedFuture,
             null,
-            new InetSocketAddress(httpForward.getHost(), httpForward.getPort())
+            InetSocketAddress.createUnresolved(httpForward.getHost(), httpForward.getPort())
         );
     }
 

@@ -3,10 +3,7 @@ package org.mockserver.openapi.examples;
 import io.swagger.v3.oas.models.media.ObjectSchema;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.media.StringSchema;
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
-import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.openapi.examples.models.Example;
 import org.mockserver.openapi.examples.models.IntegerExample;
 import org.mockserver.openapi.examples.models.ObjectExample;
@@ -29,15 +26,9 @@ import static org.hamcrest.Matchers.*;
  */
 public class GenerationOptionsTest {
 
-    @Before
-    public void setUp() {
-        ConfigurationProperties.generateRealisticExampleValues(false);
-    }
-
-    @After
-    public void tearDown() {
-        ConfigurationProperties.generateRealisticExampleValues(false);
-    }
+    // Realistic generation is driven per-call via GenerationOptions(.., realisticValues) rather than the
+    // JVM-global generateRealisticExampleValues flag, so this class mutates no shared state and runs
+    // safely in the parallel Surefire phase.
 
     private static ObjectSchema personSchema() {
         ObjectSchema schema = new ObjectSchema();
@@ -102,8 +93,7 @@ public class GenerationOptionsTest {
 
     @Test
     public void shouldProduceIdenticalValuesForSameSeed() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-        GenerationOptions options = new GenerationOptions(2024L, null);
+        GenerationOptions options = new GenerationOptions(2024L, null, true);
 
         Example first = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), options);
         Example second = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), options);
@@ -114,10 +104,8 @@ public class GenerationOptionsTest {
 
     @Test
     public void shouldProduceDifferentValuesForDifferentSeed() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-
-        Example seedA = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(1L, null));
-        Example seedB = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(999999L, null));
+        Example seedA = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(1L, null, true));
+        Example seedB = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(999999L, null, true));
 
         // at least one field should differ between two distinct seeds
         boolean differs = !stringFieldValue(seedA, "userId").equals(stringFieldValue(seedB, "userId"))
@@ -129,8 +117,7 @@ public class GenerationOptionsTest {
 
     @Test
     public void shouldPinOverriddenFieldWhileOthersStillGenerate() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-        GenerationOptions options = new GenerationOptions(42L, Map.of("userId", "system-user-123"));
+        GenerationOptions options = new GenerationOptions(42L, Map.of("userId", "system-user-123"), true);
 
         Example result = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), options);
 
@@ -143,7 +130,7 @@ public class GenerationOptionsTest {
     @Test
     public void shouldApplyOverrideEvenWhenRealisticGenerationDisabled() {
         // overrides apply regardless of the realistic-values flag
-        GenerationOptions options = new GenerationOptions(null, Map.of("userId", "pinned"));
+        GenerationOptions options = new GenerationOptions(null, Map.of("userId", "pinned"), false);
 
         Example result = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), options);
 
@@ -159,7 +146,7 @@ public class GenerationOptionsTest {
         properties.put("count", new io.swagger.v3.oas.models.media.IntegerSchema());
         schema.setProperties(properties);
 
-        GenerationOptions options = new GenerationOptions(null, Map.of("count", 7));
+        GenerationOptions options = new GenerationOptions(null, Map.of("count", 7), false);
 
         ObjectExample result = (ObjectExample) ExampleBuilder.fromSchema(schema, new HashMap<>(), options);
 
@@ -179,7 +166,7 @@ public class GenerationOptionsTest {
         properties.put("userId", userId);
         schema.setProperties(properties);
 
-        GenerationOptions options = new GenerationOptions(null, Map.of("userId", "override-loses"));
+        GenerationOptions options = new GenerationOptions(null, Map.of("userId", "override-loses"), false);
 
         Example result = ExampleBuilder.fromSchema(schema, new HashMap<>(), options);
 
@@ -189,15 +176,13 @@ public class GenerationOptionsTest {
     // --- Nothing supplied -> unchanged (historic fixed seed 42) ---
 
     @Test
-    public void shouldMatchHistoricFixedSeedWhenNoOptionsSupplied() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
+    public void shouldMatchHistoricFixedSeedWhenNoSeedSupplied() {
+        // realistic generation with no seed supplied vs. an explicit seed-42 options object should be
+        // identical, proving the default is still the historic fixed seed of 42.
+        Example noSeed = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(null, null, true));
+        Example seed42 = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(42L, null, true));
 
-        // no options at all (two-arg overload) vs. an explicit seed-42 options object should be identical,
-        // proving the default is still the historic fixed seed of 42.
-        Example noOptions = ExampleBuilder.fromSchema(personSchema(), new HashMap<>());
-        Example seed42 = ExampleBuilder.fromSchema(personSchema(), new HashMap<>(), new GenerationOptions(42L, null));
-
-        assertThat(stringFieldValue(noOptions, "userId"), is(stringFieldValue(seed42, "userId")));
-        assertThat(stringFieldValue(noOptions, "name"), is(stringFieldValue(seed42, "name")));
+        assertThat(stringFieldValue(noSeed, "userId"), is(stringFieldValue(seed42, "userId")));
+        assertThat(stringFieldValue(noSeed, "name"), is(stringFieldValue(seed42, "name")));
     }
 }

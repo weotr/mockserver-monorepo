@@ -39,11 +39,17 @@ public class MemoryMonitoring implements MockServerLogListener, MockServerMatche
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(MemoryMonitoring.class);
     private final Configuration configuration;
     private final File csvFile;
+    // Held so stop() can unregister the listeners registered in the constructor, preventing a
+    // listener leak when the owning HttpState is stopped/recreated (e.g. embedded/test reuse).
+    private final MockServerEventLog mockServerLog;
+    private final RequestMatchers requestMatchers;
 
     public MemoryMonitoring(Configuration configuration, MockServerEventLog mockServerLog, RequestMatchers requestMatchers) {
         if (configuration.outputMemoryUsageCsv()) {
             this.configuration = configuration;
             this.csvFile = new File(configuration.memoryUsageCsvDirectory(), "memoryUsage_" + new SimpleDateFormat("yyyy-MM-dd").format(new Date()) + ".csv");
+            this.mockServerLog = mockServerLog;
+            this.requestMatchers = requestMatchers;
             if (!csvFile.exists()) {
                 String line = buildStatistics().stream().map(Pair::getKey).collect(Collectors.joining(","));
                 writeLineToCsv(line);
@@ -57,6 +63,22 @@ public class MemoryMonitoring implements MockServerLogListener, MockServerMatche
         } else {
             this.configuration = null;
             this.csvFile = null;
+            this.mockServerLog = null;
+            this.requestMatchers = null;
+        }
+    }
+
+    /**
+     * Unregister the listeners registered in the constructor so this instance does not leak as a
+     * permanent listener on the event log / request matchers when its owning {@link org.mockserver.mock.HttpState}
+     * is stopped. No-op when CSV memory monitoring is disabled (no listeners were registered).
+     */
+    public void stop() {
+        if (mockServerLog != null) {
+            mockServerLog.unregisterListener(this);
+        }
+        if (requestMatchers != null) {
+            requestMatchers.unregisterListener(this);
         }
     }
 
@@ -72,10 +94,8 @@ public class MemoryMonitoring implements MockServerLogListener, MockServerMatche
     }
 
     private void writeLineToCsv(String line) {
-        try {
-            FileOutputStream rawFileOutputStream = new FileOutputStream(csvFile, true);
+        try (FileOutputStream rawFileOutputStream = new FileOutputStream(csvFile, true)) {
             rawFileOutputStream.write((line + NEW_LINE).getBytes(StandardCharsets.UTF_8));
-            rawFileOutputStream.close();
         } catch (IOException e) {
             MOCK_SERVER_LOGGER.logEvent(
                 new LogEntry()

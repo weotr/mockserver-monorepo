@@ -15,6 +15,7 @@ import org.mockserver.configuration.Configuration;
 import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.load.LoadProfile;
 import org.mockserver.load.LoadScenario;
+import org.mockserver.load.LoadStage;
 import org.mockserver.load.LoadStep;
 import org.mockserver.metrics.Metrics;
 import org.mockserver.metrics.MetricsLock;
@@ -241,6 +242,50 @@ public class LoadMetricsTest {
             Thread.sleep(5);
         }
         assertThat(Metrics.getLoadThrottledCount("throttle-load", runId, "inflight_cap"), greaterThan(0L));
+    }
+
+    @Test
+    public void droppedIterationsCountsRateStageVuCapShortfall() throws Exception {
+        // The dominant open-model drop path: a RATE stage whose arrival rate exceeds what the VU cap
+        // can sustain. With maxVus=2 and a sender that never completes (so both one-shot slots stay
+        // occupied), every further owed iteration is a VU-cap shortfall — dropped, counted as a
+        // rate_limit throttle AND folded into droppedIterations. Asserts the invariant holds:
+        // droppedIterations == count(rate_limit) for the run (no inflight_cap drops occur here).
+        Configuration config = configuration().metricsEnabled(true);
+        new Metrics(config);
+        orchestrator.setConfiguration(config);
+
+        // A sender that never completes — the two VU slots are held for the whole test.
+        Function<org.mockserver.model.HttpRequest, CompletableFuture<org.mockserver.model.HttpResponse>> blocking =
+            req -> new CompletableFuture<>();
+        LoadScenario scenario = new LoadScenario()
+            .withName("rate-cap-load")
+            .withProfile(LoadProfile.of(LoadStage.constantRate(100.0, 60_000L).withMaxVus(2)))
+            .withSteps(new LoadStep().withRequest(request().withPath("/api").withHeader("Host", "target")));
+
+        assertThat(orchestrator.start(scenario, blocking), is(nullValue()));
+        String runId = orchestrator.getStatus().runId;
+
+        // Drive the clock forward in 100ms steps so the deficit accumulator integrates 100/s; after the
+        // first ~2 iterations consume the VU slots, every subsequent owed iteration is a shortfall.
+        for (int i = 1; i <= 10; i++) {
+            clock.set(10_000L + i * 100L);
+            orchestrator.tickNow();
+        }
+        long deadline = System.currentTimeMillis() + 5_000L;
+        while (orchestrator.getStatus().droppedIterations == 0 && System.currentTimeMillis() < deadline) {
+            clock.addAndGet(100L);
+            orchestrator.tickNow();
+            Thread.sleep(5);
+        }
+
+        long dropped = orchestrator.getStatus().droppedIterations;
+        assertThat("RATE VU-cap shortfall is surfaced as dropped iterations", dropped, greaterThan(0L));
+        // Invariant: every dropped iteration here is a rate_limit throttle (no inflight_cap drops).
+        assertThat("droppedIterations equals the rate_limit throttle count for the run",
+            dropped, is(Metrics.getLoadThrottledCount("rate-cap-load", runId, "rate_limit")));
+        assertThat("no inflight_cap drops occur in the RATE VU-cap path",
+            Metrics.getLoadThrottledCount("rate-cap-load", runId, "inflight_cap"), is(0L));
     }
 
     @Test

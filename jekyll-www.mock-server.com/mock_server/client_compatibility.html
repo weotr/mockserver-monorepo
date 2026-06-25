@@ -138,7 +138,7 @@ sitemap:
 <p>Notes on specific cells:</p>
 <ul>
     <li><strong>Rust &mdash; test fixture:</strong> the Rust client has no built-in auto-reset helper. Use the Testcontainers module and call <code class="code inline">client.reset()</code> manually at the start of each test.</li>
-    <li><strong>Ruby / PHP &mdash; Testcontainers:</strong> no official MockServer Testcontainers module for these languages. Use Docker Compose or the binary launcher instead.</li>
+    <li><strong>Ruby / PHP &mdash; Testcontainers:</strong> no official MockServer Testcontainers module for these languages (six of the eight clients ship an official Testcontainers module). Use Docker Compose or the binary launcher instead.</li>
 </ul>
 
 <a id="test-fixtures" class="anchor" href="#test-fixtures">&nbsp;</a>
@@ -172,6 +172,7 @@ class PaymentServiceTest {
             response().withStatusCode(201).withBody("{\"id\":\"pay_001\"}")
         );
 
+        // point your app's base URL at http://localhost:1080
         // ... call the system under test ...
 
         client.verify(request().withPath("/payments"));
@@ -194,6 +195,7 @@ describe('payment service', () => {
 
         await client.mockSimpleResponse('/payments', { id: 'pay_001' }, 201);
 
+        // point your app's base URL at http://localhost:1080
         // ... call the system under test ...
 
         await client.verify({ path: '/payments' }, 1, 1);

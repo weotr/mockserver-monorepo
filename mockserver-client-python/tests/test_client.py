@@ -16,10 +16,15 @@ from mockserver.models import (
     HttpForward,
     HttpRequest,
     HttpResponse,
+    LoadCapture,
+    LoadFeeder,
+    LoadPacing,
     LoadProfile,
     LoadScenario,
+    LoadShape,
     LoadStage,
     LoadStep,
+    LoadThreshold,
     OpenAPIExpectation,
     Times,
     VerificationTimes,
@@ -682,6 +687,134 @@ class TestSyncLoadScenario:
             assert SyncMockHandler.last_path == "/mockserver/loadScenario/start"
             sent = json.loads(SyncMockHandler.last_request_body)
             assert sent == {"names": ["checkout-flow"]}
+
+    def test_load_scenario_advanced_serialization(self):
+        scenario = LoadScenario(
+            name="advanced",
+            step_selection="WEIGHTED",
+            abort_on_fail=True,
+            abort_grace_millis=3000,
+            thresholds=[
+                LoadThreshold(metric="LATENCY_P999", comparator="LESS_THAN", threshold=500),
+            ],
+            pacing=LoadPacing(mode="CONSTANT_PACING", value=2000),
+            feeder=LoadFeeder(
+                rows=[{"sku": "A"}, {"sku": "B"}], strategy="SEQUENTIAL"
+            ),
+            profile=LoadProfile(
+                shape=LoadShape(type="RAMP_HOLD", metric="RATE", target=100, ramp_millis=10000, hold_millis=60000)
+            ),
+            steps=[
+                LoadStep(
+                    request=HttpRequest(method="GET", path="/search"),
+                    weight=2.0,
+                    captures=[
+                        LoadCapture(name="id", source="HEADER", expression="X-Id"),
+                    ],
+                ),
+            ],
+        )
+        sent = scenario.to_dict()
+        assert sent["stepSelection"] == "WEIGHTED"
+        assert sent["abortOnFail"] is True
+        assert sent["abortGraceMillis"] == 3000
+        assert sent["thresholds"][0] == {
+            "metric": "LATENCY_P999",
+            "comparator": "LESS_THAN",
+            "threshold": 500,
+        }
+        assert sent["pacing"] == {"mode": "CONSTANT_PACING", "value": 2000}
+        assert sent["feeder"]["rows"] == [{"sku": "A"}, {"sku": "B"}]
+        assert sent["feeder"]["strategy"] == "SEQUENTIAL"
+        assert sent["profile"]["shape"]["type"] == "RAMP_HOLD"
+        assert sent["profile"]["shape"]["metric"] == "RATE"
+        assert sent["profile"]["shape"]["target"] == 100
+        assert "stages" not in sent["profile"]
+        assert sent["steps"][0]["weight"] == 2.0
+        # capture without default_value omits the defaultValue key
+        assert sent["steps"][0]["captures"][0] == {
+            "name": "id",
+            "source": "HEADER",
+            "expression": "X-Id",
+        }
+
+    def test_load_scenario_advanced_round_trip(self):
+        scenario = LoadScenario(
+            name="rt",
+            step_selection="WEIGHTED",
+            abort_on_fail=False,
+            thresholds=[LoadThreshold(metric="ERROR_RATE", comparator="LESS_THAN", threshold=0.05)],
+            pacing=LoadPacing(mode="CONSTANT_THROUGHPUT", value=10.0),
+            feeder=LoadFeeder(data='[{"k":"v"}]', format="JSON", strategy="RANDOM"),
+            profile=LoadProfile(shape=LoadShape(type="SPIKE", baseline=1, peak=10, ramp_up_millis=5000, hold_millis=5000, ramp_down_millis=5000, recovery_hold_millis=2000)),
+            steps=[LoadStep(request=HttpRequest(method="GET", path="/x"), weight=1.0, captures=[LoadCapture(name="t", source="BODY_REGEX", expression="tok=(.*)", default_value="x")])],
+        )
+        restored = LoadScenario.from_dict(scenario.to_dict())
+        assert restored.to_dict() == scenario.to_dict()
+
+    def test_get_load_scenario_report_json(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"scenario": "checkout-flow", "verdict": "FAIL", "thresholdResults": [{"satisfied": False}]}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.get_load_scenario_report("checkout-flow")
+            assert SyncMockHandler.last_method == "GET"
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/checkout-flow/report"
+            assert result["verdict"] == "FAIL"
+
+    def test_get_load_scenario_report_junit(self, sync_mock_server):
+        SyncMockHandler.response_body = "<testsuite name='checkout-flow'/>"
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.get_load_scenario_report("checkout-flow", format="junit")
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/checkout-flow/report?format=junit"
+            assert isinstance(result, str)
+            assert "<testsuite" in result
+
+    def test_get_load_scenario_report_not_found(self, sync_mock_server):
+        SyncMockHandler.response_status = 404
+        SyncMockHandler.response_body = '{"error": "never ran"}'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="No load scenario run"):
+                client.get_load_scenario_report("missing")
+
+    def test_generate_load_scenario_from_openapi(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"status": "loaded", "name": "petstore-load", "state": "LOADED", "scenario": {}}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.generate_load_scenario_from_openapi(
+                "petstore-load",
+                "https://example.com/petstore.yaml",
+                target={"host": "petstore.svc", "port": 8080, "scheme": "http"},
+            )
+            assert SyncMockHandler.last_method == "PUT"
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/generateFromOpenAPI"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["name"] == "petstore-load"
+            assert sent["specUrlOrPayload"] == "https://example.com/petstore.yaml"
+            assert sent["target"]["host"] == "petstore.svc"
+            assert "profile" not in sent
+            assert result["status"] == "loaded"
+
+    def test_generate_load_scenario_from_recording(self, sync_mock_server):
+        SyncMockHandler.response_body = json.dumps(
+            {"status": "loaded", "name": "replay", "state": "LOADED", "scenario": {}}
+        )
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.generate_load_scenario_from_recording(
+                "replay",
+                mode="TEMPLATIZED",
+                max_steps=25,
+                profile=LoadProfile(stages=[LoadStage.vu_stage(5000, vus=1)]),
+            )
+            assert SyncMockHandler.last_method == "PUT"
+            assert SyncMockHandler.last_path == "/mockserver/loadScenario/generateFromRecording"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["name"] == "replay"
+            assert sent["mode"] == "TEMPLATIZED"
+            assert sent["maxSteps"] == 25
+            assert sent["profile"]["stages"][0]["vus"] == 1
+            assert result["status"] == "loaded"
 
     def test_load_scenario_register_error(self, sync_mock_server):
         SyncMockHandler.response_status = 400

@@ -12,6 +12,7 @@ import org.mockserver.model.HttpResponse;
 import org.slf4j.event.Level;
 
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 
@@ -45,7 +46,7 @@ public class Scheduler {
 
         private final String name;
         private final boolean daemon;
-        private static int threadInitNumber;
+        private static final AtomicInteger threadInitNumber = new AtomicInteger();
 
         public SchedulerThreadFactory(String name) {
             this.name = name;
@@ -60,7 +61,7 @@ public class Scheduler {
         @Override
         @SuppressWarnings("NullableProblems")
         public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "MockServer-" + name + threadInitNumber++);
+            Thread thread = new Thread(runnable, "MockServer-" + name + threadInitNumber.getAndIncrement());
             thread.setDaemon(daemon);
             return thread;
         }

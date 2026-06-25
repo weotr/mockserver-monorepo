@@ -1,0 +1,17 @@
+meta {
+  name: end-of-run summary report for a load scenario run
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/mockserver/loadScenario/checkout/report
+  body: none
+  auth: inherit
+}
+
+docs {
+  Returns an end-of-run summary report derived from the run's status snapshot — the live snapshot while running, or the retained terminal snapshot once finished. The default JSON form carries counts, latency percentiles, the threshold verdict and per-threshold results. With ?format=junit the same data is rendered as a JUnit-XML <testsuite> (one <testcase> per threshold, a <failure> per breach, plus a "run completed" testcase) so CI consumers render per-threshold pass/fail. 404 if the scenario never ran.
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

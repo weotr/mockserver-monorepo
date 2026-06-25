@@ -117,7 +117,7 @@ public class Http3GrpcStreamingIntegrationTest {
      */
     @Test
     public void shouldHandleServerStreamingGrpcOverHttp3() throws Exception {
-        int http3Port = startMockServer(configuration()
+        int http3Port = startMockServer(() -> configuration()
             .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
             .attemptToProxyIfNoMatchingExpectation(false));
 
@@ -160,7 +160,7 @@ public class Http3GrpcStreamingIntegrationTest {
      */
     @Test
     public void shouldHandleBidiStreamingGrpcOverHttp3() throws Exception {
-        int http3Port = startMockServer(configuration()
+        int http3Port = startMockServer(() -> configuration()
             .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
             .grpcBidiStreamingEnabled(true)
             .attemptToProxyIfNoMatchingExpectation(false));
@@ -201,7 +201,7 @@ public class Http3GrpcStreamingIntegrationTest {
      */
     @Test
     public void shouldNotRouteBidiWhenDisabledOverHttp3() throws Exception {
-        int http3Port = startMockServer(configuration()
+        int http3Port = startMockServer(() -> configuration()
             .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
             .attemptToProxyIfNoMatchingExpectation(false));
 
@@ -240,7 +240,7 @@ public class Http3GrpcStreamingIntegrationTest {
      */
     @Test
     public void shouldDropInboundBidiFrameOverHttp3ViaBreakpoint() throws Exception {
-        int http3Port = startMockServer(configuration()
+        int http3Port = startMockServer(() -> configuration()
             .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
             .grpcBidiStreamingEnabled(true)
             .attemptToProxyIfNoMatchingExpectation(false));
@@ -290,7 +290,7 @@ public class Http3GrpcStreamingIntegrationTest {
      */
     @Test
     public void shouldContinueInboundBidiFramesOverHttp3ViaBreakpoint() throws Exception {
-        int http3Port = startMockServer(configuration()
+        int http3Port = startMockServer(() -> configuration()
             .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
             .grpcBidiStreamingEnabled(true)
             .attemptToProxyIfNoMatchingExpectation(false));
@@ -337,7 +337,7 @@ public class Http3GrpcStreamingIntegrationTest {
      */
     @Test
     public void shouldModifyInboundBidiFrameOverHttp3ViaBreakpoint() throws Exception {
-        int http3Port = startMockServer(configuration()
+        int http3Port = startMockServer(() -> configuration()
             .grpcDescriptorDirectory(DESCRIPTOR_DIR.toString())
             .grpcBidiStreamingEnabled(true)
             .attemptToProxyIfNoMatchingExpectation(false));
@@ -395,13 +395,36 @@ public class Http3GrpcStreamingIntegrationTest {
         return converter.toJson(messages.get(0), descriptorStore.getMethod(SERVICE, method).getInputType());
     }
 
-    private int startMockServer(Configuration config) {
-        int udpPort = findAvailableUdpPort();
-        config.http3Port(udpPort);
-        mockServer = new MockServer(config, 0);
-        int http3Port = mockServer.getHttp3Port();
+    /**
+     * Start a MockServer whose HTTP/3 (QUIC) listener binds a probed UDP port, with a bounded
+     * retry to absorb the TOCTOU window between {@link #findAvailableUdpPort()} closing the probe
+     * socket and the QUIC listener binding the same port (a collision under load would otherwise
+     * leave the HTTP/3 server unstarted and silently skip the test via the assumption below).
+     * <p>
+     * The {@code configFactory} must build a fresh {@link Configuration} on each call so a new
+     * probe port can be assigned per attempt; this helper sets {@code http3Port}. Returns the
+     * actually-bound HTTP/3 port, or skips the test (assumption) if QUIC could not start at all.
+     */
+    private int startMockServer(java.util.function.Supplier<Configuration> configFactory) {
+        final int maxAttempts = 3;
+        int http3Port = 0;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            int udpPort = findAvailableUdpPort();
+            // give the server QUIC connection generous idle headroom (matching the client's 30s) so a
+            // slow handshake or a stream legitimately paused at a breakpoint under load is not torn
+            // down by the default 5s server idle timeout
+            Configuration config = configFactory.get().http3Port(udpPort).http3MaxIdleTimeout(30000L);
+            MockServer candidate = new MockServer(config, 0);
+            http3Port = candidate.getHttp3Port();
+            if (http3Port > 0) {
+                mockServer = candidate;
+                mockServerClient = new MockServerClient("127.0.0.1", candidate.getLocalPort());
+                return http3Port;
+            }
+            // HTTP/3 failed to bind (likely a port collision) -- tear down and retry on a new port
+            candidate.stop();
+        }
         Assume.assumeTrue("HTTP/3 server did not start", http3Port > 0);
-        mockServerClient = new MockServerClient("127.0.0.1", mockServer.getLocalPort());
         return http3Port;
     }
 
@@ -427,35 +450,9 @@ public class Http3GrpcStreamingIntegrationTest {
      * bidi-streaming.
      */
     private GrpcH3Response sendGrpcOverHttp3(int port, String path, List<byte[]> requestFrames) throws Exception {
-        if (clientGroup != null) {
-            clientGroup.shutdownGracefully().sync();
-        }
-        clientGroup = new NioEventLoopGroup(1);
-
-        QuicSslContext clientSslContext = QuicSslContextBuilder.forClient()
-            .trustManager(trustAllManager())
-            .applicationProtocols(Http3.supportedApplicationProtocols())
-            .build();
-
-        Channel clientChannel = new Bootstrap()
-            .group(clientGroup)
-            .channel(NioDatagramChannel.class)
-            .handler(Http3.newQuicClientCodecBuilder()
-                .sslContext(clientSslContext)
-                .maxIdleTimeout(5000, TimeUnit.MILLISECONDS)
-                .initialMaxData(10000000)
-                .initialMaxStreamDataBidirectionalLocal(1000000)
-                .initialMaxStreamsBidirectional(100)
-                .build())
-            .bind(0)
-            .sync()
-            .channel();
-
-        QuicChannel quicChannel = QuicChannel.newBootstrap(clientChannel)
-            .handler(new Http3ClientConnectionHandler())
-            .remoteAddress(new InetSocketAddress("127.0.0.1", port))
-            .connect()
-            .get(5, TimeUnit.SECONDS);
+        QuicConnection connection = connectQuicWithRetry(port);
+        Channel clientChannel = connection.datagramChannel;
+        QuicChannel quicChannel = connection.quicChannel;
 
         List<Http3HeadersFrame> headerFrames = new ArrayList<>();
         BlockingQueue<Boolean> doneQueue = new LinkedBlockingQueue<>();
@@ -508,7 +505,11 @@ public class Http3GrpcStreamingIntegrationTest {
             }
         }
 
-        doneQueue.poll(10, TimeUnit.SECONDS);
+        // honour the completion signal: the trailing HEADERS frame (grpc-status) only arrives
+        // once channelInputClosed fires, so wait for it before reading the accumulated frames
+        Boolean done = doneQueue.poll(10, TimeUnit.SECONDS);
+        org.junit.Assert.assertNotNull(
+            "timed out waiting for gRPC response/trailers over HTTP/3", done);
 
         byte[] responseBody;
         synchronized (bodyAccumulator) {
@@ -545,6 +546,89 @@ public class Http3GrpcStreamingIntegrationTest {
         }
 
         return new GrpcH3Response(initialStatus, initialHeaders, trailingHeaders, responseBody);
+    }
+
+    /** Holds the datagram channel + QUIC channel created by {@link #connectQuicWithRetry(int)}. */
+    private static class QuicConnection {
+        final Channel datagramChannel;
+        final QuicChannel quicChannel;
+
+        QuicConnection(Channel datagramChannel, QuicChannel quicChannel) {
+            this.datagramChannel = datagramChannel;
+            this.quicChannel = quicChannel;
+        }
+    }
+
+    /**
+     * Establish a QUIC/HTTP3 connection to {@code 127.0.0.1:port} with a bounded retry.
+     * <p>
+     * A single lost UDP datagram on loopback (or a cold-start/GC hiccup) can stall the QUIC
+     * handshake. To stop that from flaking the test, each attempt fully tears down its
+     * {@link NioEventLoopGroup}, datagram channel and (partially-built) QUIC channel before the
+     * next attempt, and only the final failure is rethrown. The client codec's
+     * {@code maxIdleTimeout} is given generous headroom (30s) over the per-attempt connect
+     * deadline (8s) so an in-progress handshake is never torn down by the idle timer.
+     */
+    private QuicConnection connectQuicWithRetry(int port) throws Exception {
+        final int maxAttempts = 3;
+        Exception lastFailure = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            if (clientGroup != null) {
+                clientGroup.shutdownGracefully().sync();
+            }
+            clientGroup = new NioEventLoopGroup(1);
+
+            QuicSslContext clientSslContext = QuicSslContextBuilder.forClient()
+                .trustManager(trustAllManager())
+                .applicationProtocols(Http3.supportedApplicationProtocols())
+                .build();
+
+            Channel clientChannel = null;
+            try {
+                clientChannel = new Bootstrap()
+                    .group(clientGroup)
+                    .channel(NioDatagramChannel.class)
+                    .handler(Http3.newQuicClientCodecBuilder()
+                        .sslContext(clientSslContext)
+                        // generous idle headroom over the 8s per-attempt connect deadline so an
+                        // in-progress handshake is not torn down by the idle timer
+                        .maxIdleTimeout(30000, TimeUnit.MILLISECONDS)
+                        .initialMaxData(10000000)
+                        .initialMaxStreamDataBidirectionalLocal(1000000)
+                        .initialMaxStreamsBidirectional(100)
+                        .build())
+                    .bind(0)
+                    .sync()
+                    .channel();
+
+                QuicChannel quicChannel = QuicChannel.newBootstrap(clientChannel)
+                    .handler(new Http3ClientConnectionHandler())
+                    .remoteAddress(new InetSocketAddress("127.0.0.1", port))
+                    .connect()
+                    .get(8, TimeUnit.SECONDS);
+
+                return new QuicConnection(clientChannel, quicChannel);
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+                // transient QUIC connect stall: tear down everything created this attempt and retry
+                lastFailure = e;
+                if (clientChannel != null) {
+                    try {
+                        clientChannel.close().sync();
+                    } catch (Exception ignore) {
+                        // best-effort teardown
+                    }
+                }
+                if (clientGroup != null) {
+                    clientGroup.shutdownGracefully().sync();
+                    clientGroup = null;
+                }
+                if (attempt == maxAttempts) {
+                    throw e;
+                }
+            }
+        }
+        // unreachable: the loop either returns or rethrows on the final attempt
+        throw lastFailure;
     }
 
     private static int findAvailableUdpPort() {

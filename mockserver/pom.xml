@@ -4,7 +4,7 @@
 
     <groupId>org.mock-server</groupId>
     <artifactId>mockserver</artifactId>
-    <version>7.1.1-SNAPSHOT</version>
+    <version>7.2.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>MockServer</name>
@@ -84,6 +84,7 @@
         <netty-tcnative-boringssl-static.version>2.0.77.Final</netty-tcnative-boringssl-static.version>
         <protobuf.version>4.35.1</protobuf.version>
         <chicory.version>1.7.5</chicory.version>
+        <hdrhistogram.version>2.2.2</hdrhistogram.version>
         <jna.version>5.19.1</jna.version>
         <picocli.version>4.7.7</picocli.version>
     </properties>
@@ -254,7 +255,7 @@
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
                 <artifactId>tomcat-embed-core</artifactId>
-                <version>11.0.22</version>
+                <version>11.0.23</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.tomcat.embed</groupId>
@@ -478,7 +479,7 @@
             <dependency>
                 <groupId>net.datafaker</groupId>
                 <artifactId>datafaker</artifactId>
-                <version>2.6.0</version>
+                <version>2.7.0</version>
             </dependency>
             <!-- pin libphonenumber to resolve convergence: datafaker:2.5.4 wants 9.0.23,
                  com.github.java-json-tools:json-schema-validator:2.2.14 (transitive of
@@ -548,7 +549,7 @@
             <dependency>
                 <groupId>com.networknt</groupId>
                 <artifactId>json-schema-validator</artifactId>
-                <version>3.0.4</version>
+                <version>3.0.5</version>
             </dependency>
             <dependency>
                 <groupId>com.jayway.jsonpath</groupId>
@@ -568,7 +569,7 @@
             <dependency>
                 <groupId>io.swagger.parser.v3</groupId>
                 <artifactId>swagger-parser</artifactId>
-                <version>2.1.44</version>
+                <version>2.1.45</version>
                 <exclusions>
                     <exclusion>
                         <groupId>com.github.fge</groupId>
@@ -832,6 +833,13 @@
                 <groupId>info.picocli</groupId>
                 <artifactId>picocli</artifactId>
                 <version>${picocli.version}</version>
+            </dependency>
+
+            <!-- HdrHistogram (zero-transitive-dependency latency histogram for load-scenario percentiles) -->
+            <dependency>
+                <groupId>org.hdrhistogram</groupId>
+                <artifactId>HdrHistogram</artifactId>
+                <version>${hdrhistogram.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

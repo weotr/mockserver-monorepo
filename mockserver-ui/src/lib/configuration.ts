@@ -177,4 +177,27 @@ export const EDITABLE_PROPERTIES: readonly EditablePropertyDescriptor[] = [
     group: 'CORS',
   },
 
+  // Analytics — anonymous, cookieless dashboard usage stats
+  {
+    key: 'dashboardAnalyticsEnabled',
+    label: 'Dashboard usage analytics',
+    type: 'boolean',
+    help: 'Send anonymous, cookieless dashboard usage stats (no request or mock data) to improve the UI.',
+    group: 'Analytics',
+  },
+  {
+    key: 'dashboardAnalyticsEndpoint',
+    label: 'Analytics endpoint',
+    type: 'string',
+    help: 'PostHog instance URL events are sent to. Blank disables analytics.',
+    group: 'Analytics',
+  },
+  {
+    key: 'dashboardAnalyticsKey',
+    label: 'Analytics key',
+    type: 'string',
+    help: 'PostHog write-only project key. Blank disables analytics.',
+    group: 'Analytics',
+  },
+
 ] as const;

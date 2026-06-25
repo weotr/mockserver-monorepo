@@ -4,15 +4,17 @@ description: Start MockServer as an HTTP/HTTPS proxy, configure clients to send 
 shortTitle: Getting Started
 layout: page
 pageOrder: 1
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.9
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-06-24T08:00:00+01:00
 ---
 
 <p style="width: 35%; float: right; margin-right: 5%"><img src="../images/more_detail_available_message.png" alt="Note: this page is a high level overview of each topic, more detail is available for each topic on a linked page." style="float: right; max-width: 100%;"></p>
+
+<p>As an in-path HTTP(S) proxy, MockServer records every request and response that flows through it &mdash; including HTTPS, which it can decrypt transparently with an auto-generated certificate. That means you can <strong>capture how a system really behaves and replay it as deterministic mocks without changing a line of application code</strong>: point your clients at MockServer, run your scenarios, then analyse, verify, or record-and-replay the captured traffic.</p>
 
 <p>To use MockServer to analyse an existing system:</p>
 
@@ -75,3 +77,12 @@ sitemap:
 <h2>3. Verify Requests</h2>
 
 {% include_subpage ../mock_server/_includes/verification_summary.html %}
+
+<h2>Next Steps &amp; Related</h2>
+
+<ul>
+    <li><a href="/proxy/record_and_replay.html">Record &amp; Replay</a> &mdash; turn captured traffic into reusable mock expectations for offline, deterministic testing.</li>
+    <li><a href="/proxy/debugging_proxied_traffic.html">Debugging Proxied Traffic</a> &mdash; inspect and export recorded requests and responses (JSON, HAR, cURL) in the dashboard or via the API.</li>
+    <li><a href="/proxy/network_latency_debugging.html">Network Latency Debugging</a> &mdash; capture per-request timing breakdowns and latency percentiles to find where the time goes.</li>
+    <li><a href="/mock_server/isolating_single_service.html">Isolate a Single Service</a> &mdash; use MockServer as a reverse proxy to route one service to a local debug instance while forwarding the rest to the real environment.</li>
+</ul>

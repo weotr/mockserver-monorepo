@@ -156,6 +156,31 @@ export const REGRESSION = {
   resultPath: env('K6_RESULT_PATH', 'regression-result.json'),
 };
 
+// Throughput-vs-latency sweep tunables (sweep.js). Offers load at an ascending
+// LADDER of fixed arrival rates and records, per rate step, the ACHIEVED
+// throughput, latency percentiles, and error rate — the data series plotted as a
+// load-vs-latency "knee" curve. Unlike load.js (one ramp) the ladder is a set of
+// discrete constant-arrival-rate steps, each staggered after the previous (plus a
+// short gap so percentiles do not bleed across steps), and each request is tagged
+// with its step's offered rate so per-step percentiles are computed in the
+// summary. At the top of the ladder k6 may drop iterations (VU-starved) — that is
+// expected and is part of showing the knee, so there are NO aborting thresholds.
+export const SWEEP = {
+  // Ascending ladder of offered arrival rates (req/s). Comma-separated.
+  rates: env('K6_SWEEP_RATES', '500,1000,2000,4000,8000,16000,32000')
+    .split(',')
+    .map((r) => Number(r.trim()))
+    .filter((r) => Number.isFinite(r) && r > 0),
+  step: env('K6_SWEEP_STEP', '20s'), // duration each rate step holds
+  gap: env('K6_SWEEP_GAP', '5s'), // quiet gap between steps (no requests)
+  preAllocatedVUs: num('K6_SWEEP_PRE_VUS', 200),
+  maxVUs: num('K6_SWEEP_MAX_VUS', 4000),
+  // Transport label recorded in the result; HTTPS to MockServer negotiates HTTP/2
+  // via ALPN, but the sweep is HTTP by default (the headline knee curve).
+  proto: env('PROTO', baseUrl.startsWith('https') ? (bool('K6_HTTP2', true) ? 'https_h2' : 'https') : 'http'),
+  resultPath: env('K6_SWEEP_RESULT_PATH', 'sweep-result.json'),
+};
+
 // Resource-growth scenario tunables (growth.js). A sustained constant-load run
 // whose purpose is to surface "X increases over time" regressions (e.g. issue
 // #2329: O(n) log eviction once the request log fills to maxLogEntries). The

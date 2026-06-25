@@ -132,6 +132,9 @@ public class EarlyMatchingHandler extends SimpleChannelInboundHandler<HttpObject
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        // No isSslOrDecoderFault branch here: this handler only special-cases a benign
+        // client-close after an early response; every other exception (including SSL/decoder
+        // faults) is re-fired to the downstream handler, which logs it at the correct level.
         if (Boolean.TRUE.equals(ctx.channel().attr(EARLY_DISPATCHED).get()) && connectionClosedException(cause)) {
             if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
                 mockServerLogger.logEvent(

@@ -5,7 +5,6 @@ import io.netty.buffer.Unpooled;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.DefaultCookie;
 import io.netty.handler.codec.http2.HttpConversionUtil;
-import org.mockserver.codec.BodyContentEncodingEncoder;
 import org.mockserver.codec.BodyDecoderEncoder;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
@@ -217,16 +216,13 @@ public class MockServerHttpResponseToFullHttpResponse {
     }
 
     private ByteBuf getBody(HttpResponse httpResponse) {
-        ByteBuf bodyByteBuf = bodyDecoderEncoder.bodyToByteBuf(httpResponse.getBody(), httpResponse.getFirstHeader(CONTENT_TYPE.toString()));
-        String contentEncoding = httpResponse.getFirstHeader(CONTENT_ENCODING.toString());
-        if (isNotBlank(contentEncoding) && bodyByteBuf.readableBytes() > 0) {
-            byte[] decodedBody = new byte[bodyByteBuf.readableBytes()];
-            bodyByteBuf.readBytes(decodedBody);
-            bodyByteBuf.release();
-            byte[] reEncoded = BodyContentEncodingEncoder.encodeBody(decodedBody, contentEncoding);
-            return Unpooled.copiedBuffer(reEncoded);
-        }
-        return bodyByteBuf;
+        // Return the response body bytes verbatim. Unlike the request/forward path (which must
+        // re-compress because the inbound HttpContentDecompressor decompressed a forwarded request
+        // body while PreserveHeadersNettyRemoves kept its Content-Encoding header), a mock response
+        // body must be written to the wire exactly as supplied to withBody(...). The Content-Encoding
+        // header is still emitted literally by setHeaders, so users have byte-level control over the
+        // wire body and an already-compressed body is never double-compressed (issue #2375).
+        return bodyDecoderEncoder.bodyToByteBuf(httpResponse.getBody(), httpResponse.getFirstHeader(CONTENT_TYPE.toString()));
     }
 
     private void setHeaders(HttpResponse httpResponse, DefaultHttpResponse response, ByteBuf body) {

@@ -14,9 +14,14 @@ use MockServer\Exception\FeatureNotEnabledException;
 use MockServer\Exception\InvalidRequestException;
 use MockServer\Exception\VerificationException;
 use MockServer\HttpRequest;
+use MockServer\LoadCapture;
+use MockServer\LoadFeeder;
+use MockServer\LoadPacing;
 use MockServer\LoadProfile;
 use MockServer\LoadScenario;
+use MockServer\LoadShape;
 use MockServer\LoadStage;
+use MockServer\LoadThreshold;
 use MockServer\MockServerClient;
 use PHPUnit\Framework\TestCase;
 
@@ -710,5 +715,409 @@ class MockServerClientSreTest extends TestCase
 
         $this->expectException(InvalidRequestException::class);
         $client->startChaosExperiment(['name' => 'bad', 'stages' => []]);
+    }
+
+    // -----------------------------------------------------------------
+    // Load scenario — thresholds, pacing, feeder, captures, weight, shape
+    // -----------------------------------------------------------------
+
+    public function testLoadScenarioSerialisesThresholdsAndAbortControls(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('with-thresholds')
+                ->thresholds(
+                    LoadThreshold::of('LATENCY_P95', 'LESS_THAN', 250),
+                    LoadThreshold::of('ERROR_RATE', 'LESS_THAN_OR_EQUAL', 0.01),
+                )
+                ->abortOnFail()
+                ->abortGraceMillis(5000)
+                ->profile(LoadProfile::constant(1, 1000))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+
+        $this->assertCount(2, $body['thresholds']);
+        $this->assertSame('LATENCY_P95', $body['thresholds'][0]['metric']);
+        $this->assertSame('LESS_THAN', $body['thresholds'][0]['comparator']);
+        $this->assertEquals(250, $body['thresholds'][0]['threshold']);
+        $this->assertSame('ERROR_RATE', $body['thresholds'][1]['metric']);
+        $this->assertSame('LESS_THAN_OR_EQUAL', $body['thresholds'][1]['comparator']);
+        $this->assertEquals(0.01, $body['thresholds'][1]['threshold']);
+
+        $this->assertTrue($body['abortOnFail']);
+        $this->assertEquals(5000, $body['abortGraceMillis']);
+    }
+
+    public function testLoadScenarioSerialisesPacingAndFeeder(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('paced')
+                ->pacing(LoadPacing::constantPacing(1000))
+                ->feeder(LoadFeeder::rows([
+                    ['user' => 'alice', 'id' => '1'],
+                    ['user' => 'bob', 'id' => '2'],
+                ])->strategy('RANDOM'))
+                ->profile(LoadProfile::constant(1, 1000))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+
+        $this->assertSame('CONSTANT_PACING', $body['pacing']['mode']);
+        $this->assertEquals(1000, $body['pacing']['value']);
+
+        $this->assertCount(2, $body['feeder']['rows']);
+        $this->assertSame('alice', $body['feeder']['rows'][0]['user']);
+        $this->assertSame('RANDOM', $body['feeder']['strategy']);
+        $this->assertArrayNotHasKey('data', $body['feeder']);
+        $this->assertArrayNotHasKey('format', $body['feeder']);
+    }
+
+    public function testLoadFeederRawCsvShape(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('csv-feeder')
+                ->feeder(LoadFeeder::raw("user,id\nalice,1\nbob,2", 'csv'))
+                ->profile(LoadProfile::constant(1, 1000))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame("user,id\nalice,1\nbob,2", $body['feeder']['data']);
+        $this->assertSame('CSV', $body['feeder']['format']);
+        $this->assertArrayNotHasKey('rows', $body['feeder']);
+        $this->assertArrayNotHasKey('strategy', $body['feeder']);
+    }
+
+    public function testLoadScenarioWeightedStepsWithCaptures(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('weighted')
+                ->stepSelection('weighted')
+                ->profile(LoadProfile::constant(2, 1000))
+                ->addStep(
+                    HttpRequest::request()->method('POST')->path('/login'),
+                    null,
+                    'login',
+                    [],
+                    [
+                        LoadCapture::of('token', 'BODY_JSONPATH', '$.token'),
+                        LoadCapture::of('etag', 'HEADER', 'ETag')->defaultValue('none'),
+                    ],
+                    7.0,
+                )
+                ->addStep(
+                    HttpRequest::request()->method('GET')->path('/me'),
+                    null,
+                    'me',
+                    [],
+                    [],
+                    3.0,
+                )
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+
+        $this->assertSame('WEIGHTED', $body['stepSelection']);
+
+        $login = $body['steps'][0];
+        $this->assertEquals(7.0, $login['weight']);
+        $this->assertCount(2, $login['captures']);
+        $this->assertSame('token', $login['captures'][0]['name']);
+        $this->assertSame('BODY_JSONPATH', $login['captures'][0]['source']);
+        $this->assertSame('$.token', $login['captures'][0]['expression']);
+        $this->assertArrayNotHasKey('defaultValue', $login['captures'][0]);
+        $this->assertSame('etag', $login['captures'][1]['name']);
+        $this->assertSame('HEADER', $login['captures'][1]['source']);
+        $this->assertSame('none', $login['captures'][1]['defaultValue']);
+
+        $me = $body['steps'][1];
+        $this->assertEquals(3.0, $me['weight']);
+        $this->assertArrayNotHasKey('captures', $me);
+    }
+
+    public function testLoadProfileFromShapeSpike(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('spike')
+                ->profile(LoadProfile::fromShape(
+                    LoadShape::spike('VU', 1, 50, 5000, 30000, 5000)
+                        ->recoveryHoldMillis(10000)
+                        ->curve('LINEAR')
+                ))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $shape = $body['profile']['shape'];
+        $this->assertSame('SPIKE', $shape['type']);
+        $this->assertSame('VU', $shape['metric']);
+        $this->assertSame('LINEAR', $shape['curve']);
+        $this->assertEquals(1, $shape['baseline']);
+        $this->assertEquals(50, $shape['peak']);
+        $this->assertEquals(5000, $shape['rampUpMillis']);
+        $this->assertEquals(30000, $shape['holdMillis']);
+        $this->assertEquals(5000, $shape['rampDownMillis']);
+        $this->assertEquals(10000, $shape['recoveryHoldMillis']);
+        // a shape-only profile carries no explicit stages
+        $this->assertArrayNotHasKey('stages', $body['profile']);
+        $this->assertArrayNotHasKey('start', $shape);
+        $this->assertArrayNotHasKey('target', $shape);
+    }
+
+    public function testLoadProfileShapeStairsAndRampHold(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('stairs')
+                ->profile(LoadProfile::fromShape(LoadShape::stairs('RATE', 10, 10, 5, 20000)))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+        $stairs = json_decode((string) $history[0]['request']->getBody(), true)['profile']['shape'];
+        $this->assertSame('STAIRS', $stairs['type']);
+        $this->assertSame('RATE', $stairs['metric']);
+        $this->assertEquals(10, $stairs['start']);
+        $this->assertEquals(10, $stairs['step']);
+        $this->assertEquals(5, $stairs['steps']);
+        $this->assertEquals(20000, $stairs['stepDurationMillis']);
+        $this->assertArrayNotHasKey('peak', $stairs);
+
+        $client->loadScenario(
+            LoadScenario::scenario('ramp-hold')
+                ->profile(LoadProfile::fromShape(LoadShape::rampHold('VU', 25, 10000, 60000)))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+        $rampHold = json_decode((string) $history[1]['request']->getBody(), true)['profile']['shape'];
+        $this->assertSame('RAMP_HOLD', $rampHold['type']);
+        $this->assertSame('VU', $rampHold['metric']);
+        $this->assertEquals(25, $rampHold['target']);
+        $this->assertEquals(10000, $rampHold['rampMillis']);
+        $this->assertEquals(60000, $rampHold['holdMillis']);
+    }
+
+    public function testLoadProfileStagesStillEmittedWhenNoShape(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->loadScenario(
+            LoadScenario::scenario('stages')
+                ->profile(LoadProfile::constant(3, 1000))
+                ->addStep(HttpRequest::request()->path('/x'))
+        );
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertArrayHasKey('stages', $body['profile']);
+        $this->assertArrayNotHasKey('shape', $body['profile']);
+        $this->assertSame(3, $body['profile']['stages'][0]['vus']);
+    }
+
+    // -----------------------------------------------------------------
+    // Load scenario — report and generation endpoints
+    // -----------------------------------------------------------------
+
+    public function testGetLoadScenarioReportJsonForm(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], json_encode([
+                'scenario' => 'checkout-load',
+                'verdict' => 'PASS',
+                'p999Millis' => 412.5,
+            ])),
+        ], $history);
+
+        $report = $client->getLoadScenarioReport('checkout-load');
+
+        $request = $history[0]['request'];
+        $this->assertSame('GET', $request->getMethod());
+        $this->assertSame('/mockserver/loadScenario/checkout-load/report', $request->getUri()->getPath());
+        $this->assertSame('', $request->getUri()->getQuery());
+
+        $this->assertIsArray($report);
+        $this->assertSame('checkout-load', $report['scenario']);
+        $this->assertSame('PASS', $report['verdict']);
+        $this->assertEquals(412.5, $report['p999Millis']);
+    }
+
+    public function testGetLoadScenarioReportJunitFormReturnsRawXml(): void
+    {
+        $history = [];
+        $xml = '<testsuite name="checkout-load"><testcase name="run completed"/></testsuite>';
+        $client = $this->createClientWithMock([
+            new Response(200, ['Content-Type' => 'application/xml'], $xml),
+        ], $history);
+
+        $report = $client->getLoadScenarioReport('checkout-load', 'junit');
+
+        $request = $history[0]['request'];
+        $this->assertSame('GET', $request->getMethod());
+        $this->assertSame('/mockserver/loadScenario/checkout-load/report', $request->getUri()->getPath());
+        $this->assertSame('format=junit', $request->getUri()->getQuery());
+
+        $this->assertIsString($report);
+        $this->assertSame($xml, $report);
+    }
+
+    public function testGetLoadScenarioReportThrowsOn404(): void
+    {
+        $client = $this->createClientWithMock([
+            new Response(404, [], json_encode(['error' => 'no run'])),
+        ]);
+
+        $this->expectException(InvalidRequestException::class);
+        $client->getLoadScenarioReport('never-ran');
+    }
+
+    public function testGenerateLoadScenarioFromOpenAPISendsCorrectPayload(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], json_encode([
+                'status' => 'loaded',
+                'name' => 'petstore-load',
+                'state' => 'LOADED',
+                'scenario' => ['name' => 'petstore-load'],
+            ])),
+        ], $history);
+
+        $result = $client->generateLoadScenarioFromOpenAPI(
+            'petstore-load',
+            'https://example.com/petstore.yaml',
+            ['host' => 'petstore.svc', 'port' => 8080, 'scheme' => 'http'],
+            LoadProfile::constant(1, 5000),
+        );
+
+        $request = $history[0]['request'];
+        $this->assertSame('PUT', $request->getMethod());
+        $this->assertSame('/mockserver/loadScenario/generateFromOpenAPI', $request->getUri()->getPath());
+
+        $body = json_decode((string) $request->getBody(), true);
+        $this->assertSame('petstore-load', $body['name']);
+        $this->assertSame('https://example.com/petstore.yaml', $body['specUrlOrPayload']);
+        $this->assertSame('petstore.svc', $body['target']['host']);
+        $this->assertSame(8080, $body['target']['port']);
+        $this->assertSame('http', $body['target']['scheme']);
+        $this->assertSame(1, $body['profile']['stages'][0]['vus']);
+
+        $this->assertSame('loaded', $result['status']);
+        $this->assertSame('LOADED', $result['state']);
+    }
+
+    public function testGenerateLoadScenarioFromOpenAPIOmitsOptionalFields(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->generateLoadScenarioFromOpenAPI('minimal', '{"openapi":"3.0.0"}');
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame('minimal', $body['name']);
+        $this->assertSame('{"openapi":"3.0.0"}', $body['specUrlOrPayload']);
+        $this->assertArrayNotHasKey('target', $body);
+        $this->assertArrayNotHasKey('profile', $body);
+    }
+
+    public function testGenerateLoadScenarioFromOpenAPIThrowsOn400(): void
+    {
+        $client = $this->createClientWithMock([
+            new Response(400, [], 'unparseable spec'),
+        ]);
+
+        $this->expectException(InvalidRequestException::class);
+        $client->generateLoadScenarioFromOpenAPI('bad', 'not a spec');
+    }
+
+    public function testGenerateLoadScenarioFromRecordingSendsCorrectPayload(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], json_encode([
+                'status' => 'loaded',
+                'name' => 'replay-prod-traffic',
+                'state' => 'LOADED',
+            ])),
+        ], $history);
+
+        $result = $client->generateLoadScenarioFromRecording(
+            'replay-prod-traffic',
+            'templatized',
+            HttpRequest::request()->method('GET'),
+            ['host' => 'staging.svc', 'port' => 8080, 'scheme' => 'http'],
+            100,
+            LoadProfile::constant(1, 5000),
+        );
+
+        $request = $history[0]['request'];
+        $this->assertSame('PUT', $request->getMethod());
+        $this->assertSame('/mockserver/loadScenario/generateFromRecording', $request->getUri()->getPath());
+
+        $body = json_decode((string) $request->getBody(), true);
+        $this->assertSame('replay-prod-traffic', $body['name']);
+        $this->assertSame('TEMPLATIZED', $body['mode']);
+        $this->assertSame('GET', $body['requestFilter']['method']);
+        $this->assertSame('staging.svc', $body['target']['host']);
+        $this->assertSame(100, $body['maxSteps']);
+        $this->assertSame(1, $body['profile']['stages'][0]['vus']);
+
+        $this->assertSame('loaded', $result['status']);
+    }
+
+    public function testGenerateLoadScenarioFromRecordingMinimalPayload(): void
+    {
+        $history = [];
+        $client = $this->createClientWithMock([
+            new Response(200, [], '{}'),
+        ], $history);
+
+        $client->generateLoadScenarioFromRecording('replay');
+
+        $body = json_decode((string) $history[0]['request']->getBody(), true);
+        $this->assertSame(['name' => 'replay'], $body);
+    }
+
+    public function testGenerateLoadScenarioFromRecordingThrowsOn400(): void
+    {
+        $client = $this->createClientWithMock([
+            new Response(400, [], 'no recorded requests'),
+        ]);
+
+        $this->expectException(InvalidRequestException::class);
+        $client->generateLoadScenarioFromRecording('empty');
     }
 }

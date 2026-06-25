@@ -10,7 +10,8 @@ start. **This holds even when the session makes no changes** —
 read-only investigation, analysis, and review work in a worktree too;
 the rule is *no work runs in the bare main checkout*, not *only
 change-making work is isolated*. Changes return to `master` only via a
-gated merge using `flock` to serialize concurrent rebases.
+gated **rebase + fast-forward** using `flock` to serialize concurrent
+rebases — **never a merge commit** (see *Linear History — No Merge Commits* below).
 Isolation-by-default is what lets concurrent sessions operate on the
 same repo without stepping on each other, and matches the AI-in-SDLC
 spec (`docs/operations/ai-sdlc-integration-spec.md` §8.3).
@@ -33,6 +34,35 @@ primary's **uncommitted in-flight diff**; a worktree branched off
 `origin/master` would see only committed state and miss the very changes
 they exist to analyse, silently breaking the commit gate chain.
 Isolation is **between independent sessions, not within one**.
+
+## Linear History — No Merge Commits
+
+**`master` is kept a strictly linear history.** A worktree branch returns
+to `master` **only** by being **rebased onto the current `master` tip and
+fast-forwarded** — i.e. `git rebase origin/master` then a fast-forward
+`git push origin HEAD:master`. The rebase replays the worktree's commits on
+top of `master`, so the push is always a fast-forward and **no merge commit
+is ever created**. This is safe precisely because worktree branches are
+**local-only and unpushed** (§8.3 of the spec) — rebasing only rewrites
+commits no one else has.
+
+**Forbidden — anything that creates a merge commit on `master`:**
+
+- `git merge <branch>` into `master` (including `git merge --no-ff`)
+- a non-rebasing `git pull` (always use `git pull --rebase`)
+- pushing an intermediate **"integration branch"** that several worktree
+  branches were `git merge`-d into. When **multiple** parallel worktrees are
+  ready, rebase them **one at a time** under the merge lock — each onto the
+  result of the previous — so the final history is a flat sequence of each
+  unit's commits, not a fan of merges. (Earlier parallel-closeout runs used
+  integration branches and left merge commits in history; that pattern is
+  retired.)
+
+The goal is a clean, bisectable, easy-to-follow history. Platform-side, the
+repository **should** also enable GitHub branch protection's
+*Require linear history* on `master` to enforce this (it rejects any push
+that would introduce a merge commit). See `[[git-safety]]` for the
+destructive-command guardrails that interact with this.
 
 ## When To Use This
 
@@ -157,8 +187,8 @@ LOCK_FILE=".git/agent-rebase.lock"
 flock --timeout 300 "${LOCK_FILE}" bash -c '
     set -euo pipefail
     git fetch origin master --quiet
-    git rebase origin/master   # may resolve interactively if conflicts
-    git push origin HEAD:master
+    git rebase origin/master   # rebase (never merge) — may resolve interactively if conflicts
+    git push origin HEAD:master   # always a fast-forward after the rebase; no merge commit
 '
 ```
 

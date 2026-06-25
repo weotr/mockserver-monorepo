@@ -8,8 +8,7 @@ import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import ToggleButton from '@mui/material/ToggleButton';
+import ListSubheader from '@mui/material/ListSubheader';
 import Box from '@mui/material/Box';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
@@ -38,6 +37,7 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
+import VerifiedIcon from '@mui/icons-material/Verified';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import PanToolIcon from '@mui/icons-material/PanTool';
@@ -55,7 +55,7 @@ import type { ReactNode } from 'react';
 import BuildIcon from '@mui/icons-material/Build';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useDashboardStore, type ViewMode } from '../store';
 import type { ConnectionStatus } from '../types';
 import { useConnectionParams } from '../hooks/useConnectionParams';
@@ -135,31 +135,133 @@ interface NavTab {
   icon: ReactNode;
 }
 
-// Single source of truth for the navigation tabs, in priority order. On wide
-// screens a measured "priority+ / progressive overflow" strip renders as many
-// tabs inline as fit (longest fitting prefix of this list) and moves the
-// remainder into a labelled "More" overflow Menu; when every tab fits there is
-// no "More" button at all. On narrow screens the full list lives in the
-// hamburger Menu. The order here is the order shown in every menu.
-const NAV_TABS: NavTab[] = [
-  { value: 'get-started', label: 'Get Started', ariaLabel: 'Get started view', icon: <RocketLaunchIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'dashboard', label: 'Dashboard', ariaLabel: 'Dashboard view', description: 'Live view of incoming requests, active expectations, and what matched.', icon: <DashboardIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'traffic', label: 'Traffic', ariaLabel: 'Traffic inspector view', description: 'Browse recorded request and response traffic — select an item to open its full details.', icon: <TrafficIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'sessions', label: 'Trace', ariaLabel: 'Trace inspector view', description: 'Trace related requests grouped together — including LLM agent runs — to debug multi-step flows end to end.', icon: <AccountTreeIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'breakpoints', label: 'Breakpoints', ariaLabel: 'Breakpoints view', description: 'Pause matching requests or responses mid-flight to inspect and edit them.', icon: <PanToolIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'composer', label: 'Mocks', ariaLabel: 'Mocks view', description: 'Create, edit, and manage mock expectations — quick mode for common cases, advanced mode for full control.', icon: <PostAddIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'chaos', label: 'Chaos', ariaLabel: 'Service chaos view', description: 'Inject latency, errors, and faults to test how your system handles failure.', icon: <BoltIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'performance', label: 'Performance', ariaLabel: 'Performance testing view', description: 'Create, run, and monitor load scenarios — drive traffic at a target and watch live throughput and latency.', icon: <TrendingUpIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'optimise', label: 'LLM Optimise', ariaLabel: 'LLM Optimise view', description: 'Analyse captured LLM traffic to optimise prompts, inference cost, safety, and speed.', icon: <SavingsIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'async', label: 'Async', ariaLabel: 'AsyncAPI broker mock view', description: 'Mock event-driven APIs from an AsyncAPI spec — publish test messages to Kafka, MQTT, and AMQP (RabbitMQ) brokers.', icon: <HubIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'grpc', label: 'gRPC', ariaLabel: 'gRPC services view', description: 'Mock gRPC services and inspect gRPC calls.', icon: <RpcIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'library', label: 'Library', ariaLabel: 'Library of captured content', description: 'Browse and reuse captured requests, responses, and content.', icon: <Inventory2Icon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'drift', label: 'Drift', ariaLabel: 'Drift detection view', description: 'Detect when your mocks drift away from the real API they stand in for.', icon: <CompareArrowsIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'verification', label: 'Verify', ariaLabel: 'Verification view', description: 'Assert which requests were — or were not — received.', icon: <PlaylistAddCheckIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'contract', label: 'Contract', ariaLabel: 'Contract test view', description: 'Validate mocks and traffic against an OpenAPI contract.', icon: <FactCheckIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'cluster', label: 'Cluster', ariaLabel: 'Cluster status view', description: 'Monitor MockServer cluster nodes and shared state.', icon: <HubOutlinedIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
-  { value: 'metrics', label: 'Metrics', ariaLabel: 'Metrics view', description: 'Prometheus metrics plus memory and performance monitoring.', icon: <SpeedIcon sx={{ fontSize: '0.875rem', mr: 0.5 }} /> },
+// A labelled group of related views. The nav renders one top-level group button
+// per entry; clicking it opens a dropdown Menu of that group's views. Grouping
+// the views into a handful of intuitive categories makes the full nav
+// discoverable at a glance instead of hiding most views behind a flat "More"
+// overflow. Every ViewMode appears in exactly one group (asserted by a test).
+interface NavGroup {
+  /** Stable id used for keys, aria, and active-group lookup. */
+  id: string;
+  /** Top-level group button label. */
+  label: string;
+  ariaLabel: string;
+  /** Icon shown on the group button (typically the group's leading view icon). */
+  icon: ReactNode;
+  tabs: NavTab[];
+}
+
+const tabIconSx = { fontSize: '0.875rem', mr: 0.5 } as const;
+
+// Single source of truth for the navigation, organised into intuitive groups.
+// The order of groups (and of tabs within each group) is the order shown.
+const NAV_GROUPS: NavGroup[] = [
+  {
+    id: 'mock',
+    label: 'Mock',
+    ariaLabel: 'Mock views',
+    icon: <PostAddIcon sx={tabIconSx} />,
+    tabs: [
+      { value: 'get-started', label: 'Get Started', ariaLabel: 'Get started view', icon: <RocketLaunchIcon sx={tabIconSx} /> },
+      { value: 'composer', label: 'Mocks', ariaLabel: 'Mocks view', description: 'Create, edit, and manage mock expectations — quick mode for common cases, advanced mode for full control.', icon: <PostAddIcon sx={tabIconSx} /> },
+      { value: 'grpc', label: 'gRPC', ariaLabel: 'gRPC services view', description: 'Mock gRPC services and inspect gRPC calls.', icon: <RpcIcon sx={tabIconSx} /> },
+      { value: 'async', label: 'Async', ariaLabel: 'AsyncAPI broker mock view', description: 'Mock event-driven APIs from an AsyncAPI spec — publish test messages to Kafka, MQTT, and AMQP (RabbitMQ) brokers.', icon: <HubIcon sx={tabIconSx} /> },
+    ],
+  },
+  {
+    id: 'observe',
+    label: 'Observe',
+    ariaLabel: 'Observe views',
+    icon: <DashboardIcon sx={tabIconSx} />,
+    tabs: [
+      { value: 'dashboard', label: 'Dashboard', ariaLabel: 'Dashboard view', description: 'Live view of incoming requests, active expectations, and what matched.', icon: <DashboardIcon sx={tabIconSx} /> },
+      { value: 'traffic', label: 'Traffic', ariaLabel: 'Traffic inspector view', description: 'Browse recorded request and response traffic — select an item to open its full details.', icon: <TrafficIcon sx={tabIconSx} /> },
+      { value: 'sessions', label: 'Trace', ariaLabel: 'Trace inspector view', description: 'Trace related requests grouped together — including LLM agent runs — to debug multi-step flows end to end.', icon: <AccountTreeIcon sx={tabIconSx} /> },
+      { value: 'metrics', label: 'Metrics', ariaLabel: 'Metrics view', description: 'Prometheus metrics plus memory and performance monitoring.', icon: <SpeedIcon sx={tabIconSx} /> },
+    ],
+  },
+  {
+    id: 'verify',
+    label: 'Verify',
+    ariaLabel: 'Verify views',
+    icon: <FactCheckIcon sx={tabIconSx} />,
+    tabs: [
+      { value: 'verification', label: 'Verify', ariaLabel: 'Verification view', description: 'Assert which requests were — or were not — received.', icon: <PlaylistAddCheckIcon sx={tabIconSx} /> },
+      { value: 'contract', label: 'Contract', ariaLabel: 'Contract test view', description: 'Validate mocks and traffic against an OpenAPI contract.', icon: <FactCheckIcon sx={tabIconSx} /> },
+      { value: 'slo', label: 'SLO', ariaLabel: 'SLO verification view', description: 'Assert service-level objectives — latency percentiles and error rate — against recorded traffic.', icon: <VerifiedIcon sx={tabIconSx} /> },
+      { value: 'drift', label: 'Drift', ariaLabel: 'Drift detection view', description: 'Detect when your mocks drift away from the real API they stand in for.', icon: <CompareArrowsIcon sx={tabIconSx} /> },
+    ],
+  },
+  {
+    id: 'resilience',
+    label: 'Resilience',
+    ariaLabel: 'Resilience views',
+    icon: <BoltIcon sx={tabIconSx} />,
+    tabs: [
+      { value: 'chaos', label: 'Chaos', ariaLabel: 'Service chaos view', description: 'Inject latency, errors, and faults to test how your system handles failure.', icon: <BoltIcon sx={tabIconSx} /> },
+      { value: 'performance', label: 'Performance', ariaLabel: 'Performance testing view', description: 'Create, run, and monitor load scenarios — drive traffic at a target and watch live throughput and latency.', icon: <TrendingUpIcon sx={tabIconSx} /> },
+    ],
+  },
+  {
+    id: 'ai',
+    label: 'AI',
+    ariaLabel: 'AI views',
+    icon: <SavingsIcon sx={tabIconSx} />,
+    tabs: [
+      { value: 'optimise', label: 'LLM Optimise', ariaLabel: 'LLM Optimise view', description: 'Analyse captured LLM traffic to optimise prompts, inference cost, safety, and speed.', icon: <SavingsIcon sx={tabIconSx} /> },
+    ],
+  },
+  {
+    id: 'inspect',
+    label: 'Inspect',
+    ariaLabel: 'Inspect views',
+    icon: <PanToolIcon sx={tabIconSx} />,
+    tabs: [
+      { value: 'breakpoints', label: 'Breakpoints', ariaLabel: 'Breakpoints view', description: 'Pause matching requests or responses mid-flight to inspect and edit them.', icon: <PanToolIcon sx={tabIconSx} /> },
+      { value: 'library', label: 'Library', ariaLabel: 'Library of captured content', description: 'Browse and reuse captured requests, responses, and content.', icon: <Inventory2Icon sx={tabIconSx} /> },
+      { value: 'cluster', label: 'Cluster', ariaLabel: 'Cluster status view', description: 'Monitor MockServer cluster nodes and shared state.', icon: <HubOutlinedIcon sx={tabIconSx} /> },
+    ],
+  },
 ];
+
+// Flat list of every tab, derived from the groups — used for label lookup and
+// to build the description map. Keeping it derived guarantees it never drifts
+// from the grouped source of truth.
+const NAV_TABS: NavTab[] = NAV_GROUPS.flatMap((g) => g.tabs);
+
+// Compile-time exhaustiveness guard. This `Record<ViewMode, string>` must name
+// every ViewMode exactly once — TypeScript errors if a value is added to the
+// ViewMode union without an entry here. The build of NAV_TABS above guarantees
+// each of these values is grouped, so the missing-key error effectively means
+// "a new view was added without being placed in a NAV_GROUPS group". (A runtime
+// assertion below also proves every listed view is actually rendered.)
+const NAV_VIEW_GROUP_ID: Record<ViewMode, string> = NAV_GROUPS.reduce<Record<string, string>>(
+  (acc, group) => {
+    for (const tab of group.tabs) acc[tab.value] = group.id;
+    return acc;
+  },
+  {},
+) as Record<ViewMode, string>;
+// Fail fast at module load if a ViewMode is missing a group (defence in depth
+// behind the type — also catches a hand-edited NAV_GROUPS that drops a value).
+{
+  const ALL_VIEW_MODES: Record<ViewMode, true> = {
+    'get-started': true, dashboard: true, traffic: true, sessions: true,
+    composer: true, library: true, chaos: true, performance: true,
+    metrics: true, drift: true, verification: true, slo: true, async: true,
+    grpc: true, breakpoints: true, contract: true, cluster: true, optimise: true,
+  };
+  for (const v of Object.keys(ALL_VIEW_MODES) as ViewMode[]) {
+    if (!(v in NAV_VIEW_GROUP_ID)) {
+      throw new Error(`Navigation misconfiguration: ViewMode "${v}" is not in any NAV_GROUPS group`);
+    }
+  }
+}
+
+// The group that owns a given view, for active-group highlighting.
+function groupForView(view: ViewMode): NavGroup | undefined {
+  return NAV_GROUPS.find((g) => g.tabs.some((t) => t.value === view));
+}
 
 // Lookup of the active view's one-line description, for the bar under the nav.
 // Exported so App can render it without duplicating the per-tab copy.
@@ -185,110 +287,18 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const setView = useDashboardStore((s) => s.setView);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const theme = useTheme();
-  // Below this width the inline tab strip would overflow into a hidden scroll
-  // region, so collapse the nav into a "hamburger" Menu instead.
+  // Below this width the grouped group-button bar would crowd the toolbar, so
+  // collapse the whole nav into a single "hamburger" Menu (with grouped
+  // sections) instead.
   const compactNav = useMediaQuery(theme.breakpoints.down('lg'));
   const [navAnchorEl, setNavAnchorEl] = useState<null | HTMLElement>(null);
-  // Wide-screen "More" overflow menu holding the tabs that don't fit inline.
-  const [moreNavAnchorEl, setMoreNavAnchorEl] = useState<null | HTMLElement>(null);
+  // Wide-screen grouped nav: the group whose dropdown is currently open (by id),
+  // and the element it anchors to. Only one group menu is open at a time.
+  const [openGroupId, setOpenGroupId] = useState<string | null>(null);
+  const [groupMenuAnchorEl, setGroupMenuAnchorEl] = useState<null | HTMLElement>(null);
 
-  // --- Priority-navigation measurement ---
-  // We measure the REAL rendered buttons rather than a hidden mirror so there is
-  // no duplicated, query-pollutable text in the DOM. `navRegionRef` is the box
-  // whose width we fit into; `tabGroupRef` wraps the inline ToggleButtonGroup;
-  // `moreButtonRef` is the live "More" button when present.
-  const navRegionRef = useRef<HTMLDivElement | null>(null);
-  const tabGroupRef = useRef<HTMLDivElement | null>(null);
-  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
-  // Cached natural width per tab value, learned as each tab is observed inline.
-  // Because we DEFAULT to all-inline, the very first layout measures every tab;
-  // widths persist after a tab moves into the overflow menu (its button
-  // unmounts but its cached width stays valid). Also caches the More-button
-  // width to reserve when overflow occurs.
-  const tabWidthsRef = useRef<Map<ViewMode, number>>(new Map());
-  const moreButtonWidthRef = useRef<number>(0);
-  // How many leading tabs render inline. Default to ALL so nothing disappears
-  // before/without a real measurement (initial render, jsdom). Refined once real
-  // widths are known and the available width is smaller than the full strip.
-  const [inlineCount, setInlineCount] = useState<number>(NAV_TABS.length);
-
-  // Recompute the largest prefix of NAV_TABS that fits the available width,
-  // reserving room for the "More" button whenever at least one tab overflows.
-  const recomputeInlineCount = useCallback(() => {
-    const region = navRegionRef.current;
-    if (!region) return;
-    const available = region.clientWidth;
-    const widths = tabWidthsRef.current;
-    // Until we have a real width for every tab and a real container width, keep
-    // everything inline (initial render, jsdom where getBoundingClientRect → 0).
-    const allKnown = NAV_TABS.every((t) => (widths.get(t.value) ?? 0) > 0);
-    if (!available || !allKnown) {
-      setInlineCount(NAV_TABS.length);
-      return;
-    }
-    const totalAll = NAV_TABS.reduce((sum, t) => sum + (widths.get(t.value) ?? 0), 0);
-    // Whole strip fits → no "More" button at all.
-    if (totalAll <= available) {
-      setInlineCount(NAV_TABS.length);
-      return;
-    }
-    // Otherwise reserve room for the "More" button and take the longest prefix
-    // that still fits alongside it. At least one tab always overflows here.
-    const reserve = moreButtonWidthRef.current;
-    let used = 0;
-    let count = 0;
-    for (const tab of NAV_TABS) {
-      const next = used + (widths.get(tab.value) ?? 0);
-      if (next + reserve <= available) {
-        used = next;
-        count += 1;
-      } else {
-        break;
-      }
-    }
-    setInlineCount(count);
-  }, []);
-
-  // After each layout, cache the natural width of every currently-inline button
-  // (keyed by tab value) and the More-button width, then recompute the split.
-  useLayoutEffect(() => {
-    if (compactNav) return; // hamburger tier doesn't use the measured strip
-    const group = tabGroupRef.current;
-    if (group) {
-      const tabEls = group.querySelectorAll<HTMLElement>('[data-nav-tab]');
-      tabEls.forEach((el) => {
-        const value = el.getAttribute('data-nav-tab') as ViewMode | null;
-        const w = el.getBoundingClientRect().width;
-        if (value && w > 0) tabWidthsRef.current.set(value, w);
-      });
-    }
-    if (moreButtonRef.current) {
-      const w = moreButtonRef.current.getBoundingClientRect().width;
-      if (w > 0) moreButtonWidthRef.current = w;
-    }
-    recomputeInlineCount();
-  }, [compactNav, inlineCount, recomputeInlineCount]);
-
-  // Recompute on available-width changes via ResizeObserver, falling back to a
-  // window 'resize' listener where ResizeObserver is unavailable.
-  useEffect(() => {
-    if (compactNav) return;
-    const region = navRegionRef.current;
-    if (!region) return;
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => recomputeInlineCount());
-      ro.observe(region);
-      return () => ro.disconnect();
-    }
-    const onResize = () => recomputeInlineCount();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [compactNav, recomputeInlineCount]);
-
-  const inlineTabs = NAV_TABS.slice(0, inlineCount);
-  const overflowTabs = NAV_TABS.slice(inlineCount);
-  const hasOverflow = overflowTabs.length > 0;
-  const activeOverflowTab = overflowTabs.find((t) => t.value === view);
+  // The group that owns the active view — its group button is highlighted.
+  const activeGroup = groupForView(view);
 
   const connectionParams = useConnectionParams();
   const [mode, setModeState] = useState<MockServerMode | null>(null);
@@ -363,36 +373,53 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
       });
   };
 
-  // Styling for the inline ToggleButtonGroup nav strip.
-  const toggleGroupSx = {
-    ml: 1,
-    flexShrink: 0,
-    '& .MuiToggleButton-root': {
+  // Open a group's dropdown menu, anchored to its group button.
+  const handleOpenGroup = (groupId: string, anchor: HTMLElement) => {
+    setOpenGroupId(groupId);
+    setGroupMenuAnchorEl(anchor);
+  };
+  const handleCloseGroupMenu = () => {
+    setOpenGroupId(null);
+    setGroupMenuAnchorEl(null);
+  };
+  // Select a view (preserves the store setView path: view persistence + URL hash)
+  // and close any open menu.
+  const handleSelectView = (value: ViewMode) => {
+    setView(value);
+    handleCloseGroupMenu();
+    setNavAnchorEl(null);
+  };
+
+  // Base styling for a top-level group button. Light mode forces white text +
+  // translucent border so it reads against the primary-coloured AppBar; dark
+  // mode keeps MUI defaults which already contrast against the bar. The active
+  // group (the one owning the current view) gets a theme-appropriate highlight:
+  // a pale-white tint in light mode (matching the old ToggleButton `.Mui-selected`
+  // styling) and the theme's translucent action-selected overlay in dark mode,
+  // so selected nav reads consistently with other selected controls in each theme.
+  const groupButtonSx = (active: boolean) => {
+    const activeBg = themeMode === 'light'
+      ? 'rgba(255, 255, 255, 0.18)'
+      : theme.palette.action.selected;
+    return {
+      ml: 0.5,
       py: 0.25,
       px: 1,
       fontSize: '0.7rem',
-      textTransform: 'none',
+      textTransform: 'none' as const,
       lineHeight: 1.4,
-      whiteSpace: 'nowrap',
-      // Light-mode-only: force white text + translucent border so the
-      // buttons read against the primary-coloured AppBar. Dark mode
-      // keeps MUI's defaults which already contrast against the bar.
-      ...(themeMode === 'light' ? {
-        color: 'primary.contrastText',
-        borderColor: 'rgba(255, 255, 255, 0.3)',
-        '&:hover': {
-          backgroundColor: 'rgba(255, 255, 255, 0.08)',
-        },
-        '&.Mui-selected': {
-          color: 'primary.contrastText',
-          backgroundColor: 'rgba(255, 255, 255, 0.18)',
-          '&:hover': {
-            backgroundColor: 'rgba(255, 255, 255, 0.24)',
-          },
-        },
-      } : {}),
-    },
-  } as const;
+      whiteSpace: 'nowrap' as const,
+      flexShrink: 0,
+      color: 'inherit',
+      ...(themeMode === 'light' ? { borderColor: 'rgba(255, 255, 255, 0.3)' } : {}),
+      '&:hover': {
+        backgroundColor: themeMode === 'light'
+          ? 'rgba(255, 255, 255, 0.08)'
+          : theme.palette.action.hover,
+      },
+      ...(active ? { backgroundColor: activeBg } : {}),
+    };
+  };
 
   return (
     <MuiAppBar position="static" elevation={0} sx={{ borderBottom: 1, borderColor: 'divider' }}>
@@ -444,99 +471,79 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             <Typography variant="subtitle2" sx={{ fontWeight: 600, fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
               {NAV_TABS.find((t) => t.value === view)?.label ?? ''}
             </Typography>
+            {/* Single hamburger Menu containing every view, organised into
+                labelled group sections so the full nav stays discoverable on
+                narrow screens. */}
             <Menu
               anchorEl={navAnchorEl}
               open={Boolean(navAnchorEl)}
               onClose={() => setNavAnchorEl(null)}
             >
-              {NAV_TABS.map((tab) => (
+              {NAV_GROUPS.flatMap((group, groupIndex) => [
+                groupIndex > 0 ? <Divider key={`${group.id}-divider`} /> : null,
+                <ListSubheader key={`${group.id}-heading`} disableSticky sx={{ lineHeight: '2em', bgcolor: 'transparent' }}>
+                  {group.label}
+                </ListSubheader>,
+                ...group.tabs.map((tab) => (
+                  <MenuItem
+                    key={tab.value}
+                    selected={view === tab.value}
+                    aria-label={tab.ariaLabel}
+                    onClick={() => handleSelectView(tab.value)}
+                  >
+                    <ListItemIcon>{tab.icon}</ListItemIcon>
+                    <ListItemText>{tab.label}</ListItemText>
+                  </MenuItem>
+                )),
+              ])}
+            </Menu>
+          </>
+        ) : (
+          <Box
+            sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}
+          >
+            {/* One top-level button per group; each opens a dropdown of its
+                views. The active view's group button is highlighted so the
+                current location is always indicated. */}
+            {NAV_GROUPS.map((group) => {
+              const isActiveGroup = activeGroup?.id === group.id;
+              const isOpen = openGroupId === group.id;
+              return (
+                <Button
+                  key={group.id}
+                  size="small"
+                  color="inherit"
+                  aria-label={group.ariaLabel}
+                  aria-haspopup="menu"
+                  aria-expanded={isOpen}
+                  endIcon={<ExpandMoreIcon sx={{ fontSize: '0.875rem' }} />}
+                  onClick={(e) => handleOpenGroup(group.id, e.currentTarget)}
+                  sx={groupButtonSx(isActiveGroup)}
+                >
+                  {group.icon}
+                  {group.label}
+                </Button>
+              );
+            })}
+            {/* Dropdown for whichever group button was clicked. Anchored to that
+                button; one menu reused across all groups. */}
+            <Menu
+              anchorEl={groupMenuAnchorEl}
+              open={Boolean(groupMenuAnchorEl) && openGroupId !== null}
+              onClose={handleCloseGroupMenu}
+            >
+              {(NAV_GROUPS.find((g) => g.id === openGroupId)?.tabs ?? []).map((tab) => (
                 <MenuItem
                   key={tab.value}
                   selected={view === tab.value}
                   aria-label={tab.ariaLabel}
-                  onClick={() => {
-                    setView(tab.value);
-                    setNavAnchorEl(null);
-                  }}
+                  onClick={() => handleSelectView(tab.value)}
                 >
                   <ListItemIcon>{tab.icon}</ListItemIcon>
                   <ListItemText>{tab.label}</ListItemText>
                 </MenuItem>
               ))}
             </Menu>
-          </>
-        ) : (
-          <Box
-            ref={navRegionRef}
-            sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', position: 'relative', overflow: 'hidden' }}
-          >
-          <ToggleButtonGroup
-            ref={tabGroupRef}
-            value={view}
-            exclusive
-            size="small"
-            onChange={(_, newView: ViewMode | null) => {
-              if (newView !== null) setView(newView);
-            }}
-            sx={toggleGroupSx}
-          >
-            {inlineTabs.map((tab) => (
-              <ToggleButton key={tab.value} value={tab.value} aria-label={tab.ariaLabel} data-nav-tab={tab.value}>
-                {tab.icon}
-                {tab.label}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-          {/* "More" overflow menu holding the tabs that don't fit inline. It
-              only renders when at least one tab overflows. When the active view
-              lives in here, the button shows that view's label so the current
-              selection is always visible. */}
-          {hasOverflow && (
-            <>
-              <Button
-                ref={moreButtonRef}
-                size="small"
-                color="inherit"
-                aria-label="More views"
-                aria-haspopup="menu"
-                endIcon={<ExpandMoreIcon sx={{ fontSize: '0.875rem' }} />}
-                onClick={(e) => setMoreNavAnchorEl(e.currentTarget)}
-                sx={{
-                  ml: 0.5,
-                  py: 0.25,
-                  px: 1,
-                  fontSize: '0.7rem',
-                  textTransform: 'none',
-                  lineHeight: 1.4,
-                  whiteSpace: 'nowrap',
-                  flexShrink: 0,
-                  ...(activeOverflowTab ? { backgroundColor: 'rgba(255, 255, 255, 0.18)' } : {}),
-                }}
-              >
-                {activeOverflowTab?.label ?? 'More'}
-              </Button>
-              <Menu
-                anchorEl={moreNavAnchorEl}
-                open={Boolean(moreNavAnchorEl)}
-                onClose={() => setMoreNavAnchorEl(null)}
-              >
-                {overflowTabs.map((tab) => (
-                  <MenuItem
-                    key={tab.value}
-                    selected={view === tab.value}
-                    aria-label={tab.ariaLabel}
-                    onClick={() => {
-                      setView(tab.value);
-                      setMoreNavAnchorEl(null);
-                    }}
-                  >
-                    <ListItemIcon>{tab.icon}</ListItemIcon>
-                    <ListItemText>{tab.label}</ListItemText>
-                  </MenuItem>
-                ))}
-              </Menu>
-            </>
-          )}
           </Box>
         )}
         <Box sx={{ flex: compactNav ? 1 : '0 0 auto' }} />

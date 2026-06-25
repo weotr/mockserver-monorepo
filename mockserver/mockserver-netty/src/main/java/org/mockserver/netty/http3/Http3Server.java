@@ -356,7 +356,7 @@ public class Http3Server {
         org.bouncycastle.asn1.x500.X500Name issuer = new org.bouncycastle.asn1.x500.X500Name("CN=MockServer HTTP/3, O=MockServer");
         java.math.BigInteger serial = new java.math.BigInteger(64, new java.security.SecureRandom());
         java.util.Date notBefore = new java.util.Date();
-        java.util.Date notAfter = new java.util.Date(notBefore.getTime() + TimeUnit.DAYS.toMillis(365));
+        java.util.Date notAfter = new java.util.Date(notBefore.getTime() + TimeUnit.DAYS.toMillis(365L * org.mockserver.socket.tls.KeyAndCertificateFactory.CERTIFICATE_VALIDITY_YEARS));
 
         org.bouncycastle.operator.ContentSigner signer = new org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withECDSA")
             .build(keyPair.getPrivate());

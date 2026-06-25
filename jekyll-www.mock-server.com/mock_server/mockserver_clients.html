@@ -48,7 +48,7 @@ sitemap:
 
 <h2>REST API</h2>
 
-<p>The REST API is documented using <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" target="_blank" rel="noopener noreferrer">Open API 3</a></p>
+<p>The REST API is documented using <a  href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi" target="_blank" rel="noopener noreferrer">Open API 3</a> — the same specification is also served locally at <a href="/mockserver-openapi.yaml"><span class="inline_code">/mockserver-openapi.yaml</span></a>.</p>
 
 <a id="java-mockserver-client" class="anchor" href="#java-mockserver-client">&nbsp;</a>
 
@@ -342,7 +342,7 @@ catch (MockServerClientException e)
 <p>Add to your <span class="inline_code">Cargo.toml</span>:</p>
 
 <pre class="prettyprint code"><code class="code">[dev-dependencies]
-mockserver-client = "7.0"</code></pre>
+mockserver-client = "{{ site.mockserver_version }}"</code></pre>
 
 <p>Create an expectation using the fluent API:</p>
 

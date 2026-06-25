@@ -2282,23 +2282,469 @@ impl LoadStage {
     }
 }
 
-/// The load profile of a load scenario: an ordered list of [`LoadStage`]s run
-/// in sequence. Maps to the `LoadProfile` schema.
+/// A named load shape that expands server-side into ordinary [`LoadStage`]s.
+/// Maps to the `LoadShapeType` schema.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadShapeType {
+    /// Ramp up, hold the peak, ramp back down, with an optional recovery hold.
+    Spike,
+    /// A flight of pure-hold steps, each one "step" higher.
+    Stairs,
+    /// Ramp 0 to target then hold.
+    RampHold,
+}
+
+/// What a [`LoadShape`] drives. Maps to the `LoadShapeMetric` schema.
 ///
-/// Use [`LoadProfile::of`] to build from a list of stages, or the convenience
+/// - `Vu` — concurrent virtual users (closed model).
+/// - `Rate` — arrival rate in iterations/second (open model).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadShapeMetric {
+    /// Concurrent virtual users (closed model).
+    Vu,
+    /// Arrival rate in iterations/second (open model).
+    Rate,
+}
+
+/// A declarative named load shape that expands into ordinary [`LoadStage`]s.
+/// Maps to the `LoadShape` schema. Only the parameters its `type` needs are
+/// read; the rest are ignored. Use a shape OR an explicit `stages` list, not
+/// both.
+///
+/// Use the constructors [`LoadShape::spike`], [`LoadShape::stairs`] and
+/// [`LoadShape::ramp_hold`] so only the relevant fields are set (and therefore
+/// serialized).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadShape {
+    /// The named shape — `SPIKE`, `STAIRS` or `RAMP_HOLD`.
+    #[serde(rename = "type")]
+    pub shape_type: LoadShapeType,
+
+    /// What the shape drives — `VU` (default) or `RATE`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metric: Option<LoadShapeMetric>,
+
+    /// Ramp interpolation curve used by the shape's ramps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve: Option<RampCurve>,
+
+    /// SPIKE: the level held before and after the spike.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<f64>,
+
+    /// SPIKE: the level held at the top of the spike.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak: Option<f64>,
+
+    /// SPIKE: duration of the baseline to peak ramp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ramp_up_millis: Option<u64>,
+
+    /// SPIKE: duration to hold at the peak; RAMP_HOLD: duration to hold at the
+    /// target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hold_millis: Option<u64>,
+
+    /// SPIKE: duration of the peak to baseline ramp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ramp_down_millis: Option<u64>,
+
+    /// SPIKE (optional): duration to hold at baseline after the down ramp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_hold_millis: Option<u64>,
+
+    /// STAIRS: the level of the first step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+
+    /// STAIRS: how much each step rises above the previous one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+
+    /// STAIRS: the number of steps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u32>,
+
+    /// STAIRS: how long each step holds at its level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_duration_millis: Option<u64>,
+
+    /// RAMP_HOLD: the level ramped up to (from 0) and then held.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<f64>,
+
+    /// RAMP_HOLD: duration of the 0 to target ramp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ramp_millis: Option<u64>,
+}
+
+impl LoadShape {
+    fn base(shape_type: LoadShapeType) -> Self {
+        Self {
+            shape_type,
+            metric: None,
+            curve: None,
+            baseline: None,
+            peak: None,
+            ramp_up_millis: None,
+            hold_millis: None,
+            ramp_down_millis: None,
+            recovery_hold_millis: None,
+            start: None,
+            step: None,
+            steps: None,
+            step_duration_millis: None,
+            target: None,
+            ramp_millis: None,
+        }
+    }
+
+    /// A SPIKE shape: ramp `baseline` to `peak` over `ramp_up_millis`, hold for
+    /// `hold_millis`, then ramp back down over `ramp_down_millis`.
+    pub fn spike(
+        baseline: f64,
+        peak: f64,
+        ramp_up_millis: u64,
+        hold_millis: u64,
+        ramp_down_millis: u64,
+    ) -> Self {
+        let mut shape = Self::base(LoadShapeType::Spike);
+        shape.baseline = Some(baseline);
+        shape.peak = Some(peak);
+        shape.ramp_up_millis = Some(ramp_up_millis);
+        shape.hold_millis = Some(hold_millis);
+        shape.ramp_down_millis = Some(ramp_down_millis);
+        shape
+    }
+
+    /// A STAIRS shape: `steps` pure-hold steps, the first at `start` and each
+    /// rising by `step`, every step holding for `step_duration_millis`.
+    pub fn stairs(start: f64, step: f64, steps: u32, step_duration_millis: u64) -> Self {
+        let mut shape = Self::base(LoadShapeType::Stairs);
+        shape.start = Some(start);
+        shape.step = Some(step);
+        shape.steps = Some(steps);
+        shape.step_duration_millis = Some(step_duration_millis);
+        shape
+    }
+
+    /// A RAMP_HOLD shape: ramp from 0 to `target` over `ramp_millis`, then hold
+    /// for `hold_millis`.
+    pub fn ramp_hold(target: f64, ramp_millis: u64, hold_millis: u64) -> Self {
+        let mut shape = Self::base(LoadShapeType::RampHold);
+        shape.target = Some(target);
+        shape.ramp_millis = Some(ramp_millis);
+        shape.hold_millis = Some(hold_millis);
+        shape
+    }
+
+    /// Set what the shape drives (`VU` or `RATE`).
+    pub fn metric(mut self, metric: LoadShapeMetric) -> Self {
+        self.metric = Some(metric);
+        self
+    }
+
+    /// Set the ramp interpolation curve.
+    pub fn curve(mut self, curve: RampCurve) -> Self {
+        self.curve = Some(curve);
+        self
+    }
+
+    /// SPIKE only: hold at baseline for `recovery_hold_millis` after the down
+    /// ramp.
+    pub fn recovery_hold_millis(mut self, recovery_hold_millis: u64) -> Self {
+        self.recovery_hold_millis = Some(recovery_hold_millis);
+        self
+    }
+}
+
+/// The per-run metric a [`LoadThreshold`] evaluates. Maps to the threshold
+/// `metric` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadThresholdMetric {
+    /// 50th-percentile latency in milliseconds.
+    LatencyP50,
+    /// 95th-percentile latency in milliseconds.
+    LatencyP95,
+    /// 99th-percentile latency in milliseconds.
+    LatencyP99,
+    /// 99.9th-percentile latency in milliseconds.
+    LatencyP999,
+    /// Failed / requests, as a 0.0-1.0 fraction.
+    ErrorRate,
+    /// Throughput in requests/second over the run's elapsed time.
+    ThroughputRps,
+}
+
+/// How a [`LoadThreshold`]'s observed value is compared to its threshold. Maps
+/// to the threshold `comparator` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadComparator {
+    /// observed < threshold.
+    LessThan,
+    /// observed <= threshold.
+    LessThanOrEqual,
+    /// observed > threshold.
+    GreaterThan,
+    /// observed >= threshold.
+    GreaterThanOrEqual,
+}
+
+/// An in-run pass/fail threshold for a load scenario: a per-run metric compared
+/// against a value. All thresholds must hold for the run verdict to be PASS
+/// (logical AND). Maps to the `LoadThreshold` schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadThreshold {
+    /// The per-run metric to evaluate.
+    pub metric: LoadThresholdMetric,
+
+    /// How the observed per-run value is compared to the threshold.
+    pub comparator: LoadComparator,
+
+    /// The threshold value (milliseconds for latency metrics, a 0.0-1.0
+    /// fraction for `ERROR_RATE`, requests/second for `THROUGHPUT_RPS`).
+    pub threshold: f64,
+}
+
+impl LoadThreshold {
+    /// Create a threshold comparing `metric` to `threshold` using `comparator`.
+    pub fn new(metric: LoadThresholdMetric, comparator: LoadComparator, threshold: f64) -> Self {
+        Self {
+            metric,
+            comparator,
+            threshold,
+        }
+    }
+}
+
+/// How a [`LoadPacing`] target iteration cycle is derived from its value. Maps
+/// to the pacing `mode` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadPacingMode {
+    /// No pacing (immediate reschedule).
+    None,
+    /// `value` is the target cycle in milliseconds.
+    ConstantPacing,
+    /// `value` is the target iterations/second per VU (cycle = 1000 / value ms).
+    ConstantThroughput,
+}
+
+/// Adaptive iteration pacing (think-time) for a load scenario: a target
+/// per-virtual-user iteration cycle time. Applies only to the closed-model VU
+/// loop. Maps to the `LoadPacing` schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadPacing {
+    /// How the target iteration cycle is derived from `value`.
+    pub mode: LoadPacingMode,
+
+    /// For `CONSTANT_PACING` the target cycle in milliseconds; for
+    /// `CONSTANT_THROUGHPUT` the target iterations/second per VU. Must be > 0
+    /// when `mode` is not `NONE`.
+    pub value: f64,
+}
+
+impl LoadPacing {
+    /// Create a pacing rule with the given mode and value.
+    pub fn new(mode: LoadPacingMode, value: f64) -> Self {
+        Self { mode, value }
+    }
+
+    /// `CONSTANT_PACING`: target a per-VU iteration cycle of `cycle_millis`.
+    pub fn constant_pacing(cycle_millis: f64) -> Self {
+        Self::new(LoadPacingMode::ConstantPacing, cycle_millis)
+    }
+
+    /// `CONSTANT_THROUGHPUT`: target `iterations_per_second` per VU.
+    pub fn constant_throughput(iterations_per_second: f64) -> Self {
+        Self::new(LoadPacingMode::ConstantThroughput, iterations_per_second)
+    }
+}
+
+/// The format of a [`LoadFeeder`]'s raw `data`. Maps to the feeder `format`
+/// enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadFeederFormat {
+    /// CSV: first line is the header row.
+    Csv,
+    /// JSON: an array of flat objects.
+    Json,
+}
+
+/// How a [`LoadFeeder`] selects a row each iteration. Maps to the feeder
+/// `strategy` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadFeederStrategy {
+    /// Cycle rows and never exhaust (default).
+    Circular,
+    /// Pick a uniformly random row each iteration.
+    Random,
+    /// Use each row once in order; COMPLETES the run when exhausted.
+    Sequential,
+}
+
+/// Parameterized test data (a data feeder) for a load scenario: an inline
+/// dataset from which one row is selected per iteration and exposed to the
+/// iteration's templates as `$iteration.data.<column>`. Supply EITHER `rows`
+/// (the primary form) OR `data` + `format`. Maps to the `LoadFeeder` schema.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadFeeder {
+    /// Inline dataset: a list of column-name to value maps, one per row.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<HashMap<String, String>>,
+
+    /// Optional raw inline dataset parsed server-side into rows per `format`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+
+    /// The format of `data` (required when `data` is set).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<LoadFeederFormat>,
+
+    /// How a row is chosen each iteration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<LoadFeederStrategy>,
+}
+
+impl LoadFeeder {
+    /// A feeder from an inline list of column-name to value rows.
+    pub fn rows(rows: Vec<HashMap<String, String>>) -> Self {
+        Self {
+            rows,
+            ..Self::default()
+        }
+    }
+
+    /// A feeder from raw inline `data` parsed server-side as `format`.
+    pub fn data(data: impl Into<String>, format: LoadFeederFormat) -> Self {
+        Self {
+            data: Some(data.into()),
+            format: Some(format),
+            ..Self::default()
+        }
+    }
+
+    /// Set the row-selection strategy.
+    pub fn strategy(mut self, strategy: LoadFeederStrategy) -> Self {
+        self.strategy = Some(strategy);
+        self
+    }
+}
+
+/// Where a [`LoadCapture`] extracts its value from. Maps to the capture
+/// `source` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadCaptureSource {
+    /// A JSONPath over the response body.
+    BodyJsonpath,
+    /// A response header value.
+    Header,
+    /// A regex over the response body string (capture group 1).
+    BodyRegex,
+}
+
+/// A declarative cross-step capture / correlation rule: extracts a value from a
+/// step's response and binds it to a variable name a later step in the same
+/// iteration can reference via `$iteration.captured.<name>`. Best-effort. Maps
+/// to the `LoadCapture` schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadCapture {
+    /// The variable name later steps reference.
+    pub name: String,
+
+    /// Where to extract from.
+    pub source: LoadCaptureSource,
+
+    /// The JSONPath, header name, or regex driving the extraction.
+    pub expression: String,
+
+    /// Optional fallback value bound when extraction yields nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<String>,
+}
+
+impl LoadCapture {
+    /// Create a capture binding `name` to the value extracted from `source` via
+    /// `expression`.
+    pub fn new(
+        name: impl Into<String>,
+        source: LoadCaptureSource,
+        expression: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            source,
+            expression: expression.into(),
+            default_value: None,
+        }
+    }
+
+    /// Set the fallback value bound to the variable on no match.
+    pub fn default_value(mut self, default_value: impl Into<String>) -> Self {
+        self.default_value = Some(default_value.into());
+        self
+    }
+}
+
+/// How each iteration of a load scenario selects which steps to run. Maps to
+/// the `stepSelection` enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LoadStepSelection {
+    /// Run ALL steps in declared order (a multi-step user journey).
+    Sequential,
+    /// Run exactly ONE step per iteration chosen at random by weight.
+    Weighted,
+}
+
+/// The load profile of a load scenario: EITHER an ordered list of [`LoadStage`]s
+/// run in sequence, OR a single named [`LoadShape`] that expands into stages.
+/// Maps to the `LoadProfile` schema.
+///
+/// Use [`LoadProfile::of`] to build from a list of stages, the convenience
 /// constructors [`LoadProfile::constant`] / [`LoadProfile::linear`] for a single
-/// VU stage.
+/// VU stage, or [`LoadProfile::shaped`] for a named shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LoadProfile {
-    /// Ordered stages run one after another.
+    /// Ordered stages run one after another. Omitted (empty) when a `shape` is
+    /// used.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<LoadStage>,
+
+    /// A named shape that expands server-side into stages. Use a shape OR
+    /// `stages`, not both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<LoadShape>,
 }
 
 impl LoadProfile {
     /// A profile from an explicit list of stages.
     pub fn of(stages: Vec<LoadStage>) -> Self {
-        Self { stages }
+        Self {
+            stages,
+            shape: None,
+        }
+    }
+
+    /// A profile from a single named [`LoadShape`].
+    pub fn shaped(shape: LoadShape) -> Self {
+        Self {
+            stages: Vec::new(),
+            shape: Some(shape),
+        }
     }
 
     /// A single VU stage holding `vus` virtual users for `duration_millis`.
@@ -2335,6 +2781,18 @@ pub struct LoadStep {
     /// Optional inter-step pause (a [`Delay`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub think_time: Option<Delay>,
+
+    /// Optional cross-step capture rules applied to this step's response. Each
+    /// binds an extracted value to a variable name visible to SUBSEQUENT steps
+    /// in the same iteration.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<LoadCapture>,
+
+    /// Relative selection weight, used only when the scenario's
+    /// `stepSelection` is `WEIGHTED`. Must be > 0 when `WEIGHTED`; ignored
+    /// under the default `SEQUENTIAL` mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 impl LoadStep {
@@ -2343,12 +2801,27 @@ impl LoadStep {
         Self {
             request,
             think_time: None,
+            captures: Vec::new(),
+            weight: None,
         }
     }
 
     /// Set the inter-step pause.
     pub fn think_time(mut self, delay: Delay) -> Self {
         self.think_time = Some(delay);
+        self
+    }
+
+    /// Append a cross-step capture rule applied to this step's response.
+    pub fn capture(mut self, capture: LoadCapture) -> Self {
+        self.captures.push(capture);
+        self
+    }
+
+    /// Set the relative selection weight (used only under `WEIGHTED`
+    /// `stepSelection`).
+    pub fn weight(mut self, weight: f64) -> Self {
+        self.weight = Some(weight);
         self
     }
 }
@@ -2380,6 +2853,33 @@ pub struct LoadScenario {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_delay_millis: Option<u64>,
 
+    /// Optional in-run pass/fail thresholds; the run carries a PASS verdict iff
+    /// all hold, FAIL otherwise. Empty/omitted means no verdict is computed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub thresholds: Vec<LoadThreshold>,
+
+    /// When true, a FAIL verdict aborts the run early. Default false (omitted).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub abort_on_fail: bool,
+
+    /// Suppress `abort_on_fail` for the first N milliseconds of the run so noisy
+    /// startup samples cannot trigger a premature abort.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abort_grace_millis: Option<u64>,
+
+    /// Optional adaptive iteration pacing (closed-model VU loop only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pacing: Option<LoadPacing>,
+
+    /// Optional parameterized test data (a data feeder).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feeder: Option<LoadFeeder>,
+
+    /// How each iteration selects which steps to run — `SEQUENTIAL` (default,
+    /// omitted) or `WEIGHTED`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_selection: Option<LoadStepSelection>,
+
     /// The ramp profile.
     pub profile: LoadProfile,
 
@@ -2395,9 +2895,51 @@ impl LoadScenario {
             template_type: None,
             max_requests: None,
             start_delay_millis: None,
+            thresholds: Vec::new(),
+            abort_on_fail: false,
+            abort_grace_millis: None,
+            pacing: None,
+            feeder: None,
+            step_selection: None,
             profile,
             steps,
         }
+    }
+
+    /// Add an in-run pass/fail threshold.
+    pub fn threshold(mut self, threshold: LoadThreshold) -> Self {
+        self.thresholds.push(threshold);
+        self
+    }
+
+    /// Set whether a FAIL verdict aborts the run early.
+    pub fn abort_on_fail(mut self, abort_on_fail: bool) -> Self {
+        self.abort_on_fail = abort_on_fail;
+        self
+    }
+
+    /// Set the abort grace window (milliseconds) for `abort_on_fail`.
+    pub fn abort_grace_millis(mut self, abort_grace_millis: u64) -> Self {
+        self.abort_grace_millis = Some(abort_grace_millis);
+        self
+    }
+
+    /// Set the adaptive iteration pacing.
+    pub fn pacing(mut self, pacing: LoadPacing) -> Self {
+        self.pacing = Some(pacing);
+        self
+    }
+
+    /// Set the parameterized test data feeder.
+    pub fn feeder(mut self, feeder: LoadFeeder) -> Self {
+        self.feeder = Some(feeder);
+        self
+    }
+
+    /// Set how each iteration selects which steps to run.
+    pub fn step_selection(mut self, step_selection: LoadStepSelection) -> Self {
+        self.step_selection = Some(step_selection);
+        self
     }
 
     /// Set the template engine (`"VELOCITY"` or `"MUSTACHE"`).

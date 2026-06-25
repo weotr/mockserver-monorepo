@@ -89,13 +89,88 @@ describe('OptimiseView', () => {
     expect(chips.map((c) => c.textContent)).toEqual(['HIGH', 'MEDIUM', 'LOW']);
   });
 
-  it('shows signal saving and recommendation', async () => {
+  it('shows signal saving and the structured fix when present', async () => {
     stubFetch();
     renderView();
     const panel = await screen.findByTestId('optimise-signals');
     expect(within(panel).getByText(/Identical 5,400-token system prompt/)).toBeInTheDocument();
     expect(within(panel).getByText(/save ~\$0\.0675/)).toBeInTheDocument();
-    expect(within(panel).getByText(/Enable provider prompt caching/)).toBeInTheDocument();
+    // signal 0 carries a `fix` — its summary + action render in place of the
+    // back-compat recommendation, plus a "Learn more" docs link.
+    expect(within(panel).getByText('Enable prompt caching')).toBeInTheDocument();
+    expect(within(panel).getByText(/Add cache_control to the static system block/)).toBeInTheDocument();
+    expect(within(panel).getByRole('link', { name: 'Learn more' })).toBeInTheDocument();
+  });
+
+  it('falls back to the recommendation when a signal has no fix', async () => {
+    stubFetch();
+    renderView();
+    const panel = await screen.findByTestId('optimise-signals');
+    // the OVERSIZED_TOOL_RESULT signal has no `fix` → recommendation shown.
+    expect(within(panel).getByText(/Trim or summarise the search_docs tool output/)).toBeInTheDocument();
+  });
+
+  it('renders the verdict banner with a grade and headline', async () => {
+    stubFetch();
+    renderView();
+    const banner = await screen.findByTestId('optimise-verdict');
+    expect(within(banner).getByText('C')).toBeInTheDocument();
+    expect(within(banner).getByText(/recoverable \(18% of spend\)/)).toBeInTheDocument();
+    expect(within(banner).getByText(/an estimated 18% of spend/)).toBeInTheDocument();
+  });
+
+  it('renders the Cache-hit and One-shot hero cards', async () => {
+    stubFetch();
+    renderView();
+    const hero = await screen.findByTestId('optimise-hero');
+    expect(within(hero).getByText('Cache hit')).toBeInTheDocument();
+    expect(within(hero).getByText('62%')).toBeInTheDocument();
+    expect(within(hero).getByText('One-shot')).toBeInTheDocument();
+    expect(within(hero).getByText('83%')).toBeInTheDocument();
+  });
+
+  it('Copy verdict writes a client-side verdict to the clipboard without a markdown fetch', async () => {
+    const fetchMock = stubFetch();
+    const user = userEvent.setup();
+    const clipboard = stubClipboard();
+    try {
+      renderView();
+      const button = await screen.findByRole('button', { name: /Copy verdict/i });
+      const callsBefore = fetchMock.mock.calls.length;
+      await user.click(button);
+      await waitFor(() => {
+        expect(clipboard.writeText).toHaveBeenCalled();
+      });
+      const text = String(clipboard.writeText.mock.calls[0]?.[0] ?? '');
+      expect(text).toContain('Grade C');
+      expect(text).toContain('[HIGH]');
+      expect(text).toContain('Enable prompt caching');
+      // no extra fetch fired for the verdict copy — it is built client-side.
+      expect(fetchMock.mock.calls.length).toBe(callsBefore);
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  it('shows a calm grade-A state when there are no opportunities', async () => {
+    const calmWire = {
+      ...sample,
+      verdict: {
+        grade: 'A',
+        rationale: 'No optimisation opportunities detected.',
+        totalEstimatedSavingUsd: 0,
+        totalWastedInputTokens: 0,
+        savingFractionOfSpend: 0,
+        costIsEstimated: false,
+        highCount: 0,
+        mediumCount: 0,
+        lowCount: 0,
+      },
+    };
+    stubFetch(calmWire);
+    renderView();
+    const banner = await screen.findByTestId('optimise-verdict');
+    expect(within(banner).getByText(/no optimisation opportunities detected/i)).toBeInTheDocument();
   });
 
   it('renders one table row per call', async () => {

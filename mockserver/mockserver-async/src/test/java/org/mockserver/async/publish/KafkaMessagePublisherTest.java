@@ -7,8 +7,11 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 
+import org.apache.kafka.clients.producer.Callback;
+
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.MockitoAnnotations.openMocks;
 
@@ -35,7 +38,7 @@ public class KafkaMessagePublisherTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.topic(), is("my-topic"));

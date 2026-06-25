@@ -124,6 +124,19 @@ HttpRequest[] requests = client.retrieveRecordedRequests(
 | `retrieveGrpcServices()` | List all loaded gRPC services and their methods |
 | `clearGrpcDescriptors()` | Clear all loaded gRPC descriptors |
 
+#### Contract Testing and Pact
+
+| Method | Description |
+|--------|-------------|
+| `contractTest(String spec, String baseUrl)` | Exercise every operation in an OpenAPI spec against a live service at `baseUrl`; returns a `ContractReport`. Wraps `PUT /mockserver/contractTest`. |
+| `contractTest(String spec, String baseUrl, String operationId)` | Same as above but restricted to a single `operationId`. |
+| `trafficValidate(String spec)` | Validate recorded traffic against an OpenAPI spec; returns a `ContractReport`. Wraps `PUT /mockserver/trafficValidate`. |
+| `pactImport(String pactJson)` | Import a Pact v3 consumer contract as expectations. Wraps `PUT /mockserver/pact/import`. |
+| `pactExport(String consumer, String provider)` | Export active expectations as a Pact v3 contract. Wraps `PUT /mockserver/pact`. |
+| `pactVerify(String pactJson)` | Verify a Pact v3 contract against active expectations. Wraps `PUT /mockserver/pact/verify`. |
+
+`ContractReport` is a `record` on `MockServerClient` with fields: `int total`, `int passed` (count), `int failed`, `boolean allPassed`, `List<ContractResult> results`. Each `ContractResult` carries `operationId`, `method`, `path`, `matchedOperation`, `int statusCode`, `boolean passed`, `List<String> requestErrors`, `List<String> responseErrors`. These types and methods are defined in `mockserver/mockserver-client-java/src/main/java/org/mockserver/client/MockServerClient.java` (around line 3340).
+
 ### ForwardChainExpectation
 
 Returned by `when()`, provides terminal methods to define the action:
@@ -246,13 +259,15 @@ class MyTest {
 ```
 
 **`@MockServerSettings` attributes:**
-- `perTestSuite` — boolean, default false. If true, single server per JVM
-- `ports` — int[], default empty (auto-allocate)
+- `perTestSuite` — boolean, default false. If true, single server per JVM.
+- `ports` — int[], default empty (auto-allocate).
+- `resetBeforeEach` — boolean, default false. When true, the extension calls `reset()` on the shared server in its `BeforeEachCallback`, clearing all expectations and recorded requests before each test method. This fires before any `@BeforeEach` methods, so expectations registered in `@BeforeEach` are applied after the reset and are present for the test. Combined with `perTestSuite = true`, this gives test isolation even across multiple test classes sharing one JVM-wide server. Without `resetBeforeEach`, the historic behaviour is preserved: the shared server is never reset between tests, leaving expectations registered in `@BeforeAll` intact for the whole class.
 
 **Parameter resolution**: Injects `MockServerClient` (or `ClientAndServer`) as test method parameters.
 
 **Lifecycle:**
 - `beforeAll`: Creates `ClientAndServer`, optionally registers JVM shutdown hook
+- `beforeEach`: Calls `reset()` when `resetBeforeEach = true`
 - `afterAll`: Stops server (unless per-test-suite mode)
 
 ### Spring Test Integration
@@ -372,7 +387,7 @@ implementation; every other client mirrors the same contract.
 | Integrity | downloads to a `.part` temp, verifies the published `<file>.sha256` (**fail-closed** on missing/empty/mismatch), atomic rename, then `tar -xf` extract |
 | Versioned cache GC | after a successful install, prunes other version dirs keeping the current + **one** previous (`maxPrevious = 1`); semver-aware so a **release outranks its `-SNAPSHOT`** (a stable release is never pruned in favour of a pre-release) |
 | Env knobs | `MOCKSERVER_BINARY_BASE_URL` (mirror / air-gap), `MOCKSERVER_BINARY_CACHE`, `MOCKSERVER_SKIP_BINARY_DOWNLOAD` (fail instead of download — pre-seeded caches) |
-| Default version | the shared MockServer version (`7.1.0`), pinned per client so all clients fetch the same server bundle and share one cache |
+| Default version | the shared MockServer version (`7.2.0`), pinned per client so all clients fetch the same server bundle and share one cache |
 
 **Per-client location & API:**
 
@@ -392,8 +407,52 @@ Windows `.bat` launcher is spawned with safe quoting; child process stdout/stder
 pipe-buffer deadlock; HTTP downloads use timeouts and stream to disk. Tests are hermetic (no live
 network) using `file://` fixtures and a stubbed downloader, plus one integration test that runs only
 when a real bundle is available. *(Known minor follow-up: the PHP pruner relies on `version_compare`,
-which can treat `7.1.0` and `7.1.0-SNAPSHOT` as equal — prune order between those two is not
+which can treat `7.2.0` and `7.2.0-SNAPSHOT` as equal — prune order between those two is not
 guaranteed; tracked as a follow-up.)*
+
+## Node.js Client
+
+The Node.js client (`mockserver-client-node/`) mirrors the Java client's API surface in JavaScript/TypeScript. The primary factory is `mockServerClient(host, port, contextPath?, tls?, caCertPemFilePath?, options?)`, which returns a `MockServerClient` object.
+
+### Fluent `when()` DSL
+
+The client exposes a `when(requestMatcher, times?, timeToLive?, priority?)` method that returns a `ForwardChainExpectation` — a fluent builder mirroring Java's `ForwardChainExpectation`. The optional builder methods refine the expectation before a terminal action sends it to MockServer:
+
+```javascript
+const client = mockServerClient('localhost', 1080);
+
+// Fluent style — plain number is treated as remainingTimes
+await client
+  .when({ path: '/api/users' }, 3)
+  .withPriority(10)
+  .respond({ statusCode: 200, body: '{"users":[]}' });
+
+// Procedural style (unchanged)
+await client.mockSimpleResponse('/api/health', 'OK', 200);
+```
+
+**Argument-order caveat:** `when(matcher, times, timeToLive, priority)` takes `times` before `timeToLive` before `priority` — the opposite order from `mockWithCallback` and the other procedural helpers, which take `(matcher, handler, times, priority, timeToLive, id)`. Prefer the fluent builder methods (`.withTimes()`, `.withTimeToLive()`, `.withPriority()`) over positional arguments to avoid confusion.
+
+| Builder method | Effect |
+|----------------|--------|
+| `.withTimes(times)` | Accepts a `Times` object or a plain number (treated as `remainingTimes`) |
+| `.withTimeToLive(ttl)` | Accepts a `TimeToLive` object |
+| `.withPriority(n)` | Higher number wins on ties |
+| `.withId(id)` | Set a stable expectation ID (enables upsert) |
+
+Terminal action methods:
+
+| Method | Action |
+|--------|--------|
+| `.respond(response)` | Static HTTP response, template, or class callback |
+| `.forward(forward)` | HTTP forward, template, class callback, or override |
+| `.error(error)` | HTTP error / connection drop |
+| `.callback(fn)` | Local JS callback over the callback WebSocket |
+| `.forwardCallback(fn)` | Local JS forward callback over the callback WebSocket |
+
+### TypeScript Types
+
+Full TypeScript definitions are in `mockServerClient.d.ts` and `mockServer.d.ts`. The `ForwardChainExpectation` interface and all request/response types are exported. The client ships type definitions as part of the package; no separate `@types/mockserver` package is needed.
 
 ## WebSocket Callback System
 

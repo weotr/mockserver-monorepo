@@ -2,13 +2,16 @@ package org.mockserver.mock.action.http;
 
 import org.mockserver.configuration.Configuration;
 import org.mockserver.load.IterationContext;
+import org.mockserver.load.LoadCapture;
+import org.mockserver.load.LoadFeeder;
+import org.mockserver.load.LoadPacing;
 import org.mockserver.load.LoadProfile;
 import org.mockserver.load.LoadScenario;
 import org.mockserver.load.LoadStage;
 import org.mockserver.load.LoadScenarioState;
 import org.mockserver.load.LoadStageType;
 import org.mockserver.load.LoadStep;
-import org.mockserver.log.MockServerEventLog;
+import org.mockserver.load.LoadThreshold;
 import org.mockserver.metrics.MetricLabels;
 import org.mockserver.metrics.Metrics;
 import org.mockserver.model.Delay;
@@ -22,6 +25,8 @@ import org.mockserver.templates.engine.TemplateEngine;
 import org.mockserver.templates.engine.mustache.MustacheTemplateEngine;
 import org.mockserver.templates.engine.velocity.VelocityTemplateEngine;
 import org.mockserver.time.TimeService;
+import org.HdrHistogram.ConcurrentHistogram;
+import org.HdrHistogram.Histogram;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +42,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -459,6 +465,31 @@ public class LoadScenarioOrchestrator {
                 run.targetVUs.set(0);
                 break;
         }
+
+        // Evaluate in-run thresholds from this run's per-run data and, when abortOnFail is set and the
+        // grace window has elapsed, abort the run early on a FAIL verdict (terminal STOPPED state via
+        // the existing stop path, marked aborted-by-threshold).
+        Boolean verdict = run.evaluateThresholds(now);
+        if (Boolean.FALSE.equals(verdict)
+            && run.scenario.isAbortOnFail()
+            && elapsed >= run.scenario.getAbortGraceMillis()) {
+            abortOnThresholdFail(run);
+        }
+    }
+
+    /**
+     * Abort a run because an {@code abortOnFail} threshold was breached after the grace window: mark it
+     * aborted-by-threshold and terminate it via the existing stop path (terminal STOPPED state). The
+     * FAIL verdict already recorded by {@link RunningScenario#evaluateThresholds(long)} is carried into
+     * the retained terminal status.
+     */
+    private void abortOnThresholdFail(RunningScenario run) {
+        run.abortedByThreshold = true;
+        if (runs.remove(run.scenario.getName(), run)) {
+            LOG.info("load scenario '{}' aborted by threshold breach ({} requests sent)",
+                run.scenario.getName(), run.requestsSent.get());
+            terminate(run, LoadScenarioState.STOPPED);
+        }
     }
 
     /**
@@ -524,11 +555,15 @@ public class LoadScenarioOrchestrator {
             int shortfall = toStart - started;
             if (shortfall > 0) {
                 // The VU cap blocked the rate: drop the owed-but-unstartable iterations (so the deficit
-                // does not snowball) and record the shortfall as a rate_limit throttle.
+                // does not snowball) and record the shortfall as a rate_limit throttle. This is the
+                // dominant drop path for an overloaded open-model run, so the shortfall also feeds the
+                // per-run droppedIterations counter — keeping the invariant droppedIterations ==
+                // count(rate_limit) + count(inflight_cap) across all three throttle sites.
                 run.rateDeficit -= shortfall;
                 if (run.rateDeficit < 0) {
                     run.rateDeficit = 0;
                 }
+                run.droppedIterations.addAndGet(shortfall);
                 for (int i = 0; i < shortfall; i++) {
                     Metrics.incrementLoadThrottled(run.scenario.getName(), run.runId, "rate_limit");
                 }
@@ -541,6 +576,9 @@ public class LoadScenarioOrchestrator {
         // Atomically de-register this run iff it is still the current run for its name (a concurrent
         // re-trigger may have already replaced it). Only the winner records the terminal status.
         if (runs.remove(run.scenario.getName(), run)) {
+            // Final threshold evaluation so a normally-completed run carries PASS (all satisfied) or
+            // FAIL (any breached); a run with no thresholds keeps its null verdict.
+            run.evaluateThresholds(clock.getAsLong());
             terminate(run, LoadScenarioState.COMPLETED);
         }
     }
@@ -563,7 +601,88 @@ public class LoadScenarioOrchestrator {
         if (looping && vuIteration > 0 && tryRetireSurplus(run)) {
             return;
         }
-        fireStep(run, vuId, vuIteration, 0, looping);
+        // Data-feeder row selection: allocate a global per-iteration index (incremented once per
+        // iteration, distinct from the per-step iterationIndex used for $iteration.index) and pick the
+        // row this iteration will expose as $iteration.data. For SEQUENTIAL the index also gates the run:
+        // once it reaches the dataset size the dataset is exhausted, so no further iteration runs and the
+        // run completes (each row used exactly once). Done BEFORE any work so a SEQUENTIAL run never
+        // dispatches past its dataset; composes with the VU/RATE models via the existing complete path.
+        Map<String, String> data = Collections.emptyMap();
+        List<Map<String, String>> feederRows = run.feederRows;
+        if (feederRows != null && !feederRows.isEmpty()) {
+            LoadFeeder.Strategy strategy = run.feederStrategy;
+            if (strategy == LoadFeeder.Strategy.SEQUENTIAL) {
+                long seqIndex = run.feederIterationIndex.getAndIncrement();
+                if (seqIndex >= feederRows.size()) {
+                    // Dataset exhausted: this VU's loop ends here (release its slot once) and the run
+                    // completes. completeInternal is idempotent across concurrent VUs (atomic de-register).
+                    endVu(run);
+                    completeInternal(run);
+                    return;
+                }
+                data = feederRows.get((int) seqIndex);
+            } else if (strategy == LoadFeeder.Strategy.RANDOM) {
+                data = feederRows.get(ThreadLocalRandom.current().nextInt(feederRows.size()));
+            } else {
+                // CIRCULAR (default): cycle the dataset by the global per-iteration index, never exhausts.
+                long circularIndex = run.feederIterationIndex.getAndIncrement();
+                data = feederRows.get((int) Math.floorMod(circularIndex, feederRows.size()));
+            }
+        }
+        // Adaptive-pacing anchor: record the wall-clock nanos at which this iteration's work begins, so
+        // the closed-model reschedule point can wait out the remainder of the target iteration cycle.
+        // Threaded (like {@code captured}) through the chained fireStep calls; ignored when pacing is off
+        // and never used for the one-shot (RATE) path. Read via TimeService.nanoTime() (the same clock
+        // recordResult uses) so it is independent of the mutable test clock used for stage progression.
+        final long iterationStartNanos = TimeService.nanoTime();
+        // Per-iteration cross-step captured-variable map: created fresh here so its scope is exactly one
+        // virtual user's single pass through the steps (one user "session"). It is threaded through the
+        // chained fireStep calls below and never shared across VUs or across a VU's successive iterations,
+        // so cross-step correlation is race-free and captures never leak between users or iterations.
+        Map<String, String> captured = new ConcurrentHashMap<>();
+        // Per-iteration ordered step sequence: SEQUENTIAL runs all steps in declared order (the original
+        // behaviour); WEIGHTED runs a single step chosen at random proportional to the steps' weights, so
+        // one run can model a mixed workload. Computed once here and threaded through the chained fireStep
+        // calls (like {@code captured}) so the dispatch logic — pacing, capture, feeder, cap handling and
+        // the closed/one-shot iteration boundary — stays a single code path that simply indexes this list.
+        List<LoadStep> iterationSteps = selectIterationSteps(run.scenario);
+        fireStep(run, vuId, vuIteration, 0, looping, captured, data, iterationStartNanos, iterationSteps);
+    }
+
+    /**
+     * Build the ordered list of steps a single iteration will run. SEQUENTIAL (default) returns the
+     * scenario's full ordered step list unchanged. WEIGHTED returns a single-element list containing one
+     * step chosen by weighted random over the steps' weights (cumulative-weight + a uniform draw in
+     * {@code [0, totalWeight)}); an absent weight counts as {@code 1.0}. validate() has already proved a
+     * WEIGHTED scenario has at least one step and a positive total weight, so the selection always
+     * resolves to exactly one step.
+     */
+    private static List<LoadStep> selectIterationSteps(LoadScenario scenario) {
+        List<LoadStep> steps = scenario.getSteps();
+        if (scenario.getStepSelection() != LoadScenario.StepSelection.WEIGHTED || steps == null || steps.isEmpty()) {
+            return steps;
+        }
+        double totalWeight = 0;
+        for (LoadStep step : steps) {
+            totalWeight += weightOf(step);
+        }
+        // Defensive: validate() rejects a non-positive total, but never index past the end on a rounding
+        // edge — fall back to the last step.
+        double target = ThreadLocalRandom.current().nextDouble(totalWeight);
+        double cumulative = 0;
+        for (LoadStep step : steps) {
+            cumulative += weightOf(step);
+            if (target < cumulative) {
+                return Collections.singletonList(step);
+            }
+        }
+        return Collections.singletonList(steps.get(steps.size() - 1));
+    }
+
+    /** A step's effective selection weight: its explicit weight, or {@code 1.0} when absent. */
+    private static double weightOf(LoadStep step) {
+        Double weight = step != null ? step.getWeight() : null;
+        return weight != null ? weight : 1.0;
     }
 
     /**
@@ -592,7 +711,14 @@ public class LoadScenarioOrchestrator {
         run.activeVUs.decrementAndGet();
     }
 
-    private void fireStep(RunningScenario run, int vuId, long vuIteration, int stepIndex, boolean looping) {
+    private void fireStep(RunningScenario run, int vuId, long vuIteration, int stepIndex, boolean looping, Map<String, String> captured, Map<String, String> data, long iterationStartNanos, List<LoadStep> iterationSteps) {
+        // Coordinated-omission correction: capture the scheduled-due timestamp at the very start of the
+        // dispatch path — BEFORE the in-flight permit and RPS-token acquire below — so the latency we
+        // record measures from the moment dispatch was requested, INCLUDING any queueing wait the
+        // self-load guard imposes when the system-under-test is overloaded. Measuring from after the
+        // acquire (the old behaviour) excluded that wait and made tail percentiles look far better than
+        // reality (the classic coordinated-omission error).
+        final long scheduledNanos = TimeService.nanoTime();
         if (run.stopped.get() || !isCurrent(run)) {
             endVu(run);
             return;
@@ -605,8 +731,8 @@ public class LoadScenarioOrchestrator {
             completeInternal(run);
             return;
         }
-        List<LoadStep> steps = run.scenario.getSteps();
-        if (stepIndex >= steps.size()) {
+        List<LoadStep> steps = iterationSteps;
+        if (steps == null || stepIndex >= steps.size()) {
             // Iteration finished: account it.
             Metrics.incrementLoadIteration(run.scenario.getName(), run.runId);
             if (!looping) {
@@ -614,10 +740,16 @@ public class LoadScenarioOrchestrator {
                 endVu(run);
                 return;
             }
-            // Closed-model VU: schedule the next iteration immediately (re-scheduled, not recursed, to
-            // avoid starving the single scheduler thread).
+            // Closed-model VU: schedule the next iteration (re-scheduled, not recursed, to avoid
+            // starving the single scheduler thread). Adaptive pacing: if a target iteration cycle is
+            // configured and this iteration's work finished inside it, wait out the remainder before the
+            // next iteration's start; on overrun (or when pacing is off) the delay is 0 (immediate).
+            // Pacing only delays the NEXT launch — in-flight latency measurement is untouched. The
+            // one-shot (RATE) path above returns before here, so pacing never affects the open model.
             long nextIteration = vuIteration + 1;
-            scheduler.schedule(() -> launchIteration(run, vuId, nextIteration, true), 0, TimeUnit.MILLISECONDS);
+            long pacingDelayMillis = pacingDelayMillis(run, iterationStartNanos);
+            run.lastPacingDelayMillis = pacingDelayMillis;
+            scheduler.schedule(() -> launchIteration(run, vuId, nextIteration, true), pacingDelayMillis, TimeUnit.MILLISECONDS);
             return;
         }
 
@@ -625,7 +757,7 @@ public class LoadScenarioOrchestrator {
         long globalIndex = run.iterationIndex.getAndIncrement();
         long count = run.requestsSent.get();
         long elapsed = clock.getAsLong() - run.startedAt;
-        IterationContext iteration = new IterationContext(globalIndex, vuId, vuIteration, elapsed, count);
+        IterationContext iteration = new IterationContext(globalIndex, vuId, vuIteration, elapsed, count, captured, data);
         final String stepLabel = run.stepLabel(step, stepIndex);
         final Map<String, String> stepCustomLabels = run.customLabelsFor(step);
 
@@ -638,36 +770,41 @@ public class LoadScenarioOrchestrator {
             run.failed.incrementAndGet();
             run.requestsSent.incrementAndGet();
             Metrics.incrementLoadError(run.scenario.getName(), run.runId, "render");
-            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping);
+            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping, captured, data, iterationStartNanos, iterationSteps);
             return;
         }
 
         // Mark every generated request so the server keeps its own load traffic out of the
         // user-facing request event log (a bounded ring buffer). Without this, a running scenario
         // floods the log and evicts real / LLM traffic that the Traffic, Trace and Optimise views
-        // depend on. See MockServerEventLog#LOAD_GENERATED_HEADER. Load throughput/latency/SLO are
-        // recorded client-side in recordResult(), so suppressing the log entry does not lose metrics.
-        if (rendered != null) {
-            rendered.withHeader(MockServerEventLog.LOAD_GENERATED_HEADER, run.runId);
+        // depend on. The marker is an in-process flag on the request (HttpRequest#setLoadGenerated)
+        // that is never serialized to the wire, so it stays driver-only and cannot reach an upstream
+        // target to disable that target's logging. Gated by loadGenerationSuppressEventLog (default
+        // true). Load throughput/latency/SLO are recorded client-side in recordResult(), so
+        // suppressing the log entry does not lose metrics.
+        if (rendered != null && configuration != null && Boolean.TRUE.equals(configuration.loadGenerationSuppressEventLog())) {
+            rendered.setLoadGenerated(true);
         }
 
         // Self-load guard at dispatch: acquire an in-flight permit and an RPS token. Each skip is a
-        // distinct throttle reason so an operator can see why a scenario could not reach its setpoint.
+        // distinct throttle reason so an operator can see why a scenario could not reach its setpoint,
+        // and is counted as a dropped iteration (a due iteration the cap prevented from dispatching).
         if (!run.inFlight.tryAcquire()) {
+            run.droppedIterations.incrementAndGet();
             Metrics.incrementLoadThrottled(run.scenario.getName(), run.runId, "inflight_cap");
-            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping);
+            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping, captured, data, iterationStartNanos, iterationSteps);
             return;
         }
         if (!run.tryAcquireRpsToken(clock.getAsLong())) {
             run.inFlight.release();
+            run.droppedIterations.incrementAndGet();
             Metrics.incrementLoadThrottled(run.scenario.getName(), run.runId, "rate_limit");
-            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping);
+            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping, captured, data, iterationStartNanos, iterationSteps);
             return;
         }
 
         run.requestsSent.incrementAndGet();
         run.inFlightCount.incrementAndGet();
-        final long startNanos = TimeService.nanoTime();
         final String host = hostOf(rendered);
         final String route = run.routeLabel(step, rendered);
         final String method = methodOf(rendered);
@@ -679,15 +816,15 @@ public class LoadScenarioOrchestrator {
         } catch (Exception e) {
             run.inFlight.release();
             run.inFlightCount.decrementAndGet();
-            recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, null, startNanos, true, "connection");
-            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping);
+            recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, null, scheduledNanos, true, "connection");
+            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping, captured, data, iterationStartNanos, iterationSteps);
             return;
         }
         if (future == null) {
             run.inFlight.release();
             run.inFlightCount.decrementAndGet();
-            recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, null, startNanos, true, "null_response");
-            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping);
+            recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, null, scheduledNanos, true, "null_response");
+            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping, captured, data, iterationStartNanos, iterationSteps);
             return;
         }
         future.whenComplete((response, throwable) -> {
@@ -696,9 +833,121 @@ public class LoadScenarioOrchestrator {
             boolean error = throwable != null || response == null
                 || (response.getStatusCode() != null && response.getStatusCode() >= 500);
             String errorKind = classifyError(throwable, response);
-            recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, response, startNanos, error, errorKind);
-            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping);
+            recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, response, scheduledNanos, error, errorKind);
+            // Apply this step's cross-step captures to the per-iteration map BEFORE the next step is
+            // scheduled, so a subsequent step's template can read what this response yielded. Best-effort
+            // and never throws out of the dispatch path: a missing value or extraction error falls back
+            // to the capture's defaultValue (when set) or leaves the variable unset.
+            applyCaptures(run, step, response, captured);
+            scheduleNextStep(run, vuId, vuIteration, stepIndex, step, looping, captured, data, iterationStartNanos, iterationSteps);
         });
+    }
+
+    /**
+     * Apply a step's {@link LoadCapture} rules against the completed response, writing extracted values
+     * into the per-iteration {@code captured} map. Best-effort and side-effect-only: a malformed
+     * expression, a missing value, a null response, or any extraction error is logged at debug and
+     * skipped, falling back to the capture's {@code defaultValue} when set, otherwise leaving the
+     * variable unset. Never throws out of the dispatch path.
+     */
+    private void applyCaptures(RunningScenario run, LoadStep step, HttpResponse response, Map<String, String> captured) {
+        List<LoadCapture> captures = step != null ? step.getCaptures() : null;
+        if (captures == null || captures.isEmpty()) {
+            return;
+        }
+        for (LoadCapture capture : captures) {
+            if (capture == null || isBlank(capture.getName()) || capture.getSource() == null) {
+                continue;
+            }
+            String value = null;
+            try {
+                value = extractCapture(capture, response);
+            } catch (Throwable throwable) {
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("load scenario '{}' capture '{}' failed - skipping: {}",
+                        run.scenario.getName(), capture.getName(), throwable.getMessage());
+                }
+            }
+            if (value == null) {
+                value = capture.getDefaultValue();
+            }
+            if (value != null) {
+                captured.put(capture.getName(), value);
+            }
+        }
+    }
+
+    /**
+     * Extract a single {@link LoadCapture}'s value from the response, or null when nothing matches.
+     * Reuses Jayway JsonPath (already a project dependency) for {@code BODY_JSONPATH}.
+     */
+    private static String extractCapture(LoadCapture capture, HttpResponse response) {
+        if (response == null) {
+            return null;
+        }
+        String expression = capture.getExpression();
+        switch (capture.getSource()) {
+            case BODY_JSONPATH: {
+                if (isBlank(expression)) {
+                    return null;
+                }
+                String body = response.getBodyAsString();
+                if (isBlank(body)) {
+                    return null;
+                }
+                Object result = com.jayway.jsonpath.JsonPath.compile(expression).read(body);
+                return stringifyJsonPath(result);
+            }
+            case HEADER: {
+                if (isBlank(expression)) {
+                    return null;
+                }
+                String header = response.getFirstHeader(expression);
+                return isBlank(header) ? null : header;
+            }
+            case BODY_REGEX: {
+                if (isBlank(expression)) {
+                    return null;
+                }
+                String body = response.getBodyAsString();
+                if (isBlank(body)) {
+                    return null;
+                }
+                java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(expression).matcher(body);
+                if (matcher.find() && matcher.groupCount() >= 1) {
+                    return matcher.group(1);
+                }
+                return null;
+            }
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Render a JSONPath result as a plain string: a scalar becomes its {@code toString()}; a
+     * single-element collection (the common definite-path-returning-a-list case) is unwrapped to its
+     * element; an empty collection is treated as no match. Mirrors {@code CaptureProcessor}.
+     */
+    private static String stringifyJsonPath(Object result) {
+        if (result == null) {
+            return null;
+        }
+        if (result instanceof java.util.Collection) {
+            java.util.Collection<?> collection = (java.util.Collection<?>) result;
+            if (collection.isEmpty()) {
+                return null;
+            }
+            if (collection.size() == 1) {
+                Object only = collection.iterator().next();
+                return only != null ? String.valueOf(only) : null;
+            }
+        }
+        return String.valueOf(result);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     /**
@@ -724,7 +973,7 @@ public class LoadScenarioOrchestrator {
         return null;
     }
 
-    private void scheduleNextStep(RunningScenario run, int vuId, long vuIteration, int stepIndex, LoadStep step, boolean looping) {
+    private void scheduleNextStep(RunningScenario run, int vuId, long vuIteration, int stepIndex, LoadStep step, boolean looping, Map<String, String> captured, Map<String, String> data, long iterationStartNanos, List<LoadStep> iterationSteps) {
         if (run.stopped.get() || !isCurrent(run)) {
             // The VU loop ends here (the scenario stopped or was replaced mid-iteration). This is a
             // genuine loop-exit point, so release the slot exactly once.
@@ -732,18 +981,44 @@ public class LoadScenarioOrchestrator {
             return;
         }
         long thinkMillis = step.getThinkTime() != null ? Math.max(0, step.getThinkTime().sampleValueMillis()) : 0;
-        scheduler.schedule(() -> fireStep(run, vuId, vuIteration, stepIndex + 1, looping), thinkMillis, TimeUnit.MILLISECONDS);
+        scheduler.schedule(() -> fireStep(run, vuId, vuIteration, stepIndex + 1, looping, captured, data, iterationStartNanos, iterationSteps), thinkMillis, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Compute the adaptive-pacing delay (milliseconds) to wait before launching this VU's next
+     * closed-model iteration: {@code max(0, round(cycleMillis - elapsedMillis))}, where the cycle is
+     * the scenario's {@link LoadPacing#cycleMillis() target cycle} and {@code elapsedMillis} is how
+     * long this iteration's work took (wall-clock, via {@link TimeService#nanoTime()}). Returns
+     * {@code 0} when no pacing is configured or when the iteration overran the cycle.
+     */
+    private long pacingDelayMillis(RunningScenario run, long iterationStartNanos) {
+        LoadPacing pacing = run.scenario.getPacing();
+        double cycleMillis = pacing != null ? pacing.cycleMillis() : 0;
+        if (cycleMillis <= 0) {
+            return 0;
+        }
+        long elapsedMillis = Math.max(0, (TimeService.nanoTime() - iterationStartNanos) / 1_000_000L);
+        long delay = Math.round(cycleMillis - elapsedMillis);
+        return Math.max(0, delay);
     }
 
     private void recordResult(RunningScenario run, String host, String stepLabel, String route, String method,
                               long requestBytes, String traceId, Map<String, String> customLabels,
-                              HttpResponse response, long startNanos, boolean error, String errorKind) {
-        long latencyMillis = Math.max(0, (TimeService.nanoTime() - startNanos) / 1_000_000L);
+                              HttpResponse response, long scheduledNanos, boolean error, String errorKind) {
+        // Coordinated-omission-corrected latency: measured from the scheduled-due time captured at the
+        // start of the dispatch path (before the in-flight/RPS acquire), so any queueing wait the
+        // self-load guard imposed is INCLUDED. This single corrected value is the one recorded to the
+        // Prometheus histogram, the per-run HDR histogram and the SLO sample store — there is no
+        // competing post-acquire "service time" recorded to the same metric.
+        long latencyMillis = Math.max(0, (TimeService.nanoTime() - scheduledNanos) / 1_000_000L);
         if (error) {
             run.failed.incrementAndGet();
         } else {
             run.succeeded.incrementAndGet();
         }
+        // Record every completed iteration — successes AND failures (a failed request still has a
+        // latency) — into the authoritative per-run HDR histogram backing the status DTO's percentiles.
+        run.latencyHistogram.recordValue(latencyMillis);
         Integer statusCode = response != null ? response.getStatusCode() : null;
         double latencySeconds = latencyMillis / 1000.0;
         long responseBytes = bodyBytes(response != null ? response.getBodyAsRawBytes() : null);
@@ -844,6 +1119,16 @@ public class LoadScenarioOrchestrator {
         return run != null ? run.activeVUs.get() : 0;
     }
 
+    /**
+     * Test hook: the most recent adaptive-pacing delay (milliseconds) the most-recently-started run
+     * applied at a closed-model iteration reschedule. {@code 0} when pacing is off or the last
+     * iteration overran the cycle. Returns {@code 0} when no scenario has ever run.
+     */
+    long lastRunPacingDelayMillis() {
+        RunningScenario run = lastRun;
+        return run != null ? run.lastPacingDelayMillis : 0;
+    }
+
     public String validate(LoadScenario scenario) {
         if (scenario == null) {
             return "'loadScenario' is required";
@@ -864,13 +1149,36 @@ public class LoadScenarioOrchestrator {
                 return "step[" + i + "] must have a request";
             }
         }
+        // WEIGHTED step selection: each iteration runs one step chosen proportional to its weight, so
+        // every step's effective weight (absent = 1.0) must be > 0 and the total positive. SEQUENTIAL
+        // (the default) runs all steps in order and ignores any weights — a weight may be present but is
+        // unused, and is not rejected (lenient, so a scenario can be flipped between modes freely).
+        if (scenario.getStepSelection() == LoadScenario.StepSelection.WEIGHTED) {
+            double totalWeight = 0;
+            for (int i = 0; i < steps.size(); i++) {
+                Double weight = steps.get(i).getWeight();
+                double effective = weight != null ? weight : 1.0;
+                if (effective <= 0) {
+                    return "step[" + i + "].weight must be > 0 when stepSelection is WEIGHTED";
+                }
+                totalWeight += effective;
+            }
+            if (totalWeight <= 0) {
+                return "'steps' total weight must be > 0 when stepSelection is WEIGHTED";
+            }
+        }
         LoadProfile profile = scenario.getProfile();
         if (profile == null) {
             return "'profile' is required";
         }
+        // getStages() returns the explicit stages, or — when only a 'shape' is set — the stages that
+        // shape expands into; so all the per-stage / cap checks below cover shaped profiles for free.
         List<LoadStage> stages = profile.getStages();
         if (stages == null || stages.isEmpty()) {
-            return "'profile.stages' must contain at least one stage";
+            if (profile.getShape() != null) {
+                return "'profile.shape' expands to no stages; check its parameters (durations and step count must be > 0)";
+            }
+            return "'profile' must contain either 'stages' or a 'shape'";
         }
         int maxStages = configuration.loadGenerationMaxStages();
         if (stages.size() > maxStages) {
@@ -945,6 +1253,25 @@ public class LoadScenarioOrchestrator {
         if (scenario.getTemplateType() == HttpTemplate.TemplateType.JAVASCRIPT) {
             return "templateType JAVASCRIPT is not supported for load steps; use VELOCITY or MUSTACHE";
         }
+        LoadPacing pacing = scenario.getPacing();
+        if (pacing != null && pacing.getMode() != null && pacing.getMode() != LoadPacing.Mode.NONE
+            && pacing.getValue() <= 0) {
+            return "'pacing.value' must be > 0 when 'pacing.mode' is " + pacing.getMode();
+        }
+        LoadFeeder feeder = scenario.getFeeder();
+        if (feeder != null) {
+            List<Map<String, String>> feederRows;
+            try {
+                // Resolves inline rows, or parses data/format — a malformed CSV/JSON dataset (or data
+                // without a format) surfaces as a clear IllegalArgumentException message here.
+                feederRows = feeder.resolvedRows();
+            } catch (IllegalArgumentException e) {
+                return e.getMessage();
+            }
+            if (feederRows == null || feederRows.isEmpty()) {
+                return "'feeder' must resolve to at least one row (set 'feeder.rows' or 'feeder.data'+'feeder.format')";
+            }
+        }
         return null;
     }
 
@@ -981,11 +1308,57 @@ public class LoadScenarioOrchestrator {
         /** Current target arrival rate (iterations/sec), stored as raw long bits; 0 for non-RATE stages. */
         final AtomicLong targetRate = new AtomicLong(0);
         final AtomicLong iterationIndex = new AtomicLong(0);
+        /**
+         * Global per-ITERATION index (incremented once per launched iteration, distinct from the
+         * per-step {@link #iterationIndex}) used to index the data feeder across all VUs/iterations:
+         * CIRCULAR uses {@code index % size}, SEQUENTIAL uses {@code index} and stops the run once it
+         * reaches the dataset size. Untouched when there is no feeder or the strategy is RANDOM.
+         */
+        final AtomicLong feederIterationIndex = new AtomicLong(0);
+        /**
+         * The resolved feeder dataset (inline rows, or rows parsed from data/format), resolved once at
+         * run start so parsing never happens per-iteration. Null/empty when the scenario has no feeder.
+         */
+        final List<Map<String, String>> feederRows;
+        /** The feeder selection strategy (null when there is no feeder). */
+        final LoadFeeder.Strategy feederStrategy;
         final AtomicLong requestsSent = new AtomicLong(0);
         final AtomicLong succeeded = new AtomicLong(0);
         final AtomicLong failed = new AtomicLong(0);
+        /**
+         * Iterations that were due but never dispatched because a safety cap was hit (the in-flight
+         * permit or RPS token could not be acquired, or the RATE-stage VU cap blocked the arrival
+         * rate). Surfaced as a first-class run statistic so the truncated-distribution signal is
+         * visible rather than hidden — the percentiles below describe only the iterations that ran.
+         */
+        final AtomicLong droppedIterations = new AtomicLong(0);
+        /**
+         * Authoritative per-run latency histogram (milliseconds, ~3 significant digits, auto-resizing).
+         * Every completed iteration's coordinated-omission-corrected latency is recorded here (successes
+         * and failures alike), and the status DTO's percentiles are read from a consistent {@code copy()}
+         * of it — so percentiles are correct AND available even when Prometheus metrics are disabled.
+         */
+        final ConcurrentHistogram latencyHistogram = new ConcurrentHistogram(3);
         final Semaphore inFlight;
         final int maxRps;
+
+        /**
+         * Latest threshold verdict for this run: {@code Boolean.TRUE} = PASS (all thresholds hold),
+         * {@code Boolean.FALSE} = FAIL (any breached), {@code null} = not yet evaluated (no thresholds,
+         * or no request has been dispatched). Updated on the control tick (single scheduler thread) and read
+         * by {@link #snapshot}; volatile for cross-thread visibility.
+         */
+        volatile Boolean verdict;
+        /** Per-threshold results from the latest evaluation (empty until first evaluated). */
+        volatile List<ThresholdResult> thresholdResults = Collections.emptyList();
+        /** Set once when an {@code abortOnFail} FAIL terminates the run, surfaced in the status DTO. */
+        volatile boolean abortedByThreshold;
+        /**
+         * The most recent adaptive-pacing delay (milliseconds) applied at a closed-model iteration
+         * reschedule, for test assertions. {@code 0} when pacing is off or the iteration overran the
+         * cycle. Written on the scheduler thread, read by a test hook; volatile for visibility.
+         */
+        volatile long lastPacingDelayMillis;
 
         // Arrival-rate (RATE stage) deficit accounting; only touched on the single scheduler thread.
         double rateDeficit;
@@ -1014,6 +1387,21 @@ public class LoadScenarioOrchestrator {
             this.inFlight = new Semaphore(Math.max(1, configuration.loadGenerationMaxInFlightRequests()));
             this.maxRps = Math.max(1, configuration.loadGenerationMaxRequestsPerSecond());
             this.rpsWindowStart = triggeredAt;
+            this.latencyHistogram.setAutoResize(true);
+            // Resolve the feeder dataset once at run start (parse data/format if used) so row selection
+            // per iteration is a pure index/lookup with no parsing. validate() already proved the rows
+            // are non-empty and the data parses, so resolvedRows() cannot throw here.
+            LoadFeeder feeder = scenario.getFeeder();
+            if (feeder != null) {
+                List<Map<String, String>> resolved = feeder.resolvedRows();
+                this.feederRows = resolved != null && !resolved.isEmpty()
+                    ? Collections.unmodifiableList(new ArrayList<>(resolved))
+                    : null;
+                this.feederStrategy = feeder.getStrategy() != null ? feeder.getStrategy() : LoadFeeder.Strategy.CIRCULAR;
+            } else {
+                this.feederRows = null;
+                this.feederStrategy = null;
+            }
         }
 
         /**
@@ -1033,7 +1421,106 @@ public class LoadScenarioOrchestrator {
             return max != null && max > 0 && requestsSent.get() >= max;
         }
 
-        synchronized boolean tryAcquireRpsToken(long now) {
+        /**
+         * Evaluate this run's in-run thresholds from PER-RUN data (this run's HDR histogram and
+         * counters — never the global SLO sample store), recording the verdict and per-threshold
+         * results on the run. A null/empty threshold list leaves the verdict null (no change to
+         * existing behaviour). The verdict is also left null until at least one request has been dispatched,
+         * so a run is never failed on zero samples. Otherwise the verdict is PASS iff every threshold
+         * is satisfied, FAIL if any is breached.
+         *
+         * @param now the orchestrator-clock time to measure elapsed throughput against
+         * @return the freshly-computed verdict ({@code true}=PASS, {@code false}=FAIL, {@code null}=not
+         * evaluated)
+         */
+        Boolean evaluateThresholds(long now) {
+            List<LoadThreshold> thresholds = scenario.getThresholds();
+            if (thresholds == null || thresholds.isEmpty()) {
+                verdict = null;
+                thresholdResults = Collections.emptyList();
+                return null;
+            }
+            long sent = requestsSent.get();
+            if (sent <= 0) {
+                // No completed request yet: do not evaluate so a run is never failed on zero samples.
+                return verdict;
+            }
+            // The HDR histogram copy is only needed for LATENCY_* thresholds; for runs whose
+            // thresholds are only ERROR_RATE/THROUGHPUT_RPS, skip the per-tick copy entirely.
+            boolean needLatencySnapshot = false;
+            for (LoadThreshold threshold : thresholds) {
+                LoadThreshold.Metric metric = threshold.getMetric();
+                if (metric == LoadThreshold.Metric.LATENCY_P50
+                    || metric == LoadThreshold.Metric.LATENCY_P95
+                    || metric == LoadThreshold.Metric.LATENCY_P99
+                    || metric == LoadThreshold.Metric.LATENCY_P999) {
+                    needLatencySnapshot = true;
+                    break;
+                }
+            }
+            Histogram latencySnapshot = needLatencySnapshot ? latencyHistogram.copy() : null;
+            boolean haveLatency = latencySnapshot != null && latencySnapshot.getTotalCount() > 0;
+            // Error rate is a fraction in [0,1]. requestsSent is incremented at dispatch and failed at
+            // completion, so a lock-free read can momentarily see more completed failures than the
+            // earlier-read dispatch count; clamp so the observed rate never exceeds 1.0.
+            double errorRate = Math.min(1.0, failed.get() / (double) Math.max(1L, sent));
+            long elapsedMillis = Math.max(0L, now - startedAt);
+            double throughputRps = sent / Math.max(0.001, elapsedMillis / 1000.0);
+
+            List<ThresholdResult> results = new ArrayList<>(thresholds.size());
+            boolean allSatisfied = true;
+            for (LoadThreshold threshold : thresholds) {
+                LoadThreshold.Metric metric = threshold.getMetric();
+                double observed;
+                switch (metric) {
+                    case LATENCY_P50:
+                        observed = haveLatency ? latencySnapshot.getValueAtPercentile(50.0) : 0.0;
+                        break;
+                    case LATENCY_P95:
+                        observed = haveLatency ? latencySnapshot.getValueAtPercentile(95.0) : 0.0;
+                        break;
+                    case LATENCY_P99:
+                        observed = haveLatency ? latencySnapshot.getValueAtPercentile(99.0) : 0.0;
+                        break;
+                    case LATENCY_P999:
+                        observed = haveLatency ? latencySnapshot.getValueAtPercentile(99.9) : 0.0;
+                        break;
+                    case ERROR_RATE:
+                        observed = errorRate;
+                        break;
+                    case THROUGHPUT_RPS:
+                        observed = throughputRps;
+                        break;
+                    default:
+                        observed = 0.0;
+                        break;
+                }
+                boolean satisfied = threshold.satisfiedBy(observed);
+                allSatisfied = allSatisfied && satisfied;
+                results.add(new ThresholdResult(
+                    metric != null ? metric.name() : null,
+                    threshold.getComparator() != null ? threshold.getComparator().name() : null,
+                    threshold.getThreshold(),
+                    observed,
+                    satisfied));
+            }
+            thresholdResults = Collections.unmodifiableList(results);
+            verdict = allSatisfied;
+            return verdict;
+        }
+
+        /**
+         * Acquire one RPS token in a fixed 1-second window, or refuse when the window is full.
+         * <p>
+         * The window timestamp is re-read from the orchestrator clock <em>inside</em> the lock
+         * (the caller-supplied {@code now} is ignored) so the window reset is ordered by lock
+         * acquisition rather than by the caller's pre-lock clock snapshot. Reading {@code now}
+         * before the lock let threads enter out of timestamp order, which could reset the window
+         * to a slightly earlier instant and over-issue tokens beyond {@code maxRps} across the
+         * window edge; reading under the lock makes the window strictly monotonic per run.
+         */
+        synchronized boolean tryAcquireRpsToken(long ignoredNow) {
+            long now = clock.getAsLong();
             if (now - rpsWindowStart >= 1000) {
                 rpsWindowStart = now;
                 rpsTokensUsed = 0;
@@ -1102,7 +1589,50 @@ public class LoadScenarioOrchestrator {
             if (body != null && containsTemplate(body)) {
                 clone.withBody(engine.renderTemplate(body, request, iteration));
             }
+            renderHeaders(request, clone, engine, iteration);
             return clone;
+        }
+
+        /**
+         * Render any header value that contains a template placeholder, in place on the clone. This is
+         * what makes a templated auth header such as {@code Authorization: Bearer
+         * {{iteration.captured.token}}} resolve against the per-iteration captured map. Headers whose
+         * values contain no placeholder are left untouched. The template context is the ORIGINAL request
+         * (as for path/body). Best-effort: a header is rebuilt only when at least one of its values is a
+         * template, preserving the not/optional flags of names and untemplated values.
+         */
+        private void renderHeaders(HttpRequest request, HttpRequest clone, TemplateEngine engine, IterationContext iteration) {
+            if (request.getHeaders() == null || request.getHeaderList().isEmpty()) {
+                return;
+            }
+            for (org.mockserver.model.Header header : request.getHeaderList()) {
+                boolean anyTemplated = false;
+                List<org.mockserver.model.NottableString> originalValues = header.getValues();
+                if (originalValues != null) {
+                    for (org.mockserver.model.NottableString value : originalValues) {
+                        if (value != null && containsTemplate(value.getValue())) {
+                            anyTemplated = true;
+                            break;
+                        }
+                    }
+                }
+                if (!anyTemplated) {
+                    continue;
+                }
+                List<org.mockserver.model.NottableString> renderedValues = new ArrayList<>();
+                for (org.mockserver.model.NottableString value : originalValues) {
+                    if (value != null && containsTemplate(value.getValue())) {
+                        String rendered = engine.renderTemplate(value.getValue(), request, iteration);
+                        renderedValues.add(org.mockserver.model.NottableString.string(rendered, value.isNot()));
+                    } else {
+                        renderedValues.add(value);
+                    }
+                }
+                // Replace the cloned header (same name) with the rendered values. replace-by-name keeps
+                // header ordering stable and overwrites the cloned copy carried over from request.clone().
+                clone.replaceHeader(new org.mockserver.model.Header(
+                    header.getName(), renderedValues.toArray(new org.mockserver.model.NottableString[0])));
+            }
         }
 
         private boolean containsTemplate(String value) {
@@ -1135,6 +1665,14 @@ public class LoadScenarioOrchestrator {
             double currentTarget = running
                 ? (stageType == LoadStageType.RATE ? targetRateValue : targetVUs.get())
                 : 0.0;
+            // Percentiles are read from a consistent copy() of the authoritative per-run HDR histogram
+            // (not the coarse Prometheus buckets), so they are correct AND available even when metrics
+            // are disabled. An empty histogram reports 0 for every percentile.
+            Histogram latencySnapshot = latencyHistogram.copy();
+            long p50 = latencySnapshot.getTotalCount() == 0 ? 0L : latencySnapshot.getValueAtPercentile(50.0);
+            long p95 = latencySnapshot.getTotalCount() == 0 ? 0L : latencySnapshot.getValueAtPercentile(95.0);
+            long p99 = latencySnapshot.getTotalCount() == 0 ? 0L : latencySnapshot.getValueAtPercentile(99.0);
+            long p999 = latencySnapshot.getTotalCount() == 0 ? 0L : latencySnapshot.getValueAtPercentile(99.9);
             return new LoadScenarioStatus(
                 scenario.getName(),
                 state,
@@ -1143,9 +1681,11 @@ public class LoadScenarioOrchestrator {
                 requestsSent.get(),
                 succeeded.get(),
                 failed.get(),
-                Metrics.loadLatencyPercentileMillis(scenario.getName(), runId, 50),
-                Metrics.loadLatencyPercentileMillis(scenario.getName(), runId, 95),
-                Metrics.loadLatencyPercentileMillis(scenario.getName(), runId, 99),
+                p50,
+                p95,
+                p99,
+                p999,
+                droppedIterations.get(),
                 runId,
                 startedAtEpoch,
                 terminal ? now : null,
@@ -1156,8 +1696,36 @@ public class LoadScenarioOrchestrator {
                 running ? idx : -1,
                 running && stageType != null ? stageType.name() : null,
                 currentTarget,
-                scenario.getStartDelayMillis()
+                scenario.getStartDelayMillis(),
+                verdict == null ? null : (verdict ? "PASS" : "FAIL"),
+                abortedByThreshold,
+                thresholdResults
             );
+        }
+    }
+
+    /**
+     * One per-threshold evaluation result, surfaced in the status DTO so a client/dashboard can show
+     * which thresholds passed or breached and the observed value behind the verdict.
+     */
+    public static final class ThresholdResult {
+        /** The {@link LoadThreshold.Metric} name (e.g. {@code LATENCY_P95}). */
+        public final String metric;
+        /** The {@link org.mockserver.slo.SloObjective.Comparator} name (e.g. {@code LESS_THAN}). */
+        public final String comparator;
+        /** The configured threshold value. */
+        public final double threshold;
+        /** The observed per-run value at evaluation time (latency ms, error-rate fraction, or rps). */
+        public final double observed;
+        /** True when {@code observed} satisfied the comparator against {@code threshold}. */
+        public final boolean satisfied;
+
+        public ThresholdResult(String metric, String comparator, double threshold, double observed, boolean satisfied) {
+            this.metric = metric;
+            this.comparator = comparator;
+            this.threshold = threshold;
+            this.observed = observed;
+            this.satisfied = satisfied;
         }
     }
 
@@ -1174,6 +1742,19 @@ public class LoadScenarioOrchestrator {
         public final long p50Millis;
         public final long p95Millis;
         public final long p99Millis;
+        /**
+         * The 99.9th-percentile coordinated-omission-corrected latency in milliseconds, read from the
+         * per-run HDR histogram (0 when no iteration has completed). Surfaces deep-tail behaviour that
+         * p99 alone hides.
+         */
+        public final long p999Millis;
+        /**
+         * Iterations that were due but never dispatched because a safety cap was hit (the sum of the
+         * {@code rate_limit} and {@code inflight_cap} throttles for this run). The percentiles describe
+         * only the iterations that ran, so a non-zero value here is the truncated-distribution signal —
+         * the system-under-test could not keep up with the requested load.
+         */
+        public final long droppedIterations;
         public final String runId;
         public final long startedAtEpochMillis;
         public final Long endedAtEpochMillis;
@@ -1196,14 +1777,28 @@ public class LoadScenarioOrchestrator {
         public final double currentTarget;
         /** The configured start delay in milliseconds (0 when none). */
         public final long startDelayMillis;
+        /**
+         * In-run threshold verdict: {@code "PASS"} (all thresholds satisfied), {@code "FAIL"} (any
+         * breached), or {@code null} when the scenario has no thresholds or none has been evaluated yet
+         * (no request has been dispatched). A terminal {@code "FAIL"} should be mapped by clients to a
+         * non-zero CI exit code.
+         */
+        public final String verdict;
+        /** True when this run was terminated early by an {@code abortOnFail} threshold breach. */
+        public final boolean abortedByThreshold;
+        /** Per-threshold results behind the {@link #verdict} (empty when no thresholds / not evaluated). */
+        public final List<ThresholdResult> thresholdResults;
 
         public LoadScenarioStatus(String name, LoadScenarioState state, long elapsedMillis, int currentVus,
                                   long requestsSent, long succeeded, long failed,
-                                  long p50Millis, long p95Millis, long p99Millis,
+                                  long p50Millis, long p95Millis, long p99Millis, long p999Millis,
+                                  long droppedIterations,
                                   String runId, long startedAtEpochMillis, Long endedAtEpochMillis,
                                   Map<String, String> labels, LoadScenario scenario,
                                   int stageIndex, String stageType, double currentTarget,
-                                  long startDelayMillis) {
+                                  long startDelayMillis,
+                                  String verdict, boolean abortedByThreshold,
+                                  List<ThresholdResult> thresholdResults) {
             this.name = name;
             this.state = state;
             this.elapsedMillis = elapsedMillis;
@@ -1214,6 +1809,8 @@ public class LoadScenarioOrchestrator {
             this.p50Millis = p50Millis;
             this.p95Millis = p95Millis;
             this.p99Millis = p99Millis;
+            this.p999Millis = p999Millis;
+            this.droppedIterations = droppedIterations;
             this.runId = runId;
             this.startedAtEpochMillis = startedAtEpochMillis;
             this.endedAtEpochMillis = endedAtEpochMillis;
@@ -1223,6 +1820,9 @@ public class LoadScenarioOrchestrator {
             this.stageType = stageType;
             this.currentTarget = currentTarget;
             this.startDelayMillis = startDelayMillis;
+            this.verdict = verdict;
+            this.abortedByThreshold = abortedByThreshold;
+            this.thresholdResults = thresholdResults != null ? thresholdResults : Collections.emptyList();
         }
     }
 }

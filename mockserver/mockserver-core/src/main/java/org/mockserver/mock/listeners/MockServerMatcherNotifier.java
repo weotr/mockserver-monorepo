@@ -5,7 +5,7 @@ import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 import org.mockserver.scheduler.Scheduler;
 
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
@@ -14,8 +14,13 @@ import java.util.Objects;
  */
 public class MockServerMatcherNotifier extends ObjectWithReflectiveEqualsHashCodeToString {
 
+    private static final MockServerMatcherListener[] EMPTY_LISTENERS = new MockServerMatcherListener[0];
+
     private boolean listenerAdded = false;
-    private final List<MockServerMatcherListener> listeners = Collections.synchronizedList(new ArrayList<>());
+    // copy-on-write listener snapshot: the data-plane notify path reads this single volatile with
+    // zero allocation/locking; register/unregister rebuild the array under a lock (rare control-plane
+    // events). Mirrors CopyOnWriteArrayList semantics with a plain array for the cheapest read.
+    private volatile MockServerMatcherListener[] listeners = EMPTY_LISTENERS;
     private final Scheduler scheduler;
 
     public MockServerMatcherNotifier(Scheduler scheduler) {
@@ -23,20 +28,30 @@ public class MockServerMatcherNotifier extends ObjectWithReflectiveEqualsHashCod
     }
 
     protected void notifyListeners(final RequestMatchers notifier, Cause cause) {
-        if (listenerAdded && !listeners.isEmpty()) {
-            for (MockServerMatcherListener listener : listeners.toArray(new MockServerMatcherListener[0])) {
+        if (listenerAdded) {
+            for (MockServerMatcherListener listener : listeners) {
                 scheduler.submit(() -> listener.updated(notifier, cause));
             }
         }
     }
 
-    public void registerListener(MockServerMatcherListener listener) {
-        listeners.add(listener);
+    public synchronized void registerListener(MockServerMatcherListener listener) {
+        MockServerMatcherListener[] current = listeners;
+        MockServerMatcherListener[] updated = Arrays.copyOf(current, current.length + 1);
+        updated[current.length] = listener;
+        listeners = updated;
         listenerAdded = true;
     }
 
-    public void unregisterListener(MockServerMatcherListener listener) {
-        listeners.remove(listener);
+    public synchronized void unregisterListener(MockServerMatcherListener listener) {
+        MockServerMatcherListener[] current = listeners;
+        List<MockServerMatcherListener> remaining = new ArrayList<>(current.length);
+        for (MockServerMatcherListener existing : current) {
+            if (existing != listener) {
+                remaining.add(existing);
+            }
+        }
+        listeners = remaining.toArray(EMPTY_LISTENERS);
     }
 
     public static class Cause {

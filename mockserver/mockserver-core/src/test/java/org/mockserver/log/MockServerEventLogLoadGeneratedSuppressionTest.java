@@ -24,10 +24,12 @@ import static org.mockserver.model.HttpRequest.request;
 
 /**
  * Verifies that {@link MockServerEventLog} keeps the server's own load-generation traffic out of the
- * bounded event log: any entry whose request carries {@link MockServerEventLog#LOAD_GENERATED_HEADER}
- * (set by {@link org.mockserver.mock.action.http.LoadScenarioOrchestrator}) is dropped on {@code add},
- * so a running load scenario cannot flood the log and evict real / LLM traffic. Uses the synchronous
- * processing path so {@code size()} and retrieval are deterministic without a drain.
+ * bounded event log: any entry whose request carries the in-process load-generation marker
+ * ({@link org.mockserver.model.HttpRequest#setLoadGenerated(boolean)}, set by
+ * {@link org.mockserver.mock.action.http.LoadScenarioOrchestrator}) is dropped on {@code add}, so a
+ * running load scenario cannot flood the log and evict real / LLM traffic. The marker is in-process
+ * only, never a wire header, so it cannot reach an upstream target. Uses the synchronous processing
+ * path so {@code size()} and retrieval are deterministic without a drain.
  */
 public class MockServerEventLogLoadGeneratedSuppressionTest {
 
@@ -68,7 +70,7 @@ public class MockServerEventLogLoadGeneratedSuppressionTest {
         // when - a normal request and a load-generated request are added
         mockServerEventLog.add(new LogEntry().setType(RECEIVED_REQUEST).setHttpRequest(request("/real")));
         mockServerEventLog.add(new LogEntry().setType(RECEIVED_REQUEST).setHttpRequest(
-            request("/load").withHeader(MockServerEventLog.LOAD_GENERATED_HEADER, "run-1")));
+            request("/load").setLoadGenerated(true)));
 
         // then - only the real request was recorded; the load-generated one was suppressed
         assertThat(mockServerEventLog.size(), is(1));
@@ -79,9 +81,9 @@ public class MockServerEventLogLoadGeneratedSuppressionTest {
     public void shouldSuppressEveryLogTypeForLoadGeneratedRequests() {
         // when - both a received-request and an expectation-response entry reference a load request
         mockServerEventLog.add(new LogEntry().setType(RECEIVED_REQUEST).setHttpRequest(
-            request("/load").withHeader(MockServerEventLog.LOAD_GENERATED_HEADER, "run-1")));
+            request("/load").setLoadGenerated(true)));
         mockServerEventLog.add(new LogEntry().setType(EXPECTATION_RESPONSE).setHttpRequest(
-            request("/load").withHeader(MockServerEventLog.LOAD_GENERATED_HEADER, "run-1")));
+            request("/load").setLoadGenerated(true)));
 
         // then - nothing was recorded
         assertThat(mockServerEventLog.size(), is(0));
@@ -92,7 +94,7 @@ public class MockServerEventLogLoadGeneratedSuppressionTest {
         // when - interleaved real and load traffic
         mockServerEventLog.add(new LogEntry().setType(RECEIVED_REQUEST).setHttpRequest(request("/a")));
         mockServerEventLog.add(new LogEntry().setType(RECEIVED_REQUEST).setHttpRequest(
-            request("/load").withHeader(MockServerEventLog.LOAD_GENERATED_HEADER, "run-1")));
+            request("/load").setLoadGenerated(true)));
         mockServerEventLog.add(new LogEntry().setType(RECEIVED_REQUEST).setHttpRequest(request("/b")));
 
         // then - only the two real requests survive, in order

@@ -213,6 +213,16 @@ public class AnthropicCodec implements ProviderCodec {
             }
 
             List<ParsedMessage> parsed = new ArrayList<>();
+
+            // Anthropic carries the system prompt in a top-level "system" field (string or an
+            // array of text content blocks), NOT as a message in the "messages" array. Map it to a
+            // leading SYSTEM message so system-prompt-aware consumers (conversation matching,
+            // optimisation signals) see it the same way they do for OpenAI-shaped traffic.
+            String systemText = systemPromptText(root.get("system"));
+            if (!systemText.isEmpty()) {
+                parsed.add(new ParsedMessage(ParsedMessage.Role.SYSTEM, systemText, null, null, null));
+            }
+
             for (JsonNode msgNode : messagesNode) {
                 String rawRole = msgNode.has("role") ? msgNode.get("role").asText("") : "";
                 JsonNode contentNode = msgNode.get("content");
@@ -303,6 +313,30 @@ public class AnthropicCodec implements ProviderCodec {
         } catch (Exception e) {
             return ParsedConversation.empty();
         }
+    }
+
+    /**
+     * Extracts the system prompt text from the Anthropic top-level "system" field, which may be a
+     * plain string or an array of content blocks ({@code [{"type":"text","text":"..."}]}). Text from
+     * the blocks is concatenated; non-text blocks are ignored. Returns "" when absent or empty.
+     */
+    private static String systemPromptText(JsonNode systemNode) {
+        if (systemNode == null || systemNode.isNull()) {
+            return "";
+        }
+        if (systemNode.isTextual()) {
+            return systemNode.asText("");
+        }
+        if (systemNode.isArray()) {
+            StringBuilder builder = new StringBuilder();
+            for (JsonNode block : systemNode) {
+                if ("text".equals(block.path("type").asText(""))) {
+                    builder.append(block.path("text").asText(""));
+                }
+            }
+            return builder.toString();
+        }
+        return "";
     }
 
     private static ParsedMessage.Role mapRole(String rawRole) {

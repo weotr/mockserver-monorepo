@@ -47,7 +47,7 @@ describe('RequestPanel', () => {
       />,
     );
 
-    const searchInput = screen.getByPlaceholderText('Search...');
+    const searchInput = screen.getByLabelText('Search');
     await user.type(searchInput, 'POST');
 
     expect(onChange).toHaveBeenCalled();

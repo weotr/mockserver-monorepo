@@ -1,6 +1,6 @@
 ---
 title: AsyncAPI Broker Mocking
-description: Mock Kafka and MQTT brokers using AsyncAPI 2.x/3.x specs — publish examples, subscribe to record messages, validate against JSON Schema, all via REST or Java API.
+description: Mock Kafka, MQTT, and AMQP/RabbitMQ brokers using AsyncAPI 2.x/3.x specs — publish examples, subscribe to record messages, validate against JSON Schema, all via REST or Java API.
 shortTitle: AsyncAPI Messaging
 layout: page
 pageOrder: 2
@@ -12,7 +12,7 @@ sitemap:
   lastmod: 2026-06-01T14:00:00+00:00
 ---
 
-<p>MockServer's <strong>AsyncAPI broker mocking</strong> lets you drive Kafka and MQTT brokers with realistic example messages, all derived directly from an <a target="_blank" href="https://www.asyncapi.com/" rel="noopener noreferrer">AsyncAPI</a> 2.x or 3.x specification. MockServer can also <strong>subscribe</strong> to broker channels to record incoming messages for verification &mdash; mirroring how HTTP requests are recorded.</p>
+<p>MockServer's <strong>AsyncAPI broker mocking</strong> lets you drive Kafka, MQTT, and AMQP/RabbitMQ brokers with realistic example messages, all derived directly from an <a target="_blank" href="https://www.asyncapi.com/" rel="noopener noreferrer">AsyncAPI</a> 2.x or 3.x specification. For Kafka and MQTT, MockServer can also <strong>subscribe</strong> to broker channels to record incoming messages for verification &mdash; mirroring how HTTP requests are recorded. AMQP/RabbitMQ is currently <strong>publish-only</strong> (consumer/subscriber mocking is deferred).</p>
 
 <a id="asyncapi_quickstart" class="anchor" href="#asyncapi_quickstart">&nbsp;</a>
 
@@ -66,6 +66,8 @@ sitemap:
     "count": { "atLeast": 1 }
   }'
 # 202 Accepted = verification passed</code></pre>
+
+<p><strong>Note:</strong> <span class="inline_code">consume: true</span> tells MockServer to subscribe and record messages that <em>arrive</em> on the channel &mdash; it does <strong>not</strong> record MockServer's own published examples. To make the verify step above pass against recorded/consumed messages, have another producer send to the <span class="inline_code">orders</span> channel. If you only want to confirm MockServer published its example, you can drop <span class="inline_code">consume</span> from this quickstart.</p>
 
 <p>See the AsyncAPI examples in the <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/bruno/asyncapi" rel="noopener noreferrer">examples/bruno/asyncapi</a> folder. The full REST API reference, schema validation details, and MQTT configuration follow below.</p>
 
@@ -128,6 +130,7 @@ sitemap:
         <tr><td><span class="inline_code">kafkaBootstrapServers</span></td><td>string</td><td>null</td><td>Kafka bootstrap servers (e.g. <span class="inline_code">localhost:9092</span>)</td></tr>
         <tr><td><span class="inline_code">kafkaGroupId</span></td><td>string</td><td><span class="inline_code">mockserver-async-consumer</span></td><td>Consumer group ID for Kafka subscribers</td></tr>
         <tr><td><span class="inline_code">mqttBrokerUrl</span></td><td>string</td><td>null</td><td>MQTT broker URL (e.g. <span class="inline_code">tcp://localhost:1883</span>)</td></tr>
+        <tr><td><span class="inline_code">amqpUri</span></td><td>string</td><td>null</td><td>AMQP/RabbitMQ connection URI (e.g. <span class="inline_code">amqp://guest:guest@localhost:5672</span>). Publish-only. Channels publish to the binding's exchange using the channel name (or an explicit <span class="inline_code">routingKey</span>) as the routing key; with no exchange named, the default exchange is used.</td></tr>
         <tr><td><span class="inline_code">mqttClientId</span></td><td>string</td><td><span class="inline_code">mockserver-mqtt-pub</span> / <span class="inline_code">mockserver-mqtt-sub</span></td><td>MQTT client ID prefix. When set, <span class="inline_code">-pub</span> and <span class="inline_code">-sub</span> suffixes are appended for the publisher and subscriber connections respectively. When unset, the defaults <span class="inline_code">mockserver-mqtt-pub</span> (publisher) and <span class="inline_code">mockserver-mqtt-sub</span> (subscriber) are used.</td></tr>
         <tr><td><span class="inline_code">mqttQos</span></td><td>int</td><td>1</td><td>MQTT QoS level (0, 1, or 2)</td></tr>
         <tr><td><span class="inline_code">publishOnLoad</span></td><td>boolean</td><td>true</td><td>Publish example messages immediately when spec is loaded</td></tr>
@@ -331,6 +334,12 @@ subscriber.close();</code></pre>
             <td><span class="inline_code">MqttMessageSubscriber</span></td>
             <td>QoS 0/1/2, binary payloads</td>
         </tr>
+        <tr>
+            <td>AMQP / RabbitMQ</td>
+            <td><span class="inline_code">AmqpMessagePublisher</span></td>
+            <td><em>publish-only</em> &mdash; consumer/subscriber mocking is deferred</td>
+            <td>Exchange and queue bindings (<span class="inline_code">exchange.name</span>/<span class="inline_code">type</span>/<span class="inline_code">durable</span>, <span class="inline_code">queue.name</span>/<span class="inline_code">durable</span>, explicit <span class="inline_code">routingKey</span>); idempotent exchange declaration</td>
+        </tr>
     </tbody>
 </table>
 
@@ -364,6 +373,13 @@ subscriber.close();</code></pre>
             <td>string</td>
             <td><span class="inline_code">""</span> (unset)</td>
             <td>Default MQTT broker URL used when the per-request <span class="inline_code">brokerConfig</span> does not include <span class="inline_code">mqttBrokerUrl</span>.</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">mockserver.asyncAmqpUri</span></td>
+            <td><span class="inline_code">MOCKSERVER_ASYNC_AMQP_URI</span></td>
+            <td>string</td>
+            <td><span class="inline_code">""</span> (unset)</td>
+            <td>Default AMQP/RabbitMQ connection URI used when the per-request <span class="inline_code">brokerConfig</span> does not include <span class="inline_code">amqpUri</span>. Publish-only.</td>
         </tr>
         <tr>
             <td><span class="inline_code">mockserver.asyncRecordedMessageMaxEntries</span></td>

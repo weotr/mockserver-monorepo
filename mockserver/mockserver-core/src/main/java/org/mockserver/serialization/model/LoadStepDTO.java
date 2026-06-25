@@ -1,10 +1,13 @@
 package org.mockserver.serialization.model;
 
+import org.mockserver.load.LoadCapture;
 import org.mockserver.load.LoadStep;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -16,6 +19,8 @@ public class LoadStepDTO extends ObjectWithReflectiveEqualsHashCodeToString impl
     private DelayDTO thinkTime;
     private String name;
     private Map<String, String> labels;
+    private List<LoadCapture> captures;
+    private Double weight;
 
     public LoadStepDTO(LoadStep step) {
         if (step != null) {
@@ -29,6 +34,10 @@ public class LoadStepDTO extends ObjectWithReflectiveEqualsHashCodeToString impl
             if (step.getLabels() != null && !step.getLabels().isEmpty()) {
                 labels = new LinkedHashMap<>(step.getLabels());
             }
+            if (step.getCaptures() != null && !step.getCaptures().isEmpty()) {
+                captures = new ArrayList<>(step.getCaptures());
+            }
+            weight = step.getWeight();
         }
     }
 
@@ -49,6 +58,12 @@ public class LoadStepDTO extends ObjectWithReflectiveEqualsHashCodeToString impl
         }
         if (labels != null && !labels.isEmpty()) {
             step.withLabels(labels);
+        }
+        if (captures != null && !captures.isEmpty()) {
+            step.withCaptures(captures);
+        }
+        if (weight != null) {
+            step.withWeight(weight);
         }
         return step;
     }
@@ -86,6 +101,24 @@ public class LoadStepDTO extends ObjectWithReflectiveEqualsHashCodeToString impl
 
     public LoadStepDTO setLabels(Map<String, String> labels) {
         this.labels = labels;
+        return this;
+    }
+
+    public List<LoadCapture> getCaptures() {
+        return captures;
+    }
+
+    public LoadStepDTO setCaptures(List<LoadCapture> captures) {
+        this.captures = captures;
+        return this;
+    }
+
+    public Double getWeight() {
+        return weight;
+    }
+
+    public LoadStepDTO setWeight(Double weight) {
+        this.weight = weight;
         return this;
     }
 }

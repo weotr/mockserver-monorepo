@@ -50,7 +50,7 @@ import static org.mockserver.log.model.LogEntryMessages.TEMPLATE_GENERATED_MESSA
 @SuppressWarnings("FieldMayBeFinal")
 public class VelocityTemplateEngine implements TemplateEngine {
 
-    private static ObjectMapper objectMapper;
+    private static final ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
     private final MockServerLogger mockServerLogger;
     private final Configuration configuration;
     private HttpTemplateOutputDeserializer httpTemplateOutputDeserializer;
@@ -67,7 +67,7 @@ public class VelocityTemplateEngine implements TemplateEngine {
     // render through Velocity's context chaining, so the per-render work drops to a couple of thin context
     // wrappers with no 26-entry copy.
     //
-    // The Velocity TOOLS ($json, $xml, $import, $math, ...) are NOT hoisted: $json/$xml/$import are
+    // The Velocity TOOLS ($json, $xml, $math, ...) are NOT hoisted: $json/$xml are
     // configured request-scoped and hold per-request parse state (e.g. $json.parse($request.body)), so a
     // fresh ToolContext MUST be created per render — sharing one across render threads cross-contaminates
     // request state (guarded by VelocityTemplateEngineTest.shouldUseRequestScopeToolsInThreadSafeWay).
@@ -117,9 +117,6 @@ public class VelocityTemplateEngine implements TemplateEngine {
         this.mockServerLogger = mockServerLogger;
         this.configuration = configuration;
         this.httpTemplateOutputDeserializer = new HttpTemplateOutputDeserializer(mockServerLogger);
-        if (objectMapper == null) {
-            objectMapper = ObjectMapperFactory.createObjectMapper();
-        }
         // unique per engine instance so concurrently-constructed engines never share a repository
         this.templateRepositoryName = "mockserver-velocity-templates-" + ENGINE_INSTANCE_COUNTER.incrementAndGet();
         velocityEngine = buildVelocityEngine(configuration);
@@ -299,9 +296,9 @@ public class VelocityTemplateEngine implements TemplateEngine {
         ToolConfiguration xmlTool = new ToolConfiguration();
         xmlTool.setClass(org.apache.velocity.tools.generic.XmlTool.class.getName());
         requestToolboxConfiguration.addTool(xmlTool);
-        ToolConfiguration importTool = new ToolConfiguration();
-        importTool.setClass(org.apache.velocity.tools.generic.ImportTool.class.getName());
-        requestToolboxConfiguration.addTool(importTool);
+        // SECURITY: ImportTool ($import.read(...)) is deliberately NOT registered — it lets a template
+        // fetch an arbitrary URL or read a local file, which is an SSRF / local-file-read vector. Omit it
+        // so Velocity templates cannot reach the network or filesystem through $import.
 
         XmlFactoryConfiguration xmlFactoryConfiguration = new XmlFactoryConfiguration();
         xmlFactoryConfiguration.addToolbox(applicationToolboxConfiguration);
@@ -405,7 +402,7 @@ public class VelocityTemplateEngine implements TemplateEngine {
      * binding into a single flat context.
      */
     private VelocityContext newRenderContext(HttpRequest request) {
-        // fresh per render: $json/$xml/$import are request-scoped and hold per-request parse state
+        // fresh per render: $json/$xml are request-scoped and hold per-request parse state
         VelocityContext functionsLayer = new VelocityContext(sharedFunctionsAndHelpers, toolManager.createContext());
         VelocityContext context = new VelocityContext(functionsLayer);
         context.put("request", new HttpRequestTemplateObject(request));

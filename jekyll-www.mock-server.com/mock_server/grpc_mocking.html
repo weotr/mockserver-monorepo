@@ -16,19 +16,23 @@ sitemap:
 
 <h2>See it in action</h2>
 
-<p>MockServer converts gRPC (protobuf over HTTP/2) to JSON internally so you can mock gRPC services with the same expectation format used for REST. Here is the minimal end-to-end flow:</p>
+<p>MockServer converts gRPC (protobuf over HTTP/2) to JSON internally so you can mock gRPC services with the same expectation format used for REST. It also handles the rest of a real gRPC stack out of the box: <a href="#grpc_server_reflection">server reflection</a> (so <span class="inline_code">grpcurl</span> / <span class="inline_code">grpcui</span> can discover your services), <a href="#grpc_web_link">gRPC-Web</a> for browser clients, and the built-in <a href="#grpc_health_check">gRPC Health Checking Protocol</a> (which works even before any descriptor is loaded). Here is the minimal end-to-end flow:</p>
 
 <ol>
     <li><strong>Compile your <span class="inline_code">.proto</span> to a descriptor set</strong> and mount it in Docker (or point at the directory with <span class="inline_code">MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY</span>):</li>
 </ol>
 
-<pre class="prettyprint code"><code class="code">protoc --descriptor_set_out=service.dsc --include_imports service.proto
+<pre class="prettyprint code"><code class="code">mkdir -p descriptors
+protoc --descriptor_set_out=descriptors/service.dsc --include_imports service.proto
 
+# mount the whole descriptors directory and point MockServer at it
 docker run -d --rm \
   -p 1080:1080 \
-  -v $(pwd)/service.dsc:/protos/service.dsc \
-  -e MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY=/protos \
+  -v $(pwd)/descriptors:/descriptors \
+  -e MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY=/descriptors \
   mockserver/mockserver</code></pre>
+
+<p><span class="inline_code">MOCKSERVER_GRPC_DESCRIPTOR_DIRECTORY</span> loads compiled <span class="inline_code">.dsc</span> descriptor sets (as above). To let MockServer compile raw <span class="inline_code">.proto</span> files at startup instead, mount the proto directory and use <span class="inline_code">MOCKSERVER_GRPC_PROTO_DIRECTORY</span>. See <a href="#loading_proto_descriptors">Loading proto descriptors</a> below for all three loading options.</p>
 
 <ol start="2">
     <li><strong>Create a gRPC expectation</strong> (MockServer adds <span class="inline_code">x-grpc-service</span> and <span class="inline_code">x-grpc-method</span> headers automatically; match on them to target a specific RPC):</li>

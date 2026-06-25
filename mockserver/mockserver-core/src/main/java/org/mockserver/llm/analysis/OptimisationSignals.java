@@ -1,14 +1,21 @@
 package org.mockserver.llm.analysis;
 
 import org.mockserver.llm.analysis.LlmOptimisationReport.Call;
+import org.mockserver.llm.analysis.LlmOptimisationReport.Fix;
 import org.mockserver.llm.analysis.LlmOptimisationReport.Signal;
 import org.mockserver.llm.analysis.LlmOptimisationReport.ToolCall;
+import org.mockserver.llm.cost.LlmPricing;
+import org.mockserver.model.Provider;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Deterministic optimisation-signal detectors over the assembled calls of an
@@ -37,20 +44,71 @@ public class OptimisationSignals {
     /** Output tokens this many times the median (or more) are "bloated". */
     static final double OUTPUT_BLOAT_MEDIAN_MULTIPLE = 3.0;
 
+    /** Below this cache hit ratio, a repeated cacheable prefix is under-cached. */
+    static final double CACHE_HIT_TARGET = 0.5;
+
+    /** Discount applied to cacheable-input savings (cached reads are not free). */
+    static final double CACHE_DISCOUNT = 0.9;
+
+    /** A call producing fewer than this many output tokens is "trivial" work. */
+    static final long TRIVIAL_OUTPUT_TOKENS = 256;
+
+    /** MODEL_OVERSPEND fires only above this saving fraction. */
+    static final double MODEL_OVERSPEND_MIN_SAVING_FRACTION = 0.30;
+
+    /** UNUSED_TOOL_SCHEMA escalates to MEDIUM at/above this many wasted tokens. */
+    static final long UNUSED_TOOL_MEDIUM_TOKEN_THRESHOLD = 1_000;
+
     public List<Signal> detect(List<Call> calls) {
+        return detect(calls, Collections.emptyList(), 0L);
+    }
+
+    public List<Signal> detect(List<Call> calls, List<String> providers, long cachedInputTokens) {
         List<Signal> signals = new ArrayList<>();
         if (calls == null || calls.isEmpty()) {
             return signals;
         }
+        int callCount = calls.size();
+        List<String> providerList = providers != null ? providers : Collections.emptyList();
         addIfPresent(signals, repeatedSystemPrompt(calls));
         addIfPresent(signals, largeStaticContextResent(calls));
         addIfPresent(signals, deterministicToolCall(calls));
         addIfPresent(signals, oversizedToolResult(calls));
         addIfPresent(signals, outputTokenBloat(calls));
         addIfPresent(signals, duplicateConsecutiveCall(calls));
-        // HIGH first, then MEDIUM, then LOW; stable within a severity (insertion order).
-        signals.sort(Comparator.comparingInt(s -> severityRank(s.getSeverity())));
+        addIfPresent(signals, lowCacheHitRate(calls, providerList, cachedInputTokens));
+        addIfPresent(signals, modelOverspend(calls));
+        addIfPresent(signals, unusedToolSchema(calls));
+
+        // Populate fix + urgency on every signal.
+        for (Signal signal : signals) {
+            signal.setUrgency(urgency(signal, callCount));
+            if (signal.getFix() == null) {
+                signal.setFix(fixFor(signal, calls, providerList));
+            }
+        }
+
+        // Sort by urgency descending; tie-break by severity (HIGH<MEDIUM<LOW) then
+        // insertion order. A stable sort preserves insertion order on full ties.
+        signals.sort(Comparator
+            .comparingDouble((Signal s) -> s.getUrgency()).reversed()
+            .thenComparingInt(s -> severityRank(s.getSeverity())));
         return signals;
+    }
+
+    private static double urgency(Signal signal, int callCount) {
+        double severityWeight;
+        if ("HIGH".equals(signal.getSeverity())) {
+            severityWeight = 1.0;
+        } else if ("MEDIUM".equals(signal.getSeverity())) {
+            severityWeight = 0.6;
+        } else {
+            severityWeight = 0.3;
+        }
+        double callShare = callCount > 0
+            ? Math.min(1.0, (double) signal.getAffectedCalls().size() / callCount)
+            : 0.0;
+        return LlmOptimisationReportBuilder.round4(severityWeight * callShare);
     }
 
     private static void addIfPresent(List<Signal> signals, Signal signal) {
@@ -298,12 +356,221 @@ public class OptimisationSignals {
             .setRecommendation("De-duplicate or cache identical requests, and only retry on genuine transient errors with backoff.");
     }
 
-    private static boolean sameish(Call a, Call b) {
+    /**
+     * Near-identical request shape: same path, model, message count, system-prompt
+     * fingerprint and input-token count. Package-private and shared with
+     * {@link LlmOptimisationReportBuilder}'s windowed retry counting so the two stay
+     * in lock-step (one definition, two callers).
+     */
+    static boolean sameish(Call a, Call b) {
         return java.util.Objects.equals(a.getPath(), b.getPath())
             && java.util.Objects.equals(a.getModel(), b.getModel())
             && a.getMessageCount() == b.getMessageCount()
             && java.util.Objects.equals(a.getSystemPromptFingerprint(), b.getSystemPromptFingerprint())
             && a.getInputTokens() == b.getInputTokens();
+    }
+
+    // --- LOW_CACHE_HIT_RATE ---
+
+    private Signal lowCacheHitRate(List<Call> calls, List<String> providers, long cachedInputTokens) {
+        long totalInput = 0;
+        for (Call call : calls) {
+            totalInput += call.getInputTokens();
+        }
+        double cacheHitRatio = totalInput > 0 ? (double) cachedInputTokens / totalInput : 0.0;
+        if (cacheHitRatio >= CACHE_HIT_TARGET) {
+            return null;
+        }
+        // Group calls by repeated non-null system-prompt fingerprint (a cacheable prefix).
+        Map<String, List<Integer>> byFingerprint = new LinkedHashMap<>();
+        Map<String, Long> tokensByFingerprint = new LinkedHashMap<>();
+        for (Call call : calls) {
+            String fp = call.getSystemPromptFingerprint();
+            if (fp == null) {
+                continue;
+            }
+            byFingerprint.computeIfAbsent(fp, k -> new ArrayList<>()).add(call.getIndex());
+            tokensByFingerprint.put(fp, call.getSystemPromptTokens());
+        }
+        long cacheableRepeatedTokens = 0;
+        Set<Integer> affectedSet = new TreeSet<>();
+        boolean repeatedExists = false;
+        for (Map.Entry<String, List<Integer>> e : byFingerprint.entrySet()) {
+            int repeats = e.getValue().size();
+            if (repeats < 2) {
+                continue;
+            }
+            repeatedExists = true;
+            cacheableRepeatedTokens += tokensByFingerprint.get(e.getKey()) * (repeats - 1L);
+            affectedSet.addAll(e.getValue());
+        }
+        if (!repeatedExists) {
+            return null;
+        }
+        long notYetCached = Math.max(0, cacheableRepeatedTokens - cachedInputTokens);
+        if (notYetCached <= 0) {
+            return null;
+        }
+        List<Integer> affected = new ArrayList<>(affectedSet);
+        Double saving = savingForWastedInput(calls, affected, notYetCached);
+        if (saving != null) {
+            saving = LlmOptimisationReportBuilder.round4(saving * CACHE_DISCOUNT);
+        }
+        boolean high = notYetCached >= LARGE_CONTEXT_TOKEN_THRESHOLD && cacheHitRatio < 0.2;
+        Signal signal = new Signal()
+            .setId("LOW_CACHE_HIT_RATE")
+            .setSeverity(high ? "HIGH" : "MEDIUM")
+            .setTitle("Low cache hit rate (" + formatPercent(cacheHitRatio) + ") on a repeated "
+                + formatTokens(notYetCached) + "-token cacheable prefix")
+            .setDetail("A cacheable prompt prefix is resent across calls but only "
+                + formatPercent(cacheHitRatio) + " of input tokens were served from cache; "
+                + formatTokens(notYetCached) + " repeated tokens are not yet cached.")
+            .setAffectedCalls(affected)
+            .setEstimatedWastedInputTokens(notYetCached)
+            .setEstimatedSavingUsd(saving)
+            .setRecommendation("Enable prompt caching for the repeated static prefix so it is billed once, not on every call.");
+        signal.setFix(cacheFix(providers));
+        return signal;
+    }
+
+    // --- MODEL_OVERSPEND ---
+
+    private Signal modelOverspend(List<Call> calls) {
+        // Group trivial-work candidate calls by model.
+        Map<String, List<Integer>> candidatesByModel = new LinkedHashMap<>();
+        Map<String, Double> costByModel = new LinkedHashMap<>();
+        Map<String, Provider> providerByModel = new LinkedHashMap<>();
+        Map<String, Double> savingFractionByModel = new LinkedHashMap<>();
+        Map<String, LlmPricing.ModelOption> cheapestByModel = new LinkedHashMap<>();
+        for (Call call : calls) {
+            boolean trivial = call.getOutputTokens() < TRIVIAL_OUTPUT_TOKENS
+                && call.getToolCalls().isEmpty()
+                && call.getReasoningTokens() == 0;
+            if (!trivial) {
+                continue;
+            }
+            Provider provider = parseProvider(call.getProvider());
+            if (provider == null || call.getModel() == null) {
+                continue;
+            }
+            Double currentBlended = LlmPricing.blendedPerMillion(provider, call.getModel());
+            LlmPricing.ModelOption cheapest = LlmPricing.cheapestModel(provider);
+            if (currentBlended == null || cheapest == null) {
+                continue;
+            }
+            if (currentBlended <= cheapest.getBlendedPerMillion()) {
+                continue; // already on (or below) the cheapest model
+            }
+            String model = call.getModel();
+            candidatesByModel.computeIfAbsent(model, k -> new ArrayList<>()).add(call.getIndex());
+            costByModel.merge(model, call.getEstimatedCostUsd(), Double::sum);
+            providerByModel.put(model, provider);
+            cheapestByModel.put(model, cheapest);
+            savingFractionByModel.put(model,
+                clamp(1.0 - cheapest.getBlendedPerMillion() / currentBlended, 0.0, 1.0));
+        }
+        // Pick the model with the most candidate calls; tie -> highest affected cost.
+        String bestModel = null;
+        for (Map.Entry<String, List<Integer>> e : candidatesByModel.entrySet()) {
+            if (bestModel == null) {
+                bestModel = e.getKey();
+                continue;
+            }
+            int sizeCmp = Integer.compare(e.getValue().size(), candidatesByModel.get(bestModel).size());
+            if (sizeCmp > 0
+                || (sizeCmp == 0 && costByModel.get(e.getKey()) > costByModel.get(bestModel))) {
+                bestModel = e.getKey();
+            }
+        }
+        if (bestModel == null) {
+            return null;
+        }
+        List<Integer> affected = dedupeSorted(candidatesByModel.get(bestModel));
+        double savingFraction = savingFractionByModel.get(bestModel);
+        if (affected.size() < 2 || savingFraction <= MODEL_OVERSPEND_MIN_SAVING_FRACTION) {
+            return null;
+        }
+        double affectedCost = costByModel.get(bestModel);
+        double saving = LlmOptimisationReportBuilder.round4(affectedCost * savingFraction);
+        LlmPricing.ModelOption cheapest = cheapestByModel.get(bestModel);
+        int percent = (int) Math.round(savingFraction * 100);
+        String recommendation = "These " + affected.size() + " calls on `" + bestModel
+            + "` produced <256-token outputs with no tools or reasoning — a smaller model such as `"
+            + cheapest.getLabel() + "` would likely suffice at ~" + percent + "% lower cost.";
+        return new Signal()
+            .setId("MODEL_OVERSPEND")
+            .setSeverity("LOW")
+            .setTitle("Over-powered model on " + affected.size() + " trivial calls (`" + bestModel
+                + "` → `" + cheapest.getLabel() + "`)")
+            .setDetail(recommendation)
+            .setAffectedCalls(affected)
+            .setEstimatedWastedInputTokens(null)
+            .setEstimatedSavingUsd(saving)
+            .setRecommendation(recommendation);
+    }
+
+    // --- UNUSED_TOOL_SCHEMA ---
+
+    private Signal unusedToolSchema(List<Call> calls) {
+        // Tool names that were actually invoked anywhere in the session.
+        Set<String> invoked = new LinkedHashSet<>();
+        for (Call call : calls) {
+            for (ToolCall tc : call.getToolCalls()) {
+                if (tc.getName() != null) {
+                    invoked.add(tc.getName());
+                }
+            }
+        }
+        // Union of all defined tool names.
+        Set<String> definedUnion = new LinkedHashSet<>();
+        for (Call call : calls) {
+            definedUnion.addAll(call.getDefinedToolNames());
+        }
+        Set<String> unusedGlobal = new LinkedHashSet<>(definedUnion);
+        unusedGlobal.removeAll(invoked);
+        if (unusedGlobal.isEmpty()) {
+            return null;
+        }
+        List<Integer> affected = new ArrayList<>();
+        long totalWasted = 0;
+        for (Call call : calls) {
+            List<String> defined = call.getDefinedToolNames();
+            if (defined.isEmpty() || call.getDefinedToolTokens() <= 0) {
+                continue;
+            }
+            int unusedInCall = 0;
+            for (String name : defined) {
+                if (unusedGlobal.contains(name)) {
+                    unusedInCall++;
+                }
+            }
+            if (unusedInCall == 0) {
+                continue;
+            }
+            affected.add(call.getIndex());
+            totalWasted += Math.round(call.getDefinedToolTokens() * (double) unusedInCall / defined.size());
+        }
+        if (affected.size() < 2) {
+            return null;
+        }
+        affected = dedupeSorted(affected);
+        Double saving = savingForWastedInput(calls, affected, totalWasted);
+        List<String> unusedNames = new ArrayList<>(unusedGlobal);
+        List<String> shown = unusedNames.subList(0, Math.min(5, unusedNames.size()));
+        String recommendation = "Tools [" + String.join(", ", shown) + "] are defined on every request but"
+            + " never called — remove them from `tools` to stop re-sending ~" + formatTokens(totalWasted)
+            + " tokens of unused schema each call.";
+        return new Signal()
+            .setId("UNUSED_TOOL_SCHEMA")
+            .setSeverity(totalWasted >= UNUSED_TOOL_MEDIUM_TOKEN_THRESHOLD ? "MEDIUM" : "LOW")
+            .setTitle("Unused tool schema re-sent on " + affected.size() + " calls ("
+                + formatTokens(totalWasted) + " wasted tokens)")
+            .setDetail("Tool definitions [" + String.join(", ", shown) + "] are sent on every request but never"
+                + " invoked, so their schema is paid for as input on each call.")
+            .setAffectedCalls(affected)
+            .setEstimatedWastedInputTokens(totalWasted > 0 ? totalWasted : null)
+            .setEstimatedSavingUsd(saving)
+            .setRecommendation(recommendation);
     }
 
     // --- shared helpers ---
@@ -330,6 +597,100 @@ public class OptimisationSignals {
         }
         double fraction = Math.min(1.0, (double) wastedInputTokens / affectedInput);
         return LlmOptimisationReportBuilder.round4(affectedCost * fraction);
+    }
+
+    // --- fix builders ---
+
+    private static final String DOCS_BASE = "https://www.mock-server.com/mock_server/ai_optimisation.html";
+
+    /**
+     * Build the structured {@link Fix} for a signal by its id. The cache fix is
+     * provider-aware and supplied directly by the cache detector, so this covers
+     * the other (provider-agnostic) signals.
+     */
+    private Fix fixFor(Signal signal, List<Call> calls, List<String> providers) {
+        switch (signal.getId()) {
+            case "REPEATED_SYSTEM_PROMPT":
+                return cacheFix(providers);
+            case "LARGE_STATIC_CONTEXT_RESENT":
+                return new Fix()
+                    .setSummary("Cache or retrieve static context")
+                    .setAction("Move the large static context into a retrieval tool, or enable prompt caching so it is sent once, not on every turn.")
+                    .setDocsUrl(DOCS_BASE + "#repeated-context");
+            case "DETERMINISTIC_TOOL_CALL":
+                return new Fix()
+                    .setSummary("Replace tool with direct call")
+                    .setAction("Call the deterministic endpoint directly (HTTP or MCP) and feed the result back, instead of routing it through the model each time.")
+                    .setExampleExpectation("{\n  \"httpRequest\": { \"path\": \"/tool/lookup\" },\n  \"httpResponse\": { \"body\": { \"result\": \"...\" } }\n}")
+                    .setDocsUrl(DOCS_BASE + "#deterministic-tools");
+            case "OVERSIZED_TOOL_RESULT":
+                return new Fix()
+                    .setSummary("Trim tool output")
+                    .setAction("Summarise or project the tool result to the fields the model actually needs before returning it, so it is not re-sent in full on every turn.")
+                    .setDocsUrl(DOCS_BASE + "#oversized-tool-results");
+            case "OUTPUT_TOKEN_BLOAT":
+                return new Fix()
+                    .setSummary("Constrain output length")
+                    .setAction("Set max_tokens and a strict response_format / JSON schema so the model returns only what is required.")
+                    .setConfigSnippet("{\n  \"max_tokens\": 512,\n  \"response_format\": { \"type\": \"json_object\" }\n}")
+                    .setDocsUrl(DOCS_BASE + "#output-bloat");
+            case "DUPLICATE_CONSECUTIVE_CALL":
+                return new Fix()
+                    .setSummary("De-duplicate and back off retries")
+                    .setAction("Cache identical requests and only retry on genuine transient errors with exponential backoff.")
+                    .setDocsUrl(DOCS_BASE + "#duplicate-calls");
+            case "MODEL_OVERSPEND":
+                return new Fix()
+                    .setSummary("Use a smaller model")
+                    .setAction(signal.getRecommendation())
+                    .setDocsUrl(DOCS_BASE + "#model-overspend");
+            case "UNUSED_TOOL_SCHEMA":
+                return new Fix()
+                    .setSummary("Remove unused tools")
+                    .setAction(signal.getRecommendation())
+                    .setDocsUrl(DOCS_BASE + "#unused-tools");
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Provider-aware caching fix. Anthropic gets a concrete {@code cache_control}
+     * snippet; OpenAI/Gemini/Azure get automatic-prefix-caching advice with no
+     * snippet (caching is implicit there).
+     */
+    private static Fix cacheFix(List<String> providers) {
+        boolean anthropic = providers != null && providers.contains(Provider.ANTHROPIC.name());
+        if (anthropic) {
+            return new Fix()
+                .setSummary("Enable prompt caching")
+                .setAction("Add `cache_control:{type:ephemeral}` to the static system block so Anthropic serves the repeated prefix from cache.")
+                .setConfigSnippet("{\n  \"system\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"<static system prompt>\",\n      \"cache_control\": { \"type\": \"ephemeral\" }\n    }\n  ]\n}")
+                .setDocsUrl(DOCS_BASE + "#prompt-caching");
+        }
+        return new Fix()
+            .setSummary("Enable prompt caching")
+            .setAction("Automatic prefix caching — keep the static prefix byte-identical and first; do not interleave volatile content before it.")
+            .setDocsUrl(DOCS_BASE + "#prompt-caching");
+    }
+
+    private static Provider parseProvider(String name) {
+        if (name == null) {
+            return null;
+        }
+        try {
+            return Provider.valueOf(name);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static String formatPercent(double fraction) {
+        return Math.round(fraction * 100) + "%";
     }
 
     private static List<Integer> dedupeSorted(List<Integer> in) {

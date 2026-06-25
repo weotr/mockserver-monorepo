@@ -8,6 +8,8 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.examples.Example;
 import io.swagger.v3.oas.models.headers.Header;
 import io.swagger.v3.oas.models.media.ComposedSchema;
+import io.swagger.v3.oas.models.media.DateSchema;
+import io.swagger.v3.oas.models.media.DateTimeSchema;
 import io.swagger.v3.oas.models.media.MediaType;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.responses.ApiResponses;
@@ -25,6 +27,8 @@ import org.mockserver.openapi.examples.models.StringExample;
 import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.net.URI;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -371,7 +375,8 @@ public class OpenAPIConverter {
         }
         try {
             if (schema.getExample() != null) {
-                return resolveExampleRefs(ExampleBuilder.normalizeFlattenedExample(schema.getExample(), schema), openAPI);
+                Object example = ExampleBuilder.normalizeFlattenedExample(schema.getExample(), schema);
+                return resolveExampleRefs(normalizeTemporalExample(schema, example), openAPI);
             }
             if (schema instanceof ComposedSchema composedSchema) {
                 if (composedSchema.getAllOf() != null) {
@@ -444,6 +449,24 @@ public class OpenAPIConverter {
         } finally {
             activeStack.remove(schema);
         }
+    }
+
+    /**
+     * swagger-parser deserialises an inline {@code example} on a {@code format: date}/{@code date-time}
+     * schema into a {@link Date}/{@link java.time.OffsetDateTime}. Serialising those raw temporal objects
+     * with Jackson emits epoch-millis numbers instead of the ISO string the spec author wrote, so render
+     * them back to the schema's string form here (matching {@link ExampleBuilder}'s generated-sample path).
+     */
+    private static Object normalizeTemporalExample(Schema<?> schema, Object example) {
+        if (example instanceof Date && schema instanceof DateSchema) {
+            DateFormat format = new SimpleDateFormat("yyyy-MM-dd");
+            format.setTimeZone(TimeZone.getTimeZone("UTC"));
+            return format.format((Date) example);
+        }
+        if (example instanceof java.time.OffsetDateTime && schema instanceof DateTimeSchema) {
+            return example.toString();
+        }
+        return example;
     }
 
     public static boolean isJsonContentType(String contentType) {

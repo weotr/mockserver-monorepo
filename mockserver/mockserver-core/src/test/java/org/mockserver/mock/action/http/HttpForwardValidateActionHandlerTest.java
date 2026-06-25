@@ -68,6 +68,28 @@ public class HttpForwardValidateActionHandlerTest {
     }
 
     @Test
+    public void shouldBlockForwardValidateToPrivateTargetWhenSsrfGuardEnabled() {
+        // given - SSRF guard on, explicit forward target resolves to a loopback/private address
+        Configuration configuration = new Configuration().forwardProxyBlockPrivateNetworks(true);
+        HttpForwardValidateActionHandler guardedHandler = new HttpForwardValidateActionHandler(mock(MockServerLogger.class), configuration, mockHttpClient);
+
+        // when
+        HttpResponse response = guardedHandler.handle(
+            forwardValidate()
+                .withSpecUrlOrPayload("org/mockserver/openapi/openapi_petstore_example.json")
+                .withHost("127.0.0.1")
+                .withPort(8080)
+                .withValidateRequest(false)
+                .withValidateResponse(false),
+            request("/pets").withMethod("GET")
+        ).getHttpResponse().join();
+
+        // then - request is rejected with a bad gateway and never forwarded
+        assertThat(response.getStatusCode(), is(502));
+        verify(mockHttpClient, never()).sendRequest(any(HttpRequest.class), any());
+    }
+
+    @Test
     public void shouldReturnActionType() {
         assertThat(forwardValidate().getType().name(), is("FORWARD_VALIDATE"));
     }

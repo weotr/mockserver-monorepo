@@ -26,6 +26,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -467,6 +468,59 @@ public class JWTValidatorTest {
         assertThat(acceptedAlgorithms.contains(JWSAlgorithm.ES256), equalTo(true));
         assertThat(acceptedAlgorithms.contains(JWSAlgorithm.PS256), equalTo(true));
         assertThat(acceptedAlgorithms.contains(JWSAlgorithm.EdDSA), equalTo(true));
+    }
+
+    // --- Repeated / concurrent validation (shared-instance statelessness) ---
+
+    /**
+     * A single JWTValidator instance is shared across all concurrent control-plane requests.
+     * validate() must therefore be stateless: it must NOT re-configure the shared processor on
+     * every call. This drives many concurrent validations through one configured instance (mixing
+     * accepted and rejected tokens) and asserts every outcome is correct, so one thread's key policy
+     * / claims verifier can never overwrite another's mid-validation.
+     */
+    @Test
+    public void shouldValidateConcurrentlyOnSharedInstance() throws Exception {
+        // given
+        AsymmetricKeyPair keyPair = AsymmetricKeyGenerator.createAsymmetricKeyPair(AsymmetricKeyPairAlgorithm.RSA2048_SHA256);
+        JWKSource<SecurityContext> jwkSource = createJWKSource(keyPair);
+        JWTValidator validator = new JWTValidator(jwkSource).withExpectedAudience("my-audience");
+        JWTGenerator generator = new JWTGenerator(keyPair);
+        String validJwt = generator.signJWT(ImmutableMap.of(
+            "exp", Clock.systemUTC().instant().plus(Duration.ofHours(1)).getEpochSecond(),
+            "iat", Clock.systemUTC().instant().minus(Duration.ofMinutes(5)).getEpochSecond(),
+            "sub", "test-subject",
+            "aud", "my-audience"
+        ));
+        String wrongAudienceJwt = generator.signJWT(ImmutableMap.of(
+            "exp", Clock.systemUTC().instant().plus(Duration.ofHours(1)).getEpochSecond(),
+            "iat", Clock.systemUTC().instant().minus(Duration.ofMinutes(5)).getEpochSecond(),
+            "sub", "test-subject",
+            "aud", "wrong-audience"
+        ));
+
+        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+        try {
+            List<java.util.concurrent.Future<Boolean>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < 200; i++) {
+                boolean expectValid = (i % 2 == 0);
+                String jwt = expectValid ? validJwt : wrongAudienceJwt;
+                futures.add(executor.submit(() -> {
+                    try {
+                        validator.validate(jwt);
+                        return true;
+                    } catch (AuthenticationException exception) {
+                        return false;
+                    }
+                }));
+            }
+            // then - every outcome matches the token submitted (no cross-contamination)
+            for (int i = 0; i < futures.size(); i++) {
+                assertThat("validation outcome for request " + i, futures.get(i).get(), equalTo(i % 2 == 0));
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     // --- Helper methods ---

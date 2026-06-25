@@ -4,7 +4,7 @@ description: Configure your application to proxy through MockServer using port f
 shortTitle: Configuring Clients
 layout: page
 pageOrder: 2
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.7
@@ -67,7 +67,7 @@ sitemap:
 <ul>
 	<li><strong>serverPort</strong> - specifies the HTTP and HTTPS port for the MockServer.</li>
 	<li><strong>proxyRemotePort</strong> - specifies the port to forward all proxy requests to.</li>
-	<li><strong>proxyRemoteHost</strong> - specified the host to forward all proxy requests to as a domain name or ip address. If no value is provided when <strong>proxyRemotePort</strong> has been specified, the default <span class="string_literal">"localhost"</span> is used.</li>
+	<li><strong>proxyRemoteHost</strong> - specifies the host to forward all proxy requests to as a domain name or ip address. The default is an empty value (<span class="string_literal">""</span>), so a host <strong>must</strong> be provided alongside <strong>proxyRemotePort</strong> &mdash; without an explicit host nothing is forwarded.</li>
 </ul>
 
 <p>For details of how to run MockServer with the above values configured see <a href="/mock_server/running_mock_server.html">Running MockServer</a></p>
@@ -79,6 +79,10 @@ sitemap:
 <h4>Client</h4>
 
 <p>To use the Web Proxy and Secure Web Proxy HTTP clients must be configured correctly.</p>
+
+<p>The Java examples below read the <span class="inline_code">http.proxyHost</span> and <span class="inline_code">http.proxyPort</span> system properties to locate MockServer. Set them when launching the JVM (or via <span class="inline_code">System.setProperty(...)</span> before the client is created), for example pointing at a MockServer running locally on port <strong>1080</strong>:</p>
+
+<pre><code class="code">-Dhttp.proxyHost=localhost -Dhttp.proxyPort=1080</code></pre>
 
 <p>Example code or screen-shots is shown below explaining how to configure the following clients:</p>
 

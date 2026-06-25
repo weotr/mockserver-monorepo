@@ -61,7 +61,8 @@ public class Not extends ObjectWithJsonToString {
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(not);
+            int computed = Objects.hash(not);
+            hashCode = computed != 0 ? computed : 1;
         }
         return hashCode;
     }

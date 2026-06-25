@@ -45,6 +45,13 @@ class LoadScenario implements \JsonSerializable
     private array $steps = [];
     /** @var array<string, string> */
     private array $labels = [];
+    /** @var array<int, LoadThreshold> */
+    private array $thresholds = [];
+    private ?bool $abortOnFail = null;
+    private ?int $abortGraceMillis = null;
+    private ?LoadPacing $pacing = null;
+    private ?LoadFeeder $feeder = null;
+    private ?string $stepSelection = null;
 
     public function __construct(string $name)
     {
@@ -118,12 +125,19 @@ class LoadScenario implements \JsonSerializable
      * @param Delay|null $thinkTime Optional inter-step pause
      * @param string|null $name Optional human label / metric label for the step
      * @param array<string, string> $labels Optional step-level annotation labels
+     * @param array<int, LoadCapture> $captures Optional cross-step capture rules
+     *        applied to this step's response (visible to subsequent steps in the
+     *        same iteration).
+     * @param float|null $weight Relative selection weight, used only when the
+     *        scenario's stepSelection is WEIGHTED.
      */
     public function addStep(
         HttpRequest $request,
         ?Delay $thinkTime = null,
         ?string $name = null,
         array $labels = [],
+        array $captures = [],
+        ?float $weight = null,
     ): self {
         $step = ['request' => $request->toArray()];
         if ($thinkTime !== null) {
@@ -134,6 +148,15 @@ class LoadScenario implements \JsonSerializable
         }
         if ($labels !== []) {
             $step['labels'] = $labels;
+        }
+        if ($captures !== []) {
+            $step['captures'] = array_map(
+                static fn (LoadCapture $capture): array => $capture->toArray(),
+                array_values($captures),
+            );
+        }
+        if ($weight !== null) {
+            $step['weight'] = $weight;
         }
         $this->steps[] = $step;
 
@@ -149,6 +172,84 @@ class LoadScenario implements \JsonSerializable
     public function labels(array $labels): self
     {
         $this->labels = $labels;
+
+        return $this;
+    }
+
+    /**
+     * Set the in-run pass/fail thresholds. The run carries a PASS verdict iff
+     * all hold, FAIL otherwise. Empty means no verdict is computed.
+     *
+     * @param array<int, LoadThreshold> $thresholds
+     */
+    public function thresholds(LoadThreshold ...$thresholds): self
+    {
+        $this->thresholds = array_values($thresholds);
+
+        return $this;
+    }
+
+    /**
+     * Append a single in-run pass/fail threshold.
+     */
+    public function addThreshold(LoadThreshold $threshold): self
+    {
+        $this->thresholds[] = $threshold;
+
+        return $this;
+    }
+
+    /**
+     * When true, a FAIL verdict aborts the run early (terminal STOPPED state,
+     * abortedByThreshold set); default false (the run always finishes its
+     * stages and carries a final verdict).
+     */
+    public function abortOnFail(bool $abortOnFail = true): self
+    {
+        $this->abortOnFail = $abortOnFail;
+
+        return $this;
+    }
+
+    /**
+     * Suppress abortOnFail for the first N milliseconds of the run so noisy
+     * startup samples cannot trigger a premature abort.
+     */
+    public function abortGraceMillis(int $abortGraceMillis): self
+    {
+        $this->abortGraceMillis = $abortGraceMillis;
+
+        return $this;
+    }
+
+    /**
+     * Set adaptive iteration pacing (think-time) for the closed-model VU loop.
+     */
+    public function pacing(LoadPacing $pacing): self
+    {
+        $this->pacing = $pacing;
+
+        return $this;
+    }
+
+    /**
+     * Set the parameterized test data (data feeder) for the scenario.
+     */
+    public function feeder(LoadFeeder $feeder): self
+    {
+        $this->feeder = $feeder;
+
+        return $this;
+    }
+
+    /**
+     * Set how each iteration selects which steps to run: SEQUENTIAL (default,
+     * all steps in declared order) or WEIGHTED (exactly one step per iteration
+     * chosen at random proportional to each step's weight).
+     */
+    public function stepSelection(string $stepSelection): self
+    {
+        $this->stepSelection = strtoupper($stepSelection);
 
         return $this;
     }
@@ -179,8 +280,29 @@ class LoadScenario implements \JsonSerializable
         if ($this->labels !== []) {
             $result['labels'] = $this->labels;
         }
+        if ($this->thresholds !== []) {
+            $result['thresholds'] = array_map(
+                static fn (LoadThreshold $threshold): array => $threshold->toArray(),
+                $this->thresholds,
+            );
+        }
+        if ($this->abortOnFail !== null) {
+            $result['abortOnFail'] = $this->abortOnFail;
+        }
+        if ($this->abortGraceMillis !== null) {
+            $result['abortGraceMillis'] = $this->abortGraceMillis;
+        }
+        if ($this->pacing !== null) {
+            $result['pacing'] = $this->pacing->toArray();
+        }
+        if ($this->feeder !== null) {
+            $result['feeder'] = $this->feeder->toArray();
+        }
         if ($this->profile !== null) {
             $result['profile'] = $this->profile->toArray();
+        }
+        if ($this->stepSelection !== null) {
+            $result['stepSelection'] = $this->stepSelection;
         }
         $result['steps'] = $this->steps;
 

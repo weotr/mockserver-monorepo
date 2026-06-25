@@ -4,12 +4,14 @@ shortTitle: Verifying Proxied Requests
 description: Verify that proxied requests and responses were received by MockServer a specific number of times or in a particular order, including response matching by status code, headers, and body.
 layout: page
 pageOrder: 4
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2026-06-15T08:00:00+01:00
+  lastmod: 2026-06-24T08:00:00+01:00
 ---
+
+<p>Because MockServer records every request it forwards <strong>and the response the upstream returned</strong>, in proxy mode you can verify both sides of an interaction: that your system made the expected calls, and that the dependency replied as expected. Verifying the proxied <strong>responses</strong> &mdash; by status code, headers, and body &mdash; is the headline advantage of proxying through MockServer over an assertion-only test, letting you assert against real upstream behaviour. See <a href="#verifying_responses">Verifying Responses</a> below for that; the sections before it cover verifying the requests themselves.</p>
 
 {% include_subpage ../mock_server/_includes/verification_summary.html %}

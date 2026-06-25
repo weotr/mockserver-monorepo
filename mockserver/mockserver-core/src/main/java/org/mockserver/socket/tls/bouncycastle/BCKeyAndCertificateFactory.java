@@ -186,7 +186,7 @@ public class BCKeyAndCertificateFactory implements KeyAndCertificateFactory {
         BigInteger serial = new BigInteger(64, new SecureRandom());
 
         // create the certificate - version 3 (with subjects name same as issues as self signed)
-        X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(issuerName, serial, NOT_BEFORE, NOT_AFTER, issuerName, publicKey);
+        X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(issuerName, serial, KeyAndCertificateFactory.notBefore(), KeyAndCertificateFactory.notAfter(), issuerName, publicKey);
         builder.addExtension(Extension.subjectKeyIdentifier, false, createSubjectKeyIdentifier(publicKey));
         builder.addExtension(Extension.basicConstraints, true, new BasicConstraints(true));
 
@@ -309,7 +309,7 @@ public class BCKeyAndCertificateFactory implements KeyAndCertificateFactory {
         BigInteger serial = new BigInteger(64, new SecureRandom());
 
         // create the certificate - version 3
-        X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(issuer, serial, NOT_BEFORE, NOT_AFTER, subject, publicKey);
+        X509v3CertificateBuilder builder = new JcaX509v3CertificateBuilder(issuer, serial, KeyAndCertificateFactory.notBefore(), KeyAndCertificateFactory.notAfter(), subject, publicKey);
         builder.addExtension(Extension.subjectKeyIdentifier, false, createSubjectKeyIdentifier(publicKey));
         builder.addExtension(Extension.basicConstraints, false, new BasicConstraints(false));
 

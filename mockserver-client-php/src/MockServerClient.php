@@ -1086,6 +1086,164 @@ class MockServerClient
         return $this->startLoadScenarios(self::scenarioName($scenario));
     }
 
+    /**
+     * Retrieve the end-of-run summary report for a load scenario run.
+     *
+     * With the default JSON form (omit {@code $format}) the report is returned
+     * as a decoded associative array carrying counts, latency percentiles, the
+     * threshold verdict and per-threshold results. With {@code $format='junit'}
+     * the same data is returned as a raw JUnit-XML {@code <testsuite>} string so
+     * a load run becomes a first-class CI test artifact.
+     *
+     * @param string $name The load scenario name.
+     * @param string|null $format Report format. Omit (or any value other than
+     *        "junit") for the JSON report; "junit" returns the JUnit-XML string.
+     * @return array<string, mixed>|string The decoded JSON report, or the raw
+     *         JUnit-XML string when {@code $format='junit'}.
+     * @throws InvalidRequestException If the scenario never ran (HTTP 404).
+     * @throws MockServerException On communication errors.
+     */
+    public function getLoadScenarioReport(string $name, ?string $format = null): array|string
+    {
+        $path = '/mockserver/loadScenario/' . rawurlencode($name) . '/report';
+        if ($format !== null) {
+            $path .= '?format=' . rawurlencode($format);
+        }
+        $response = $this->get($path);
+
+        $status = $response->getStatusCode();
+        $responseBody = (string) $response->getBody();
+
+        if ($status === 404) {
+            throw new InvalidRequestException(
+                "Failed to get load scenario report '{$name}': not found (HTTP 404): {$responseBody}"
+            );
+        }
+        if ($status >= 400) {
+            throw new MockServerException(
+                "Failed to get load scenario report '{$name}' (HTTP {$status}): {$responseBody}"
+            );
+        }
+
+        // The JUnit form is returned as raw XML; hand it back verbatim.
+        if ($format === 'junit') {
+            return $responseBody;
+        }
+
+        if ($responseBody !== '') {
+            $parsed = json_decode($responseBody, true);
+            if (is_array($parsed)) {
+                return $parsed;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * Generate (and load) an editable load scenario from an OpenAPI spec.
+     *
+     * One step is produced per OpenAPI operation, each with the operation's
+     * method, server-prefixed path, a representative request-body example and a
+     * Content-Type header. The generated scenario is loaded (registered) in the
+     * LOADED state — it generates no traffic and is allowed even when load
+     * generation is disabled — and returned so it can be shown and edited before
+     * triggering a run.
+     *
+     * @param string $name The generated scenario name (the unique registry key).
+     * @param string $specUrlOrPayload The OpenAPI spec as an inline JSON/YAML
+     *        payload, a URL, or a file/classpath reference.
+     * @param array<string, mixed>|null $target Optional explicit network target
+     *        for every generated step ({host, port, scheme}); overrides the
+     *        spec's servers[0].
+     * @param LoadProfile|array<string, mixed>|null $profile Optional load
+     *        profile; when omitted a conservative default is applied.
+     * @return array<string, mixed> The server response ({status, name, state, scenario}).
+     * @throws InvalidRequestException If the name/spec is missing or the spec or
+     *         generated scenario is invalid (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function generateLoadScenarioFromOpenAPI(
+        string $name,
+        string $specUrlOrPayload,
+        ?array $target = null,
+        LoadProfile|array|null $profile = null,
+    ): array {
+        $payload = [
+            'name' => $name,
+            'specUrlOrPayload' => $specUrlOrPayload,
+        ];
+        if ($target !== null) {
+            $payload['target'] = $target;
+        }
+        if ($profile !== null) {
+            $payload['profile'] = self::toPayload($profile);
+        }
+
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/loadScenario/generateFromOpenAPI', $body);
+
+        return $this->decodeSreResponse($response, 'generate load scenario from OpenAPI');
+    }
+
+    /**
+     * Generate (and load) an editable load scenario from recorded proxy traffic.
+     *
+     * VERBATIM (the default) emits one step per recorded request, in recorded
+     * order, optionally capped by {@code $maxSteps}. TEMPLATIZED deduplicates
+     * recorded requests by (method, templatised-path), keeping one representative
+     * per unique route ordered by descending hit frequency. The generated
+     * scenario is loaded (registered) in the LOADED state and returned so it can
+     * be shown and edited before triggering a run.
+     *
+     * @param string $name The generated scenario name (the unique registry key).
+     * @param string|null $mode VERBATIM (default) or TEMPLATIZED.
+     * @param HttpRequest|array<string, mixed>|null $requestFilter Optional matcher
+     *        selecting which recorded requests to include; absent means all.
+     * @param array<string, mixed>|null $target Optional explicit network target
+     *        applied to every generated step ({host, port, scheme}).
+     * @param int|null $maxSteps Optional cap on the number of VERBATIM steps.
+     * @param LoadProfile|array<string, mixed>|null $profile Optional load
+     *        profile; when omitted a conservative default is applied.
+     * @return array<string, mixed> The server response ({status, name, state, scenario}).
+     * @throws InvalidRequestException If the name is missing, there are no
+     *         recorded requests, the mode is invalid, or the generated scenario
+     *         is invalid (HTTP 400).
+     * @throws MockServerException On communication errors.
+     */
+    public function generateLoadScenarioFromRecording(
+        string $name,
+        ?string $mode = null,
+        HttpRequest|array|null $requestFilter = null,
+        ?array $target = null,
+        ?int $maxSteps = null,
+        LoadProfile|array|null $profile = null,
+    ): array {
+        $payload = ['name' => $name];
+        if ($mode !== null) {
+            $payload['mode'] = strtoupper($mode);
+        }
+        if ($requestFilter !== null) {
+            $payload['requestFilter'] = $requestFilter instanceof HttpRequest
+                ? $requestFilter->toArray()
+                : $requestFilter;
+        }
+        if ($target !== null) {
+            $payload['target'] = $target;
+        }
+        if ($maxSteps !== null) {
+            $payload['maxSteps'] = $maxSteps;
+        }
+        if ($profile !== null) {
+            $payload['profile'] = self::toPayload($profile);
+        }
+
+        $body = json_encode($payload, JSON_THROW_ON_ERROR);
+        $response = $this->put('/mockserver/loadScenario/generateFromRecording', $body);
+
+        return $this->decodeSreResponse($response, 'generate load scenario from recording');
+    }
+
     // -----------------------------------------------------------------
     // SRE control-plane: service-scoped HTTP chaos
     // -----------------------------------------------------------------

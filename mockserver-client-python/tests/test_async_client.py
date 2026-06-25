@@ -21,10 +21,15 @@ from mockserver.models import (
     HttpRequest,
     HttpRequestAndHttpResponse,
     HttpResponse,
+    LoadCapture,
+    LoadFeeder,
+    LoadPacing,
     LoadProfile,
     LoadScenario,
+    LoadShape,
     LoadStage,
     LoadStep,
+    LoadThreshold,
     OpenAPIExpectation,
     Ports,
     TimeToLive,
@@ -817,6 +822,164 @@ class TestAsyncLoadScenario:
         assert MockHandler.last_path == "/mockserver/loadScenario/start"
         sent = json.loads(MockHandler.last_request_body)
         assert sent == {"names": ["checkout-flow"]}
+
+    @pytest.mark.asyncio
+    async def test_load_scenario_advanced_serialization(self, mock_server):
+        MockHandler.response_body = json.dumps({"name": "advanced", "state": "LOADED"})
+        scenario = LoadScenario(
+            name="advanced",
+            step_selection="WEIGHTED",
+            abort_on_fail=True,
+            abort_grace_millis=5000,
+            thresholds=[
+                LoadThreshold(metric="LATENCY_P99", comparator="LESS_THAN", threshold=250),
+                LoadThreshold(metric="ERROR_RATE", comparator="LESS_THAN_OR_EQUAL", threshold=0.01),
+            ],
+            pacing=LoadPacing(mode="CONSTANT_THROUGHPUT", value=5.0),
+            feeder=LoadFeeder(rows=[{"user": "alice"}, {"user": "bob"}], strategy="RANDOM"),
+            profile=LoadProfile(shape=LoadShape(type="SPIKE", metric="VU", baseline=1, peak=20, ramp_up_millis=10000, hold_millis=30000, ramp_down_millis=10000)),
+            steps=[
+                LoadStep(
+                    request=HttpRequest(method="GET", path="/cart"),
+                    weight=7.0,
+                    captures=[LoadCapture(name="token", source="BODY_JSONPATH", expression="$.token", default_value="none")],
+                ),
+                LoadStep(request=HttpRequest(method="POST", path="/checkout"), weight=3.0),
+            ],
+        )
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        await client.load_scenario(scenario)
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent["stepSelection"] == "WEIGHTED"
+        assert sent["abortOnFail"] is True
+        assert sent["abortGraceMillis"] == 5000
+        assert sent["thresholds"][0] == {"metric": "LATENCY_P99", "comparator": "LESS_THAN", "threshold": 250}
+        assert sent["thresholds"][1]["metric"] == "ERROR_RATE"
+        assert sent["pacing"] == {"mode": "CONSTANT_THROUGHPUT", "value": 5.0}
+        assert sent["feeder"]["rows"] == [{"user": "alice"}, {"user": "bob"}]
+        assert sent["feeder"]["strategy"] == "RANDOM"
+        assert "data" not in sent["feeder"]
+        assert sent["profile"]["shape"]["type"] == "SPIKE"
+        assert sent["profile"]["shape"]["rampUpMillis"] == 10000
+        assert "stages" not in sent["profile"]
+        assert sent["steps"][0]["weight"] == 7.0
+        assert sent["steps"][0]["captures"][0] == {
+            "name": "token",
+            "source": "BODY_JSONPATH",
+            "expression": "$.token",
+            "defaultValue": "none",
+        }
+
+    @pytest.mark.asyncio
+    async def test_load_scenario_advanced_round_trip(self, mock_server):
+        scenario = LoadScenario(
+            name="rt",
+            feeder=LoadFeeder(data="a,b\n1,2", format="CSV"),
+            pacing=LoadPacing(mode="CONSTANT_PACING", value=1000),
+            thresholds=[LoadThreshold(metric="THROUGHPUT_RPS", comparator="GREATER_THAN", threshold=100)],
+            profile=LoadProfile(shape=LoadShape(type="STAIRS", start=1, step=2, steps=5, step_duration_millis=2000)),
+            steps=[LoadStep(request=HttpRequest(method="GET", path="/x"), weight=1.0)],
+        )
+        restored = LoadScenario.from_dict(scenario.to_dict())
+        assert restored.to_dict() == scenario.to_dict()
+
+    @pytest.mark.asyncio
+    async def test_get_load_scenario_report_json(self, mock_server):
+        MockHandler.response_body = json.dumps(
+            {"scenario": "checkout-flow", "verdict": "PASS", "thresholdResults": []}
+        )
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        result = await client.get_load_scenario_report("checkout-flow")
+        assert MockHandler.last_method == "GET"
+        assert MockHandler.last_path == "/mockserver/loadScenario/checkout-flow/report"
+        assert result["verdict"] == "PASS"
+
+    @pytest.mark.asyncio
+    async def test_get_load_scenario_report_junit(self, mock_server):
+        MockHandler.response_body = "<testsuite name='checkout-flow'></testsuite>"
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        result = await client.get_load_scenario_report("checkout-flow", format="junit")
+        assert MockHandler.last_path == "/mockserver/loadScenario/checkout-flow/report?format=junit"
+        assert isinstance(result, str)
+        assert "<testsuite" in result
+
+    @pytest.mark.asyncio
+    async def test_get_load_scenario_report_not_found(self, mock_server):
+        MockHandler.response_status = 404
+        MockHandler.response_body = '{"error": "never ran"}'
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        with pytest.raises(MockServerError, match="No load scenario run"):
+            await client.get_load_scenario_report("missing")
+
+    @pytest.mark.asyncio
+    async def test_generate_load_scenario_from_openapi(self, mock_server):
+        MockHandler.response_body = json.dumps(
+            {"status": "loaded", "name": "petstore-load", "state": "LOADED", "scenario": {}}
+        )
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        result = await client.generate_load_scenario_from_openapi(
+            "petstore-load",
+            "https://example.com/petstore.yaml",
+            target={"host": "petstore.svc", "port": 8080, "scheme": "http"},
+            profile=LoadProfile(stages=[LoadStage.vu_stage(10000, vus=2)]),
+        )
+        assert MockHandler.last_method == "PUT"
+        assert MockHandler.last_path == "/mockserver/loadScenario/generateFromOpenAPI"
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent["name"] == "petstore-load"
+        assert sent["specUrlOrPayload"] == "https://example.com/petstore.yaml"
+        assert sent["target"] == {"host": "petstore.svc", "port": 8080, "scheme": "http"}
+        assert sent["profile"]["stages"][0]["vus"] == 2
+        assert result["status"] == "loaded"
+
+    @pytest.mark.asyncio
+    async def test_generate_load_scenario_from_openapi_body_override(self, mock_server):
+        MockHandler.response_body = json.dumps({"status": "loaded"})
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        await client.generate_load_scenario_from_openapi(
+            body={"name": "raw", "specUrlOrPayload": "{}"}
+        )
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent == {"name": "raw", "specUrlOrPayload": "{}"}
+
+    @pytest.mark.asyncio
+    async def test_generate_load_scenario_from_recording(self, mock_server):
+        MockHandler.response_body = json.dumps(
+            {"status": "loaded", "name": "replay", "state": "LOADED", "scenario": {}}
+        )
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        result = await client.generate_load_scenario_from_recording(
+            "replay",
+            mode="TEMPLATIZED",
+            request_filter=HttpRequest(method="GET", path="/api/.*"),
+            target={"host": "staging.svc", "port": 8080, "scheme": "http"},
+            max_steps=50,
+        )
+        assert MockHandler.last_method == "PUT"
+        assert MockHandler.last_path == "/mockserver/loadScenario/generateFromRecording"
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent["name"] == "replay"
+        assert sent["mode"] == "TEMPLATIZED"
+        assert sent["requestFilter"]["method"] == "GET"
+        assert sent["target"]["host"] == "staging.svc"
+        assert sent["maxSteps"] == 50
+        assert result["status"] == "loaded"
+
+    @pytest.mark.asyncio
+    async def test_generate_load_scenario_from_recording_defaults(self, mock_server):
+        MockHandler.response_body = json.dumps({"status": "loaded"})
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        await client.generate_load_scenario_from_recording("minimal")
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent == {"name": "minimal"}
+
+    @pytest.mark.asyncio
+    async def test_generate_load_scenario_from_recording_error(self, mock_server):
+        MockHandler.response_status = 400
+        MockHandler.response_body = '{"error": "no recorded requests"}'
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        with pytest.raises(MockServerError, match="Failed to generate load scenario from recording"):
+            await client.generate_load_scenario_from_recording("x")
 
 
 class TestAsyncScenario:

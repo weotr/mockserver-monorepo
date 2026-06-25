@@ -27,7 +27,34 @@
 <div class="panel">
     <p><em><strong>Please Note:</strong> There are over 100 more detailed code examples in Java, JavaScript, Python, Ruby, Go, .NET, Rust, PHP and the REST API below.</em></p>
 
-    <pre class="prettyprint lang-java code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+    <p>The Node client supports two styles. The <strong>fluent <code>when().respond()</code> DSL</strong> is the recommended style — it mirrors the Java client and makes the request matcher, times, and priority explicit:</p>
+
+    <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+
+// Recommended: fluent when().respond() DSL
+mockServerClient("localhost", 1080)
+    .when({
+        method: 'POST',
+        path: '/login',
+        body: { username: 'foo', password: 'bar' }
+    })
+    .withTimes(1)
+    .withPriority(10)
+    .respond({
+        statusCode: 302,
+        headers: { Location: ['https://www.mock-server.com'] },
+        cookies: { sessionId: '2By8LOhBmaW5nZXJwcmludCIlMDAzMW' }
+    })
+    .then(
+        function () { console.log("expectation created"); },
+        function (error) { console.log(error); }
+    );</code></pre>
+
+    <p><code>.withTimes(n)</code> limits the expectation to <code>n</code> matched requests. <code>.withTimeToLive({ unlimited: false, timeToLive: 60, timeUnit: 'SECONDS' })</code> sets an expiry window. <code>.withPriority(n)</code> controls evaluation order (higher value wins). The terminal actions are <code>.respond()</code>, <code>.forward()</code>, <code>.error()</code>, and <code>.callback()</code>.</p>
+
+    <p>The <strong>procedural <code>mockAnyResponse</code> style</strong> passes the full expectation JSON directly and is still supported:</p>
+
+    <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
 mockServerClient("localhost", 1080).mockAnyResponse({
     "httpRequest": {
         "method": "POST",

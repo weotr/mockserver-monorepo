@@ -65,9 +65,13 @@ steps:
     timeout_in_minutes: 45
     agents:
       queue: "perf"
-  - label: ":microscope: perf regression — micro-benchmark"
+  - label: ":microscope: perf regression — micro-benchmark + scaling sweep"
     command: ".buildkite/scripts/steps/perf-test-microbench.sh"
-    timeout_in_minutes: 30
+    # Bumped 30 -> 50: the step now also runs run-scaling.sh, which forks a JVM per
+    # param combo across MatchingBenchmark (8 combos) + CandidateIndexBenchmark (10
+    # combos) after a SECOND core build. With the bounded JMH_ARGS_SCALING this adds
+    # ~12-18 min, which can exceed the old 30m budget under cloud-CI noise.
+    timeout_in_minutes: 50
     agents:
       queue: "perf"
   - wait: ~

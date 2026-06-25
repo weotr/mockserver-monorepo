@@ -515,12 +515,101 @@ export interface LoadStage {
 }
 
 /**
- * Traffic profile that shapes a {@link LoadScenario} over time as an ordered
- * list of {@link LoadStage}s run in sequence. Each stage holds or ramps virtual
- * users (`VU`), an arrival rate (`RATE`), or drives no load (`PAUSE`).
+ * A named, declarative load shape that expands into ordinary {@link LoadStage}s.
+ * Use a shape OR an explicit `stages` list on a {@link LoadProfile}, not both —
+ * only the parameters its `type` needs are read, the rest are ignored.
+ *
+ * - `SPIKE` — ramp from `baseline` to `peak`, hold, ramp back down, and
+ *   optionally hold `baseline` again (`baseline`, `peak`, `rampUpMillis`,
+ *   `holdMillis`, `rampDownMillis`, `recoveryHoldMillis`).
+ * - `STAIRS` — a flight of pure-hold steps, each one `step` higher (`start`,
+ *   `step`, `steps`, `stepDurationMillis`).
+ * - `RAMP_HOLD` — ramp from 0 to `target` then hold (`target`, `rampMillis`,
+ *   `holdMillis`).
+ */
+export type LoadShapeType = "SPIKE" | "STAIRS" | "RAMP_HOLD";
+
+/**
+ * What a {@link LoadShape} drives: `VU` = concurrent virtual users (closed
+ * model); `RATE` = arrival rate in iterations/second (open model). The shape
+ * expands into ordinary {@link LoadStage}s of this type.
+ */
+export type LoadShapeMetric = "VU" | "RATE";
+
+/**
+ * A declarative named load shape that expands into ordinary {@link LoadStage}s.
+ * Set a `shape` OR an explicit `stages` list on a {@link LoadProfile}, not both.
+ */
+export interface LoadShape {
+  type: LoadShapeType;
+  /** what the shape drives (defaults to VU) */
+  metric?: LoadShapeMetric;
+  /** ramp curve used for the shape's ramps (defaults to LINEAR) */
+  curve?: RampCurve;
+  /** SPIKE: the level held before and after the spike */
+  baseline?: number;
+  /** SPIKE: the level held at the top of the spike */
+  peak?: number;
+  /** SPIKE: duration of the baseline to peak ramp */
+  rampUpMillis?: number;
+  /** SPIKE: duration to hold at the peak; RAMP_HOLD: duration to hold at the target */
+  holdMillis?: number;
+  /** SPIKE: duration of the peak to baseline ramp */
+  rampDownMillis?: number;
+  /** SPIKE (optional): duration to hold at baseline after the down ramp */
+  recoveryHoldMillis?: number;
+  /** STAIRS: the level of the first step */
+  start?: number;
+  /** STAIRS: how much each step rises above the previous one */
+  step?: number;
+  /** STAIRS: the number of steps */
+  steps?: number;
+  /** STAIRS: how long each step holds at its level */
+  stepDurationMillis?: number;
+  /** RAMP_HOLD: the level ramped up to (from 0) and then held */
+  target?: number;
+  /** RAMP_HOLD: duration of the 0 to target ramp */
+  rampMillis?: number;
+}
+
+/**
+ * Traffic profile that shapes a {@link LoadScenario} over time as EITHER an
+ * ordered list of {@link LoadStage}s run in sequence OR a single named
+ * {@link LoadShape} (which expands into stages). Set one, not both; if both are
+ * set the explicit `stages` win. Each stage holds or ramps virtual users
+ * (`VU`), an arrival rate (`RATE`), or drives no load (`PAUSE`).
  */
 export interface LoadProfile {
-  stages: LoadStage[];
+  stages?: LoadStage[];
+  /** a declarative named shape, as an alternative to an explicit `stages` list */
+  shape?: LoadShape;
+}
+
+/**
+ * Where a {@link LoadCapture} extracts its value from a step's response.
+ *
+ * - `BODY_JSONPATH` — a JSONPath over the response body.
+ * - `HEADER` — a response header value (by name).
+ * - `BODY_REGEX` — a regex over the response body string (capture group 1).
+ */
+export type LoadCaptureSource = "BODY_JSONPATH" | "HEADER" | "BODY_REGEX";
+
+/**
+ * A declarative cross-step capture / correlation rule: extracts a value from a
+ * step's response and binds it to a variable name that a later step in the same
+ * iteration can reference from its templated request fields via
+ * `$iteration.captured.<name>` (Velocity) / `{{iteration.captured.<name>}}`
+ * (Mustache). Best-effort: on no match it falls back to `defaultValue` (when
+ * set) or leaves the variable unset, never failing the run.
+ */
+export interface LoadCapture {
+  /** the variable name later steps reference (e.g. 'token') */
+  name: string;
+  source: LoadCaptureSource;
+  /** the JSONPath, header name, or regex driving the extraction */
+  expression: string;
+  /** optional fallback value bound when extraction yields nothing */
+  defaultValue?: string;
 }
 
 /**
@@ -532,7 +621,119 @@ export interface LoadStep {
   /** optional pause before issuing this step's request */
   thinkTime?: Delay;
   request: HttpRequest;
+  /** optional cross-step capture rules applied to this step's response */
+  captures?: LoadCapture[];
+  /** relative selection weight, used only when stepSelection is WEIGHTED (> 0) */
+  weight?: number;
 }
+
+/**
+ * The per-run metric a {@link LoadThreshold} evaluates.
+ *
+ * Latency percentiles are in milliseconds; `ERROR_RATE` is a 0.0-1.0 fraction;
+ * `THROUGHPUT_RPS` is requests/second over the run's elapsed time.
+ */
+export type LoadThresholdMetric =
+  | "LATENCY_P50"
+  | "LATENCY_P95"
+  | "LATENCY_P99"
+  | "LATENCY_P999"
+  | "ERROR_RATE"
+  | "THROUGHPUT_RPS";
+
+/**
+ * How the observed per-run value is compared to a {@link LoadThreshold}'s value.
+ */
+export type LoadThresholdComparator =
+  | "LESS_THAN"
+  | "LESS_THAN_OR_EQUAL"
+  | "GREATER_THAN"
+  | "GREATER_THAN_OR_EQUAL";
+
+/**
+ * An in-run pass/fail threshold for a load scenario: a per-run metric compared
+ * against a value. All thresholds must hold for the run verdict to be PASS
+ * (logical AND); any breach makes the verdict FAIL.
+ */
+export interface LoadThreshold {
+  metric: LoadThresholdMetric;
+  comparator: LoadThresholdComparator;
+  /** the threshold value (ms for latency, 0.0-1.0 for ERROR_RATE, rps for THROUGHPUT_RPS) */
+  threshold: number;
+}
+
+/**
+ * A single per-threshold result behind a load run's verdict.
+ */
+export interface LoadThresholdResult {
+  metric: LoadThresholdMetric;
+  comparator: LoadThresholdComparator;
+  threshold: number;
+  /** the observed per-run value at evaluation time */
+  observed: number;
+  satisfied: boolean;
+}
+
+/**
+ * How a target per-virtual-user iteration cycle (think-time pacing) is derived
+ * for the closed-model VU loop.
+ *
+ * - `NONE` — no pacing (immediate reschedule).
+ * - `CONSTANT_PACING` — `value` is the target cycle in milliseconds.
+ * - `CONSTANT_THROUGHPUT` — `value` is the target iterations/second per VU.
+ */
+export type LoadPacingMode = "NONE" | "CONSTANT_PACING" | "CONSTANT_THROUGHPUT";
+
+/**
+ * Adaptive iteration pacing (think-time) for a load scenario. Applies only to
+ * the closed-model VU loop — open-model RATE iterations ignore it.
+ */
+export interface LoadPacing {
+  mode: LoadPacingMode;
+  /** ms (CONSTANT_PACING) or iterations/second per VU (CONSTANT_THROUGHPUT); > 0 when mode is not NONE */
+  value: number;
+}
+
+/**
+ * The format of a {@link LoadFeeder}'s raw inline `data`.
+ */
+export type LoadFeederFormat = "CSV" | "JSON";
+
+/**
+ * How a {@link LoadFeeder} chooses a row each iteration.
+ *
+ * - `CIRCULAR` (default) — cycle rows, never exhausting.
+ * - `RANDOM` — pick a uniformly random row each iteration.
+ * - `SEQUENTIAL` — use each row once in order, completing the run when exhausted.
+ */
+export type LoadFeederStrategy = "CIRCULAR" | "RANDOM" | "SEQUENTIAL";
+
+/**
+ * Parameterized test data (a data feeder) for a load scenario: an inline
+ * dataset from which one row is selected per iteration and exposed to that
+ * iteration's templated request as `$iteration.data.<column>` (Velocity) /
+ * `{{iteration.data.<column>}}` (Mustache). Supply EITHER `rows` (the primary
+ * form) OR `data` + `format`; when both are given `rows` wins.
+ */
+export interface LoadFeeder {
+  /** inline dataset: a list of column-name to value maps, one per row */
+  rows?: { [column: string]: string }[];
+  /** optional raw inline dataset parsed server-side into rows per `format` */
+  data?: string;
+  /** the format of `data` (required when `data` is set) */
+  format?: LoadFeederFormat;
+  /** how a row is chosen each iteration (defaults to CIRCULAR) */
+  strategy?: LoadFeederStrategy;
+}
+
+/**
+ * How each iteration of a {@link LoadScenario} selects which steps to run.
+ *
+ * - `SEQUENTIAL` (default) — run ALL steps in declared order (a user journey).
+ * - `WEIGHTED` — run exactly ONE step per iteration chosen at random
+ *   proportional to each step's `weight` (mixed-workload modelling).
+ */
+export type LoadStepSelection = "SEQUENTIAL" | "WEIGHTED";
 
 /**
  * A server-driven load-injection scenario. MockServer drives the `steps`
@@ -550,6 +751,18 @@ export interface LoadScenario {
   maxRequests?: number;
   /** optional delay before the scenario begins once started */
   startDelayMillis?: number;
+  /** optional in-run pass/fail thresholds; the run carries a verdict iff all hold */
+  thresholds?: LoadThreshold[];
+  /** when true, a FAIL verdict aborts the run early (defaults to false) */
+  abortOnFail?: boolean;
+  /** suppress abortOnFail for the first N milliseconds of the run */
+  abortGraceMillis?: number;
+  /** adaptive per-VU iteration pacing (think-time) */
+  pacing?: LoadPacing;
+  /** parameterized inline test data exposed to each iteration's templates */
+  feeder?: LoadFeeder;
+  /** how each iteration selects which steps to run (defaults to SEQUENTIAL) */
+  stepSelection?: LoadStepSelection;
   profile: LoadProfile;
   steps: LoadStep[];
 }
@@ -579,11 +792,132 @@ export interface LoadScenarioStatus {
   p50Millis?: number;
   p95Millis?: number;
   p99Millis?: number;
+  /** 99.9th-percentile coordinated-omission-corrected latency (ms) */
+  p999Millis?: number;
+  /** iterations due but never dispatched because a safety cap was hit */
+  droppedIterations?: number;
+  /** in-run threshold verdict; absent when no thresholds were evaluated */
+  verdict?: LoadVerdict;
+  /** true when this run was terminated early by an abortOnFail threshold breach */
+  abortedByThreshold?: boolean;
+  /** per-threshold results behind the verdict (present when thresholds were evaluated) */
+  thresholdResults?: LoadThresholdResult[];
   runId?: string;
   startedAt?: number;
   endedAt?: number;
   labels?: { [key: string]: string };
   definition?: LoadScenario;
+}
+
+/**
+ * In-run threshold verdict for a load scenario run: `PASS` (all thresholds
+ * satisfied) or `FAIL` (any breached). A terminal `FAIL` should be mapped by
+ * clients to a non-zero CI exit code.
+ */
+export type LoadVerdict = "PASS" | "FAIL";
+
+/**
+ * End-of-run summary report for a load scenario run (the JSON form returned by
+ * `getLoadScenarioReport(name)`). A JUnit-XML rendering of the same data is
+ * returned as a string when the report endpoint is called with `format=junit`.
+ */
+export interface LoadScenarioReport {
+  scenario?: string;
+  runId?: string;
+  state?: LoadScenarioState;
+  /** in-run threshold verdict; absent when no thresholds were evaluated */
+  verdict?: LoadVerdict;
+  /** true when this run was terminated early by an abortOnFail threshold breach */
+  abortedByThreshold?: boolean;
+  timing?: {
+    startedAtEpochMillis?: number;
+    /** epoch-millis the run ended; null while still running */
+    endedAtEpochMillis?: number | null;
+    durationMillis?: number;
+  };
+  counts?: {
+    requestsSent?: number;
+    succeeded?: number;
+    failed?: number;
+    droppedIterations?: number;
+    /** failed / max(1, requestsSent) */
+    errorRate?: number;
+  };
+  latencyMillis?: {
+    p50?: number;
+    p95?: number;
+    p99?: number;
+    p999?: number;
+  };
+  /** per-threshold results behind the verdict */
+  thresholdResults?: LoadThresholdResult[];
+}
+
+/**
+ * Explicit network target for the steps generated by
+ * `generateLoadScenarioFromOpenAPI(...)` / `generateLoadScenarioFromRecording(...)`.
+ * Overrides the spec's `servers[0]` (OpenAPI) or each recorded request's own
+ * Host/secure routing (recording).
+ */
+export interface LoadGenerationTarget {
+  host?: string;
+  port?: number;
+  scheme?: "http" | "https";
+}
+
+/**
+ * Request body for `generateLoadScenarioFromOpenAPI(...)`: seed a load scenario
+ * from an OpenAPI specification (one step per operation).
+ */
+export interface GenerateLoadScenarioFromOpenAPIRequest {
+  /** the generated scenario name (the unique registry key) */
+  name: string;
+  /** the OpenAPI spec as an inline JSON/YAML payload, a URL, or a file/classpath reference */
+  specUrlOrPayload: string;
+  /** explicit network target for every generated step (overrides the spec's servers[0]) */
+  target?: LoadGenerationTarget;
+  /** optional traffic profile; a conservative default is applied when omitted */
+  profile?: LoadProfile;
+}
+
+/**
+ * How `generateLoadScenarioFromRecording(...)` turns recorded requests into steps.
+ *
+ * - `VERBATIM` (default) — one step per recorded request, in recorded order.
+ * - `TEMPLATIZED` — one step per unique (method, templatised-path) route,
+ *   ordered by descending hit frequency.
+ */
+export type LoadRecordingMode = "VERBATIM" | "TEMPLATIZED";
+
+/**
+ * Request body for `generateLoadScenarioFromRecording(...)`: seed a load
+ * scenario from traffic previously recorded by MockServer in proxy mode.
+ */
+export interface GenerateLoadScenarioFromRecordingRequest {
+  /** the generated scenario name (the unique registry key) */
+  name: string;
+  /** VERBATIM (one step per recorded request) or TEMPLATIZED (one step per route) */
+  mode?: LoadRecordingMode;
+  /** optional matcher selecting which recorded requests to include (absent = all) */
+  requestFilter?: HttpRequest;
+  /** optional cap on the number of VERBATIM steps (keeps the first N requests) */
+  maxSteps?: number;
+  /** explicit network target applied to every generated step */
+  target?: LoadGenerationTarget;
+  /** optional traffic profile; a conservative default is applied when omitted */
+  profile?: LoadProfile;
+}
+
+/**
+ * Result of `generateLoadScenarioFromOpenAPI(...)` /
+ * `generateLoadScenarioFromRecording(...)`: the generated scenario was loaded
+ * (registered) and is returned so it can be shown and edited before a run.
+ */
+export interface LoadScenarioGenerationResult {
+  status: "loaded";
+  name: string;
+  state: LoadScenarioState;
+  scenario: LoadScenario;
 }
 
 /**

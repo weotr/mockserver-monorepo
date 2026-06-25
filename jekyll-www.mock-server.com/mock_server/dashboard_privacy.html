@@ -1,0 +1,116 @@
+---
+title: Dashboard Privacy
+shortTitle: Dashboard Privacy
+description: What the MockServer dashboard usage analytics collects, what it never collects, and how to disable it.
+layout: page
+pageOrder: 99
+section: 'Operations'
+subsection: true
+sitemap:
+  priority: 0.5
+  changefreq: 'monthly'
+  lastmod: 2026-06-24T00:00:00+00:00
+keywords: dashboard analytics, privacy, PostHog, cookieless, Do Not Track, opt-out, anonymous usage data
+---
+
+<p><strong>On this page:</strong></p>
+<ul>
+  <li><a href="#what-is-collected">What is collected</a></li>
+  <li><a href="#what-is-not-collected">What is never collected</a></li>
+  <li><a href="#cookieless">Cookieless and cross-site identifier free</a></li>
+  <li><a href="#how-to-disable">How to disable</a></li>
+</ul>
+
+<h2 id="what-is-collected">What is collected</h2>
+
+<p>When an operator enables analytics (by supplying a self-hosted PostHog endpoint and key), the dashboard
+may send a small set of coarse, anonymous usage events. No free-text values from your mocks, requests,
+or environment are ever included.</p>
+
+<p>The four event types are:</p>
+
+<table class="table table-striped">
+  <thead>
+    <tr><th>Event</th><th>When sent</th><th>Properties carried</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">app_open</span></td>
+      <td>Once per page load, after all activation gates pass</td>
+      <td>App version, surface (<span class="inline_code">browser</span> or <span class="inline_code">ide-embedded</span>), colour theme (<span class="inline_code">light</span> / <span class="inline_code">dark</span> / <span class="inline_code">system</span>)</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">view_change</span></td>
+      <td>Each time you switch dashboard tab</td>
+      <td>The tab name (e.g. <span class="inline_code">traffic</span>, <span class="inline_code">composer</span>, <span class="inline_code">chaos</span>)</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">feature_used</span></td>
+      <td>When you trigger a specific feature action</td>
+      <td>Feature name from a closed enumeration (e.g. <span class="inline_code">expectation_created</span>, <span class="inline_code">chaos_started</span>, <span class="inline_code">load_run_started</span>) and optionally a mode (<span class="inline_code">quick</span> or <span class="inline_code">advanced</span>)</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">error_shown</span></td>
+      <td>When the dashboard displays an error to you</td>
+      <td>A coarse category from a closed enumeration (<span class="inline_code">load_failed</span>, <span class="inline_code">save_failed</span>, <span class="inline_code">connection_failed</span>, <span class="inline_code">validation_failed</span>, <span class="inline_code">unknown</span>) — never an error message or stack trace</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="what-is-not-collected">What is never collected</h2>
+
+<p>The analytics module is <strong>structurally</strong> incapable of sending the following data. Every
+public function accepts only values from a closed, whitelisted set — there is no code path that
+accepts a free-text string and forwards it to the analytics backend.</p>
+
+<ul>
+  <li>Request URLs, paths, query strings, or hostnames</li>
+  <li>Request or response headers (including <span class="inline_code">Authorization</span>, <span class="inline_code">Cookie</span>, or any other credential)</li>
+  <li>Request or response bodies</li>
+  <li>Expectation JSON, mock configurations, or scenario state</li>
+  <li>Server ports, IP addresses, or file paths</li>
+  <li>Error messages or stack traces</li>
+  <li>Any data from the mocked or proxied traffic passing through MockServer</li>
+</ul>
+
+<h2 id="cookieless">Cookieless and cross-site identifier free</h2>
+
+<p>Analytics is initialised with PostHog's <span class="inline_code">persistence: 'memory'</span> option. This means:</p>
+
+<ul>
+  <li>No cookies are set.</li>
+  <li>No persistent identifier is written to <span class="inline_code">localStorage</span> or <span class="inline_code">sessionStorage</span> for tracking purposes.</li>
+  <li>Each page load is independent — there is no mechanism to correlate sessions or track an individual across visits.</li>
+  <li>PostHog autocapture and session recording are both disabled.</li>
+</ul>
+
+<h2 id="how-to-disable">How to disable</h2>
+
+<p>There are three independent ways to disable analytics:</p>
+
+<h3>1. Operator: disable for the whole deployment</h3>
+
+<p>Set the <span class="inline_code">dashboardAnalyticsEnabled</span> configuration property to <span class="inline_code">false</span>.
+This is the authoritative master switch — when it is off, the analytics module never loads and the
+consent banner is never shown, regardless of any other setting.</p>
+
+<pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsEnabled="false"</code></pre>
+<pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED=false</code></pre>
+
+<p>Analytics is also inactive by default because both <span class="inline_code">dashboardAnalyticsEndpoint</span> and
+<span class="inline_code">dashboardAnalyticsKey</span> are empty out of the box — an operator must explicitly supply
+a self-hosted PostHog endpoint and key for any events to be sent.</p>
+
+<h3>2. Individual: opt out via the dashboard banner</h3>
+
+<p>When analytics is active, a banner appears at the bottom of the dashboard on first use. Clicking
+<strong>Opt out</strong> records your choice in the browser's <span class="inline_code">localStorage</span>
+under the key <span class="inline_code">mockserver.analytics.optOut</span>, stops any in-flight PostHog capture
+immediately, and prevents analytics from running on any subsequent page load in that browser.</p>
+
+<h3>3. Individual: browser Do Not Track or Global Privacy Control</h3>
+
+<p>If your browser has <strong>Do Not Track</strong> (<span class="inline_code">navigator.doNotTrack === '1'</span>)
+or <strong>Global Privacy Control</strong> (<span class="inline_code">navigator.globalPrivacyControl === true</span>)
+enabled, the analytics module detects this automatically during its activation check and becomes a
+permanent no-op for that page load — no events are sent and no banner is shown.</p>

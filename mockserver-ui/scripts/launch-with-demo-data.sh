@@ -145,7 +145,23 @@ MOCKSERVER_LOG="$UI_DIR/mockserver-demo.log"
 # Feature flags passed to the JVM. Load injection needs loadGenerationEnabled (the
 # /mockserver/loadScenario control plane is 403 otherwise) + sloTrackingEnabled so the
 # load run's latency/error samples feed the SLO verdict store the Performance tab reads.
-MOCKSERVER_JVM_ARGS=(-Dmockserver.metricsEnabled=true -Dmockserver.wasmEnabled=true)
+# Cap the JVM heap. Without an explicit -Xmx the HotSpot default max heap is 25% of
+# physical RAM — on a large Mac that is many GB, and under --with-load-injection (heavy
+# self-targeting load + a flood of log entries) the JVM grows to that ceiling and the OS
+# starts SIGKILLing / swapping, making the whole machine unresponsive during a perf test.
+# A modest cap keeps the demo + load runs comfortably bounded; override with DEMO_MAX_HEAP
+# (e.g. DEMO_MAX_HEAP=2g npm run demo) for heavier scenarios.
+DEMO_MAX_HEAP="${DEMO_MAX_HEAP:-1g}"
+# Cap the in-memory request event-log ring buffer. Its default size scales with heap up to
+# 100,000 entries (min(heapAvailableInKB()/8, 100000)) — even at -Xmx1g that resolves to the
+# full 100,000 ceiling, a buffer budgeted to consume essentially the whole heap when it fills.
+# The demo load self-targets THIS server, and the load-generated event-log suppression is
+# driver-side only (the marker is transient and does not survive the socket hop), so the server
+# logs all of its own load traffic. Left unbounded that fills the buffer in ~15-30 min and pushes
+# the capped heap into continuous GC, pegging every core and stalling the machine. A demo never
+# needs more than a few thousand entries of scrollback; override with DEMO_MAX_LOG_ENTRIES.
+DEMO_MAX_LOG_ENTRIES="${DEMO_MAX_LOG_ENTRIES:-5000}"
+MOCKSERVER_JVM_ARGS=(-Xmx"$DEMO_MAX_HEAP" -Dmockserver.maxLogEntries="$DEMO_MAX_LOG_ENTRIES" -Dmockserver.metricsEnabled=true -Dmockserver.wasmEnabled=true)
 # --load-generation enables the load-generation control plane WITHOUT auto-starting the
 # heavy demo scenarios (that auto-start is gated on DEMO_WITH_LOAD_INJECTION below). This lets
 # a caller drive a deliberately light scenario — e.g. for a clean Performance screenshot —
@@ -153,7 +169,7 @@ MOCKSERVER_JVM_ARGS=(-Dmockserver.metricsEnabled=true -Dmockserver.wasmEnabled=t
 if [ "$WITH_LOAD_INJECTION" = true ] || [ "$LOAD_GENERATION" = true ]; then
   MOCKSERVER_JVM_ARGS+=(-Dmockserver.loadGenerationEnabled=true -Dmockserver.sloTrackingEnabled=true)
 fi
-echo "→ Starting MockServer on port $MOCKSERVER_PORT (log: $MOCKSERVER_LOG)..."
+echo "→ Starting MockServer on port $MOCKSERVER_PORT (max heap: $DEMO_MAX_HEAP, log: $MOCKSERVER_LOG)..."
 java "${MOCKSERVER_JVM_ARGS[@]}" -jar "$MOCKSERVER_JAR" -serverPort "$MOCKSERVER_PORT" -logLevel INFO > "$MOCKSERVER_LOG" 2>&1 &
 MOCKSERVER_PID=$!
 

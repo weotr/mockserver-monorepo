@@ -111,11 +111,79 @@ type LoadStage struct {
 	MaxVus *int `json:"maxVus,omitempty"`
 }
 
-// LoadProfile is an ordered list of stages run in sequence, describing the load
-// over time. Wire keys match schema LoadProfile (OpenAPI).
+// LoadShapeType is a named declarative load shape that expands into ordinary
+// stages. Wire values match schema LoadShapeType (OpenAPI).
+type LoadShapeType string
+
+const (
+	// LoadShapeSpike ramps up, holds the peak, ramps back down, then optionally
+	// holds a recovery baseline.
+	LoadShapeSpike LoadShapeType = "SPIKE"
+	// LoadShapeStairs is a flight of pure-hold steps, each one "step" higher.
+	LoadShapeStairs LoadShapeType = "STAIRS"
+	// LoadShapeRampHold ramps from 0 to a target then holds.
+	LoadShapeRampHold LoadShapeType = "RAMP_HOLD"
+)
+
+// LoadShapeMetric is what a LoadShape drives. Wire values match schema
+// LoadShapeMetric (OpenAPI).
+type LoadShapeMetric string
+
+const (
+	// LoadShapeMetricVU drives concurrent virtual users (closed model).
+	LoadShapeMetricVU LoadShapeMetric = "VU"
+	// LoadShapeMetricRate drives an arrival rate in iterations/second (open model).
+	LoadShapeMetricRate LoadShapeMetric = "RATE"
+)
+
+// LoadShape is a declarative named load shape that expands into ordinary stages;
+// only the parameters its Type needs are read. Use a shape OR an explicit stages
+// list, not both. Wire keys match schema LoadShape (OpenAPI line 4813).
+//
+// Numeric levels (Baseline, Peak, Start, Step, Target) use pointer types so a
+// meaningful zero is still emitted; omitempty drops them only when nil.
+type LoadShape struct {
+	// Type is the shape kind: "SPIKE", "STAIRS" or "RAMP_HOLD" (required).
+	Type LoadShapeType `json:"type,omitempty"`
+	// Metric is what the shape drives: "VU" or "RATE".
+	Metric LoadShapeMetric `json:"metric,omitempty"`
+	// Curve is the ramp interpolation curve for ramp segments.
+	Curve RampCurve `json:"curve,omitempty"`
+	// Baseline is the SPIKE level held before and after the spike.
+	Baseline *float64 `json:"baseline,omitempty"`
+	// Peak is the SPIKE level held at the top of the spike.
+	Peak *float64 `json:"peak,omitempty"`
+	// RampUpMillis is the SPIKE baseline-to-peak ramp duration.
+	RampUpMillis int64 `json:"rampUpMillis,omitempty"`
+	// HoldMillis is the SPIKE peak-hold (and RAMP_HOLD target-hold) duration.
+	HoldMillis int64 `json:"holdMillis,omitempty"`
+	// RampDownMillis is the SPIKE peak-to-baseline ramp duration.
+	RampDownMillis int64 `json:"rampDownMillis,omitempty"`
+	// RecoveryHoldMillis is the optional SPIKE baseline hold after the down ramp.
+	RecoveryHoldMillis int64 `json:"recoveryHoldMillis,omitempty"`
+	// Start is the STAIRS level of the first step.
+	Start *float64 `json:"start,omitempty"`
+	// Step is the STAIRS rise of each step above the previous one.
+	Step *float64 `json:"step,omitempty"`
+	// Steps is the STAIRS number of steps.
+	Steps int `json:"steps,omitempty"`
+	// StepDurationMillis is the STAIRS hold duration per step.
+	StepDurationMillis int64 `json:"stepDurationMillis,omitempty"`
+	// Target is the RAMP_HOLD level ramped up to (from 0) and then held.
+	Target *float64 `json:"target,omitempty"`
+	// RampMillis is the RAMP_HOLD 0-to-target ramp duration.
+	RampMillis int64 `json:"rampMillis,omitempty"`
+}
+
+// LoadProfile describes the load over time, as EITHER an ordered list of Stages
+// OR a single named Shape (which expands into stages). Set one, not both; if
+// both are set the explicit stages win. Wire keys match schema LoadProfile
+// (OpenAPI).
 type LoadProfile struct {
-	// Stages are the ordered stages run one after another (required).
-	Stages []LoadStage `json:"stages"`
+	// Stages are the ordered stages run one after another.
+	Stages []LoadStage `json:"stages,omitempty"`
+	// Shape is a declarative named shape that expands into stages.
+	Shape *LoadShape `json:"shape,omitempty"`
 }
 
 // ConstantVusStage builds a VU hold stage holding vus virtual users for
@@ -160,6 +228,143 @@ type LoadStep struct {
 	// Labels are optional step-level annotation labels, merged over the
 	// scenario labels (step keys win).
 	Labels map[string]string `json:"labels,omitempty"`
+	// Captures are optional cross-step capture rules applied to this step's
+	// response, binding extracted values visible to SUBSEQUENT steps in the same
+	// iteration. Meaningful only under SEQUENTIAL step selection.
+	Captures []LoadCapture `json:"captures,omitempty"`
+	// Weight is the relative selection weight, used only when the scenario's
+	// StepSelection is WEIGHTED (probability proportional to weight). Omitted
+	// means 1.0 in WEIGHTED mode; must be > 0 when WEIGHTED. A pointer so a
+	// supplied value is always emitted and omitted otherwise. Ignored under the
+	// default SEQUENTIAL mode.
+	Weight *float64 `json:"weight,omitempty"`
+}
+
+// LoadCaptureSource is where a LoadCapture extracts its value from. Wire values
+// match the LoadCapture.source enum (OpenAPI).
+type LoadCaptureSource = string
+
+const (
+	// LoadCaptureBodyJSONPath extracts via a JSONPath over the response body.
+	LoadCaptureBodyJSONPath LoadCaptureSource = "BODY_JSONPATH"
+	// LoadCaptureHeader extracts a response header value.
+	LoadCaptureHeader LoadCaptureSource = "HEADER"
+	// LoadCaptureBodyRegex extracts via a regex (capture group 1) over the body.
+	LoadCaptureBodyRegex LoadCaptureSource = "BODY_REGEX"
+)
+
+// LoadCapture is a declarative cross-step capture / correlation rule: it
+// extracts a value from a step's response and binds it to a variable name a
+// later step in the same iteration can reference. Best-effort — on no match it
+// falls back to DefaultValue (when set) or leaves the variable unset, never
+// failing the run. Wire keys match schema LoadCapture (OpenAPI line 4913).
+type LoadCapture struct {
+	// Name is the variable name later steps reference (required).
+	Name string `json:"name,omitempty"`
+	// Source is where to extract from: BODY_JSONPATH, HEADER or BODY_REGEX
+	// (required).
+	Source LoadCaptureSource `json:"source,omitempty"`
+	// Expression is the JSONPath, header name or regex driving the extraction
+	// (required).
+	Expression string `json:"expression,omitempty"`
+	// DefaultValue is the optional fallback bound when extraction yields nothing.
+	DefaultValue string `json:"defaultValue,omitempty"`
+}
+
+// LoadThresholdMetric is the per-run metric a LoadThreshold evaluates. Wire
+// values match the LoadThreshold.metric enum (OpenAPI).
+type LoadThresholdMetric = string
+
+const (
+	// LoadThresholdLatencyP50 is the per-run 50th-percentile latency (ms).
+	LoadThresholdLatencyP50 LoadThresholdMetric = "LATENCY_P50"
+	// LoadThresholdLatencyP95 is the per-run 95th-percentile latency (ms).
+	LoadThresholdLatencyP95 LoadThresholdMetric = "LATENCY_P95"
+	// LoadThresholdLatencyP99 is the per-run 99th-percentile latency (ms).
+	LoadThresholdLatencyP99 LoadThresholdMetric = "LATENCY_P99"
+	// LoadThresholdLatencyP999 is the per-run 99.9th-percentile latency (ms).
+	LoadThresholdLatencyP999 LoadThresholdMetric = "LATENCY_P999"
+	// LoadThresholdErrorRate is the per-run error rate (0.0-1.0 fraction).
+	LoadThresholdErrorRate LoadThresholdMetric = "ERROR_RATE"
+	// LoadThresholdThroughputRPS is the per-run throughput (requests/second).
+	LoadThresholdThroughputRPS LoadThresholdMetric = "THROUGHPUT_RPS"
+)
+
+// LoadThreshold is an in-run pass/fail threshold for a load scenario: a per-run
+// metric compared against a value. All thresholds must hold for the run verdict
+// to be PASS (logical AND); any breach makes the verdict FAIL. Wire keys match
+// schema LoadThreshold (OpenAPI line 4935). All three fields are required.
+type LoadThreshold struct {
+	// Metric is the per-run metric to evaluate (required).
+	Metric LoadThresholdMetric `json:"metric,omitempty"`
+	// Comparator is how the observed value is compared to the threshold:
+	// LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL
+	// (required).
+	Comparator string `json:"comparator,omitempty"`
+	// Threshold is the threshold value (ms for latency, 0.0-1.0 for ERROR_RATE,
+	// requests/second for THROUGHPUT_RPS) (required).
+	Threshold float64 `json:"threshold,omitempty"`
+}
+
+// LoadPacingMode is how a LoadPacing target iteration cycle is derived. Wire
+// values match the LoadPacing.mode enum (OpenAPI).
+type LoadPacingMode = string
+
+const (
+	// LoadPacingNone disables pacing (immediate reschedule).
+	LoadPacingNone LoadPacingMode = "NONE"
+	// LoadPacingConstantPacing treats Value as the target cycle in milliseconds.
+	LoadPacingConstantPacing LoadPacingMode = "CONSTANT_PACING"
+	// LoadPacingConstantThroughput treats Value as target iterations/second per VU.
+	LoadPacingConstantThroughput LoadPacingMode = "CONSTANT_THROUGHPUT"
+)
+
+// LoadPacing is adaptive iteration pacing (think-time) for a load scenario: a
+// target per-virtual-user iteration cycle time. Applies only to the closed-model
+// VU loop (open-model RATE iterations ignore it) and composes with per-step
+// ThinkTime. Wire keys match schema LoadPacing (OpenAPI line 4955). Both fields
+// are required.
+type LoadPacing struct {
+	// Mode is how the target cycle is derived from Value: NONE, CONSTANT_PACING
+	// or CONSTANT_THROUGHPUT (required).
+	Mode LoadPacingMode `json:"mode,omitempty"`
+	// Value is the target cycle in milliseconds (CONSTANT_PACING) or target
+	// iterations/second per VU (CONSTANT_THROUGHPUT); must be > 0 when Mode is
+	// not NONE; ignored when NONE (required).
+	Value float64 `json:"value,omitempty"`
+}
+
+// LoadFeederStrategy is how a LoadFeeder selects a row each iteration. Wire
+// values match the LoadFeeder.strategy enum (OpenAPI).
+type LoadFeederStrategy = string
+
+const (
+	// LoadFeederCircular cycles rows[globalIteration % size] and never exhausts.
+	LoadFeederCircular LoadFeederStrategy = "CIRCULAR"
+	// LoadFeederRandom picks a uniformly random row each iteration.
+	LoadFeederRandom LoadFeederStrategy = "RANDOM"
+	// LoadFeederSequential uses each row once in order and COMPLETES the run once
+	// the dataset is exhausted.
+	LoadFeederSequential LoadFeederStrategy = "SEQUENTIAL"
+)
+
+// LoadFeeder is parameterized test data (a data feeder) for a load scenario: an
+// inline dataset from which one row is selected per iteration and exposed to the
+// iteration's templated request fields. The dataset is always inline. Supply
+// EITHER Rows (the primary form) OR Data + Format; when both are given Rows wins.
+// Wire keys match schema LoadFeeder (OpenAPI line 4971).
+type LoadFeeder struct {
+	// Rows is the inline dataset: a list of column-name to value maps, one per
+	// row (the primary mechanism). Must be non-empty when used.
+	Rows []map[string]string `json:"rows,omitempty"`
+	// Data is an optional raw inline dataset parsed server-side into rows per
+	// Format. Ignored when Rows is set.
+	Data string `json:"data,omitempty"`
+	// Format is the format of Data: CSV or JSON (required when Data is set).
+	Format string `json:"format,omitempty"`
+	// Strategy is how a row is chosen each iteration: CIRCULAR (default), RANDOM
+	// or SEQUENTIAL.
+	Strategy LoadFeederStrategy `json:"strategy,omitempty"`
 }
 
 // LoadScenario is an API-driven load scenario: ordered templated steps driven
@@ -177,11 +382,35 @@ type LoadScenario struct {
 	StartDelayMillis int64 `json:"startDelayMillis,omitempty"`
 	// Labels are optional scenario-level annotation labels.
 	Labels map[string]string `json:"labels,omitempty"`
+	// Thresholds are optional in-run pass/fail thresholds; the run carries a PASS
+	// verdict iff all hold, FAIL otherwise. Empty/omitted means no verdict.
+	Thresholds []LoadThreshold `json:"thresholds,omitempty"`
+	// AbortOnFail, when true, aborts the run early on a FAIL verdict (terminal
+	// STOPPED state, abortedByThreshold set); default false.
+	AbortOnFail bool `json:"abortOnFail,omitempty"`
+	// AbortGraceMillis suppresses AbortOnFail for the first N milliseconds of the
+	// run so noisy startup samples cannot trigger a premature abort.
+	AbortGraceMillis int64 `json:"abortGraceMillis,omitempty"`
+	// Pacing is optional adaptive iteration pacing (closed-model VU loop only).
+	Pacing *LoadPacing `json:"pacing,omitempty"`
+	// Feeder is optional parameterized inline test data exposed per iteration.
+	Feeder *LoadFeeder `json:"feeder,omitempty"`
 	// Profile is the ramp profile (required).
 	Profile *LoadProfile `json:"profile,omitempty"`
+	// StepSelection is how each iteration selects which steps to run: SEQUENTIAL
+	// (default, all steps in order) or WEIGHTED (one step per iteration by weight).
+	StepSelection string `json:"stepSelection,omitempty"`
 	// Steps is the ordered list of request steps fired each iteration (required).
 	Steps []LoadStep `json:"steps,omitempty"`
 }
+
+// StepSelection wire values for LoadScenario.StepSelection (OpenAPI).
+const (
+	// StepSelectionSequential runs ALL steps in declared order each iteration.
+	StepSelectionSequential = "SEQUENTIAL"
+	// StepSelectionWeighted runs exactly ONE step per iteration chosen by weight.
+	StepSelectionWeighted = "WEIGHTED"
+)
 
 // LoadScenarioState is the lifecycle state of a registered load scenario.
 // One of LOADED, PENDING, RUNNING, COMPLETED, STOPPED.
@@ -212,21 +441,46 @@ type LoadScenarioRef struct {
 // of name/state/definition), present only once the scenario has run, so it is
 // embedded into LoadScenarioEntry and carries no name/state of its own.
 type LoadScenarioStatus struct {
-	ElapsedMillis int64             `json:"elapsedMillis,omitempty"`
-	CurrentVus    int               `json:"currentVus,omitempty"`
-	StageIndex    int               `json:"stageIndex,omitempty"`
-	StageType     string            `json:"stageType,omitempty"`
-	CurrentTarget float64           `json:"currentTarget,omitempty"`
-	RequestsSent  int64             `json:"requestsSent,omitempty"`
-	Succeeded     int64             `json:"succeeded,omitempty"`
-	Failed        int64             `json:"failed,omitempty"`
-	P50Millis     float64           `json:"p50Millis,omitempty"`
-	P95Millis     float64           `json:"p95Millis,omitempty"`
-	P99Millis     float64           `json:"p99Millis,omitempty"`
-	RunID         string            `json:"runId,omitempty"`
-	StartedAt     int64             `json:"startedAt,omitempty"`
-	EndedAt       int64             `json:"endedAt,omitempty"`
-	Labels        map[string]string `json:"labels,omitempty"`
+	ElapsedMillis int64   `json:"elapsedMillis,omitempty"`
+	CurrentVus    int     `json:"currentVus,omitempty"`
+	StageIndex    int     `json:"stageIndex,omitempty"`
+	StageType     string  `json:"stageType,omitempty"`
+	CurrentTarget float64 `json:"currentTarget,omitempty"`
+	RequestsSent  int64   `json:"requestsSent,omitempty"`
+	Succeeded     int64   `json:"succeeded,omitempty"`
+	Failed        int64   `json:"failed,omitempty"`
+	P50Millis     float64 `json:"p50Millis,omitempty"`
+	P95Millis     float64 `json:"p95Millis,omitempty"`
+	P99Millis     float64 `json:"p99Millis,omitempty"`
+	P999Millis    float64 `json:"p999Millis,omitempty"`
+	// DroppedIterations are iterations that were due but never dispatched because a
+	// safety cap was hit (rate_limit + inflight_cap throttles for this run).
+	DroppedIterations int64 `json:"droppedIterations,omitempty"`
+	// Verdict is the in-run threshold verdict: "PASS" or "FAIL"; absent when the
+	// scenario has no thresholds or none has been evaluated yet.
+	Verdict string `json:"verdict,omitempty"`
+	// AbortedByThreshold is true when this run was terminated early by an
+	// abortOnFail threshold breach.
+	AbortedByThreshold bool `json:"abortedByThreshold,omitempty"`
+	// ThresholdResults are the per-threshold results behind the verdict (present
+	// when thresholds were evaluated).
+	ThresholdResults []LoadThresholdResult `json:"thresholdResults,omitempty"`
+	RunID            string                `json:"runId,omitempty"`
+	StartedAt        int64                 `json:"startedAt,omitempty"`
+	EndedAt          int64                 `json:"endedAt,omitempty"`
+	Labels           map[string]string     `json:"labels,omitempty"`
+}
+
+// LoadThresholdResult is a single per-threshold result behind a run verdict. Wire
+// keys match the thresholdResults item of schema LoadScenarioListEntry (OpenAPI).
+type LoadThresholdResult struct {
+	Metric     LoadThresholdMetric `json:"metric,omitempty"`
+	Comparator string              `json:"comparator,omitempty"`
+	Threshold  float64             `json:"threshold,omitempty"`
+	// Observed is the observed per-run value at evaluation time (latency ms,
+	// error-rate fraction, or requests/second).
+	Observed  float64 `json:"observed,omitempty"`
+	Satisfied bool    `json:"satisfied,omitempty"`
 }
 
 // LoadScenarioEntry is one entry of the registry listing: the scenario name,
@@ -427,6 +681,73 @@ func (c *Client) RunLoadScenario(scenario LoadScenario) (*LoadScenarioStartResul
 		return nil, err
 	}
 	return c.StartLoadScenarios(scenario.Name)
+}
+
+// GetLoadScenarioReport returns the end-of-run summary report for a scenario run
+// (GET /mockserver/loadScenario/{name}/report). With format "" the JSON report
+// is returned; with format "junit" a JUnit-XML <testsuite> document is returned
+// (so a load run becomes a first-class CI test artifact). The raw response body
+// is returned verbatim. Returns an error if the scenario never ran (HTTP 404).
+func (c *Client) GetLoadScenarioReport(name string, format string) (string, error) {
+	var params url.Values
+	if format != "" {
+		params = url.Values{"format": []string{format}}
+	}
+
+	respBody, statusCode, err := c.doRequest("GET", "/mockserver/loadScenario/"+url.PathEscape(name)+"/report", nil, params)
+	if err != nil {
+		return "", err
+	}
+	if statusCode == 404 {
+		return "", fmt.Errorf("mockserver: load scenario %q has no run report", name)
+	}
+	if statusCode >= 400 {
+		return "", fmt.Errorf("mockserver: get load scenario report failed (status %d): %s", statusCode, string(respBody))
+	}
+	return string(respBody), nil
+}
+
+// GenerateLoadScenarioFromOpenAPI seeds a load scenario from an OpenAPI spec and
+// loads (registers) it in the LOADED state without running it
+// (PUT /mockserver/loadScenario/generateFromOpenAPI). The body is the request
+// document ({name, specUrlOrPayload, optional target, optional profile}); a map
+// or a typed struct may be passed. The decoded response ({status, name, state,
+// scenario}) is returned as raw JSON for the caller to inspect or edit.
+func (c *Client) GenerateLoadScenarioFromOpenAPI(body interface{}) (interface{}, error) {
+	return c.generateLoadScenario("/mockserver/loadScenario/generateFromOpenAPI", "generate load scenario from OpenAPI", body)
+}
+
+// GenerateLoadScenarioFromRecording seeds a load scenario from recorded proxy
+// traffic and loads (registers) it in the LOADED state without running it
+// (PUT /mockserver/loadScenario/generateFromRecording). The body is the request
+// document ({name, optional mode, requestFilter, maxSteps, target, profile}); a
+// map or a typed struct may be passed. The decoded response ({status, name,
+// state, scenario}) is returned as raw JSON for the caller to inspect or edit.
+func (c *Client) GenerateLoadScenarioFromRecording(body interface{}) (interface{}, error) {
+	return c.generateLoadScenario("/mockserver/loadScenario/generateFromRecording", "generate load scenario from recording", body)
+}
+
+// generateLoadScenario is the shared transport for the two generate endpoints.
+func (c *Client) generateLoadScenario(path, action string, body interface{}) (interface{}, error) {
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("mockserver: marshal %s request: %w", action, err)
+	}
+
+	respBody, statusCode, err := c.doRequest("PUT", path, reqBody, nil)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode >= 400 {
+		return nil, fmt.Errorf("mockserver: %s failed (status %d): %s", action, statusCode, string(respBody))
+	}
+	var result interface{}
+	if len(respBody) > 0 {
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			return nil, fmt.Errorf("mockserver: unmarshal %s result: %w", action, err)
+		}
+	}
+	return result, nil
 }
 
 // -----------------------------------------------------------------------------

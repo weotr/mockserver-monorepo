@@ -22,6 +22,14 @@ public class LlmQuotaRegistry {
 
     private static final LlmQuotaRegistry INSTANCE = new LlmQuotaRegistry(System::currentTimeMillis);
 
+    // Cap the number of distinct quota names retained. Without this, a workload that
+    // uses many one-off quota names would leak a map entry per name forever (a window
+    // is only replaced when the same name is reused). When the cap is exceeded we
+    // opportunistically evict windows that have already expired relative to their own
+    // window length, which is always safe — an expired window is recreated fresh on
+    // next access anyway.
+    private static final int MAX_WINDOWS = 10_000;
+
     private final ConcurrentHashMap<String, Window> windows = new ConcurrentHashMap<>();
     private final LongSupplier clock;
 
@@ -71,11 +79,30 @@ public class LlmQuotaRegistry {
         long now = clock.getAsLong();
         Window updated = windows.compute(name, (key, existing) -> {
             if (existing == null || now - existing.startMillis >= windowMillis) {
-                return new Window(now, amount);
+                return new Window(now, amount, windowMillis);
             }
-            return new Window(existing.startMillis, existing.count + amount);
+            return new Window(existing.startMillis, existing.count + amount, existing.windowMillis);
         });
+        if (windows.size() > MAX_WINDOWS) {
+            evictExpiredWindows(now);
+        }
         return updated.count <= limit;
+    }
+
+    /**
+     * Opportunistically remove windows that have already expired (relative to their
+     * own window length). Safe because an expired window is reconstructed fresh on the
+     * next {@code tryAcquire} for that name; this only reclaims memory for idle, never
+     * reused quota names. Uses {@code remove(key, value)} so a window that was
+     * concurrently refreshed is not dropped.
+     */
+    private void evictExpiredWindows(long now) {
+        for (java.util.Map.Entry<String, Window> entry : windows.entrySet()) {
+            Window window = entry.getValue();
+            if (now - window.startMillis >= window.windowMillis) {
+                windows.remove(entry.getKey(), window);
+            }
+        }
     }
 
     /**
@@ -88,10 +115,12 @@ public class LlmQuotaRegistry {
     private static final class Window {
         private final long startMillis;
         private final long count; // long (not int) so a never-expiring window can't overflow; compared against int limit by widening
+        private final long windowMillis; // retained so expired windows can be opportunistically evicted
 
-        private Window(long startMillis, long count) {
+        private Window(long startMillis, long count, long windowMillis) {
             this.startMillis = startMillis;
             this.count = count;
+            this.windowMillis = windowMillis;
         }
     }
 }

@@ -12,6 +12,7 @@ import org.slf4j.event.Level;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
 import static org.mockserver.netty.HttpRequestHandler.setProxyingRequest;
 import static org.mockserver.netty.unification.PortUnificationHandler.disableSslDownstream;
 import static org.mockserver.netty.unification.PortUnificationHandler.enableSslDownstream;
@@ -59,6 +60,13 @@ public abstract class SocksProxyHandler<T> extends SimpleChannelInboundHandler<T
                 new LogEntry()
                     .setLogLevel(Level.ERROR)
                     .setMessageFormat("exception caught by SOCKS proxy handler -> closing pipeline " + ctx.channel())
+                    .setThrowable(cause)
+            );
+        } else if (isSslOrDecoderFault(cause)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("SSL or decoder fault caught by SOCKS proxy handler -> closing pipeline " + ctx.channel())
                     .setThrowable(cause)
             );
         }

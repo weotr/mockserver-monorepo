@@ -17,6 +17,8 @@ import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThanOrEqualTo;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.Assert.assertEquals;
@@ -210,5 +212,122 @@ public class LlmOptimisationReportBuilderTest {
         assertEquals(300, report.getTotals().getInputTokens());
         assertEquals(30, report.getTotals().getOutputTokens());
         assertEquals(300, report.getTotals().getTotalLatencyMs());
+    }
+
+    // --- verdict ---
+
+    @Test
+    public void emptyReportStillHasGradeAVerdict() {
+        LlmOptimisationReport report = builder.build(Collections.emptyList(), "host:none",
+            LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        LlmOptimisationReport.Verdict v = report.getVerdict();
+        assertThat(v, notNullValue());
+        assertEquals("A", v.getGrade());
+        assertEquals("No optimisation opportunities detected.", v.getRationale());
+        assertEquals(0.0, v.getTotalEstimatedSavingUsd(), 0.0);
+        assertEquals(0, v.getTotalWastedInputTokens());
+        assertEquals(0.0, v.getSavingFractionOfSpend(), 0.0);
+    }
+
+    @Test
+    public void verdictTotalSavingNeverExceedsSpend() {
+        // Many repeated calls so several overlapping signals fire; the verdict
+        // headline must remain clamped to total spend.
+        List<CapturedExchange> exchanges = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            exchanges.add(exchange(openAiRequest("gpt-4o-2024-08-06", "a long static system brief repeated every turn", "q" + i),
+                openAiUsageResponse("gpt-4o-2024-08-06", 4000, 50, "stop"), 100L));
+        }
+        LlmOptimisationReport report = builder.build(exchanges, "host:api.openai.com",
+            LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        LlmOptimisationReport.Verdict v = report.getVerdict();
+        assertThat(v.getTotalEstimatedSavingUsd(),
+            is(lessThanOrEqualTo(report.getTotals().getEstimatedCostUsd())));
+        assertThat(v.getSavingFractionOfSpend(), is(lessThanOrEqualTo(1.0)));
+        assertThat(v.getGrade(), notNullValue());
+    }
+
+    @Test
+    public void verdictSeverityFloorPreventsGradeAWithHighSignal() {
+        // A large repeated context fires a HIGH signal; even if the saving fraction
+        // is tiny, grade must not be "A".
+        List<CapturedExchange> exchanges = new ArrayList<>();
+        StringBuilder bigSystem = new StringBuilder();
+        for (int i = 0; i < 9000; i++) {
+            bigSystem.append('x'); // ~2250 tokens, above LARGE_CONTEXT_TOKEN_THRESHOLD
+        }
+        for (int i = 0; i < 2; i++) {
+            exchanges.add(exchange(openAiRequest("gpt-4o-2024-08-06", bigSystem.toString(), "q" + i),
+                openAiUsageResponse("gpt-4o-2024-08-06", 100000, 50, "stop"), 100L));
+        }
+        LlmOptimisationReport report = builder.build(exchanges, "host:api.openai.com",
+            LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        assertThat(report.getVerdict().getHighCount(), is(greaterThan(0)));
+        assertThat(report.getVerdict().getGrade(), is(not("A")));
+    }
+
+    // --- KPIs ---
+
+    @Test
+    public void cacheHitRatioComputedFromCachedInputTokens() {
+        HttpResponse cached = response().withStatusCode(200)
+            .withBody("{\"model\":\"gpt-4o-2024-08-06\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}],"
+                + "\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":10,\"prompt_tokens_details\":{\"cached_tokens\":250}}}");
+        LlmOptimisationReport report = builder.build(
+            Collections.singletonList(exchange(openAiRequest("gpt-4o-2024-08-06", "sys", "hi"), cached, 100L)),
+            "host:api.openai.com", LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        assertEquals(250, report.getTotals().getCachedInputTokens());
+        assertEquals(0.25, report.getTotals().getCacheHitRatio(), 1e-9);
+    }
+
+    @Test
+    public void cacheHitRatioZeroWhenNoInput() {
+        LlmOptimisationReport report = builder.build(Collections.emptyList(), "k",
+            LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        assertEquals(0.0, report.getTotals().getCacheHitRatio(), 0.0);
+    }
+
+    @Test
+    public void retryCallCountAndOneShotRateWindowed() {
+        // 3 identical consecutive calls → 2 retries (calls 1 and 2 each match a prior within window).
+        List<CapturedExchange> exchanges = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            exchanges.add(exchange(openAiRequest("gpt-4o-2024-08-06", "same system", "same question"),
+                openAiUsageResponse("gpt-4o-2024-08-06", 500, 20, "stop"), 100L));
+        }
+        LlmOptimisationReport report = builder.build(exchanges, "host:api.openai.com",
+            LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        assertEquals(2, report.getTotals().getRetryCallCount());
+        // oneShotRate = 1 - 2/3 = 0.3333
+        assertEquals(0.3333, report.getTotals().getOneShotRate(), 1e-4);
+    }
+
+    @Test
+    public void noRetriesGivesOneShotRateOne() {
+        List<CapturedExchange> exchanges = new ArrayList<>();
+        exchanges.add(exchange(openAiRequest("gpt-4o-2024-08-06", "sys", "a different question"),
+            openAiUsageResponse("gpt-4o-2024-08-06", 500, 20, "stop"), 100L));
+        exchanges.add(exchange(openAiRequest("gpt-4o-2024-08-06", "sys", "another different one"),
+            openAiUsageResponse("gpt-4o-2024-08-06", 700, 20, "stop"), 100L));
+        LlmOptimisationReport report = builder.build(exchanges, "host:api.openai.com",
+            LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        assertEquals(0, report.getTotals().getRetryCallCount());
+        assertEquals(1.0, report.getTotals().getOneShotRate(), 0.0);
+    }
+
+    // --- defined tools capture ---
+
+    @Test
+    public void definedToolsCapturedFromOpenAiRequest() {
+        HttpRequest withTools = request().withMethod("POST").withPath("/v1/chat/completions")
+            .withHeader("Host", "api.openai.com")
+            .withBody("{\"model\":\"gpt-4o-2024-08-06\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],"
+                + "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"description\":\"Get weather\"}}]}");
+        LlmOptimisationReport report = builder.build(
+            Collections.singletonList(exchange(withTools, openAiUsageResponse("gpt-4o-2024-08-06", 100, 10, "stop"), 100L)),
+            "host:api.openai.com", LlmOptimisationReport.GroupingBasis.PROXY_HOST, headers(), Collections.emptyList());
+        LlmOptimisationReport.Call call = report.getCalls().get(0);
+        assertThat(call.getDefinedToolNames(), contains("get_weather"));
+        assertThat(call.getDefinedToolTokens(), greaterThan(0L));
     }
 }

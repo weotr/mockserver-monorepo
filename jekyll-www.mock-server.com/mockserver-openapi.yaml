@@ -4,7 +4,7 @@ servers:
   - url: 'https://localhost:1080/'
 info:
   title: MockServer API
-  version: 7.1.0
+  version: 7.2.0
   description: >-
     MockServer enables easy mocking of any system you integrate with via HTTP or HTTPS with clients written in Java, JavaScript and Ruby and a simple REST API (as shown below).
 
@@ -2853,6 +2853,232 @@ paths:
                 properties:
                   error:
                     type: string
+  /mockserver/loadScenario/{name}/report:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        description: the load scenario name
+        schema:
+          type: string
+      - name: format
+        in: query
+        required: false
+        description: >-
+          report format. Omit (or any value other than "junit") for the JSON report;
+          "junit" returns a JUnit-XML <testsuite> (Content-Type application/xml) so a
+          load run becomes a first-class CI test artifact.
+        schema:
+          type: string
+          enum: [junit]
+    get:
+      tags:
+        - loadgen
+      summary: end-of-run summary report for a load scenario run
+      description: >-
+        Returns an end-of-run summary report derived from the run's status snapshot — the live
+        snapshot while running, or the retained terminal snapshot once finished. The default JSON
+        form carries counts, latency percentiles, the threshold verdict and per-threshold results.
+        With ?format=junit the same data is rendered as a JUnit-XML <testsuite> (one <testcase> per
+        threshold, a <failure> per breach, plus a "run completed" testcase) so CI consumers render
+        per-threshold pass/fail. 404 if the scenario never ran.
+      responses:
+        '200':
+          description: report returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoadScenarioReport"
+            application/xml:
+              schema:
+                type: string
+                description: JUnit-XML <testsuite> document (returned when format=junit)
+        '404':
+          description: no load scenario run for that name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /mockserver/loadScenario/generateFromOpenAPI:
+    put:
+      tags:
+        - loadgen
+      summary: seed a load scenario from an OpenAPI specification
+      description: >-
+        Generates an editable load scenario from an OpenAPI spec and loads (registers) it into the
+        registry under "name" in the LOADED state — exactly like PUT /mockserver/loadScenario, it
+        generates no traffic and is allowed even when loadGenerationEnabled is false. One step is
+        produced per OpenAPI operation (in a stable path-then-method order), each with the operation's
+        method and server-prefixed path, a representative request-body example, and a Content-Type
+        header. The spec is accepted identically to PUT /mockserver/openapi/expectation — an inline
+        JSON/YAML payload, a URL, or a file/classpath reference. Target precedence for where each request
+        is sent (carried as the request's Host header and secure flag): an explicit "target" wins, else
+        the spec's servers[0] URL, else the request is left path-only for the operator to edit. When no
+        "profile" is supplied a conservative default is applied (one short constant-VU stage) so the
+        scenario is immediately runnable yet safe — the operator edits it before scaling up. The
+        generated scenario is returned so a client/UI can show and edit it before triggering a run.
+      responses:
+        '200':
+          description: load scenario generated and loaded (registered)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                    enum: [loaded]
+                  name:
+                    type: string
+                  state:
+                    type: string
+                    enum: [LOADED, PENDING, RUNNING, COMPLETED, STOPPED]
+                  scenario:
+                    $ref: "#/components/schemas/LoadScenario"
+        '400':
+          description: missing name/spec, an unparseable spec, a spec with no operations, or a generated scenario that fails validation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - specUrlOrPayload
+              properties:
+                name:
+                  type: string
+                  description: the generated scenario name (the unique registry key)
+                specUrlOrPayload:
+                  type: string
+                  description: the OpenAPI spec as an inline JSON/YAML payload, a URL, or a file/classpath reference
+                target:
+                  type: object
+                  description: explicit network target for every generated step (overrides the spec's servers[0])
+                  properties:
+                    host:
+                      type: string
+                    port:
+                      type: integer
+                    scheme:
+                      type: string
+                      enum: [http, https]
+                profile:
+                  $ref: "#/components/schemas/LoadProfile"
+            example:
+              name: petstore-load
+              specUrlOrPayload: "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml"
+              target:
+                host: petstore.svc
+                port: 8080
+                scheme: http
+        description: the scenario name plus the OpenAPI spec (with optional target and profile)
+        required: true
+  /mockserver/loadScenario/generateFromRecording:
+    put:
+      tags:
+        - loadgen
+      summary: seed a load scenario from recorded proxy traffic
+      description: >-
+        Generates an editable load scenario from traffic previously recorded by MockServer in
+        proxy/recording mode (the requests held by the event log) and loads (registers) it into the
+        registry under "name" in the LOADED state — exactly like PUT /mockserver/loadScenario, it
+        generates no traffic and is allowed even when loadGenerationEnabled is false. Two modes control
+        how recorded requests become steps. VERBATIM (the default) emits one step per recorded request,
+        in recorded order, preserving the concrete path, body and headers — with an optional "maxSteps"
+        cap. TEMPLATIZED deduplicates recorded requests by (method, templatised-path) — id-shaped path
+        segments such as /orders/123 collapse to /orders/{id} — keeping one representative example per
+        unique route, ordered by descending hit frequency (most-hit routes first); each step's "weight" is
+        set to its route's observed hit count and the scenario uses "stepSelection": "WEIGHTED" so replay
+        reproduces the recorded traffic mix. An optional "requestFilter" (an HttpRequest matcher) selects which recorded requests to
+        include; absent means all recorded requests. An optional "target" is applied to every step
+        (overriding each recorded request's own Host/secure routing); absent leaves each recorded
+        request's routing untouched. When no "profile" is supplied a conservative default is applied (one
+        short constant-VU stage) so the scenario is immediately runnable yet safe — the operator edits it
+        before scaling up. The generated scenario is returned so a client/UI can show and edit it before
+        triggering a run.
+      responses:
+        '200':
+          description: load scenario generated and loaded (registered)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                properties:
+                  status:
+                    type: string
+                    enum: [loaded]
+                  name:
+                    type: string
+                  state:
+                    type: string
+                    enum: [LOADED, PENDING, RUNNING, COMPLETED, STOPPED]
+                  scenario:
+                    $ref: "#/components/schemas/LoadScenario"
+        '400':
+          description: missing name, no recorded requests to convert, an invalid mode, or a generated scenario that fails validation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  description: the generated scenario name (the unique registry key)
+                mode:
+                  type: string
+                  enum: [VERBATIM, TEMPLATIZED]
+                  default: VERBATIM
+                  description: VERBATIM = one step per recorded request; TEMPLATIZED = one step per unique (method, templatised-path) route, ordered by descending frequency
+                requestFilter:
+                  $ref: "#/components/schemas/HttpRequest"
+                maxSteps:
+                  type: integer
+                  description: optional cap on the number of VERBATIM steps (keeps the first N recorded requests)
+                target:
+                  type: object
+                  description: explicit network target applied to every generated step (overrides each recorded request's own Host/secure routing)
+                  properties:
+                    host:
+                      type: string
+                    port:
+                      type: integer
+                    scheme:
+                      type: string
+                      enum: [http, https]
+                profile:
+                  $ref: "#/components/schemas/LoadProfile"
+            example:
+              name: replay-prod-traffic
+              mode: TEMPLATIZED
+              target:
+                host: staging.svc
+                port: 8080
+                scheme: http
+        description: the scenario name plus optional mode, requestFilter, maxSteps, target and profile
+        required: true
   /mockserver/loadScenario/start:
     put:
       tags:
@@ -4577,18 +4803,81 @@ components:
         maxVus:
           type: integer
           description: "RATE stage only: optional cap on the auto-scaling virtual-user pool that runs the started iterations (defaults to the global virtual-user cap)"
-    LoadProfile:
-      description: "an ordered list of stages run in sequence describing the load over time"
+    LoadShapeType:
+      type: string
+      enum: [SPIKE, STAIRS, RAMP_HOLD]
+      description: "named load shape: SPIKE (ramp up, hold the peak, ramp back down, optional recovery hold); STAIRS (a flight of pure-hold steps, each one 'step' higher); RAMP_HOLD (ramp 0 to target then hold)."
+    LoadShapeMetric:
+      type: string
+      enum: [VU, RATE]
+      description: "what the shape drives: VU = concurrent virtual users (closed model); RATE = arrival rate in iterations/second (open model). A shape expands into ordinary LoadStage stages of this type."
+    LoadShape:
+      description: "a declarative named load shape that expands into ordinary stages; only the parameters its 'type' needs are read, the rest are ignored. Use a shape OR an explicit 'stages' list, not both."
       type: object
       additionalProperties: false
       required:
-        - stages
+        - type
+      properties:
+        type:
+          $ref: "#/components/schemas/LoadShapeType"
+        metric:
+          $ref: "#/components/schemas/LoadShapeMetric"
+        curve:
+          $ref: "#/components/schemas/RampCurve"
+        baseline:
+          type: number
+          description: "SPIKE: the level held before and after the spike"
+        peak:
+          type: number
+          description: "SPIKE: the level held at the top of the spike"
+        rampUpMillis:
+          type: integer
+          format: int64
+          description: "SPIKE: duration of the baseline to peak ramp"
+        holdMillis:
+          type: integer
+          format: int64
+          description: "SPIKE: duration to hold at the peak; RAMP_HOLD: duration to hold at the target"
+        rampDownMillis:
+          type: integer
+          format: int64
+          description: "SPIKE: duration of the peak to baseline ramp"
+        recoveryHoldMillis:
+          type: integer
+          format: int64
+          description: "SPIKE (optional): duration to hold at baseline after the down ramp"
+        start:
+          type: number
+          description: "STAIRS: the level of the first step"
+        step:
+          type: number
+          description: "STAIRS: how much each step rises above the previous one"
+        steps:
+          type: integer
+          description: "STAIRS: the number of steps"
+        stepDurationMillis:
+          type: integer
+          format: int64
+          description: "STAIRS: how long each step holds at its level"
+        target:
+          type: number
+          description: "RAMP_HOLD: the level ramped up to (from 0) and then held"
+        rampMillis:
+          type: integer
+          format: int64
+          description: "RAMP_HOLD: duration of the 0 to target ramp"
+    LoadProfile:
+      description: "describes the load over time, as EITHER an ordered list of 'stages' OR a single named 'shape' (which expands into stages). Set one, not both; if both are set the explicit stages win."
+      type: object
+      additionalProperties: false
       properties:
         stages:
           type: array
           description: "ordered stages run one after another (max 20). Each holds or ramps virtual users (VU, closed model) or an arrival rate (RATE, open model), or pauses (PAUSE)."
           items:
             $ref: "#/components/schemas/LoadStage"
+        shape:
+          $ref: "#/components/schemas/LoadShape"
     LoadStep:
       description: "a single templated request step in a load scenario"
       type: object
@@ -4614,6 +4903,96 @@ components:
           additionalProperties:
             type: string
           description: "optional step-level custom annotation labels, merged over the scenario labels (step keys win); exported as OpenTelemetry attributes on every load measurement and as allowlisted Prometheus labels"
+        captures:
+          type: array
+          description: "optional cross-step capture rules applied to this step's response. Each binds an extracted value to a variable name visible to SUBSEQUENT steps in the same iteration via $iteration.captured.<name> (Velocity) / {{iteration.captured.<name>}} (Mustache), in path, body and header templates. Scope is per-iteration (one virtual user's single pass through the steps)."
+          items:
+            $ref: "#/components/schemas/LoadCapture"
+        weight:
+          type: number
+          description: "relative selection weight, used only when the scenario's stepSelection is WEIGHTED: each iteration runs exactly ONE step chosen at random with probability proportional to its weight (e.g. weights 7 / 2 / 1 model a 70% / 20% / 10% mixed workload). Omitted means 1.0 in WEIGHTED mode; must be > 0 when WEIGHTED. Ignored under the default SEQUENTIAL mode (all steps run in order)."
+    LoadCapture:
+      description: "a declarative cross-step capture / correlation rule: extracts a value from a step's response and binds it to a variable name that a later step in the same iteration can reference from its templated request fields. Best-effort: on no match it falls back to defaultValue (when set) or leaves the variable unset, never failing the run."
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - source
+        - expression
+      properties:
+        name:
+          type: string
+          description: "the variable name later steps reference (e.g. 'token' for $iteration.captured.token)"
+        source:
+          type: string
+          enum: [BODY_JSONPATH, HEADER, BODY_REGEX]
+          description: "where to extract from: a JSONPath over the response body, a response header value, or a regex over the response body string"
+        expression:
+          type: string
+          description: "the JSONPath (BODY_JSONPATH), header name (HEADER), or regex (BODY_REGEX, capture group 1) driving the extraction"
+        defaultValue:
+          type: string
+          description: "optional fallback value bound to the variable when extraction yields nothing; when omitted the variable is left unset on no match"
+    LoadThreshold:
+      description: "an in-run pass/fail threshold for a load scenario: a per-run metric compared against a value. All thresholds must hold for the run verdict to be PASS (logical AND); any breach makes the verdict FAIL. Evaluated from this run's own latency histogram and counters, not the global SLO sample store."
+      type: object
+      additionalProperties: false
+      required:
+        - metric
+        - comparator
+        - threshold
+      properties:
+        metric:
+          type: string
+          enum: [LATENCY_P50, LATENCY_P95, LATENCY_P99, LATENCY_P999, ERROR_RATE, THROUGHPUT_RPS]
+          description: "the per-run metric to evaluate: latency percentiles in milliseconds, ERROR_RATE as a 0.0-1.0 fraction, THROUGHPUT_RPS as requests/second over the run's elapsed time"
+        comparator:
+          type: string
+          enum: [LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL]
+          description: "how the observed per-run value is compared to the threshold"
+        threshold:
+          type: number
+          description: "the threshold value (milliseconds for latency metrics, a 0.0-1.0 fraction for ERROR_RATE, requests/second for THROUGHPUT_RPS)"
+    LoadPacing:
+      description: "adaptive iteration pacing (think-time) for a load scenario: a target per-virtual-user iteration cycle time. After a closed-model VU finishes one pass through the steps, the orchestrator waits whatever remains of the target cycle before launching that VU's next iteration; on overrun the next iteration starts immediately (no wait). Applies only to the closed-model VU loop — open-model RATE iterations ignore it, their arrival rate already governing spacing — and composes with per-step thinkTime. In-flight latency measurement is unchanged; pacing only affects when the next iteration launches."
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - value
+      properties:
+        mode:
+          type: string
+          enum: [NONE, CONSTANT_PACING, CONSTANT_THROUGHPUT]
+          default: NONE
+          description: "how the target iteration cycle is derived from value: NONE = no pacing (immediate reschedule); CONSTANT_PACING = value is the target cycle in milliseconds; CONSTANT_THROUGHPUT = value is the target iterations/second per VU (cycle = 1000 / value ms)"
+        value:
+          type: number
+          description: "for CONSTANT_PACING the target cycle in milliseconds; for CONSTANT_THROUGHPUT the target iterations/second per VU. Must be > 0 when mode is not NONE; ignored when mode is NONE."
+    LoadFeeder:
+      description: "parameterized test data (a data feeder) for a load scenario: an inline dataset from which one row is selected per iteration and exposed to that iteration's templated request path, body and headers as $iteration.data.<column> (Velocity) / {{iteration.data.<column>}} (Mustache). The dataset is always inline (no external URL or file source). Supply EITHER rows (inline list of objects, the primary form) OR data + format (raw CSV/JSON parsed server-side); when both are given rows wins."
+      type: object
+      additionalProperties: false
+      properties:
+        rows:
+          type: array
+          description: "inline dataset: a list of column-name to value maps, one per row (the primary mechanism; round-trips with no parsing). Must be non-empty when used."
+          items:
+            type: object
+            additionalProperties:
+              type: string
+        data:
+          type: string
+          description: "optional raw inline dataset parsed server-side into rows per format. CSV: first line is the header row (RFC 4180-ish — embedded commas, doubled quotes and newlines are handled). JSON: an array of flat objects. The raw text is preserved verbatim on round-trip (the derived rows are not re-serialized). Ignored when rows is set."
+        format:
+          type: string
+          enum: [CSV, JSON]
+          description: "the format of data (required when data is set)"
+        strategy:
+          type: string
+          enum: [CIRCULAR, RANDOM, SEQUENTIAL]
+          default: CIRCULAR
+          description: "how a row is chosen each iteration: CIRCULAR (default) cycles rows[globalIteration % size] and never exhausts; RANDOM picks a uniformly random row each iteration; SEQUENTIAL uses rows[globalIteration] once each in order and COMPLETES the run once the dataset is exhausted (data-driven replay-once)."
     LoadScenario:
       description: "an API-driven load scenario: ordered templated steps driven at a target concurrency. The name is the unique registry key — PUT loads (registers) it; PUT /loadScenario/start triggers it to run."
       type: object
@@ -4644,11 +5023,34 @@ components:
           additionalProperties:
             type: string
           description: "optional scenario-level custom annotation labels; exported as OpenTelemetry attributes on every load measurement and (for keys named in the loadGenerationMetricLabels allowlist) as extra Prometheus labels"
+        thresholds:
+          type: array
+          description: "optional in-run pass/fail thresholds; the run carries a PASS verdict iff all hold, FAIL otherwise. Empty/omitted means no verdict is computed."
+          items:
+            $ref: "#/components/schemas/LoadThreshold"
+        abortOnFail:
+          type: boolean
+          default: false
+          description: "when true, a FAIL verdict aborts the run early (terminal STOPPED state, abortedByThreshold set); default false (the run always finishes its stages and carries a final verdict)"
+        abortGraceMillis:
+          type: integer
+          format: int64
+          default: 0
+          description: "suppress abortOnFail for the first N milliseconds of the run so noisy startup samples cannot trigger a premature abort (thresholds are still evaluated and a verdict still reported during the grace window — only the abort action is deferred)"
+        pacing:
+          $ref: "#/components/schemas/LoadPacing"
+        feeder:
+          $ref: "#/components/schemas/LoadFeeder"
         profile:
           $ref: "#/components/schemas/LoadProfile"
+        stepSelection:
+          type: string
+          enum: [SEQUENTIAL, WEIGHTED]
+          default: SEQUENTIAL
+          description: "how each iteration selects which steps to run: SEQUENTIAL (default) runs ALL steps in declared order (a multi-step user journey); WEIGHTED runs exactly ONE step per iteration chosen at random proportional to each step's weight (mixed-workload modelling, e.g. 70% browse / 20% search / 10% checkout). Cross-step captures are meaningful only under SEQUENTIAL (a WEIGHTED iteration runs a single step); feeder data and pacing apply to both."
         steps:
           type: array
-          description: "ordered list of request steps fired in sequence each iteration (max 50)"
+          description: "ordered list of request steps. Under SEQUENTIAL stepSelection (default) all steps are fired in sequence each iteration; under WEIGHTED one step is chosen per iteration by weight (max 50)"
           items:
             $ref: "#/components/schemas/LoadStep"
     LoadScenarioListEntry:
@@ -4695,6 +5097,40 @@ components:
           type: number
         p99Millis:
           type: number
+        p999Millis:
+          type: number
+          description: "99.9th-percentile coordinated-omission-corrected latency (ms), from the per-run HDR histogram; available even when metrics are disabled"
+        droppedIterations:
+          type: integer
+          format: int64
+          description: "iterations that were due but never dispatched because a safety cap was hit (sum of rate_limit and inflight_cap throttles for this run)"
+        verdict:
+          type: string
+          enum: [PASS, FAIL]
+          description: "in-run threshold verdict: PASS (all thresholds satisfied) or FAIL (any breached); absent when the scenario has no thresholds or none has been evaluated yet. A terminal FAIL should be mapped by clients to a non-zero CI exit code."
+        abortedByThreshold:
+          type: boolean
+          default: false
+          description: "true when this run was terminated early by an abortOnFail threshold breach; absent means false"
+        thresholdResults:
+          type: array
+          description: "per-threshold results behind the verdict (present when thresholds were evaluated)"
+          items:
+            type: object
+            properties:
+              metric:
+                type: string
+                enum: [LATENCY_P50, LATENCY_P95, LATENCY_P99, LATENCY_P999, ERROR_RATE, THROUGHPUT_RPS]
+              comparator:
+                type: string
+                enum: [LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL]
+              threshold:
+                type: number
+              observed:
+                type: number
+                description: "the observed per-run value at evaluation time (latency ms, error-rate fraction, or requests/second)"
+              satisfied:
+                type: boolean
         runId:
           type: string
         startedAt:
@@ -4703,6 +5139,93 @@ components:
         endedAt:
           type: integer
           format: int64
+    LoadScenarioReport:
+      description: >-
+        end-of-run summary report for a load scenario run (JSON form). A JUnit-XML rendering of the same
+        data is returned instead when the report endpoint is called with ?format=junit (Content-Type
+        application/xml).
+      type: object
+      properties:
+        scenario:
+          type: string
+        runId:
+          type: string
+        state:
+          type: string
+          enum: [LOADED, PENDING, RUNNING, COMPLETED, STOPPED]
+        verdict:
+          type: string
+          enum: [PASS, FAIL]
+          description: "in-run threshold verdict; absent when the scenario has no thresholds or none has been evaluated yet"
+        abortedByThreshold:
+          type: boolean
+          description: "true when this run was terminated early by an abortOnFail threshold breach"
+        timing:
+          type: object
+          properties:
+            startedAtEpochMillis:
+              type: integer
+              format: int64
+            endedAtEpochMillis:
+              type: integer
+              format: int64
+              nullable: true
+              description: "epoch-millis the run ended; null while still running"
+            durationMillis:
+              type: integer
+              format: int64
+              description: "elapsed run time in milliseconds"
+        counts:
+          type: object
+          properties:
+            requestsSent:
+              type: integer
+              format: int64
+            succeeded:
+              type: integer
+              format: int64
+            failed:
+              type: integer
+              format: int64
+            droppedIterations:
+              type: integer
+              format: int64
+            errorRate:
+              type: number
+              description: "failed / max(1, requestsSent)"
+        latencyMillis:
+          type: object
+          properties:
+            p50:
+              type: integer
+              format: int64
+            p95:
+              type: integer
+              format: int64
+            p99:
+              type: integer
+              format: int64
+            p999:
+              type: integer
+              format: int64
+        thresholdResults:
+          type: array
+          description: "per-threshold results behind the verdict"
+          items:
+            type: object
+            properties:
+              metric:
+                type: string
+                enum: [LATENCY_P50, LATENCY_P95, LATENCY_P99, LATENCY_P999, ERROR_RATE, THROUGHPUT_RPS]
+              comparator:
+                type: string
+                enum: [LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL]
+              threshold:
+                type: number
+              observed:
+                type: number
+              satisfied:
+                type: boolean
     SloObjective:
       description: "a single service-level objective over the recorded SLI samples"
       type: object

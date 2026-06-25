@@ -53,6 +53,10 @@ export interface LoadStepDTO {
   request: LoadRequestDTO;
   thinkTime?: DelayDTO;
   labels?: Record<string, string>;
+  /** Cross-step capture rules applied to this step's response (visible to later steps). */
+  captures?: LoadCaptureDTO[];
+  /** Relative selection weight, used only under WEIGHTED stepSelection (must be > 0 when WEIGHTED). */
+  weight?: number;
 }
 
 /** The kind of a load stage. */
@@ -83,10 +87,122 @@ export interface LoadStageDTO {
   maxVus?: number;
 }
 
-/** Staged load profile: an ordered list of stages run one after another. */
-export interface LoadProfileDTO {
-  stages: LoadStageDTO[];
+/** A declarative named load shape that expands server-side into ordinary stages. */
+export type LoadShapeType = 'SPIKE' | 'STAIRS' | 'RAMP_HOLD';
+
+/** What a shape drives: concurrent virtual users (closed) or arrival rate (open). */
+export type LoadShapeMetric = 'VU' | 'RATE';
+
+/**
+ * A declarative named load shape (an alternative to an explicit `stages` list). Only the
+ * parameters its `type` needs are read by the server; the rest are ignored.
+ *  - SPIKE: ramp baseline→peak, hold at peak, ramp back to baseline, optional recovery hold.
+ *  - STAIRS: a flight of pure-hold steps, each `step` higher, starting at `start`.
+ *  - RAMP_HOLD: ramp 0→target then hold.
+ */
+export interface LoadShapeDTO {
+  type: LoadShapeType;
+  metric?: LoadShapeMetric;
+  curve?: RampCurve;
+  // SPIKE
+  baseline?: number;
+  peak?: number;
+  rampUpMillis?: number;
+  holdMillis?: number;
+  rampDownMillis?: number;
+  recoveryHoldMillis?: number;
+  // STAIRS
+  start?: number;
+  step?: number;
+  steps?: number;
+  stepDurationMillis?: number;
+  // RAMP_HOLD
+  target?: number;
+  rampMillis?: number;
 }
+
+/**
+ * Staged load profile: EITHER an ordered list of `stages` run one after another, OR a single
+ * named `shape` that expands server-side into stages. Set one, not both (explicit stages win).
+ */
+export interface LoadProfileDTO {
+  stages?: LoadStageDTO[];
+  shape?: LoadShapeDTO;
+}
+
+/** The per-run metric a threshold (and per-threshold result) evaluates. */
+export type LoadThresholdMetric =
+  | 'LATENCY_P50'
+  | 'LATENCY_P95'
+  | 'LATENCY_P99'
+  | 'LATENCY_P999'
+  | 'ERROR_RATE'
+  | 'THROUGHPUT_RPS';
+
+/** How an observed per-run value is compared to a threshold. */
+export type LoadComparator =
+  | 'LESS_THAN'
+  | 'LESS_THAN_OR_EQUAL'
+  | 'GREATER_THAN'
+  | 'GREATER_THAN_OR_EQUAL';
+
+/** An in-run pass/fail threshold: a per-run metric compared against a value (logical AND). */
+export interface LoadThresholdDTO {
+  metric: LoadThresholdMetric;
+  comparator: LoadComparator;
+  threshold: number;
+}
+
+/** One per-threshold result behind the run verdict (server-reported). */
+export interface ThresholdResult {
+  metric: LoadThresholdMetric;
+  comparator: LoadComparator;
+  threshold: number;
+  /** observed per-run value at evaluation time (latency ms, error-rate fraction, or req/s). */
+  observed?: number;
+  satisfied?: boolean;
+}
+
+/** Where a cross-step capture extracts its value from. */
+export type LoadCaptureSource = 'BODY_JSONPATH' | 'HEADER' | 'BODY_REGEX';
+
+/**
+ * A cross-step capture/correlation rule: extract a value from a step's response and bind it to a
+ * variable later steps in the same iteration can reference (`$iteration.captured.<name>`).
+ */
+export interface LoadCaptureDTO {
+  name: string;
+  source: LoadCaptureSource;
+  expression: string;
+  defaultValue?: string;
+}
+
+/** How the target per-VU iteration cycle is derived for adaptive pacing. */
+export type LoadPacingMode = 'NONE' | 'CONSTANT_PACING' | 'CONSTANT_THROUGHPUT';
+
+/** Adaptive iteration pacing (think-time) for the closed-model VU loop. */
+export interface LoadPacingDTO {
+  mode: LoadPacingMode;
+  value: number;
+}
+
+/** How a feeder row is chosen each iteration. */
+export type LoadFeederStrategy = 'CIRCULAR' | 'RANDOM' | 'SEQUENTIAL';
+
+/**
+ * Parameterized test data (a data feeder): an inline dataset, one row selected per iteration and
+ * exposed as `$iteration.data.<column>`. Supply EITHER `rows` (inline list of objects, the primary
+ * form) OR `data` + `format` (raw CSV/JSON parsed server-side); when both are given `rows` wins.
+ */
+export interface LoadFeederDTO {
+  rows?: Record<string, string>[];
+  data?: string;
+  format?: 'CSV' | 'JSON';
+  strategy?: LoadFeederStrategy;
+}
+
+/** How each iteration selects which steps to run. */
+export type LoadStepSelection = 'SEQUENTIAL' | 'WEIGHTED';
 
 /** An API-driven load scenario. */
 export interface LoadScenarioDTO {
@@ -98,6 +214,18 @@ export interface LoadScenarioDTO {
   startDelayMillis?: number;
   profile: LoadProfileDTO;
   steps: LoadStepDTO[];
+  /** In-run pass/fail thresholds; run carries a PASS verdict iff all hold. */
+  thresholds?: LoadThresholdDTO[];
+  /** When true, a FAIL verdict aborts the run early (terminal STOPPED, abortedByThreshold set). */
+  abortOnFail?: boolean;
+  /** Suppress abortOnFail for the first N ms so noisy startup samples can't trigger a premature abort. */
+  abortGraceMillis?: number;
+  /** Adaptive per-VU iteration pacing (closed-model VU loop only). */
+  pacing?: LoadPacingDTO;
+  /** Inline parameterized test data exposed per iteration. */
+  feeder?: LoadFeederDTO;
+  /** How each iteration selects steps: SEQUENTIAL (all in order) or WEIGHTED (one by weight). */
+  stepSelection?: LoadStepSelection;
 }
 
 export type LoadState = 'none' | 'running' | 'completed' | 'stopped';
@@ -146,6 +274,16 @@ export interface LoadScenarioStatus {
   p50Millis?: number;
   p95Millis?: number;
   p99Millis?: number;
+  /** 99.9th-percentile coordinated-omission-corrected latency (ms), from the per-run HDR histogram. */
+  p999Millis?: number;
+  /** Iterations that were due but never dispatched because a safety cap was hit. */
+  droppedIterations?: number;
+  /** In-run threshold verdict; absent when the scenario has no thresholds or none evaluated yet. */
+  verdict?: 'PASS' | 'FAIL';
+  /** True when this run was terminated early by an abortOnFail threshold breach. */
+  abortedByThreshold?: boolean;
+  /** Per-threshold results behind the verdict (present when thresholds were evaluated). */
+  thresholdResults?: ThresholdResult[];
   runId?: string;
   startedAt?: number;
   endedAt?: number;
@@ -247,6 +385,11 @@ function extractLoadScenarioStatus(node: Record<string, unknown>): LoadScenarioS
     'p50Millis',
     'p95Millis',
     'p99Millis',
+    'p999Millis',
+    'droppedIterations',
+    'verdict',
+    'abortedByThreshold',
+    'thresholdResults',
     'runId',
     'startedAt',
     'endedAt',
@@ -268,6 +411,11 @@ function extractLoadScenarioStatus(node: Record<string, unknown>): LoadScenarioS
     p50Millis: node.p50Millis as number | undefined,
     p95Millis: node.p95Millis as number | undefined,
     p99Millis: node.p99Millis as number | undefined,
+    p999Millis: node.p999Millis as number | undefined,
+    droppedIterations: node.droppedIterations as number | undefined,
+    verdict: node.verdict as 'PASS' | 'FAIL' | undefined,
+    abortedByThreshold: node.abortedByThreshold as boolean | undefined,
+    thresholdResults: node.thresholdResults as ThresholdResult[] | undefined,
     runId: node.runId as string | undefined,
     startedAt: node.startedAt as number | undefined,
     endedAt: node.endedAt as number | undefined,
@@ -364,6 +512,77 @@ export async function clearLoadScenarios(params: ConnectionParams): Promise<void
 export async function stopLoadScenario(params: ConnectionParams): Promise<void> {
   const res = await fetch(endpoint(params), { method: 'DELETE' });
   await ensureOk(res);
+}
+
+/**
+ * URL of a run's end-of-run summary report (GET /loadScenario/{name}/report). Pass `format: 'junit'`
+ * for the JUnit-XML rendering (a load run becomes a first-class CI test artifact); otherwise JSON.
+ * Returned as a URL (rather than fetched) so the panel can drive a browser download directly.
+ */
+export function loadScenarioReportUrl(
+  params: ConnectionParams,
+  name: string,
+  format?: 'junit',
+): string {
+  const base = `${endpoint(params)}/${encodeURIComponent(name)}/report`;
+  return format ? `${base}?format=${format}` : base;
+}
+
+/** Network target for a generated scenario's steps (shared by both generate endpoints). */
+export interface GenerateTarget {
+  host?: string;
+  port?: number;
+  scheme?: 'http' | 'https';
+}
+
+/**
+ * Seed a load scenario from an OpenAPI spec (PUT /loadScenario/generateFromOpenAPI). One step per
+ * operation. Registers the result in the LOADED state (no traffic; allowed when load generation is
+ * disabled) and returns the generated scenario so it can be loaded into the editor before running.
+ */
+export async function generateFromOpenAPI(
+  params: ConnectionParams,
+  request: { name: string; specUrlOrPayload: string; target?: GenerateTarget; profile?: LoadProfileDTO },
+): Promise<LoadScenarioDTO> {
+  const res = await fetch(`${endpoint(params)}/generateFromOpenAPI`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  await ensureOk(res);
+  const body = (await res.json()) as { scenario?: LoadScenarioDTO };
+  if (!body.scenario) throw new LoadScenarioError('Server returned no generated scenario', res.status);
+  return body.scenario;
+}
+
+/** How recorded requests become steps when generating from a recording. */
+export type GenerateRecordingMode = 'VERBATIM' | 'TEMPLATIZED';
+
+/**
+ * Seed a load scenario from recorded proxy traffic (PUT /loadScenario/generateFromRecording).
+ * VERBATIM emits one step per recorded request (optional `maxSteps` cap); TEMPLATIZED deduplicates
+ * by (method, templatised-path). Registers the result in the LOADED state and returns it for editing.
+ */
+export async function generateFromRecording(
+  params: ConnectionParams,
+  request: {
+    name: string;
+    mode?: GenerateRecordingMode;
+    requestFilter?: unknown;
+    maxSteps?: number;
+    target?: GenerateTarget;
+    profile?: LoadProfileDTO;
+  },
+): Promise<LoadScenarioDTO> {
+  const res = await fetch(`${endpoint(params)}/generateFromRecording`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  });
+  await ensureOk(res);
+  const body = (await res.json()) as { scenario?: LoadScenarioDTO };
+  if (!body.scenario) throw new LoadScenarioError('Server returned no generated scenario', res.status);
+  return body.scenario;
 }
 
 /** Whether the status represents an active (still-running) scenario. */

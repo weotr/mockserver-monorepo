@@ -4,7 +4,11 @@ import Typography from '@mui/material/Typography';
 import { useTheme } from '@mui/material/styles';
 
 export interface MetricsSeries {
-  data: number[];
+  /**
+   * One value per x-position. `null` renders a gap — used by the load chart so a
+   * per-scenario line only draws over the frames where that scenario was running.
+   */
+  data: (number | null)[];
   label: string;
 }
 

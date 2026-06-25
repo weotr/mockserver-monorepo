@@ -3,12 +3,16 @@ title: Record & Replay
 description: Record HTTP/HTTPS traffic through the MockServer proxy and replay it as mock expectations for offline testing and service virtualization.
 layout: page
 pageOrder: 3
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-06-24T08:00:00+01:00
 ---
+
+<p><strong>Record &amp; replay</strong> means proxying live HTTP(S) traffic through MockServer once, capturing the real requests and the responses the upstream returned, then serving those captured responses back as mock expectations &mdash; so the same interactions can be replayed on demand with the real dependency switched off.</p>
+
+<p>This turns a one-off recording into a reusable, deterministic test fixture. Unlike re-recording against the live service on every run, a replayed recording is fast, offline, repeatable, and immune to upstream outages, rate limits, or drifting data &mdash; which is exactly what you want for CI and for reproducing a specific scenario. The steps below cover recording the traffic and retrieving it as expectations ready to replay.</p>
 
 {% include_subpage _includes/analysing_behaviour.html %}

@@ -9,8 +9,18 @@ subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-06-22T00:00:00+00:00
-keywords: stateful mock, scenario, state machine, sequential responses, cycling responses, responseMode, timed transition, trigger scenario, cross-protocol scenario, mockserver scenario, multi-step api mock
+  lastmod: 2026-06-24T00:00:00+00:00
+keywords: stateful mock, scenario, state machine, capture rule, persist value across requests, sequential responses, cycling responses, responseMode, timed transition, trigger scenario, cross-protocol scenario, mockserver scenario, multi-step api mock
 ---
 
 {% include_subpage _includes/stateful_scenarios.html %}
+
+<a id="related_pages" class="anchor" href="#related_pages">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/response_templates.html">Response Templates</a> &mdash; read captured scenario state back into a dynamic response with the <span class="inline_code">scenario</span> helper (capture &rarr; template value reuse)</li>
+    <li><a href="/mock_server/verification.html">Verify Requests</a> &mdash; assert the requests your code under test sent at each step of a scenario</li>
+    <li><a href="/mock_server/llm_response_mocking.html">LLM Response Mocking</a> &mdash; use scenarios to script multi-turn AI agent conversations</li>
+</ul>

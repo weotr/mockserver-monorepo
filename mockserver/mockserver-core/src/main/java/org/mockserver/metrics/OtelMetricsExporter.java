@@ -191,7 +191,9 @@ public class OtelMetricsExporter {
             .setDescription("Total HTTP chaos faults injected by type (mirrors Prometheus counter)")
             .ofLongs()
             .buildWithCallback(m -> {
-                for (String faultType : new String[]{"drop", "error", "latency"}) {
+                // Mirror the full documented fault-type set (the single source of truth on Metrics),
+                // not a hardcoded subset, so no fault type is silently dropped from OTLP export.
+                for (String faultType : Metrics.CHAOS_FAULT_TYPES) {
                     m.record(Metrics.getHttpChaosInjectedCount(faultType),
                         Attributes.of(AttributeKey.stringKey("fault_type"), faultType));
                 }

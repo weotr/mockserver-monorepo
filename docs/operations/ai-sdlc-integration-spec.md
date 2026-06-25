@@ -212,8 +212,9 @@ The system **MUST** apply a *lower* effective concurrency limit when warranted b
 
 ### 8.4 Contention and merge safety (`MUST`)
 - Independent units **MUST** be partitioned to minimise shared-file contention.
-- Reintegration **MUST** be serialised through a defined merge discipline (e.g. rebase-then-merge under a lock) so concurrent units cannot corrupt shared branch state.
-- After merging independent parallel units, the **integrated** result **MUST** be re-verified and **SHOULD** be re-reviewed adversarially, because defects can emerge from the *combination* even when each unit was individually correct.
+- Reintegration **MUST** be serialised through a defined merge discipline under a lock so concurrent units cannot corrupt shared branch state.
+- **Linear history (`MUST`).** Reintegration **MUST** keep the mainline a **linear history with no merge commits**: each gate-passed unit is **rebased onto the current mainline tip and fast-forwarded** (`git rebase` then a fast-forward `git push`). The system **MUST NOT** create merge commits on the mainline — no `git merge` of a worktree/unit branch (including `--no-ff`), no non-rebasing `git pull`, and no intermediate "integration branch" that worktree branches are merged into. When several parallel units reintegrate, they are rebased **sequentially** under the lock, each onto the result of the previous. The rationale is a clean, bisectable, easy-to-follow history; the trade-off is that rebasing rewrites the *unit branch's* (local, unpushed) commits, which is safe precisely because worktree branches are local-only (§8.3).
+- After reintegrating independent parallel units, the **integrated** result **MUST** be re-verified and **SHOULD** be re-reviewed adversarially, because defects can emerge from the *combination* even when each unit was individually correct.
 
 ### 8.5 Non-filesystem shared state (`MUST`)
 Worktree isolation covers the filesystem only. Where agents touch shared mutable resources **beyond** the filesystem (databases, infrastructure, external services, ticket systems, message queues), the system **MUST** prevent unsafe concurrent mutation with the same discipline — via partitioning, locking, dedicated non-production targets, or serialisation. Such resources **MUST** be identified during decomposition (§7.3), their contention risk **MUST** feed the dynamic concurrency limit (§8.2), and their side effects **MUST** be made replay-safe (§15 R8).
@@ -747,6 +748,6 @@ Terms used normatively in this specification. Where a term is defined here, its 
 | **Higher-scrutiny change class** | A change to the controls themselves (tests, gates, policy rules, constitutions, routing, guardrails) requiring at-least-gated-approval classification, stronger review, and separation of duties (§19.5, §12 V7). |
 | **Evaluation harness** | The offline golden-task suite that validates changes to AI components before rollout (§18.5). |
 | **AI component** | A change-managed element of the integration: prompt, system instruction, review constitution, routing policy, guardrail, or model/provider version (§22.5). |
-| **Reintegration** | Merging a completed, gate-passed unit back onto the mainline under serialised merge discipline (§8.4). |
+| **Reintegration** | Rebasing a completed, gate-passed unit onto the mainline tip and fast-forwarding it onto the mainline under serialised merge discipline, preserving a linear history with no merge commits (§8.4). |
 | **Escalation** | A structured hand-off of a decision to a human when ambiguity, policy, or risk exceeds delegated authority; non-blocking and batched by default (§19.3, §19.4). |
 | **Operator halt** | An operator-invoked control that immediately stops or pauses AI activity, globally or scoped, and cannot be overridden by the system (§17 OP10). |

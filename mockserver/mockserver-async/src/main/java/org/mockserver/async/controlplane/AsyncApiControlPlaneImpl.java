@@ -84,7 +84,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
     }
 
     @Override
-    public JsonNode load(String requestBody) {
+    public synchronized JsonNode load(String requestBody) {
         // Reset any previous state
         resetInternal();
 
@@ -228,7 +228,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
     }
 
     @Override
-    public JsonNode status() {
+    public synchronized JsonNode status() {
         ObjectNode result = MAPPER.createObjectNode();
 
         if (loadedSpec == null) {
@@ -303,7 +303,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
     }
 
     @Override
-    public String verify(String verificationJson) {
+    public synchronized String verify(String verificationJson) {
         if (verificationJson == null || verificationJson.isBlank()) {
             throw new IllegalArgumentException("verification request body must not be empty");
         }
@@ -444,7 +444,7 @@ public class AsyncApiControlPlaneImpl implements AsyncApiControlPlane {
     }
 
     @Override
-    public void reset() {
+    public synchronized void reset() {
         resetInternal();
         LOG.info("AsyncAPI control-plane reset");
     }

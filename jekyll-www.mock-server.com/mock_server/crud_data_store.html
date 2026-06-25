@@ -40,7 +40,7 @@ sitemap:
             <td>string</td>
             <td>yes</td>
             <td></td>
-            <td>Root path for the resource (e.g. <span class="inline_code">/users</span>). Must start with <span class="inline_code">/</span>, must not be <span class="inline_code">/</span>, and must not overlap <span class="inline_code">/mockserver</span>.</td>
+            <td>Root path for the resource (e.g. <span class="inline_code">/users</span>). Must start with <span class="inline_code">/</span>, must not be <span class="inline_code">/</span>, must not contain <span class="inline_code">..</span> (path-traversal sequences are rejected), and must not overlap <span class="inline_code">/mockserver</span>.</td>
         </tr>
         <tr>
             <td><span class="inline_code">idField</span></td>
@@ -68,7 +68,7 @@ sitemap:
 
 <h3>Example request</h3>
 
-<pre class="prettyprint lang-java code"><code class="code">PUT /mockserver/crud HTTP/1.1
+<pre class="prettyprint lang-http code"><code class="code">PUT /mockserver/crud HTTP/1.1
 Content-Type: application/json
 
 {
@@ -83,7 +83,7 @@ Content-Type: application/json
 
 <h3>Response (201 Created)</h3>
 
-<pre class="prettyprint lang-java code"><code class="code">{
+<pre class="prettyprint lang-json code"><code class="code">{
   "basePath" : "/users",
   "idField" : "id",
   "idStrategy" : "AUTO_INCREMENT",

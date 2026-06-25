@@ -1,10 +1,26 @@
 <p>MockServer supports verification of requests and responses it has received, including both proxied requests and requests that have matched an expectation.</p>
+
+<p><strong>What you can verify:</strong></p>
+<ul>
+    <li><strong>Responses while proxying a system under test (SUT)</strong> &mdash; assert not just that the right requests were sent, but that the SUT returned the expected status codes, headers, and bodies (see <a href="#verifying_responses">Verifying Responses</a>).</li>
+    <li><strong>Whether a request was forwarded or mocked</strong> &mdash; <code>withDisposition(Disposition.FORWARDED)</code> counts only requests proxied upstream, <code>withDisposition(Disposition.MOCKED)</code> only requests served by an expectation.</li>
+    <li><strong>Asynchronous requests, with a timeout</strong> (Java client) &mdash; <code>verify(request, times, Duration)</code> polls until a request eventually arrives, and <code>verifyNever(request, Duration)</code> asserts none arrives within a window.</li>
+    <li><strong>All failures at once</strong> &mdash; <code>verifyAll(...)</code> evaluates every supplied verification and reports every mismatch together rather than failing on the first.</li>
+</ul>
+
 <p>Verification can be specified as follows:</p>
 <ul>
     <li>a <a href="/mock_server/creating_expectations.html#request_matchers"><strong>request matcher</strong></a> and a condition indicating the number of times the request should be matched</li>
 	<li>a <strong>response matcher</strong> (optionally combined with a request matcher) and a condition indicating the number of times a matching response should have been recorded</li>
 	<li>a sequence of <a href="/mock_server/creating_expectations.html#request_matchers"><strong>request matchers</strong></a> that is matched in order</li>
 	<li>a sequence of <strong>request and response matcher pairs</strong> that is matched in order</li>
+</ul>
+
+<p><strong>On this page:</strong></p>
+<ul>
+    <li><a href="#how_verification_works">How Verification Works</a> &mdash; including disposition, <code>verifyAll</code>, timeout-aware verification, and parallel-testing notes</li>
+    <li><a href="#verification_timing">Verification Timing</a></li>
+    <li><a href="#verifying_responses">Verifying Responses</a> &mdash; verify proxied/mocked responses by status, headers, and body</li>
 </ul>
 
 <a id="how_verification_works" class="anchor" href="#how_verification_works">&nbsp;</a>

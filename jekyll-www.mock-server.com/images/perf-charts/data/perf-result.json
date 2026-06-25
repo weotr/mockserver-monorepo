@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "commit": "15f4dcf509101bf3dd4440357db52c7902d88f34",
+  "branch": "master",
+  "timestamp_utc": "2026-06-24T23:12:13Z",
+  "build_number": "64",
+  "build_url": "https://buildkite.com/mockserver/mockserver-performance-test/builds/64",
+  "agent": {
+    "instance_type": "",
+    "queue": "perf",
+    "server_cpus": "0-5",
+    "k6_cpus": "7-15"
+  },
+  "mockserver_image": "mockserver/mockserver:mockserver-snapshot",
+  "behaviours": {
+    "match_http": {
+      "p50_ms": 0.475,
+      "p95_ms": 1014.217,
+      "p99_ms": 1240.048,
+      "throughput_rps": 191.833,
+      "error_rate": 0
+    },
+    "forward_http": {
+      "p50_ms": 1.35,
+      "p95_ms": 1215.522,
+      "p99_ms": 1454.019,
+      "throughput_rps": 183.758,
+      "error_rate": 0
+    },
+    "template_http": {
+      "p50_ms": 0.55,
+      "p95_ms": 1012.136,
+      "p99_ms": 1241.186,
+      "throughput_rps": 191.758,
+      "error_rate": 0
+    },
+    "large_http": {
+      "p50_ms": 5.811,
+      "p95_ms": 1028.292,
+      "p99_ms": 1254.751,
+      "throughput_rps": 191.3,
+      "error_rate": 0
+    },
+    "match_https_h2": {
+      "p50_ms": 0.821,
+      "p95_ms": 1217.862,
+      "p99_ms": 1527.468,
+      "throughput_rps": 186.067,
+      "error_rate": 0
+    },
+    "forward_https_h2": {
+      "p50_ms": 1.297,
+      "p95_ms": 1487.585,
+      "p99_ms": 2154.075,
+      "throughput_rps": 177.683,
+      "error_rate": 0
+    },
+    "template_https_h2": {
+      "p50_ms": 0.828,
+      "p95_ms": 1220.132,
+      "p99_ms": 1530.677,
+      "throughput_rps": 185.933,
+      "error_rate": 0
+    },
+    "large_https_h2": {
+      "p50_ms": 5.575,
+      "p95_ms": 1244.958,
+      "p99_ms": 1556.83,
+      "throughput_rps": 185.342,
+      "error_rate": 0
+    }
+  },
+  "growth": {
+    "duration_s": 360,
+    "p95_ms": {
+      "first_window": 0.204,
+      "last_window": 0.21,
+      "ratio": 1.027
+    },
+    "cpu_pct": {
+      "start": 8.64,
+      "end": 8.5,
+      "peak": 32.09,
+      "ratio": 0.9838
+    },
+    "heap_used_bytes": {
+      "start": 2032140288,
+      "end": 1941962752,
+      "peak": 5016387584,
+      "ratio": 0.9556
+    },
+    "gc_seconds_delta": 0.909,
+    "threads_peak": 26
+  },
+  "sweep": {
+    "proto": "http",
+    "points": [
+      {
+        "offered_rps": 2000,
+        "achieved_rps": 1995.3,
+        "p50_ms": 0.169,
+        "p90_ms": 0.216,
+        "p95_ms": 0.258,
+        "p99_ms": 0.39,
+        "p999_ms": 70.52,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 4000,
+        "achieved_rps": 3990.8,
+        "p50_ms": 0.179,
+        "p90_ms": 0.262,
+        "p95_ms": 0.295,
+        "p99_ms": 0.4,
+        "p999_ms": 14.011,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 8000,
+        "achieved_rps": 8000.1,
+        "p50_ms": 0.149,
+        "p90_ms": 0.195,
+        "p95_ms": 0.218,
+        "p99_ms": 0.289,
+        "p999_ms": 0.577,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 16000,
+        "achieved_rps": 16000.1,
+        "p50_ms": 0.159,
+        "p90_ms": 0.231,
+        "p95_ms": 0.279,
+        "p99_ms": 0.501,
+        "p999_ms": 1.441,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 32000,
+        "achieved_rps": 31751.2,
+        "p50_ms": 0.194,
+        "p90_ms": 1.977,
+        "p95_ms": 4.14,
+        "p99_ms": 9.62,
+        "p999_ms": 16.368,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 48000,
+        "achieved_rps": 36323.8,
+        "p50_ms": 23.119,
+        "p90_ms": 99.436,
+        "p95_ms": 125.136,
+        "p99_ms": 195.665,
+        "p999_ms": 310.471,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 64000,
+        "achieved_rps": 30870.7,
+        "p50_ms": 97.355,
+        "p90_ms": 152.764,
+        "p95_ms": 170.664,
+        "p99_ms": 230.506,
+        "p999_ms": 326.265,
+        "error_rate": 0
+      },
+      {
+        "offered_rps": 80000,
+        "achieved_rps": 33040.9,
+        "p50_ms": 112.646,
+        "p90_ms": 162.495,
+        "p95_ms": 181.17,
+        "p99_ms": 262.945,
+        "p999_ms": 326.096,
+        "error_rate": 0
+      }
+    ]
+  }
+}

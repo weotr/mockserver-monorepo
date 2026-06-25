@@ -10,6 +10,7 @@ import io.netty.util.ReferenceCountUtil;
 import org.mockserver.cors.CORSHeaders;
 import org.mockserver.authentication.AuthenticationException;
 import org.mockserver.authentication.AuthenticationHandler;
+import org.mockserver.authentication.AuthenticationResult;
 import org.mockserver.lifecycle.LifeCycle;
 import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
@@ -25,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
 
 /**
  * Netty channel handler that intercepts MCP (Model Context Protocol) requests
@@ -91,6 +93,13 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
                     .setMessageFormat("exception caught by MCP handler")
                     .setThrowable(cause)
             );
+        } else if (isSslOrDecoderFault(cause)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("SSL or decoder fault caught by MCP handler")
+                    .setThrowable(cause)
+            );
         }
         ctx.close();
     }
@@ -146,44 +155,63 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
     }
 
     private boolean authenticateRequest(ChannelHandlerContext ctx, FullHttpRequest request) {
+        return authenticate(ctx, request) != null;
+    }
+
+    /**
+     * Authenticate a control-plane MCP request. Returns the {@link AuthenticationResult}
+     * (carrying the verified principal's scopes, used for per-tool authorization on the POST
+     * path) when authentication succeeds, or {@code null} after having written the 401
+     * rejection when it fails. When no authentication handler is configured, returns an
+     * authenticated-but-anonymous result (no scopes) so the caller proceeds unchanged.
+     */
+    private AuthenticationResult authenticate(ChannelHandlerContext ctx, FullHttpRequest request) {
         AuthenticationHandler authHandler = httpState.getControlPlaneAuthenticationHandler();
-        if (authHandler != null) {
-            try {
-                HttpRequest mockRequest = HttpRequest.request()
-                    .withMethod(request.method().name())
-                    .withPath(request.uri());
-                mockRequest.withLogCorrelationId(org.mockserver.uuid.UUIDService.getUUID());
-                for (Map.Entry<String, String> header : request.headers()) {
-                    mockRequest.withHeader(header.getKey(), header.getValue());
-                }
-                Certificate[] clientCertificates = SniHandler.retrieveClientCertificates(mockServerLogger, ctx);
-                if (clientCertificates != null) {
-                    new JDKCertificateToMockServerX509Certificate(mockServerLogger)
-                        .setClientCertificates(mockRequest, clientCertificates);
-                }
-                if (!authHandler.controlPlaneRequestAuthenticated(mockRequest)) {
-                    writeUnauthorized(ctx);
-                    return false;
-                }
-            } catch (AuthenticationException e) {
-                mockServerLogger.logEvent(
-                    new LogEntry()
-                        .setLogLevel(Level.WARN)
-                        .setMessageFormat("MCP authentication failed: {}")
-                        .setArguments(e.getMessage())
-                        .setThrowable(e)
-                );
-                writeUnauthorized(ctx);
-                return false;
-            }
+        if (authHandler == null) {
+            return AuthenticationResult.authenticated(null, "none", java.util.Map.of(), java.util.Set.of());
         }
-        return true;
+        try {
+            HttpRequest mockRequest = HttpRequest.request()
+                .withMethod(request.method().name())
+                .withPath(request.uri());
+            mockRequest.withLogCorrelationId(org.mockserver.uuid.UUIDService.getUUID());
+            for (Map.Entry<String, String> header : request.headers()) {
+                mockRequest.withHeader(header.getKey(), header.getValue());
+            }
+            Certificate[] clientCertificates = SniHandler.retrieveClientCertificates(mockServerLogger, ctx);
+            if (clientCertificates != null) {
+                new JDKCertificateToMockServerX509Certificate(mockServerLogger)
+                    .setClientCertificates(mockRequest, clientCertificates);
+            }
+            // Use the richer authenticate() SPI: existing/legacy boolean handlers are adapted
+            // by its default method to an authenticated-but-anonymous result (no scopes), so
+            // behaviour is unchanged for them; OIDC-style handlers surface verified scopes that
+            // drive per-tool control-plane authorization.
+            AuthenticationResult result = authHandler.authenticate(mockRequest);
+            if (!result.isAuthenticated()) {
+                writeUnauthorized(ctx);
+                return null;
+            }
+            return result;
+        } catch (AuthenticationException e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("MCP authentication failed: {}")
+                    .setArguments(e.getMessage())
+                    .setThrowable(e)
+            );
+            writeUnauthorized(ctx);
+            return null;
+        }
     }
 
     private void handlePost(ChannelHandlerContext ctx, FullHttpRequest request) {
-        if (!authenticateRequest(ctx, request)) {
+        AuthenticationResult authenticationResult = authenticate(ctx, request);
+        if (authenticationResult == null) {
             return;
         }
+        final java.util.Set<String> scopes = authenticationResult.getScopes();
         // Retain the request before handing off to the MCP executor since Netty will release
         // the buffer after channelRead returns. The finally block ensures it is always released.
         request.retain();
@@ -192,7 +220,7 @@ public class McpStreamableHttpHandler extends ChannelInboundHandlerAdapter {
                 try {
                     String body = request.content().toString(StandardCharsets.UTF_8);
                     String mcpSessionId = request.headers().get("Mcp-Session-Id");
-                    McpRequestProcessor.McpResult result = processor.handlePost(body, mcpSessionId);
+                    McpRequestProcessor.McpResult result = processor.handlePost(body, mcpSessionId, scopes);
                     writeMcpResult(ctx, result);
                 } finally {
                     request.release();

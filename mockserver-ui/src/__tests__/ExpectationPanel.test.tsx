@@ -53,7 +53,7 @@ describe('ExpectationPanel', () => {
     });
 
     render(<ExpectationPanel />);
-    const searchInput = screen.getByPlaceholderText('Search...');
+    const searchInput = screen.getByLabelText('Search');
     await user.type(searchInput, 'orders');
 
     expect(screen.queryByText('/users')).not.toBeInTheDocument();

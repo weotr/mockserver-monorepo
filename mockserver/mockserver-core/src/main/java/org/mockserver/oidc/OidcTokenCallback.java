@@ -166,10 +166,24 @@ public class OidcTokenCallback implements ExpectationResponseCallback {
 
         if (clientId == null || clientSecret == null
             || !clientId.equals(config.getClientId())
-            || !clientSecret.equals(config.getClientSecret())) {
+            || !secretsMatch(clientSecret, config.getClientSecret())) {
             return invalidClient();
         }
         return null;
+    }
+
+    /**
+     * Constant-time comparison of the presented client_secret against the configured one. Using
+     * {@link MessageDigest#isEqual} avoids the early-exit timing side channel of {@link String#equals},
+     * so the response time does not leak how many leading characters of the secret were correct.
+     */
+    private static boolean secretsMatch(String presented, String configured) {
+        if (presented == null || configured == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+            presented.getBytes(StandardCharsets.UTF_8),
+            configured.getBytes(StandardCharsets.UTF_8));
     }
 
     private HttpResponse invalidClient() {

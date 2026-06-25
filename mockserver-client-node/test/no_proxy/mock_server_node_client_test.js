@@ -1467,6 +1467,172 @@ describe('mock server node client (no proxy)', { concurrency: 1 }, function () {
         assert.equal(entry.name, loadScenarioDefinition.name, "runLoadScenario should still have registered the scenario");
     });
 
+    // A scenario exercising the load-injection features added alongside the
+    // thresholds/verdict/pacing/feeder/captures/weighted/shape model. The
+    // server accepts and round-trips these fields on registration (no run
+    // required), which deterministically exercises that the client serializes
+    // them correctly even with loadGenerationEnabled=false.
+    var richLoadScenarioDefinition = {
+        name: "node-client-load-test-rich",
+        templateType: "MUSTACHE",
+        stepSelection: "WEIGHTED",
+        abortOnFail: true,
+        abortGraceMillis: 2000,
+        thresholds: [
+            { metric: "LATENCY_P95", comparator: "LESS_THAN", threshold: 500 },
+            { metric: "ERROR_RATE", comparator: "LESS_THAN_OR_EQUAL", threshold: 0.01 }
+        ],
+        pacing: { mode: "CONSTANT_THROUGHPUT", value: 2 },
+        feeder: {
+            rows: [ { user: "alice" }, { user: "bob" } ],
+            strategy: "CIRCULAR"
+        },
+        profile: {
+            shape: {
+                type: "RAMP_HOLD",
+                metric: "VU",
+                target: 3,
+                rampMillis: 500,
+                holdMillis: 1000
+            }
+        },
+        steps: [
+            {
+                name: "login",
+                weight: 7,
+                request: { method: "POST", path: "/load/login", body: "{\"u\":\"{{iteration.data.user}}\"}" },
+                captures: [
+                    { name: "token", source: "BODY_JSONPATH", expression: "$.token", defaultValue: "anon" }
+                ]
+            },
+            {
+                name: "browse",
+                weight: 3,
+                request: {
+                    method: "GET",
+                    path: "/load/browse",
+                    headers: { "Authorization": ["Bearer {{iteration.captured.token}}"] }
+                }
+            }
+        ]
+    };
+
+    it('should register a load scenario carrying thresholds, pacing, feeder, captures, weighted steps and a shape', async function () {
+        await client.clearLoadScenarios();
+        var registration = await client.loadScenario(richLoadScenarioDefinition);
+        assert.ok(registration, "loadScenario should resolve a registration object");
+        assert.equal(registration.name, richLoadScenarioDefinition.name, "registration should echo the scenario name");
+
+        // round-trip the persisted definition and assert the new fields survived
+        var entry = await client.getLoadScenario(richLoadScenarioDefinition.name);
+        var def = entry.definition || entry;
+        assert.equal(def.stepSelection, "WEIGHTED", "stepSelection should round-trip");
+        assert.equal(def.abortOnFail, true, "abortOnFail should round-trip");
+        assert.equal(def.abortGraceMillis, 2000, "abortGraceMillis should round-trip");
+        assert.ok(Array.isArray(def.thresholds) && def.thresholds.length === 2, "thresholds should round-trip");
+        assert.equal(def.thresholds[0].metric, "LATENCY_P95", "threshold metric should round-trip");
+        assert.equal(def.thresholds[0].comparator, "LESS_THAN", "threshold comparator should round-trip");
+        assert.ok(def.pacing && def.pacing.mode === "CONSTANT_THROUGHPUT", "pacing should round-trip");
+        assert.ok(def.feeder && Array.isArray(def.feeder.rows) && def.feeder.rows.length === 2, "feeder rows should round-trip");
+        assert.ok(def.profile && def.profile.shape && def.profile.shape.type === "RAMP_HOLD", "profile shape should round-trip");
+        assert.equal(def.steps[0].weight, 7, "step weight should round-trip");
+        assert.ok(Array.isArray(def.steps[0].captures) && def.steps[0].captures[0].name === "token", "step captures should round-trip");
+        await client.clearLoadScenarios();
+    });
+
+    it('should reject getLoadScenarioReport with 404 for a scenario that never ran', async function () {
+        var rejected = false;
+        try {
+            await client.getLoadScenarioReport("node-client-no-such-report");
+        } catch (err) {
+            rejected = true;
+            var message = (typeof err === "string") ? err : String(err);
+            assert.ok(message.indexOf("404") !== -1, "expected a 404 but got: " + message);
+        }
+        assert.equal(rejected, true, "getLoadScenarioReport should reject for a scenario that never ran");
+    });
+
+    it('should request the JUnit report form when format="junit" is passed', async function () {
+        // The scenario has never run, so the server answers 404 either way; what
+        // this asserts is that the client builds the request without throwing and
+        // surfaces the server response (i.e. the ?format= path is wired up). A
+        // distinct scenario name keeps it independent of other report tests.
+        var rejected = false;
+        try {
+            await client.getLoadScenarioReport("node-client-no-such-report-junit", "junit");
+        } catch (err) {
+            rejected = true;
+            var message = (typeof err === "string") ? err : String(err);
+            assert.ok(message.indexOf("404") !== -1, "expected a 404 but got: " + message);
+        }
+        assert.equal(rejected, true, "getLoadScenarioReport(name, 'junit') should reject for a scenario that never ran");
+    });
+
+    it('should generate and register a load scenario from an OpenAPI spec', async function () {
+        await client.clearLoadScenarios();
+        var spec = JSON.stringify({
+            openapi: "3.0.0",
+            info: { title: "node-client-load-openapi", version: "1.0.0" },
+            servers: [ { url: "http://generated.svc:8080" } ],
+            paths: {
+                "/widgets": {
+                    get: { responses: { "200": { description: "ok" } } }
+                }
+            }
+        });
+        var result = await client.generateLoadScenarioFromOpenAPI({
+            name: "node-client-load-from-openapi",
+            specUrlOrPayload: spec
+        });
+        assert.ok(result, "generateLoadScenarioFromOpenAPI should resolve a result");
+        assert.equal(result.status, "loaded", "result status should be 'loaded'");
+        assert.equal(result.name, "node-client-load-from-openapi", "result should echo the scenario name");
+        assert.ok(result.scenario, "result should carry the generated scenario");
+        assert.ok(Array.isArray(result.scenario.steps) && result.scenario.steps.length >= 1, "generated scenario should have at least one step");
+
+        // it was actually registered in the LOADED state
+        var entry = await client.getLoadScenario("node-client-load-from-openapi");
+        assert.equal(entry.name, "node-client-load-from-openapi", "generated scenario should be registered");
+        await client.clearLoadScenarios();
+    });
+
+    it('should apply an explicit target when generating from an OpenAPI spec', async function () {
+        await client.clearLoadScenarios();
+        var spec = JSON.stringify({
+            openapi: "3.0.0",
+            info: { title: "node-client-load-openapi-target", version: "1.0.0" },
+            paths: {
+                "/things": { get: { responses: { "200": { description: "ok" } } } }
+            }
+        });
+        var result = await client.generateLoadScenarioFromOpenAPI({
+            name: "node-client-load-from-openapi-target",
+            specUrlOrPayload: spec,
+            target: { host: "target.svc", port: 9090, scheme: "https" }
+        });
+        assert.equal(result.status, "loaded", "result status should be 'loaded'");
+        assert.ok(result.scenario.steps.length >= 1, "generated scenario should have a step");
+        await client.clearLoadScenarios();
+    });
+
+    it('should reject generateLoadScenarioFromRecording when there is no recorded traffic', async function () {
+        // With no recorded proxy traffic the server returns 400; this exercises
+        // that the client issues the PUT and surfaces the error (the success
+        // path with recorded traffic requires proxy mode which is out of scope
+        // for this no-proxy suite).
+        var rejected = false;
+        try {
+            await client.generateLoadScenarioFromRecording({
+                name: "node-client-load-from-recording",
+                mode: "TEMPLATIZED"
+            });
+        } catch (err) {
+            rejected = true;
+            assert.ok(err, "generateLoadScenarioFromRecording should reject with an error body");
+        }
+        assert.equal(rejected, true, "generateLoadScenarioFromRecording should reject when there is no recorded traffic");
+    });
+
     // ========================================================================
     // gRPC descriptor management
     //   PUT /mockserver/grpc/descriptors  (raw FileDescriptorSet bytes)

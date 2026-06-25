@@ -26,6 +26,7 @@ class LoadProfile implements \JsonSerializable
 {
     /** @var array<int, LoadStage> */
     private array $stages = [];
+    private ?LoadShape $shape = null;
 
     public function __construct()
     {
@@ -38,6 +39,19 @@ class LoadProfile implements \JsonSerializable
     {
         $profile = new self();
         $profile->stages = $stages;
+
+        return $profile;
+    }
+
+    /**
+     * Build a profile from a single declarative named {@see LoadShape} that the
+     * server expands into ordinary stages. Use a shape OR an explicit list of
+     * stages, not both.
+     */
+    public static function fromShape(LoadShape $shape): self
+    {
+        $profile = new self();
+        $profile->shape = $shape;
 
         return $profile;
     }
@@ -71,6 +85,17 @@ class LoadProfile implements \JsonSerializable
     }
 
     /**
+     * Set the declarative named {@see LoadShape} for this profile. If explicit
+     * stages are also set the server prefers the stages.
+     */
+    public function shape(LoadShape $shape): self
+    {
+        $this->shape = $shape;
+
+        return $this;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function jsonSerialize(): array
@@ -83,11 +108,22 @@ class LoadProfile implements \JsonSerializable
      */
     public function toArray(): array
     {
-        return [
-            'stages' => array_map(
+        $result = [];
+        if ($this->stages !== []) {
+            $result['stages'] = array_map(
                 static fn (LoadStage $stage): array => $stage->toArray(),
                 $this->stages,
-            ),
-        ];
+            );
+        }
+        if ($this->shape !== null) {
+            $result['shape'] = $this->shape->toArray();
+        }
+        // Preserve the historical shape: a profile built from stages always
+        // emits a (possibly empty) "stages" array even when none were added.
+        if ($this->stages === [] && $this->shape === null) {
+            $result['stages'] = [];
+        }
+
+        return $result;
     }
 }

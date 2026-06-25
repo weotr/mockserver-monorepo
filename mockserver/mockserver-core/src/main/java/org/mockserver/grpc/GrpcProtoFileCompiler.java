@@ -6,8 +6,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -33,7 +36,7 @@ public class GrpcProtoFileCompiler {
     public byte[] compile(Path protoFile, Path protoPath) {
         Path outputFile = null;
         try {
-            outputFile = Files.createTempFile("mockserver-grpc-", ".desc");
+            outputFile = createRestrictedTempFile("mockserver-grpc-", ".desc");
             List<String> command = new ArrayList<>();
             command.add(protocPath);
             command.add("--descriptor_set_out=" + outputFile.toAbsolutePath());
@@ -81,7 +84,7 @@ public class GrpcProtoFileCompiler {
     public byte[] compileSource(String protoSource) {
         Path tempProtoFile = null;
         try {
-            tempProtoFile = Files.createTempFile("mockserver-grpc-", ".proto");
+            tempProtoFile = createRestrictedTempFile("mockserver-grpc-", ".proto");
             Files.write(tempProtoFile, protoSource.getBytes(StandardCharsets.UTF_8));
             return compile(tempProtoFile, tempProtoFile.getParent());
         } catch (IOException e) {
@@ -139,5 +142,20 @@ public class GrpcProtoFileCompiler {
             Thread.currentThread().interrupt();
             return false;
         }
+    }
+
+    /**
+     * Create a temporary file owner-readable/writable only on POSIX filesystems
+     * ({@code rw-------}), so a transient proto/descriptor file is not exposed to other
+     * local users via a world-readable default. Falls back to the platform default on
+     * non-POSIX filesystems (e.g. Windows), where directory ACLs already restrict access.
+     */
+    private static Path createRestrictedTempFile(String prefix, String suffix) throws IOException {
+        if (FileSystems.getDefault().supportedFileAttributeViews().contains("posix")) {
+            FileAttribute<?> perms = PosixFilePermissions.asFileAttribute(
+                PosixFilePermissions.fromString("rw-------"));
+            return Files.createTempFile(prefix, suffix, perms);
+        }
+        return Files.createTempFile(prefix, suffix);
     }
 }

@@ -40,6 +40,7 @@ import static io.netty.handler.codec.http.HttpResponseStatus.*;
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.exception.ExceptionHandling.closeOnFlush;
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
 import static org.mockserver.log.model.LogEntry.LogMessageType.AUTHENTICATION_FAILED;
 import static org.mockserver.metrics.Metrics.Name.REQUESTS_RECEIVED_COUNT;
 import static org.mockserver.mock.HttpState.PATH_PREFIX;
@@ -239,6 +240,16 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
 
                 } else if (request.matches("PUT", PATH_PREFIX + "/bind", "/bind")) {
 
+                    // /bind mutates the server's listening ports, so it must take the SAME
+                    // control-plane authn + authorization + audit decision as the operations
+                    // dispatched through HttpState.handle and the /configuration route. Route
+                    // through the shared core gate (which writes the 401/403 and audits on
+                    // failure) BEFORE any side effect, and return on false so an unauthenticated
+                    // caller cannot rebind ports. Default (no control-plane auth configured) is a
+                    // no-op: the gate returns true and binding proceeds with no credentials.
+                    if (!httpState.controlPlaneRequestAuthenticated(request, responseWriter)) {
+                        return;
+                    }
                     PortBinding requestedPortBindings = portBindingSerializer.deserialize(request.getBodyAsString());
                     if (requestedPortBindings != null) {
                         try {
@@ -259,6 +270,17 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
 
                 } else if (request.matches("PUT", PATH_PREFIX + "/stop", "/stop")) {
 
+                    // /stop shuts the whole server down, so it must take the SAME control-plane
+                    // authn + authorization + audit decision as the operations dispatched through
+                    // HttpState.handle and the /configuration route. Run the shared core gate
+                    // (which writes the 401/403 and audits on failure) FIRST — BEFORE the OK write
+                    // and BEFORE the shutdown thread is spawned — and return on false so an
+                    // unauthenticated caller cannot stop the server. Default (no control-plane auth
+                    // configured) is a no-op: the gate returns true and /stop proceeds with no
+                    // credentials, preserving the existing behaviour.
+                    if (!httpState.controlPlaneRequestAuthenticated(request, responseWriter)) {
+                        return;
+                    }
                     // Control-plane direct-writes bypass NettyResponseWriter.sendResponse, so the
                     // in-flight token is not completed by the response funnel here. Complete it
                     // explicitly (idempotent with the closeFuture safety net via the AtomicBoolean
@@ -537,6 +559,13 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
                 new LogEntry()
                     .setLogLevel(Level.ERROR)
                     .setMessageFormat("exception caught by " + server.getClass() + " handler -> closing pipeline " + ctx.channel())
+                    .setThrowable(cause)
+            );
+        } else if (isSslOrDecoderFault(cause)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("SSL or decoder fault caught by " + server.getClass() + " handler -> closing pipeline " + ctx.channel())
                     .setThrowable(cause)
             );
         }

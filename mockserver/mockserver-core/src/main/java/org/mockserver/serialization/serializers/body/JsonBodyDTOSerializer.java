@@ -11,6 +11,7 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.model.JsonBodyDTO;
 
 import java.io.IOException;
+import java.util.Arrays;
 
 /**
  * @author jamesdbloom
@@ -36,7 +37,17 @@ public class JsonBodyDTOSerializer extends StdSerializer<JsonBodyDTO> {
         boolean contentTypeNonDefault = jsonBodyDTO.getContentType() != null && !jsonBodyDTO.getContentType().equals(JsonBody.DEFAULT_JSON_CONTENT_TYPE.toString());
         boolean matchTypeNonDefault = jsonBodyDTO.getMatchType() != JsonBody.DEFAULT_MATCH_TYPE;
         boolean matchNumbersAsStringsNonDefault = jsonBodyDTO.isMatchNumbersAsStrings();
-        if (serialiseDefaultValues || notNonDefault || optionalNonDefault || contentTypeNonDefault || matchTypeNonDefault || matchNumbersAsStringsNonDefault) {
+        JsonNode jsonNode = OBJECT_MAPPER.readTree(jsonBodyDTO.getJson());
+        // the original wire bytes cannot be reconstructed from the serialised JSON value when they differ
+        // from the canonical serialisation of the parsed tree (e.g. recorded requests with original spacing) -
+        // in that case emit them explicitly so getBodyAsRawBytes()/getBodyAsOriginalRawBytes() round-trip exactly.
+        // this is scoped to the recorded-request retrieval path only (via the per-call "emitRawBytes" attribute) so
+        // matcher/expectation serialisation and diagnostic mismatch logs stay clean (see #2374); the expensive
+        // canonical re-serialisation + comparison is only computed when the attribute is set and rawBytes is present
+        boolean rawBytesNonDefault = Boolean.TRUE.equals(provider.getAttribute("emitRawBytes"))
+            && jsonBodyDTO.getRawBytes() != null
+            && !Arrays.equals(jsonBodyDTO.getRawBytes(), OBJECT_MAPPER.writeValueAsBytes(jsonNode));
+        if (serialiseDefaultValues || notNonDefault || optionalNonDefault || contentTypeNonDefault || matchTypeNonDefault || matchNumbersAsStringsNonDefault || rawBytesNonDefault) {
             jgen.writeStartObject();
             if (notNonDefault) {
                 jgen.writeBooleanField("not", jsonBodyDTO.getNot());
@@ -48,14 +59,13 @@ public class JsonBodyDTOSerializer extends StdSerializer<JsonBodyDTO> {
                 jgen.writeStringField("contentType", jsonBodyDTO.getContentType());
             }
             jgen.writeStringField("type", jsonBodyDTO.getType().name());
-            JsonNode jsonNode = OBJECT_MAPPER.readTree(jsonBodyDTO.getJson());
             if (jsonNode.isValueNode()) {
                 jgen.writeFieldName("json");
                 jgen.writeRawValue(jsonBodyDTO.getJson());
             } else {
                 jgen.writeObjectField("json", jsonNode);
             }
-            if (jsonBodyDTO.getRawBytes() != null) {
+            if (rawBytesNonDefault) {
                 jgen.writeObjectField("rawBytes", jsonBodyDTO.getRawBytes());
             }
             if (matchTypeNonDefault) {
@@ -66,11 +76,10 @@ public class JsonBodyDTOSerializer extends StdSerializer<JsonBodyDTO> {
             }
             jgen.writeEndObject();
         } else {
-            JsonNode defaultJsonNode = OBJECT_MAPPER.readTree(jsonBodyDTO.getJson());
-            if (defaultJsonNode.isValueNode()) {
+            if (jsonNode.isValueNode()) {
                 jgen.writeRawValue(jsonBodyDTO.getJson());
             } else {
-                jgen.writeObject(defaultJsonNode);
+                jgen.writeObject(jsonNode);
             }
         }
     }

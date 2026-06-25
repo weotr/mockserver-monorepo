@@ -654,7 +654,7 @@ flowchart LR
     SVC --> PRICE["LlmPricing\n(estimate USD cost)"]
     SVC --> REDACT["FixtureRedactor\n(strip secrets)"]
     SVC --> BUILD["LlmOptimisationReportBuilder\n(assemble report)"]
-    BUILD --> SIG["OptimisationSignals\n(detect 6 signal types)"]
+    BUILD --> SIG["OptimisationSignals\n(detect 9 signal types)"]
     BUILD --> RPT["LlmOptimisationReport\n(JSON bundle)"]
     RPT -->|"format=markdown"| RENDER["LlmOptimisationBriefRenderer\n(Markdown brief)"]
 ```
@@ -687,20 +687,92 @@ CORS is enabled on this endpoint so the dashboard UI can call it even when the d
 
 **Dashboard** — the LLM Optimise screen (`OptimiseView.tsx`, the **LLM Optimise** nav tab, positioned immediately after **Chaos**) fetches `format=json` for display and `format=markdown` for the "Copy optimisation brief" and "Download bundle" buttons.
 
+### In-product verdict
+
+`LlmOptimisationReport.Verdict` is always present on the report (an empty session yields grade `A`, zeros, and the rationale `"No optimisation opportunities detected."`). It is computed by `LlmOptimisationReportBuilder.buildVerdict` using per-call MAX attribution — the approach that ensures overlapping signals can never inflate the headline above actual spend.
+
+**Attribution algorithm.** For each signal with `k` affected calls, divide its `estimatedSavingUsd` and `estimatedWastedInputTokens` by `k` to get per-call shares. For each call index `i`, take the **maximum** across all signals (not a sum) so the same wasted tokens cannot be counted twice. Sum those per-call maxima, then apply a final clamp: `totalEstimatedSavingUsd ≤ totals.estimatedCostUsd`.
+
+**Grade thresholds.** `score = 100 × (1 − savingFraction)`, where `savingFraction = totalEstimatedSavingUsd / totals.estimatedCostUsd` (falls back to a token-wasted fraction when cost is zero):
+
+| Score | Grade |
+|-------|-------|
+| ≥ 90 | A |
+| ≥ 75 | B |
+| ≥ 60 | C |
+| ≥ 45 | D |
+| < 45 | F |
+
+**Severity floor:** if `highCount > 0` and the score would otherwise yield `A`, the grade is promoted to `B`.
+
+**Rationale string** (templated, deterministic): no signals → `"No optimisation opportunities detected."`; otherwise → `"Grade C — an estimated 18% of spend ($1.42) is recoverable across 3 findings (1 high, 2 medium)."` Zero-count severities are omitted.
+
+| Verdict field | Type | Notes |
+|---|---|---|
+| `grade` | String | `"A"` … `"F"` |
+| `rationale` | String | Templated one-liner |
+| `totalEstimatedSavingUsd` | double | Clamped ≤ `totals.estimatedCostUsd` |
+| `totalWastedInputTokens` | long | Sum of per-call MAX wasted input tokens |
+| `savingFractionOfSpend` | double | 0..1 |
+| `costIsEstimated` | boolean | Mirrors `totals.costIsEstimated` |
+| `highCount` / `mediumCount` / `lowCount` | int | Signal counts by severity |
+
+The **dashboard** renders the verdict as a banner above the hero cards (`data-testid="optimise-verdict"`): the grade letter is colour-coded (A/B = success, C = warning, D/F = error), the headline shows `"Est. $X recoverable (Y% of spend)"`, and the rationale appears beneath it. The **"Copy verdict"** button next to "Copy optimisation brief" builds a compact plain-text verdict client-side from the already-loaded JSON (no additional fetch).
+
+The **Markdown brief** opens with a `## Verdict` section (grade, rationale, recoverable estimate, cache-hit %, one-shot %) before the run summary.
+
+### Session KPIs
+
+Three new KPIs are added to `Totals` and reflected in the run summary and hero cards:
+
+| KPI field | Formula | Dashboard label |
+|---|---|---|
+| `cacheHitRatio` | `inputTokens > 0 ? cachedInputTokens / inputTokens : 0` | Cache hit |
+| `oneShotRate` | `callCount > 0 ? 1 − retryCallCount / callCount : 1.0` | One-shot |
+| `retryCallCount` | Windowed retry count (window = 3): call `i` is a retry if it matches any of the prior 3 calls on path, model, messageCount, systemPromptFingerprint, and inputTokens. | — (used to derive `oneShotRate`) |
+
 ### Optimisation signals
 
-`OptimisationSignals.detect(calls)` runs six pure detectors and sorts the results HIGH → MEDIUM → LOW:
+`OptimisationSignals.detect(calls, providers, cachedInputTokens)` runs nine pure detectors. Results are sorted by **urgency descending** (urgency = `severityWeight × callShare`, where severityWeight is 1.0 / 0.6 / 0.3 for HIGH / MEDIUM / LOW, and callShare = affected calls / total calls); severity rank is the tie-breaker.
 
-| Signal id | Severity | Trigger | Lever |
-|-----------|----------|---------|-------|
-| `REPEATED_SYSTEM_PROMPT` | HIGH / MEDIUM | Same system-prompt fingerprint on ≥2 calls | Prompt caching / retrieval tool |
-| `LARGE_STATIC_CONTEXT_RESENT` | HIGH | Context block ≥2,000 tokens resent on ≥2 calls | Prompt caching / retrieval tool |
-| `DETERMINISTIC_TOOL_CALL` | MEDIUM | Same tool name + args fingerprint on ≥2 calls | Direct HTTP/MCP endpoint |
-| `OVERSIZED_TOOL_RESULT` | MEDIUM | Tool result ≥1,000 tokens | Trim/summarise output |
-| `OUTPUT_TOKEN_BLOAT` | LOW | Output ≥1,500 tokens or ≥3× session median | `max_tokens` / `response_format` |
-| `DUPLICATE_CONSECUTIVE_CALL` | MEDIUM | Near-identical consecutive request shape | De-duplicate / cache / retry guard |
+Each signal also carries a structured `Fix` object (all String fields, any nullable):
 
-Each signal carries `estimatedWastedInputTokens` (nullable) and `estimatedSavingUsd` (nullable, scaled from per-call cost via `LlmPricing`).
+| `Fix` field | Content |
+|---|---|
+| `summary` | Imperative ≤6-word headline, e.g. `"Enable prompt caching"` |
+| `action` | 1–2 sentence description of what to do |
+| `configSnippet` | Copy-paste env / JSON snippet, or null |
+| `exampleExpectation` | Example MockServer expectation JSON, or null |
+| `docsUrl` | Absolute URL into the consumer docs, or null |
+
+The legacy `recommendation` String on each signal is retained for back-compat. When `fix` is present the dashboard renders `fix.summary` (bold) + `fix.action` + copy-button for `configSnippet` / `exampleExpectation` + a docs link; when `fix` is null it falls back to `recommendation`.
+
+| Signal id | Severity | Urgency | Trigger | Lever |
+|-----------|----------|---------|---------|-------|
+| `REPEATED_SYSTEM_PROMPT` | HIGH / MEDIUM | urgency-ranked | Same system-prompt fingerprint on ≥2 calls | Prompt caching / retrieval tool |
+| `LARGE_STATIC_CONTEXT_RESENT` | HIGH | urgency-ranked | Context block ≥2,000 tokens resent on ≥2 calls | Prompt caching / retrieval tool |
+| `DETERMINISTIC_TOOL_CALL` | MEDIUM | urgency-ranked | Same tool name + args fingerprint on ≥2 calls | Direct HTTP/MCP endpoint |
+| `OVERSIZED_TOOL_RESULT` | MEDIUM | urgency-ranked | Tool result ≥1,000 tokens | Trim/summarise output |
+| `OUTPUT_TOKEN_BLOAT` | LOW | urgency-ranked | Output ≥1,500 tokens or ≥3× session median | `max_tokens` / `response_format` |
+| `DUPLICATE_CONSECUTIVE_CALL` | MEDIUM | urgency-ranked | Near-identical consecutive request shape | De-duplicate / cache / retry guard |
+| `LOW_CACHE_HIT_RATE` | HIGH / MEDIUM | urgency-ranked | `cacheHitRatio < 0.5` AND a repeated cacheable system-prompt fingerprint exists AND `notYetCached > 0`. HIGH when notYetCached ≥ 2,000 tokens AND ratio < 0.2, else MEDIUM. `fix` is provider-aware: Anthropic gets a `cache_control` snippet; OpenAI/Gemini get prefix-caching advice. | Enable prompt caching |
+| `MODEL_OVERSPEND` | LOW | urgency-ranked | ≥2 trivial calls (output < 256 tokens, no tool calls, no reasoning tokens) on a model whose blended rate is > 30% above the provider's cheapest model. `estimatedSavingUsd = affectedCost × savingFraction`; `estimatedWastedInputTokens = null`. | Switch to a smaller model |
+| `UNUSED_TOOL_SCHEMA` | MEDIUM / LOW | urgency-ranked | Tools defined in the `tools` array but never invoked across the session, resent on ≥2 calls with `definedToolTokens > 0`. MEDIUM when total wasted tokens ≥ 1,000. Per-call waste = `definedToolTokens × unusedInCall / definedCount`. | Remove unused tools from `tools` |
+
+Each signal carries `estimatedWastedInputTokens` (nullable) and `estimatedSavingUsd` (nullable, scaled from per-call cost via `LlmPricing`). Additionally, each signal carries `urgency` (double, 0..1) used for sorting.
+
+#### `Call` additions for `UNUSED_TOOL_SCHEMA`
+
+`buildCall` captures the tool names and schema size from the request body:
+
+| `Call` field | Type | Source |
+|---|---|---|
+| `definedToolNames` | `List<String>` | Tool/function names from the request `tools` array (OpenAI: `function.name`; Anthropic/Gemini: `name`). Best-effort; empty on parse failure. |
+| `definedToolTokens` | long | `charsToTokens(serialized tools node length)` (`~4 chars/token`). 0 when `tools` is absent. |
+
+#### Anthropic top-level `system` field
+
+The Anthropic provider codec (`AnthropicCodec`) maps the top-level `system` field in request bodies — both the simple `"system": "text"` string form and the `"system": [{"type":"text","text":"...","cache_control":{...}}]` blocks array form — to a leading `SYSTEM` message in the decoded conversation. This ensures `REPEATED_SYSTEM_PROMPT` and `LOW_CACHE_HIT_RATE` fire correctly on Anthropic traffic (including Bedrock). `cachedInputTokens` is populated from `usage.cache_read_input_tokens` in the Anthropic response by `AnthropicLlmClient`.
 
 ### Session grouping
 
@@ -720,7 +792,8 @@ Sessions group by isolation key (when LLM conversation expectations with `Isolat
 ### Markdown brief structure (frozen order)
 
 1. Framing preamble (verbatim instructions for the downstream LLM)
-2. Run summary (providers, models, token totals, estimated cost, latency, tool-call count)
-3. Per-call table (`# | model | in tok | out tok | cost | latency | tools | finish`)
-4. Detected opportunities (HIGH first, each as a `###` section with title, detail, affected call indices, estimated saving, recommendation)
-5. Conversations and tool definitions appendix (redacted messages + tool schemas per call)
+2. `## Verdict` — grade, rationale, `"Est. $X (Y% of spend) / Z tokens recoverable"`, cache-hit %, one-shot %
+3. Run summary (providers, models, token totals, estimated cost, latency, tool-call count, cache-hit rate, one-shot rate)
+4. Per-call table (`# | model | in tok | out tok | cost | latency | tools | finish`)
+5. Detected opportunities (urgency-ranked, each as a `###` section with title, detail, affected call indices, estimated saving, recommendation, `Fix:` line, and optional fenced `config` / `json` block for snippet / example expectation and docs link)
+6. Conversations and tool definitions appendix (redacted messages + tool schemas per call)

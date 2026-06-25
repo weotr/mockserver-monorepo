@@ -649,7 +649,7 @@ PUT /mockserver/serviceChaos
     <li><strong>Kubernetes sidecar or egress proxy:</strong> deploy MockServer as a sidecar container or egress proxy in your K8s pod/namespace and route specific traffic through it with chaos injection enabled</li>
 </ul>
 
-<p>MockServer operates at the <strong>HTTP layer (L7)</strong> and requires either explicit routing <strong>or</strong> transparent interception (Linux iptables <code class="inline code">REDIRECT</code> / <code class="inline code">TPROXY</code>) to place it in-path — see <a href="/mock_server/chaos_testing_kubernetes.html">Service Mesh / Sidecar Mode</a>. See <a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> for detailed proxy deployment patterns.</p>
+<p>MockServer operates at the <strong>HTTP layer (L7)</strong> and requires either explicit routing <strong>or</strong> transparent interception (Linux iptables <code class="inline code">REDIRECT</code> / <code class="inline code">TPROXY</code>) to place it in-path — see <a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a>. See <a href="/mock_server/isolating_single_service.html">Isolating Single Service</a> for detailed proxy deployment patterns.</p>
 
 <a id="stateful_count_based_faults" class="anchor" href="#stateful_count_based_faults">&nbsp;</a>
 
@@ -919,6 +919,10 @@ mock_server_active_service_chaos{fault_type="drop"}</code></pre>
 <h2>Dashboard UI</h2>
 
 <p>Chaos profiles can be configured directly from the <a href="/mock_server/mockserver_ui.html">MockServer dashboard</a> when composing a standard HTTP expectation. Toggle the <strong>Inject fault / chaos</strong> switch in the expectation composer to reveal fields for the chaos profile. The dashboard generates the correct JSON payload (with <code class="inline code">chaos</code> as a top-level expectation field) and the equivalent Java client and curl snippets. Active expectations that have a chaos profile display a <strong>Chaos</strong> summary chip in the expectations panel.</p>
+
+<h3>SLO Verification Panel</h3>
+
+<p>The dashboard includes an <strong>SLO</strong> panel where you can author SLO criteria and run a verification against recorded traffic without leaving the browser (SLO verification requires <code class="inline code">sloTrackingEnabled=true</code> on the server; the panel reports when tracking is disabled). Enter your latency and error-rate thresholds, choose an upstream host or leave the scope empty to cover all hosts, then click <strong>Verify SLO</strong>. The panel calls the <a href="#slo_resilience_verdicts"><code class="inline code">PUT /mockserver/verifySLO</code></a> endpoint and displays the result as <strong>PASS</strong>, <strong>FAIL</strong>, or <strong>INCONCLUSIVE</strong> with the supporting sample counts and breach details inline. This is the fastest way to confirm that a chaos experiment has not degraded SLO compliance during a load run.</p>
 
 <a id="grpc_fault_injection" class="anchor" href="#grpc_fault_injection">&nbsp;</a>
 
@@ -1556,6 +1560,37 @@ new MockServerClient("localhost", 1080)
 
 <p>This experiment waits until the next 02:00 (server local time), then injects 503s into <code class="inline code">payments.svc</code> for 10 minutes &mdash; useful for rehearsing an off-peak incident without staying up to trigger it.</p>
 
+<h3>Asserting an SLO during the experiment (pass/fail verdict)</h3>
+
+<p>An experiment can carry an optional <code class="inline code">sloCriteria</code> block &mdash; the same shape the <a href="#slo_resilience_verdicts">SLO Resilience Verdicts</a> endpoint accepts (a list of objectives such as error-rate or latency percentile, each with a threshold). When present, MockServer turns the experiment into a self-checking resilience test:</p>
+
+<ul>
+    <li><strong>Terminal verdict</strong> &mdash; when the experiment ends, MockServer evaluates the SLO over the experiment's own time window and attaches an <code class="inline code">experimentVerdict</code> to the status. The result is one of <code class="inline code">PASS</code> (every objective held for the whole experiment), <code class="inline code">FAIL</code> (an objective was breached at any point, or the experiment was auto-halted), or <code class="inline code">INCONCLUSIVE</code> (fewer samples than the criteria's <code class="inline code">minimumSampleCount</code>).</li>
+    <li><strong>Automatic halt on breach</strong> &mdash; if an objective is actually breached <em>while the experiment runs</em>, MockServer stops the experiment immediately with status <code class="inline code">halted_by_slo_breach</code> and a <code class="inline code">FAIL</code> verdict, so a chaos run that pushes the system past its SLO doesn't keep degrading it.</li>
+</ul>
+
+<p>The SLO window is scoped to the experiment automatically &mdash; you do not need to set the window in <code class="inline code">sloCriteria</code>; MockServer measures from the experiment's start to its end (or to "now" for the live breach check). SLO sample tracking must be enabled (<code class="inline code">sloTrackingEnabled=true</code>) so the proxy records the upstream traffic the verdict is computed from. Omitting <code class="inline code">sloCriteria</code> keeps the original behaviour exactly &mdash; no verdict, no extra checking.</p>
+
+<pre class="code"><code class="code">curl -sf -X PUT http://mockserver:1080/mockserver/chaosExperiment \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "payments-resilience-check",
+    "stages": [
+      {"durationMillis": 120000, "profiles": {"payments.svc": {"errorStatus": 503, "errorProbability": 0.2}}}
+    ],
+    "sloCriteria": {
+      "minimumSampleCount": 20,
+      "objectives": [
+        {"sli": "ERROR_RATE", "comparator": "LESS_THAN", "threshold": 0.25},
+        {"sli": "LATENCY_P95", "comparator": "LESS_THAN", "threshold": 800}
+      ]
+    }
+  }'
+
+# GET status after it ends includes the verdict:
+# {"name":"payments-resilience-check","status":"completed", ... ,
+#  "experimentVerdict":{"result":"PASS","objectiveResults":[ ... ]}}</code></pre>
+
 <h3>Safety limits</h3>
 
 <ul>
@@ -1564,6 +1599,7 @@ new MockServerClient("localhost", 1080)
     <li><strong>Maximum 7 days</strong> for a deferred <code class="inline code">startDelayMillis</code></li>
     <li><strong>Only one experiment at a time</strong> &mdash; starting a new experiment stops the previous one</li>
     <li><strong>Auto-halt integration</strong> &mdash; if the <a href="#chaos_auto_halt">auto-halt circuit-breaker</a> fires while an experiment is running, the experiment stops immediately (status: <code class="inline code">halted_by_auto_halt</code>)</li>
+    <li><strong>SLO-breach halt</strong> &mdash; for an experiment with <code class="inline code">sloCriteria</code>, breaching an objective mid-run stops it immediately (status: <code class="inline code">halted_by_slo_breach</code>, verdict <code class="inline code">FAIL</code>)</li>
 </ul>
 
 <h3>Monitoring</h3>
@@ -1575,7 +1611,7 @@ new MockServerClient("localhost", 1080)
 #     "totalStages":3,"stageElapsedMillis":15000,"stageRemainingMillis":45000,
 #     "loopIteration":0,"totalElapsedMillis":75000,"experiment":{...}}</code></pre>
 
-<p>The <code class="inline code">status</code> field is one of: <code class="inline code">scheduled</code> (a delayed/cron start is pending &mdash; the status also carries <code class="inline code">startRemainingMillis</code>), <code class="inline code">running</code>, <code class="inline code">completed</code>, <code class="inline code">stopped</code>, or <code class="inline code">halted_by_auto_halt</code>.</p>
+<p>The <code class="inline code">status</code> field is one of: <code class="inline code">scheduled</code> (a delayed/cron start is pending &mdash; the status also carries <code class="inline code">startRemainingMillis</code>), <code class="inline code">running</code>, <code class="inline code">completed</code>, <code class="inline code">stopped</code>, <code class="inline code">halted_by_auto_halt</code>, or <code class="inline code">halted_by_slo_breach</code>. For an experiment that carried an <code class="inline code">sloCriteria</code>, the status also includes an <code class="inline code">experimentVerdict</code> (<code class="inline code">PASS</code> / <code class="inline code">FAIL</code> / <code class="inline code">INCONCLUSIVE</code>) once the experiment ends.</p>
 
 <h3>Stopping</h3>
 
@@ -1704,7 +1740,7 @@ mock_server_chaos_auto_halt_total &gt; 0</code></pre>
 
 <p>The following chaos features are planned for future releases:</p>
 <ul>
-    <li><strong>Advanced stateful fault injection</strong> — token-bucket rate limiting (429 that depletes and refills) and circuit-breaker windows</li>
+    <li><strong>Advanced stateful fault injection</strong> — token-bucket (depleting/refilling) rate limiting, beyond the existing fixed-window quota, and circuit-breaker windows</li>
 </ul>
 
 <a id="chaos_examples" class="anchor" href="#chaos_examples">&nbsp;</a>
@@ -1719,7 +1755,7 @@ mock_server_chaos_auto_halt_total &gt; 0</code></pre>
 
 <button id="button_faq_rate_limit" class="accordion">How do I simulate a 429 rate limit with MockServer?</button>
 <div class="panel">
-    <p>Add a chaos profile to your expectation with <code class="inline code">errorStatus</code> set to <code class="inline code">429</code>, <code class="inline code">errorProbability</code> set to <code class="inline code">1.0</code> (for every request) or a fraction like <code class="inline code">0.3</code> (for 30% of requests), and an optional <code class="inline code">retryAfter</code> value. The chaos profile works on both mocked responses and forwarded/proxied upstream calls. See the <a href="#request_quota">Request Quota</a> section above.</p>
+    <p>There are two ways. For a <strong>probabilistic</strong> 429, add a chaos profile to your expectation with <code class="inline code">errorStatus</code> set to <code class="inline code">429</code>, <code class="inline code">errorProbability</code> set to <code class="inline code">1.0</code> (for every request) or a fraction like <code class="inline code">0.3</code> (for 30% of requests), and an optional <code class="inline code">retryAfter</code> value &mdash; see <a href="#error_injection">Error injection</a> above. For a <strong>deterministic</strong> "the Nth call within the window gets 429" hard limit, use the stateful <a href="#request_quota">Request Quota</a> instead. The chaos profile works on both mocked responses and forwarded/proxied upstream calls.</p>
 </div>
 
 <button id="button_faq_latency" class="accordion">How do I inject latency into API responses?</button>
@@ -1763,7 +1799,7 @@ mock_server_chaos_auto_halt_total &gt; 0</code></pre>
 
 <ul>
     <li><a href="/mock_server/load_injection.html">Performance Testing / Load Injection</a> &mdash; drive synthetic API traffic with multi-stage VU or arrival-rate profiles and assert SLOs over the results — the natural complement to chaos testing</li>
-    <li><a href="/mock_server/service_mesh.html">Service Mesh / Sidecar Mode</a> &mdash; deploy MockServer in-path as a transparent sidecar so you can inject the faults above into live traffic without changing application config</li>
+    <li><a href="/mock_server/service_mesh.html">Transparent Proxy / Sidecar Mode</a> &mdash; deploy MockServer in-path as a transparent sidecar so you can inject the faults above into live traffic without changing application config</li>
     <li><a href="/mock_server/transparent_interception_recipes.html">Transparent Interception Recipes</a> &mdash; iptables REDIRECT / TPROXY recipes for routing real traffic through MockServer to apply chaos profiles</li>
     <li><a href="/mock_server/chaos_testing_kubernetes.html">Chaos Proxy in Kubernetes</a> &mdash; sidecar, egress, and reverse-proxy deployment patterns for injecting faults in a cluster</li>
     <li><a href="/mock_server/chaos_testing_orchestrators.html">Driving MockServer from Chaos Orchestrators</a> &mdash; Chaos Toolkit, AWS FIS, Azure Chaos Studio and LitmusChaos recipes against the control plane</li>

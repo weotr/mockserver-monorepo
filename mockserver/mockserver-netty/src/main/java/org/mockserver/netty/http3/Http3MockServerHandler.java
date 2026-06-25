@@ -545,12 +545,13 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
                 result = mcpRequestProcessor.handleOptions(hasOrigin);
                 break;
             case "POST":
-                if (!authenticateMcpRequest(ctx, request)) {
+                org.mockserver.authentication.AuthenticationResult authenticationResult = authenticateMcpRequestResult(request);
+                if (authenticationResult == null) {
                     result = buildUnauthorizedResult();
                     break;
                 }
                 String body = request.getBodyAsString();
-                result = mcpRequestProcessor.handlePost(body, mcpSessionId);
+                result = mcpRequestProcessor.handlePost(body, mcpSessionId, authenticationResult.getScopes());
                 break;
             case "DELETE":
                 if (!authenticateMcpRequest(ctx, request)) {
@@ -584,12 +585,26 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
      * @return true if authentication passed (or no handler is configured); false if rejected
      */
     private boolean authenticateMcpRequest(ChannelHandlerContext ctx, HttpRequest request) {
+        return authenticateMcpRequestResult(request) != null;
+    }
+
+    /**
+     * Authenticate an MCP request and return the {@link org.mockserver.authentication.AuthenticationResult}
+     * (carrying the verified principal's scopes, used for per-tool control-plane authorization on the
+     * POST path), or {@code null} when authentication fails. When no handler is configured, returns an
+     * authenticated-but-anonymous result (no scopes) so the caller proceeds unchanged.
+     * <p>
+     * Uses the richer {@code authenticate()} SPI: legacy boolean handlers are adapted to an
+     * authenticated-but-anonymous result by its default method, so behaviour is unchanged for them.
+     */
+    private org.mockserver.authentication.AuthenticationResult authenticateMcpRequestResult(HttpRequest request) {
         AuthenticationHandler authHandler = httpState.getControlPlaneAuthenticationHandler();
         if (authHandler == null) {
-            return true;
+            return org.mockserver.authentication.AuthenticationResult.authenticated(null, "none", java.util.Map.of(), java.util.Set.of());
         }
         try {
-            return authHandler.controlPlaneRequestAuthenticated(request);
+            org.mockserver.authentication.AuthenticationResult result = authHandler.authenticate(request);
+            return result.isAuthenticated() ? result : null;
         } catch (AuthenticationException e) {
             mockServerLogger.logEvent(
                 new LogEntry()
@@ -599,7 +614,7 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
                     .setArguments(e.getMessage())
                     .setThrowable(e)
             );
-            return false;
+            return null;
         }
     }
 

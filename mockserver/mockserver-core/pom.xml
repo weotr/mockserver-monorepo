@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>7.1.1-SNAPSHOT</version>
+        <version>7.2.1-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -92,6 +92,15 @@
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java-util</artifactId>
+            <exclusions>
+                <!-- protobuf-java-util references an older error_prone_annotations than guava brings;
+                     guava's path supplies the (compile-time-only) annotations at the version the build
+                     resolves to. Prune the older edge for downstream convergence (#1970). -->
+                <exclusion>
+                    <groupId>com.google.errorprone</groupId>
+                    <artifactId>error_prone_annotations</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- gzip HTTP deflater & inflater -->
@@ -143,6 +152,12 @@
                     <groupId>org.apache.commons</groupId>
                     <artifactId>commons-lang3</artifactId>
                 </exclusion>
+                <!-- velocity-engine-core references slf4j-api 1.7.36; this module declares slf4j-api
+                     directly at ${slf4j.version}. Prune for downstream convergence (#1970). -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -168,6 +183,22 @@
                     <groupId>commons-beanutils</groupId>
                     <artifactId>commons-beanutils</artifactId>
                 </exclusion>
+                <!-- velocity-tools-generic (and its commons-digester3 edge) reference stale commons-lang3
+                     3.10, slf4j-api 1.7.30 and commons-logging 1.1.1; all three are supplied at the
+                     resolved versions elsewhere (direct commons-lang3 / slf4j-api, and commons-logging via
+                     the commons-beanutils path). Prune for downstream convergence (#1970). -->
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-logging</groupId>
+                    <artifactId>commons-logging</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <!-- Fixed commons-beanutils for velocity-tools-generic / commons-digester3 (see exclusion above).
@@ -191,6 +222,12 @@
             <groupId>com.dylibso.chicory</groupId>
             <artifactId>runtime</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <!-- HdrHistogram (authoritative per-run load-scenario latency percentiles) -->
+        <dependency>
+            <groupId>org.hdrhistogram</groupId>
+            <artifactId>HdrHistogram</artifactId>
         </dependency>
 
         <!-- javascript (GraalVM polyglot) -->
@@ -231,6 +268,21 @@
                  the Java client now excludes). -->
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Declared directly because swagger-parser (which previously supplied jackson-dataformat-yaml
+                 for parsing YAML OpenAPI specs) now excludes it to keep downstream convergence clean (#1970).
+                 Version managed in the parent pom's dependencyManagement at ${jackson.version}. -->
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+            <exclusions>
+                <!-- jackson-dataformat-yaml references snakeyaml 2.5; datafaker supplies the pinned 2.6.
+                     Prune so a single snakeyaml version reaches consumers (#1970). -->
+                <exclusion>
+                    <groupId>org.yaml</groupId>
+                    <artifactId>snakeyaml</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>net.javacrumbs.json-unit</groupId>
@@ -278,12 +330,101 @@
                  transitive so the API stays available if that transitive changes. -->
             <groupId>com.github.java-json-tools</groupId>
             <artifactId>json-patch</artifactId>
+            <exclusions>
+                <!-- json-patch's msg-simple/btf/jackson-coreutils chain references stale jackson-databind
+                     2.11.0 and jsr305 2.0.1; both are supplied at the pinned versions elsewhere (direct
+                     jackson-databind, protobuf's jsr305 3.0.2). Prune for downstream convergence (#1970). -->
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-databind</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.google.code.findbugs</groupId>
+                    <artifactId>jsr305</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- open api -->
         <dependency>
             <groupId>io.swagger.parser.v3</groupId>
             <artifactId>swagger-parser</artifactId>
+            <exclusions>
+                <!-- swagger-parser drags a large legacy subtree (swagger-parser-v2-converter ->
+                     swagger-core 1.6.x / swagger-compat-spec-parser -> com.github.java-json-tools:
+                     json-schema-validator 2.2.14) that references many stale versions of libraries
+                     this module already pins. MockServer's own build converges these via the parent
+                     dependencyManagement, but dependencyManagement is NOT transitive, so a downstream
+                     consumer running maven-enforcer's dependencyConvergence saw conflicts for guava,
+                     jsr305, rhino, libphonenumber, snakeyaml, commons-*, slf4j, jackson-* and
+                     jakarta.xml.bind-api (GitHub issue #1970). The pinned/newer versions already win
+                     nearest-wins, so pruning the stale references here leaves the resolved classpath
+                     unchanged while letting consumers' convergence checks pass. Every artifact below
+                     is supplied at a single version by a direct dependency of this module (or by
+                     datafaker/protobuf at the version that already wins). -->
+                <exclusion>
+                    <groupId>com.google.guava</groupId>
+                    <artifactId>guava</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.google.code.findbugs</groupId>
+                    <artifactId>jsr305</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.mozilla</groupId>
+                    <artifactId>rhino</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.googlecode.libphonenumber</groupId>
+                    <artifactId>libphonenumber</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.yaml</groupId>
+                    <artifactId>snakeyaml</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-io</groupId>
+                    <artifactId>commons-io</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-codec</groupId>
+                    <artifactId>commons-codec</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>commons-logging</groupId>
+                    <artifactId>commons-logging</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-annotations</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-databind</artifactId>
+                </exclusion>
+                <!-- jackson-dataformat-yaml was supplied ONLY by swagger; declared directly below so
+                     YAML OpenAPI specs still parse after this edge is pruned. -->
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.dataformat</groupId>
+                    <artifactId>jackson-dataformat-yaml</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.datatype</groupId>
+                    <artifactId>jackson-datatype-jsr310</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>jakarta.xml.bind</groupId>
+                    <artifactId>jakarta.xml.bind-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <!-- upgrade swagger-parser dependency fixing
@@ -350,6 +491,14 @@
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
+        </dependency>
+        <dependency>
+            <!-- javax.annotation.Nullable (JSR-305) is referenced directly in this module's source
+                 (e.g. HttpForwardAction); declare it directly rather than relying on it arriving
+                 transitively via swagger/json-patch/protobuf, whose stale 2.0.1 edges are now pruned
+                 for downstream convergence (#1970). Version managed in the parent pom at 3.0.2. -->
+            <groupId>com.google.code.findbugs</groupId>
+            <artifactId>jsr305</artifactId>
         </dependency>
 
         <!-- classpath scanning -->
@@ -555,6 +704,7 @@
                         <!-- WS2.1 scenario-state template tests mutate the CrossProtocolEventBus singleton (live ScenarioManager) -->
                         <exclude>**/VelocityScenarioStateTemplateTest.java</exclude>
                         <exclude>**/JavaScriptScenarioStateTemplateTest.java</exclude>
+                        <exclude>**/MustacheScenarioStateTemplateTest.java</exclude>
                         <!-- WS2.6 gRPC bidi scenario-state template test mutates the CrossProtocolEventBus singleton (live ScenarioManager) -->
                         <exclude>**/GrpcStreamMessageScenarioTemplateTest.java</exclude>
                         <!-- WS2.2 capture-rule test mutates the CrossProtocolEventBus singleton (live ScenarioManager) -->
@@ -582,9 +732,6 @@
                         <exclude>**/PerExpectationMetricsTest.java</exclude>
                         <!-- T10: mutates the global mockserver.redactSecretsInLog system property -->
                         <exclude>**/LogEntryRedactionTest.java</exclude>
-                        <!-- WS3.3: mutate global ConfigurationProperties.generateRealisticExampleValues -->
-                        <exclude>**/GenerationOptionsTest.java</exclude>
-                        <exclude>**/OpenAPIConverterGenerationOptionsTest.java</exclude>
                         <!-- Mutate global ConfigurationProperties.llmProvider/llmApiKey/llmModel/llmBaseUrl/llmBackendsConfig -->
                         <exclude>**/LlmBackendResolverTest.java</exclude>
                         <exclude>**/LlmProviderSnifferTest.java</exclude>
@@ -646,6 +793,8 @@
                         <exclude>**/LlmOptimisationReportServiceTest.java</exclude>
                         <!-- Resets the ForwardCircuitBreaker singleton (shared with the upstream_circuit_open gauge) -->
                         <exclude>**/HttpForwardActionResilienceTest.java</exclude>
+                        <!-- Sets/clears the mockserver.otelEndpoint JVM system property and property cache -->
+                        <exclude>**/OtelEndpointConfigurationTest.java</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -697,6 +846,7 @@
                                 <include>**/VelocityTemplateEngineTest.java</include>
                                 <include>**/VelocityScenarioStateTemplateTest.java</include>
                                 <include>**/JavaScriptScenarioStateTemplateTest.java</include>
+                                <include>**/MustacheScenarioStateTemplateTest.java</include>
                                 <include>**/GrpcStreamMessageScenarioTemplateTest.java</include>
                                 <include>**/CaptureProcessorTest.java</include>
                                 <include>**/OidcProviderGeneratorTest.java</include>
@@ -713,8 +863,6 @@
                                 <include>**/LlmMetricsTest.java</include>
                                 <include>**/PerExpectationMetricsTest.java</include>
                                 <include>**/LogEntryRedactionTest.java</include>
-                                <include>**/GenerationOptionsTest.java</include>
-                                <include>**/OpenAPIConverterGenerationOptionsTest.java</include>
                                 <include>**/LlmBackendResolverTest.java</include>
                                 <include>**/LlmProviderSnifferTest.java</include>
                                 <include>**/ForwardPathGenAiSpansTest.java</include>
@@ -762,6 +910,7 @@
                                 <include>**/ConfigurationPropertiesEffectiveConfigGlobalStateTest.java</include>
                                 <include>**/LlmOptimisationReportServiceTest.java</include>
                                 <include>**/HttpForwardActionResilienceTest.java</include>
+                                <include>**/OtelEndpointConfigurationTest.java</include>
                             </includes>
                         </configuration>
                     </execution>

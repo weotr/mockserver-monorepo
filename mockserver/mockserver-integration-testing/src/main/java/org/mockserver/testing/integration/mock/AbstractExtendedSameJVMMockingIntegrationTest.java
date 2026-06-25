@@ -1,6 +1,7 @@
 package org.mockserver.testing.integration.mock;
 
 import org.junit.Test;
+import org.mockserver.model.CaptureRule;
 import org.mockserver.model.HttpStatusCode;
 import org.mockserver.model.HttpTemplate;
 import org.mockserver.templates.engine.javascript.JavaScriptTemplateEngine;
@@ -9,6 +10,7 @@ import org.mockserver.testing.integration.callback.StaticTestExpectationResponse
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.junit.Assert.assertEquals;
 import static org.mockserver.character.Character.NEW_LINE;
+import static org.mockserver.mock.Expectation.when;
 import static org.mockserver.model.Header.header;
 import static org.mockserver.model.HttpClassCallback.callback;
 import static org.mockserver.model.HttpRequest.request;
@@ -179,6 +181,67 @@ public abstract class AbstractExtendedSameJVMMockingIntegrationTest extends Abst
                         .withPath(calculatePath("some_path"))
                         .withCookie("name", "value")
                         .withBody("some_request_body"),
+                    getHeadersToRemove()
+                )
+            );
+
+        }
+    }
+
+    @Test // same JVM due to issues detecting the JavaScript (GraalVM Polyglot) engine via the Maven plugin
+    public void shouldCaptureRequestValueAndReuseItInJavaScriptResponseTemplate() {
+        // given - a multi-step flow: step 1 captures the order id from the request body into the scenario
+        // state key "orderIdJavaScript"; a later request reads it back via scenario.get(...) in a JavaScript
+        // response template (the "persist a value across calls" use case)
+        mockServerClient.upsert(
+            when(request().withMethod("POST").withPath(calculatePath("order/javascript/step1")))
+                .withCapture(CaptureRule.capture(CaptureRule.Source.jsonPath, "$.id", "orderIdJavaScript"))
+                .thenRespond(response().withStatusCode(OK_200.code()).withBody("{\"step\": 1}"))
+        );
+        mockServerClient
+            .when(request().withMethod("POST").withPath(calculatePath("order/javascript/step3")))
+            .respond(
+                template(
+                    HttpTemplate.TemplateType.JAVASCRIPT,
+                    "return { 'statusCode': 200, 'body': 'orderId=' + scenario.get('orderIdJavaScript') };"
+                )
+            );
+
+        // when - the first request supplies the id (capture fires when this request is served)
+        makeRequest(
+            request()
+                .withMethod("POST")
+                .withPath(calculatePath("order/javascript/step1"))
+                .withBody("{\"id\": \"ORDER-JAVASCRIPT\"}"),
+            getHeadersToRemove()
+        );
+
+        if (JavaScriptTemplateEngine.isPolyglotAvailable()) {
+
+            // then - the later request reproduces the captured id in its response body
+            assertEquals(
+                response()
+                    .withStatusCode(OK_200.code())
+                    .withReasonPhrase(OK_200.reasonPhrase())
+                    .withBody("orderId=ORDER-JAVASCRIPT"),
+                makeRequest(
+                    request()
+                        .withMethod("POST")
+                        .withPath(calculatePath("order/javascript/step3")),
+                    getHeadersToRemove()
+                )
+            );
+
+        } else {
+
+            // then - without the JavaScript engine on the classpath the template cannot run, so the
+            // expectation produces no response and the request is unmatched
+            assertEquals(
+                notFoundResponse(),
+                makeRequest(
+                    request()
+                        .withMethod("POST")
+                        .withPath(calculatePath("order/javascript/step3")),
                     getHeadersToRemove()
                 )
             );

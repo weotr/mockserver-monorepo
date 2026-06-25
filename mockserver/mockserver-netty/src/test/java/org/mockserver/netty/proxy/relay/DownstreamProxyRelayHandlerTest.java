@@ -2,17 +2,24 @@ package org.mockserver.netty.proxy.relay;
 
 import io.netty.buffer.Unpooled;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.DecoderException;
 import io.netty.handler.codec.http.*;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.MockServerLogger;
+import org.slf4j.event.Level;
 
+import javax.net.ssl.SSLException;
 import java.nio.charset.StandardCharsets;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * EmbeddedChannel tests for {@link DownstreamProxyRelayHandler} verifying:
@@ -122,6 +129,80 @@ public class DownstreamProxyRelayHandlerTest {
 
         // then
         assertFalse("downstream channel should be closed on exception", downstreamChannel.isActive());
+    }
+
+    @Test
+    public void shouldLogWarnAndCloseOnDecoderFault() {
+        // given - a handler wired with a mock logger so the log level can be asserted
+        MockServerLogger logger = mock(MockServerLogger.class);
+        EmbeddedChannel channel = new EmbeddedChannel(new DownstreamProxyRelayHandler(logger, new EmbeddedChannel()));
+
+        // when - a genuine decoder fault is caught
+        channel.pipeline().fireExceptionCaught(new DecoderException("bad frame"));
+        channel.runPendingTasks();
+
+        // then - it is surfaced at WARN (not silently dropped) and the channel is closed
+        ArgumentCaptor<LogEntry> captor = ArgumentCaptor.forClass(LogEntry.class);
+        verify(logger).logEvent(captor.capture());
+        assertThat(captor.getValue().getLogLevel(), is(Level.WARN));
+        assertFalse("channel should be closed on decoder fault", channel.isActive());
+
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void shouldLogWarnAndCloseOnSslFault() {
+        // given
+        MockServerLogger logger = mock(MockServerLogger.class);
+        EmbeddedChannel channel = new EmbeddedChannel(new DownstreamProxyRelayHandler(logger, new EmbeddedChannel()));
+
+        // when - a throwable whose cause is an SSLException is caught
+        channel.pipeline().fireExceptionCaught(new RuntimeException("relay failed", new SSLException("handshake failed")));
+        channel.runPendingTasks();
+
+        // then
+        ArgumentCaptor<LogEntry> captor = ArgumentCaptor.forClass(LogEntry.class);
+        verify(logger).logEvent(captor.capture());
+        assertThat(captor.getValue().getLogLevel(), is(Level.WARN));
+        assertFalse("channel should be closed on SSL fault", channel.isActive());
+
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void shouldStaySilentOnBenignConnectionClose() {
+        // given
+        MockServerLogger logger = mock(MockServerLogger.class);
+        EmbeddedChannel channel = new EmbeddedChannel(new DownstreamProxyRelayHandler(logger, new EmbeddedChannel()));
+
+        // when - a benign connection reset is caught
+        channel.pipeline().fireExceptionCaught(new RuntimeException("Connection reset by peer"));
+        channel.runPendingTasks();
+
+        // then - nothing is logged but the channel is still closed
+        verify(logger, org.mockito.Mockito.never()).logEvent(org.mockito.ArgumentMatchers.any(LogEntry.class));
+        assertFalse("channel should be closed on benign close", channel.isActive());
+
+        channel.finishAndReleaseAll();
+    }
+
+    @Test
+    public void shouldLogErrorOnUnexpectedException() {
+        // given
+        MockServerLogger logger = mock(MockServerLogger.class);
+        EmbeddedChannel channel = new EmbeddedChannel(new DownstreamProxyRelayHandler(logger, new EmbeddedChannel()));
+
+        // when - an unexpected exception is caught
+        channel.pipeline().fireExceptionCaught(new IllegalStateException("unexpected"));
+        channel.runPendingTasks();
+
+        // then - it is surfaced at ERROR and the channel is closed
+        ArgumentCaptor<LogEntry> captor = ArgumentCaptor.forClass(LogEntry.class);
+        verify(logger).logEvent(captor.capture());
+        assertThat(captor.getValue().getLogLevel(), is(Level.ERROR));
+        assertFalse("channel should be closed on unexpected exception", channel.isActive());
+
+        channel.finishAndReleaseAll();
     }
 
     @Test

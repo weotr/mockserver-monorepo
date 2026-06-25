@@ -461,6 +461,104 @@ public abstract class AbstractBasicMockingIntegrationTest extends AbstractTransp
         );
     }
 
+    @Test
+    public void shouldCaptureRequestValueAndReuseItInVelocityResponseTemplate() {
+        // given - a multi-step flow: step 1 captures the order id from the request body into the
+        // scenario state key "orderIdVelocity"; a later request reads it back via $!scenario.get(...)
+        // in a Velocity response template (the "persist a value across calls" use case)
+        mockServerClient.upsert(
+            when(request().withMethod("POST").withPath(calculatePath("order/velocity/step1")))
+                .withCapture(CaptureRule.capture(CaptureRule.Source.jsonPath, "$.id", "orderIdVelocity"))
+                .thenRespond(response().withStatusCode(OK_200.code()).withBody("{\"step\": 1}"))
+        );
+        mockServerClient
+            .when(request().withMethod("POST").withPath(calculatePath("order/velocity/step3")))
+            .respond(
+                template(
+                    HttpTemplate.TemplateType.VELOCITY,
+                    "{" + NEW_LINE +
+                        "     \"statusCode\": 200," + NEW_LINE +
+                        "     \"body\": \"orderId=$!scenario.get('orderIdVelocity')\"" + NEW_LINE +
+                        "}" + NEW_LINE
+                )
+            );
+
+        // when - the first request supplies the id (capture fires when this request is served)
+        makeRequest(
+            request()
+                .withMethod("POST")
+                .withPath(calculatePath("order/velocity/step1"))
+                .withBody("{\"id\": \"ORDER-VELOCITY\"}"),
+            getHeadersToRemove()
+        );
+
+        // then - the later request reproduces the captured id in its response body
+        assertEquals(
+            response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("orderId=ORDER-VELOCITY"),
+            makeRequest(
+                request()
+                    .withMethod("POST")
+                    .withPath(calculatePath("order/velocity/step3")),
+                getHeadersToRemove()
+            )
+        );
+    }
+
+    // Capture -> JavaScript response template is covered where the GraalVM JS engine is actually on the
+    // classpath: CaptureProcessorTest.shouldDriveLaterResponseTemplateFromCapturedJsonPathValue (core) and
+    // AbstractExtendedSameJVMMockingIntegrationTest.shouldCaptureRequestValueAndReuseItInJavaScriptResponseTemplate
+    // (HTTP, guarded by JavaScriptTemplateEngine.isPolyglotAvailable()). It is intentionally NOT here because
+    // the GraalVM JS dependency is optional and absent from this module's runtime, so the template cannot run.
+
+    @Test
+    public void shouldCaptureRequestValueAndReuseItInMustacheResponseTemplate() {
+        // given - same flow as the Velocity test using a Mustache response template. jmustache cannot
+        // invoke a helper method with an argument inline, so scenario state is read by name as a section
+        // lambda whose body is the key: {{#scenario.get}}orderIdMustache{{/scenario.get}}
+        mockServerClient.upsert(
+            when(request().withMethod("POST").withPath(calculatePath("order/mustache/step1")))
+                .withCapture(CaptureRule.capture(CaptureRule.Source.jsonPath, "$.id", "orderIdMustache"))
+                .thenRespond(response().withStatusCode(OK_200.code()).withBody("{\"step\": 1}"))
+        );
+        mockServerClient
+            .when(request().withMethod("POST").withPath(calculatePath("order/mustache/step3")))
+            .respond(
+                template(
+                    HttpTemplate.TemplateType.MUSTACHE,
+                    "{" + NEW_LINE +
+                        "     \"statusCode\": 200," + NEW_LINE +
+                        "     \"body\": \"orderId={{#scenario.get}}orderIdMustache{{/scenario.get}}\"" + NEW_LINE +
+                        "}" + NEW_LINE
+                )
+            );
+
+        // when - the first request supplies the id (capture fires when this request is served)
+        makeRequest(
+            request()
+                .withMethod("POST")
+                .withPath(calculatePath("order/mustache/step1"))
+                .withBody("{\"id\": \"ORDER-MUSTACHE\"}"),
+            getHeadersToRemove()
+        );
+
+        // then - the later request reproduces the captured id in its response body
+        assertEquals(
+            response()
+                .withStatusCode(OK_200.code())
+                .withReasonPhrase(OK_200.reasonPhrase())
+                .withBody("orderId=ORDER-MUSTACHE"),
+            makeRequest(
+                request()
+                    .withMethod("POST")
+                    .withPath(calculatePath("order/mustache/step3")),
+                getHeadersToRemove()
+            )
+        );
+    }
+
     // shouldReturnResponseByMatchingPathAndMethod — moved to AbstractTransportAgnosticSemanticsIntegrationTest (step 2)
 
     @Test

@@ -78,6 +78,17 @@ public class WebSocketClientRegistry {
                 channel.close();
             }
         }));
+        // DEFERRED LIMITATION (known): these callback registries are CircularHashMaps with no eviction
+        // listener. If more than maxWebSocketExpectations callbacks are in flight concurrently, the eldest
+        // entry is silently evicted and the CompletableFuture waiting on that correlationId is never
+        // completed — the waiting scheduler thread blocks until maxFutureTimeoutInMillis. A clean fix is NOT
+        // applied here on purpose: the eviction listener fires from inside LinkedHashMap.put (via
+        // removeEldestEntry) while the map is mid-structural-modification, but the callbacks themselves
+        // re-entrantly call unregister*CallbackHandler() (mutating this same map) when invoked, so completing
+        // the evicted future from the listener would require a deferred-dispatch side-table to run the
+        // callback off the map's monitor. That is a larger redesign than is warranted here. In practice this
+        // is bounded by maxWebSocketExpectations (default large) and only manifests under extreme concurrent
+        // callback load. See code-review finding #4 (WebSocketClientRegistry eviction).
         this.responseCallbackRegistry = Collections.synchronizedMap(new CircularHashMap<>(configuration.maxWebSocketExpectations()));
         this.forwardCallbackRegistry = Collections.synchronizedMap(new CircularHashMap<>(configuration.maxWebSocketExpectations()));
         this.streamFrameCallbackRegistry = Collections.synchronizedMap(new CircularHashMap<>(configuration.maxWebSocketExpectations()));

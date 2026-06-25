@@ -62,6 +62,15 @@ public class JWTValidator {
         JWSAlgorithm.EdDSA
     ));
 
+    // Set true once the per-instance configuration (key selector + claims verifier) has been
+    // installed on the shared jwtProcessor. A single JWTValidator instance is shared across all
+    // concurrent control-plane requests, so the processor must NOT be re-configured per call:
+    // doing so let one thread's key policy / claims verifier overwrite another's mid-validation
+    // (an auth-correctness defect). Configuration is installed exactly once, after all withX
+    // setters have run, the first time validate() is called. Mirrors OidcJWTValidator, which
+    // installs both in its constructor and leaves validate() stateless.
+    private volatile boolean configured;
+
     public JWTValidator(JWKSource<SecurityContext> jwkSource) {
         this.jwkSource = jwkSource;
         this.jwtProcessor = new DefaultJWTProcessor<>();
@@ -101,18 +110,35 @@ public class JWTValidator {
         return this;
     }
 
-    public JWTClaimsSet validate(String jwt) {
-        try {
-            jwtProcessor.setJWSKeySelector(new JWSVerificationKeySelector<>(JWS_ALGORITHMS, jwkSource));
-            JWTClaimsSet.Builder matchingClaimsBuilder = new JWTClaimsSet.Builder();
-            if (this.matchingClaims != null) {
-                this.matchingClaims.forEach(matchingClaimsBuilder::claim);
+    /**
+     * Installs the key selector and claims verifier on the shared processor exactly once (after all
+     * withX setters have run). Double-checked locking on {@link #configured} so concurrent first
+     * callers do not race, and so steady-state callers take no lock. The configuration is fixed once
+     * built — none of it depends on the per-call token — so a single install is correct.
+     */
+    private void configureOnce() {
+        if (!configured) {
+            synchronized (this) {
+                if (!configured) {
+                    jwtProcessor.setJWSKeySelector(new JWSVerificationKeySelector<>(JWS_ALGORITHMS, jwkSource));
+                    JWTClaimsSet.Builder matchingClaimsBuilder = new JWTClaimsSet.Builder();
+                    if (this.matchingClaims != null) {
+                        this.matchingClaims.forEach(matchingClaimsBuilder::claim);
+                    }
+                    jwtProcessor.setJWTClaimsSetVerifier(new CustomJWTClaimsVerifier(
+                        this.expectedAudience,
+                        matchingClaimsBuilder.build(),
+                        this.requiredClaims
+                    ));
+                    configured = true;
+                }
             }
-            jwtProcessor.setJWTClaimsSetVerifier(new CustomJWTClaimsVerifier(
-                this.expectedAudience,
-                matchingClaimsBuilder.build(),
-                this.requiredClaims
-            ));
+        }
+    }
+
+    public JWTClaimsSet validate(String jwt) {
+        configureOnce();
+        try {
             return jwtProcessor.process(jwt, null);
         } catch (ParseException | BadJOSEException | JOSEException exception) {
             throw new AuthenticationException(exception.getMessage(), exception);

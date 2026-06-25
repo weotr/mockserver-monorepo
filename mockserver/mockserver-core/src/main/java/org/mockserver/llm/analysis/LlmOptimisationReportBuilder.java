@@ -1,5 +1,7 @@
 package org.mockserver.llm.analysis;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
 import org.mockserver.llm.ProviderCodec;
@@ -14,6 +16,7 @@ import org.mockserver.model.HttpResponse;
 import org.mockserver.model.Provider;
 import org.mockserver.model.ToolUse;
 import org.mockserver.model.Usage;
+import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -47,6 +50,11 @@ public class LlmOptimisationReportBuilder {
 
     /** ~4 characters per token — a rough cross-provider estimate. */
     private static final double CHARS_PER_TOKEN = 4.0;
+
+    /** Window for windowed retry detection (a retry of any of the prior N calls). */
+    private static final int RETRY_WINDOW = 3;
+
+    private static final ObjectMapper OBJECT_MAPPER = ObjectMapperFactory.createObjectMapper();
 
     /**
      * A transport-agnostic captured exchange: the forwarded request, the
@@ -146,7 +154,12 @@ public class LlmOptimisationReportBuilder {
 
         aggregateTotals(report);
 
-        report.setSignals(new OptimisationSignals().detect(report.getCalls()));
+        report.setSignals(new OptimisationSignals().detect(
+            report.getCalls(),
+            report.getSession().getProviders(),
+            report.getTotals().getCachedInputTokens()));
+
+        report.setVerdict(buildVerdict(report));
 
         return report;
     }
@@ -174,6 +187,9 @@ public class LlmOptimisationReportBuilder {
 
         // Tool calls (assistant turns) with arg fingerprints and result token sizes.
         call.setToolCalls(buildToolCalls(messages));
+
+        // Tool definitions declared in the request body (for UNUSED_TOOL_SCHEMA).
+        captureDefinedTools(call, request);
 
         // Usage / cost from the response, else estimate from decoded text.
         applyUsageAndCost(call, exchange.getResponse(), provider, model, conversation);
@@ -214,6 +230,43 @@ public class LlmOptimisationReportBuilder {
             }
         }
         return result;
+    }
+
+    /**
+     * Capture the tool/function names DEFINED in the request body's {@code tools}
+     * array and estimate the token cost of the whole serialised tools block.
+     * Best-effort: any parse failure leaves the call's defaults (empty list / 0).
+     * OpenAI entries carry {@code function.name}; Anthropic/Gemini carry a
+     * top-level {@code name}.
+     */
+    private void captureDefinedTools(LlmOptimisationReport.Call call, HttpRequest request) {
+        if (request == null || request.getBody() == null) {
+            return;
+        }
+        try {
+            JsonNode body = OBJECT_MAPPER.readTree(request.getBodyAsString());
+            JsonNode tools = body.path("tools");
+            if (!tools.isArray() || tools.size() == 0) {
+                return;
+            }
+            List<String> names = new ArrayList<>();
+            for (JsonNode tool : tools) {
+                JsonNode functionName = tool.path("function").path("name");
+                if (functionName.isTextual()) {
+                    names.add(functionName.asText());
+                    continue;
+                }
+                JsonNode name = tool.path("name");
+                if (name.isTextual()) {
+                    names.add(name.asText());
+                }
+            }
+            call.setDefinedToolNames(names);
+            String serialised = OBJECT_MAPPER.writeValueAsString(tools);
+            call.setDefinedToolTokens(charsToTokens(serialised.length()));
+        } catch (Exception e) {
+            // not JSON or no tools — leave defaults
+        }
     }
 
     private void applyUsageAndCost(LlmOptimisationReport.Call call, HttpResponse response, Provider provider,
@@ -269,7 +322,11 @@ public class LlmOptimisationReportBuilder {
             toolCalls += call.getToolCalls().size();
             anyEstimated = anyEstimated || call.isCostIsEstimated();
         }
-        totals.setCallCount(report.getCalls().size())
+        int callCount = report.getCalls().size();
+        int retryCallCount = windowedRetryCount(report.getCalls());
+        double cacheHitRatio = input > 0 ? round4((double) cached / input) : 0.0;
+        double oneShotRate = callCount > 0 ? round4(1.0 - (double) retryCallCount / callCount) : 1.0;
+        totals.setCallCount(callCount)
             .setInputTokens(input)
             .setOutputTokens(output)
             .setCachedInputTokens(cached)
@@ -277,7 +334,154 @@ public class LlmOptimisationReportBuilder {
             .setTotalLatencyMs(latency)
             .setEstimatedCostUsd(round4(cost))
             .setCostIsEstimated(anyEstimated)
-            .setToolCallCount(toolCalls);
+            .setToolCallCount(toolCalls)
+            .setCacheHitRatio(cacheHitRatio)
+            .setRetryCallCount(retryCallCount)
+            .setOneShotRate(oneShotRate);
+    }
+
+    /**
+     * Windowed retry detection (§3, window={@value #RETRY_WINDOW}): call {@code i}
+     * is a retry if it is {@link OptimisationSignals#sameish "sameish"} as any of the
+     * prior {@value #RETRY_WINDOW} calls. Reuses the single shared predicate so retry
+     * counting and {@code DUPLICATE_CONSECUTIVE_CALL} can never drift apart.
+     */
+    private static int windowedRetryCount(List<LlmOptimisationReport.Call> calls) {
+        int retries = 0;
+        for (int i = 1; i < calls.size(); i++) {
+            for (int j = Math.max(0, i - RETRY_WINDOW); j < i; j++) {
+                if (OptimisationSignals.sameish(calls.get(j), calls.get(i))) {
+                    retries++;
+                    break;
+                }
+            }
+        }
+        return retries;
+    }
+
+    // --- verdict ---
+
+    /**
+     * Deterministic A–F verdict (§4). Per-call MAX attribution prevents
+     * overlapping signals from inflating the headline above spend; the total is
+     * additionally clamped to {@code totals.estimatedCostUsd}. An empty report
+     * yields grade {@code A}, zeros and "No optimisation opportunities detected.".
+     */
+    private LlmOptimisationReport.Verdict buildVerdict(LlmOptimisationReport report) {
+        LlmOptimisationReport.Verdict verdict = new LlmOptimisationReport.Verdict();
+        LlmOptimisationReport.Totals totals = report.getTotals();
+        List<LlmOptimisationReport.Call> calls = report.getCalls();
+        List<LlmOptimisationReport.Signal> signals = report.getSignals();
+        verdict.setCostIsEstimated(totals.isCostIsEstimated());
+
+        int high = 0, medium = 0, low = 0;
+        for (LlmOptimisationReport.Signal s : signals) {
+            if ("HIGH".equals(s.getSeverity())) {
+                high++;
+            } else if ("MEDIUM".equals(s.getSeverity())) {
+                medium++;
+            } else {
+                low++;
+            }
+        }
+        verdict.setHighCount(high).setMediumCount(medium).setLowCount(low);
+
+        int n = calls.size();
+        if (n == 0) {
+            verdict.setGrade("A").setRationale("No optimisation opportunities detected.");
+            return verdict;
+        }
+
+        double[] callSaving = new double[n];
+        long[] callWasted = new long[n];
+        for (LlmOptimisationReport.Signal s : signals) {
+            int k = s.getAffectedCalls().size();
+            if (k == 0) {
+                continue;
+            }
+            double perCallSave = (s.getEstimatedSavingUsd() == null ? 0.0 : s.getEstimatedSavingUsd()) / k;
+            long perCallWaste = (s.getEstimatedWastedInputTokens() == null ? 0L : s.getEstimatedWastedInputTokens()) / k;
+            for (Integer ci : s.getAffectedCalls()) {
+                if (ci == null || ci < 0 || ci >= n) {
+                    continue;
+                }
+                callSaving[ci] = Math.max(callSaving[ci], perCallSave);
+                callWasted[ci] = Math.max(callWasted[ci], perCallWaste);
+            }
+        }
+        double totalSaving = 0.0;
+        long totalWasted = 0;
+        for (int i = 0; i < n; i++) {
+            totalSaving += Math.min(callSaving[i], calls.get(i).getEstimatedCostUsd());
+            totalWasted += Math.min(callWasted[i], calls.get(i).getInputTokens());
+        }
+        totalSaving = round4(Math.min(totalSaving, totals.getEstimatedCostUsd()));
+
+        double savingFraction;
+        if (totals.getEstimatedCostUsd() > 0) {
+            savingFraction = totalSaving / totals.getEstimatedCostUsd();
+        } else if (totals.getInputTokens() > 0) {
+            savingFraction = (double) totalWasted / totals.getInputTokens();
+        } else {
+            savingFraction = 0.0;
+        }
+        double clampedFraction = Math.max(0.0, Math.min(1.0, savingFraction));
+
+        verdict.setTotalEstimatedSavingUsd(totalSaving);
+        verdict.setTotalWastedInputTokens(totalWasted);
+        verdict.setSavingFractionOfSpend(round4(clampedFraction));
+
+        double score = 100.0 * (1.0 - clampedFraction);
+        String letter;
+        if (score >= 90) {
+            letter = "A";
+        } else if (score >= 75) {
+            letter = "B";
+        } else if (score >= 60) {
+            letter = "C";
+        } else if (score >= 45) {
+            letter = "D";
+        } else {
+            letter = "F";
+        }
+        if (high > 0 && "A".equals(letter)) {
+            letter = "B"; // severity floor
+        }
+        verdict.setGrade(letter);
+        verdict.setRationale(buildRationale(letter, signals.size(), clampedFraction, totalSaving, high, medium, low));
+        return verdict;
+    }
+
+    private static String buildRationale(String letter, int findingCount, double savingFraction,
+                                         double totalSaving, int high, int medium, int low) {
+        if (findingCount == 0) {
+            return "No optimisation opportunities detected.";
+        }
+        int percent = (int) Math.round(savingFraction * 100);
+        List<String> bySeverity = new ArrayList<>();
+        if (high > 0) {
+            bySeverity.add(high + " high");
+        }
+        if (medium > 0) {
+            bySeverity.add(medium + " medium");
+        }
+        if (low > 0) {
+            bySeverity.add(low + " low");
+        }
+        String findingsWord = findingCount == 1 ? "finding" : "findings";
+        String breakdown = String.join(", ", bySeverity);
+        // Grade A means "well optimised". A session can still carry low-impact findings
+        // (e.g. a MEDIUM/LOW signal whose estimated saving is negligible — these do not
+        // pull the grade below A, and only a HIGH finding floors the grade at B). Phrase
+        // grade A so it does NOT contradict the findings listed beneath it.
+        if ("A".equals(letter)) {
+            return "Grade A — well optimised; " + findingCount + " low-impact " + findingsWord
+                + " noted (" + breakdown + "), estimated saving " + String.format("$%.2f", totalSaving)
+                + " (" + percent + "% of spend).";
+        }
+        return "Grade " + letter + " — an estimated " + percent + "% of spend ("
+            + String.format("$%.2f", totalSaving) + ") is recoverable across " + findingCount + " "
+            + findingsWord + " (" + breakdown + ").";
     }
 
     // --- decoding / parsing helpers ---

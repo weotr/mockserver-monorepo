@@ -59,6 +59,7 @@ import TruncatedText from './TruncatedText';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { humanizeError } from '../lib/errorMessage';
 import { useDashboardStore } from '../store';
+import { trackFeature } from '../lib/analytics';
 
 const MATCHERS_POLL_INTERVAL_MS = 5000;
 
@@ -302,6 +303,7 @@ export default function BreakpointsPanel({ connectionParams }: BreakpointsPanelP
         clientId,
         skipCount,
       );
+      trackFeature('breakpoint_set');
       refreshMatchers();
       // Reset form
       setFormMethod('');

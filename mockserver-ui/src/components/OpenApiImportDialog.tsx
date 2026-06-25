@@ -19,6 +19,7 @@ import {
 import { humanizeError, type HumanError } from '../lib/errorMessage';
 import HumanErrorAlert from './HumanErrorAlert';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
+import { trackFeature } from '../lib/analytics';
 
 interface OpenApiImportDialogProps {
   open: boolean;
@@ -72,6 +73,7 @@ export default function OpenApiImportDialog({ open, onClose, connectionParams }:
         }
       }
       const created = await importOpenApi(connectionParams, spec.trim(), selections);
+      trackFeature('openapi_imported');
       setCreatedCount(created.length);
     } catch (e) {
       setError(humanizeError(e));

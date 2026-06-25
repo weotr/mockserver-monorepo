@@ -27,8 +27,11 @@ public class PerExpectationMetricsTest {
     @Before
     public void setUp() {
         // Capture the global property so the default-off assertions are deterministic
-        // regardless of any ambient configuration, and restore it in tearDown.
-        originalConfigured = System.getProperty("mockserver.perExpectationMetrics") != null;
+        // regardless of any ambient configuration, and restore it in tearDown. The setter
+        // writes the canonical key (mockserver.perExpectationMetricsEnabled); a legacy
+        // key may also be present, so consider either as "configured".
+        originalConfigured = System.getProperty("mockserver.perExpectationMetricsEnabled") != null
+            || System.getProperty("mockserver.perExpectationMetrics") != null;
         originalValue = ConfigurationProperties.perExpectationMetricsEnabled();
         ConfigurationProperties.perExpectationMetricsEnabled(false);
         Metrics.resetAdditionalMetricsForTesting();
@@ -39,6 +42,9 @@ public class PerExpectationMetricsTest {
         if (originalConfigured) {
             ConfigurationProperties.perExpectationMetricsEnabled(originalValue);
         } else {
+            // Clear both the canonical key written by the setter and the legacy key, so no
+            // cached JVM system property leaks into other tests in the same fork.
+            System.clearProperty("mockserver.perExpectationMetricsEnabled");
             System.clearProperty("mockserver.perExpectationMetrics");
         }
         Metrics.resetAdditionalMetricsForTesting();

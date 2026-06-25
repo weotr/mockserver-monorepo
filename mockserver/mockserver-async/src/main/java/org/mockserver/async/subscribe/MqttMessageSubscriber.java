@@ -31,6 +31,12 @@ public class MqttMessageSubscriber implements MessageSubscriber {
     private final ConcurrentMap<String, BoundedMessageStore> recordedMessages = new ConcurrentHashMap<>();
 
     /**
+     * Tracks broker connectivity. Set to {@code false} when the MQTT callback reports a
+     * lost connection so callers can detect an unhealthy subscriber via {@link #isHealthy()}.
+     */
+    private volatile boolean connected = true;
+
+    /**
      * Create a subscriber connected to the given MQTT broker with no security.
      * Backward-compatible entry point.
      *
@@ -104,7 +110,9 @@ public class MqttMessageSubscriber implements MessageSubscriber {
         client.setCallback(new MqttCallback() {
             @Override
             public void connectionLost(Throwable cause) {
-                LOG.warn("MQTT subscriber connection lost: {}", cause.getMessage());
+                connected = false;
+                LOG.warn("MQTT subscriber connection lost; subscriber is no longer healthy: {}",
+                    cause != null ? cause.getMessage() : "unknown cause");
             }
 
             @Override
@@ -124,6 +132,14 @@ public class MqttMessageSubscriber implements MessageSubscriber {
                 // not relevant for subscriber
             }
         });
+    }
+
+    /**
+     * Returns {@code false} if the MQTT callback has reported a lost connection (the
+     * subscriber will record no further messages until reconnected); {@code true} otherwise.
+     */
+    public boolean isHealthy() {
+        return connected;
     }
 
     @Override

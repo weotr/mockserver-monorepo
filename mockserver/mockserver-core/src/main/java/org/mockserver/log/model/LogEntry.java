@@ -774,13 +774,28 @@ public class LogEntry implements EventTranslator<LogEntry> {
             }
         }
 
-        private static volatile Map<String, String> cachedRawOverrides;
-        private static volatile Map<String, Level> cachedNormalizedOverrides;
+        /**
+         * Immutable holder pairing the raw overrides map with its normalized form, referenced by a
+         * single volatile field so both halves are always read and published together. Storing the
+         * two halves in separate volatile fields allowed a reader to pair a freshly published {@code raw}
+         * with a stale (or null) {@code normalized}, because the two volatile writes were independent.
+         */
+        private static final class OverrideCacheEntry {
+            private final Map<String, String> raw;
+            private final Map<String, Level> normalized;
+
+            private OverrideCacheEntry(Map<String, String> raw, Map<String, Level> normalized) {
+                this.raw = raw;
+                this.normalized = normalized;
+            }
+        }
+
+        private static volatile OverrideCacheEntry cachedOverrides;
 
         private static Map<String, Level> normalizeOverrides(Map<String, String> overrides) {
-            Map<String, String> cached = cachedRawOverrides;
-            if (cached == overrides && cachedNormalizedOverrides != null) {
-                return cachedNormalizedOverrides;
+            OverrideCacheEntry cached = cachedOverrides;
+            if (cached != null && cached.raw == overrides) {
+                return cached.normalized;
             }
             Map<String, Level> normalized = new HashMap<>();
             for (Map.Entry<String, String> entry : overrides.entrySet()) {
@@ -793,8 +808,7 @@ public class LogEntry implements EventTranslator<LogEntry> {
                     normalized.put(key, level);
                 }
             }
-            cachedRawOverrides = overrides;
-            cachedNormalizedOverrides = normalized;
+            cachedOverrides = new OverrideCacheEntry(overrides, normalized);
             return normalized;
         }
 

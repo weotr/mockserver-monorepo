@@ -106,15 +106,27 @@ public class RateLimitRegistry {
         }
         final int limit = limitBox;
         final long windowMillis = windowBox;
-        if (isOverCap(windows, key)) {
-            return Decision.allow();
-        }
         Window updated = windows.compute(key, (k, existing) -> {
-            if (existing == null || now - existing.startMillis >= windowMillis) {
+            if (existing == null) {
+                // New key: enforce the named-counter cap inside compute so the same-key check+insert
+                // is atomic under the per-key lock (eliminating the same-key TOCTOU). isOverCap() reads
+                // the global map sizes, so concurrent inserts of DISTINCT keys may still overshoot this
+                // fail-open soft memory bound by a small bounded amount — acceptable. Refuse the insert
+                // (return null) when the cap is reached so the request fails open below.
+                if (isOverCap()) {
+                    return null;
+                }
+                return new Window(now, 1);
+            }
+            if (now - existing.startMillis >= windowMillis) {
                 return new Window(now, 1);
             }
             return new Window(existing.startMillis, existing.count + 1);
         });
+        if (updated == null) {
+            // Cap reached for a new key: fail open (allowed).
+            return Decision.allow();
+        }
         boolean allowed = updated.count <= limit;
         long remaining = Math.max(0L, limit - updated.count);
         long resetEpochSecond = (updated.startMillis + windowMillis) / 1000L;
@@ -132,12 +144,17 @@ public class RateLimitRegistry {
         final double refillPerSecond = refillBox;
         // tokens are tracked in milli-tokens (1 token == 1000 milli-tokens) for integer math
         final long capacityMilli = burst * 1000L;
-        if (isOverCap(buckets, key)) {
-            return Decision.allow();
-        }
         Bucket updated = buckets.compute(key, (k, existing) -> {
             long tokensMilli;
             if (existing == null) {
+                // New key: enforce the named-counter cap inside compute so the same-key check+insert
+                // is atomic under the per-key lock (eliminating the same-key TOCTOU). isOverCap() reads
+                // the global map sizes, so concurrent inserts of DISTINCT keys may still overshoot this
+                // fail-open soft memory bound by a small bounded amount — acceptable. Refuse the insert
+                // (return null) when the cap is reached so the request fails open below.
+                if (isOverCap()) {
+                    return null;
+                }
                 tokensMilli = capacityMilli;
             } else {
                 long elapsed = Math.max(0L, now - existing.lastRefillMillis);
@@ -150,6 +167,10 @@ public class RateLimitRegistry {
             }
             return new Bucket(tokensMilli, now, false);
         });
+        if (updated == null) {
+            // Cap reached for a new key: fail open (allowed).
+            return Decision.allow();
+        }
         boolean allowed = updated.lastAllowed;
         long remaining = updated.tokensMilli / 1000L;
         // time (seconds) until at least one whole token is available again
@@ -166,10 +187,15 @@ public class RateLimitRegistry {
         return new Decision(allowed, burst, Math.max(0L, remaining), resetEpochSecond);
     }
 
-    private boolean isOverCap(ConcurrentHashMap<String, ?> map, String key) {
-        if (map.containsKey(key)) {
-            return false;
-        }
+    /**
+     * Whether inserting a new distinct counter key would exceed the configured cap on the total
+     * number of named counters. Called from inside a {@code compute} lambda (under the per-key lock)
+     * only when the key is absent, so check-and-insert is atomic and concurrent inserts cannot all
+     * pass and overshoot {@link ConfigurationProperties#rateLimitMaxNamedQuotas()}. The key being
+     * inserted is, by construction, not yet present in either map, so {@code windows.size() +
+     * buckets.size()} is the current distinct-counter count.
+     */
+    private boolean isOverCap() {
         long total = (long) windows.size() + (long) buckets.size();
         return total >= ConfigurationProperties.rateLimitMaxNamedQuotas();
     }

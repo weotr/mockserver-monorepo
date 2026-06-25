@@ -620,17 +620,19 @@ public class VelocityTemplateEngineTest {
     }
 
     @Test
-    public void shouldHandleHttpRequestsWithVelocityTemplateWithImportTool() throws Exception {
-        // write the imported file into a per-test temp folder (not the working directory) so parallel
-        // test classes cannot collide on a shared CWD file; reference it by absolute path in the template
+    public void shouldNotExposeImportToolForFileReadOrSsrf() throws Exception {
+        // SECURITY: the ImportTool ($import.read(...)) lets a template read an arbitrary local file or
+        // fetch a remote URL (SSRF / local-file-read), so it is deliberately NOT registered. A template
+        // referencing $import must therefore NOT return the file content — the reference is undefined and
+        // is emitted as inert literal text (non-strict references) rather than reading the file.
         File testInputFile = new File(temporaryFolder.getRoot(), "testInputFile.txt");
-        String testInputFileContent = "This file content will be part of the response body";
+        String testInputFileContent = "This file content must NOT leak into the response body";
         Files.write(Paths.get(testInputFile.getAbsolutePath()), testInputFileContent.getBytes());
 
         // given
         String template = "{" + NEW_LINE +
             "    'statusCode': 200," + NEW_LINE +
-            "    'body': \"$import.read('" + testInputFile.getAbsolutePath().replace("\\", "\\\\") + "')\"" + NEW_LINE +
+            "    'body': \"prefix-$import.read('" + testInputFile.getAbsolutePath().replace("\\", "\\\\") + "')\"" + NEW_LINE +
             "}";
         HttpRequest request = request()
             .withPath("/somePath")
@@ -641,12 +643,9 @@ public class VelocityTemplateEngineTest {
         // when
         HttpResponse actualHttpResponse = new VelocityTemplateEngine(mockServerLogger, configuration).executeTemplate(template, request, HttpResponseDTO.class);
 
-        // then
-        assertThat(actualHttpResponse, is(
-            response()
-                .withStatusCode(200)
-                .withBody(testInputFileContent)
-        ));
+        // then — the file content must never appear in the rendered response
+        assertThat(actualHttpResponse.getStatusCode(), is(200));
+        assertThat(actualHttpResponse.getBodyAsString(), not(containsString(testInputFileContent)));
     }
 
     @Test

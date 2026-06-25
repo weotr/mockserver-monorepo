@@ -90,6 +90,142 @@ public enum LoadTemplateType
 }
 
 /// <summary>
+/// A named, declarative load shape (expands server-side into ordinary <see cref="LoadStage"/> stages).
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadShapeType
+{
+    /// <summary>Ramp up, hold the peak, ramp back down, with an optional recovery hold.</summary>
+    SPIKE,
+
+    /// <summary>A flight of pure-hold steps, each one 'step' higher.</summary>
+    STAIRS,
+
+    /// <summary>Ramp from 0 to a target and then hold.</summary>
+    RAMP_HOLD
+}
+
+/// <summary>What a <see cref="LoadShape"/> drives: concurrent virtual users (closed model) or an arrival rate (open model).</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadShapeMetric
+{
+    /// <summary>Concurrent virtual users (closed model).</summary>
+    VU,
+
+    /// <summary>Arrival rate in iterations/second (open model).</summary>
+    RATE
+}
+
+/// <summary>How each iteration of a <see cref="LoadScenario"/> selects which steps to run.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadStepSelection
+{
+    /// <summary>Run ALL steps in declared order each iteration (a multi-step user journey).</summary>
+    SEQUENTIAL,
+
+    /// <summary>Run exactly ONE step per iteration, chosen at random proportional to each step's weight.</summary>
+    WEIGHTED
+}
+
+/// <summary>The per-run metric a <see cref="LoadThreshold"/> evaluates.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadThresholdMetric
+{
+    LATENCY_P50,
+    LATENCY_P95,
+    LATENCY_P99,
+    LATENCY_P999,
+
+    /// <summary>Failed / requests, as a 0.0-1.0 fraction.</summary>
+    ERROR_RATE,
+
+    /// <summary>Requests per second over the run's elapsed time.</summary>
+    THROUGHPUT_RPS
+}
+
+/// <summary>How an observed per-run value is compared to a <see cref="LoadThreshold.Threshold"/>.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadThresholdComparator
+{
+    LESS_THAN,
+    LESS_THAN_OR_EQUAL,
+    GREATER_THAN,
+    GREATER_THAN_OR_EQUAL
+}
+
+/// <summary>How the target iteration cycle of a <see cref="LoadPacing"/> is derived from its value.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadPacingMode
+{
+    /// <summary>No pacing (immediate reschedule).</summary>
+    NONE,
+
+    /// <summary>The value is the target iteration cycle in milliseconds.</summary>
+    CONSTANT_PACING,
+
+    /// <summary>The value is the target iterations/second per virtual user (cycle = 1000 / value ms).</summary>
+    CONSTANT_THROUGHPUT
+}
+
+/// <summary>The format of a raw inline <see cref="LoadFeeder.Data"/> dataset.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadFeederFormat
+{
+    CSV,
+    JSON
+}
+
+/// <summary>How a row is chosen from a <see cref="LoadFeeder"/> each iteration.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadFeederStrategy
+{
+    /// <summary>Cycle rows[globalIteration % size]; never exhausts (default).</summary>
+    CIRCULAR,
+
+    /// <summary>Pick a uniformly random row each iteration.</summary>
+    RANDOM,
+
+    /// <summary>Use rows[globalIteration] once each in order; COMPLETES the run once exhausted.</summary>
+    SEQUENTIAL
+}
+
+/// <summary>Where a <see cref="LoadCapture"/> extracts a value from a step's response.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadCaptureSource
+{
+    /// <summary>A JSONPath over the response body.</summary>
+    BODY_JSONPATH,
+
+    /// <summary>A response header value.</summary>
+    HEADER,
+
+    /// <summary>A regex over the response body string (capture group 1).</summary>
+    BODY_REGEX
+}
+
+/// <summary>The in-run threshold verdict of a load scenario run.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadVerdict
+{
+    /// <summary>All thresholds satisfied.</summary>
+    PASS,
+
+    /// <summary>At least one threshold breached. Clients should map a terminal FAIL to a non-zero CI exit code.</summary>
+    FAIL
+}
+
+/// <summary>The mode controlling how recorded requests become steps when generating from a recording.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadRecordingMode
+{
+    /// <summary>One step per recorded request, in recorded order (default).</summary>
+    VERBATIM,
+
+    /// <summary>One step per unique (method, templatised-path) route, ordered by descending frequency.</summary>
+    TEMPLATIZED
+}
+
+/// <summary>
 /// One stage of a <see cref="LoadProfile"/>, run in sequence: it holds or ramps a setpoint for its
 /// <see cref="DurationMillis"/>. A stage is one of three kinds (<see cref="LoadStageType"/>):
 /// VU (closed model — hold <see cref="Vus"/> or ramp <see cref="StartVus"/> to <see cref="EndVus"/>),
@@ -175,14 +311,104 @@ public sealed class LoadStage
 }
 
 /// <summary>
-/// An ordered list of stages run in sequence, describing the load over time for a
-/// <see cref="LoadScenario"/>.
+/// A declarative named load shape that expands server-side into ordinary <see cref="LoadStage"/>
+/// stages. Only the parameters its <see cref="Type"/> needs are read; the rest are ignored. Use a
+/// shape OR an explicit <see cref="LoadProfile.Stages"/> list, not both.
+/// </summary>
+public sealed class LoadShape
+{
+    /// <summary>The named shape (required): SPIKE, STAIRS or RAMP_HOLD.</summary>
+    [JsonPropertyName("type")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadShapeType? Type { get; set; }
+
+    /// <summary>What the shape drives: VU (closed model) or RATE (open model).</summary>
+    [JsonPropertyName("metric")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadShapeMetric? Metric { get; set; }
+
+    /// <summary>Ramp interpolation curve.</summary>
+    [JsonPropertyName("curve")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RampCurve? Curve { get; set; }
+
+    /// <summary>SPIKE: the level held before and after the spike.</summary>
+    [JsonPropertyName("baseline")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Baseline { get; set; }
+
+    /// <summary>SPIKE: the level held at the top of the spike.</summary>
+    [JsonPropertyName("peak")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Peak { get; set; }
+
+    /// <summary>SPIKE: duration of the baseline-to-peak ramp, in milliseconds.</summary>
+    [JsonPropertyName("rampUpMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RampUpMillis { get; set; }
+
+    /// <summary>SPIKE: duration to hold at the peak; RAMP_HOLD: duration to hold at the target (ms).</summary>
+    [JsonPropertyName("holdMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? HoldMillis { get; set; }
+
+    /// <summary>SPIKE: duration of the peak-to-baseline ramp, in milliseconds.</summary>
+    [JsonPropertyName("rampDownMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RampDownMillis { get; set; }
+
+    /// <summary>SPIKE (optional): duration to hold at baseline after the down ramp, in milliseconds.</summary>
+    [JsonPropertyName("recoveryHoldMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RecoveryHoldMillis { get; set; }
+
+    /// <summary>STAIRS: the level of the first step.</summary>
+    [JsonPropertyName("start")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Start { get; set; }
+
+    /// <summary>STAIRS: how much each step rises above the previous one.</summary>
+    [JsonPropertyName("step")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Step { get; set; }
+
+    /// <summary>STAIRS: the number of steps.</summary>
+    [JsonPropertyName("steps")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Steps { get; set; }
+
+    /// <summary>STAIRS: how long each step holds at its level, in milliseconds.</summary>
+    [JsonPropertyName("stepDurationMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? StepDurationMillis { get; set; }
+
+    /// <summary>RAMP_HOLD: the level ramped up to (from 0) and then held.</summary>
+    [JsonPropertyName("target")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Target { get; set; }
+
+    /// <summary>RAMP_HOLD: duration of the 0-to-target ramp, in milliseconds.</summary>
+    [JsonPropertyName("rampMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RampMillis { get; set; }
+}
+
+/// <summary>
+/// Describes the load over time for a <see cref="LoadScenario"/>, as EITHER an ordered list of
+/// <see cref="Stages"/> OR a single named <see cref="Shape"/> (which expands into stages). Set one,
+/// not both; if both are set the explicit stages win.
 /// </summary>
 public sealed class LoadProfile
 {
-    /// <summary>Ordered stages run one after another (required, max 20).</summary>
+    /// <summary>Ordered stages run one after another (max 20).</summary>
     [JsonPropertyName("stages")]
-    public List<LoadStage> Stages { get; set; } = new();
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<LoadStage>? Stages { get; set; }
+
+    /// <summary>A single named load shape that expands into stages; use instead of <see cref="Stages"/>.</summary>
+    [JsonPropertyName("shape")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadShape? Shape { get; set; }
 }
 
 /// <summary>
@@ -209,6 +435,145 @@ public sealed class LoadStep
     [JsonPropertyName("labels")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? Labels { get; set; }
+
+    /// <summary>
+    /// Optional cross-step capture rules applied to this step's response; each binds an extracted value
+    /// to a variable visible to subsequent steps in the same iteration. Meaningful only under
+    /// SEQUENTIAL <see cref="LoadScenario.StepSelection"/>.
+    /// </summary>
+    [JsonPropertyName("captures")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<LoadCapture>? Captures { get; set; }
+
+    /// <summary>
+    /// Relative selection weight, used only when the scenario's <see cref="LoadScenario.StepSelection"/>
+    /// is WEIGHTED (must be &gt; 0 then; omitted means 1.0). Ignored under SEQUENTIAL.
+    /// </summary>
+    [JsonPropertyName("weight")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Weight { get; set; }
+}
+
+/// <summary>
+/// A declarative cross-step capture / correlation rule: extracts a value from a step's response and
+/// binds it to a variable name a later step in the same iteration can reference from its templated
+/// request fields. Best-effort: on no match it falls back to <see cref="DefaultValue"/> (when set) or
+/// leaves the variable unset, never failing the run.
+/// </summary>
+public sealed class LoadCapture
+{
+    /// <summary>The variable name later steps reference (required, e.g. "token" for $iteration.captured.token).</summary>
+    [JsonPropertyName("name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Name { get; set; }
+
+    /// <summary>Where to extract from (required): BODY_JSONPATH, HEADER or BODY_REGEX.</summary>
+    [JsonPropertyName("source")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadCaptureSource? Source { get; set; }
+
+    /// <summary>The JSONPath, header name, or regex driving the extraction (required).</summary>
+    [JsonPropertyName("expression")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Expression { get; set; }
+
+    /// <summary>Optional fallback value bound to the variable when extraction yields nothing.</summary>
+    [JsonPropertyName("defaultValue")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DefaultValue { get; set; }
+}
+
+/// <summary>
+/// An in-run pass/fail threshold for a load scenario: a per-run metric compared against a value. All
+/// thresholds must hold for the run verdict to be PASS (logical AND); any breach makes it FAIL.
+/// </summary>
+public sealed class LoadThreshold
+{
+    /// <summary>The per-run metric to evaluate (required).</summary>
+    [JsonPropertyName("metric")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadThresholdMetric? Metric { get; set; }
+
+    /// <summary>How the observed per-run value is compared to the threshold (required).</summary>
+    [JsonPropertyName("comparator")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadThresholdComparator? Comparator { get; set; }
+
+    /// <summary>The threshold value (ms for latency, 0.0-1.0 fraction for ERROR_RATE, rps for THROUGHPUT_RPS) (required).</summary>
+    [JsonPropertyName("threshold")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Threshold { get; set; }
+}
+
+/// <summary>
+/// Adaptive iteration pacing (think-time) for a load scenario: a target per-virtual-user iteration
+/// cycle time. Applies only to the closed-model VU loop; open-model RATE iterations ignore it.
+/// </summary>
+public sealed class LoadPacing
+{
+    /// <summary>How the target iteration cycle is derived from <see cref="Value"/> (required).</summary>
+    [JsonPropertyName("mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadPacingMode? Mode { get; set; }
+
+    /// <summary>
+    /// For CONSTANT_PACING the target cycle in milliseconds; for CONSTANT_THROUGHPUT the target
+    /// iterations/second per VU. Must be &gt; 0 when mode is not NONE; ignored when mode is NONE.
+    /// </summary>
+    [JsonPropertyName("value")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Value { get; set; }
+}
+
+/// <summary>
+/// Parameterized test data (a data feeder) for a load scenario: an inline dataset from which one row
+/// is selected per iteration and exposed to that iteration's templated fields. Always inline. Supply
+/// EITHER <see cref="Rows"/> (the primary form) OR <see cref="Data"/> + <see cref="Format"/>; rows wins.
+/// </summary>
+public sealed class LoadFeeder
+{
+    /// <summary>Inline dataset: a list of column-name-to-value maps, one per row (the primary mechanism).</summary>
+    [JsonPropertyName("rows")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Dictionary<string, string>>? Rows { get; set; }
+
+    /// <summary>Optional raw inline dataset parsed server-side into rows per <see cref="Format"/>. Ignored when <see cref="Rows"/> is set.</summary>
+    [JsonPropertyName("data")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Data { get; set; }
+
+    /// <summary>The format of <see cref="Data"/> (required when data is set): CSV or JSON.</summary>
+    [JsonPropertyName("format")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadFeederFormat? Format { get; set; }
+
+    /// <summary>How a row is chosen each iteration (default CIRCULAR).</summary>
+    [JsonPropertyName("strategy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadFeederStrategy? Strategy { get; set; }
+}
+
+/// <summary>
+/// The evaluated result of a single <see cref="LoadThreshold"/>, present in a run's status when
+/// thresholds were evaluated (behind the run <c>verdict</c>).
+/// </summary>
+public sealed class LoadThresholdResult
+{
+    [JsonPropertyName("metric")]
+    public string? Metric { get; set; }
+
+    [JsonPropertyName("comparator")]
+    public string? Comparator { get; set; }
+
+    [JsonPropertyName("threshold")]
+    public double? Threshold { get; set; }
+
+    /// <summary>The observed per-run value at evaluation time.</summary>
+    [JsonPropertyName("observed")]
+    public double? Observed { get; set; }
+
+    [JsonPropertyName("satisfied")]
+    public bool? Satisfied { get; set; }
 }
 
 /// <summary>
@@ -245,10 +610,43 @@ public sealed class LoadScenario
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? Labels { get; set; }
 
+    /// <summary>
+    /// Optional in-run pass/fail thresholds; the run carries a PASS verdict iff all hold, FAIL
+    /// otherwise. Empty/omitted means no verdict is computed.
+    /// </summary>
+    [JsonPropertyName("thresholds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<LoadThreshold>? Thresholds { get; set; }
+
+    /// <summary>When true, a FAIL verdict aborts the run early (default false).</summary>
+    [JsonPropertyName("abortOnFail")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? AbortOnFail { get; set; }
+
+    /// <summary>Suppress <see cref="AbortOnFail"/> for the first N milliseconds so noisy startup samples cannot trigger a premature abort.</summary>
+    [JsonPropertyName("abortGraceMillis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? AbortGraceMillis { get; set; }
+
+    /// <summary>Optional adaptive iteration pacing (think-time) for the closed-model VU loop.</summary>
+    [JsonPropertyName("pacing")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadPacing? Pacing { get; set; }
+
+    /// <summary>Optional inline data feeder exposing one row per iteration to templated request fields.</summary>
+    [JsonPropertyName("feeder")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadFeeder? Feeder { get; set; }
+
     /// <summary>Ramp profile describing the target concurrency over time (required).</summary>
     [JsonPropertyName("profile")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LoadProfile? Profile { get; set; }
+
+    /// <summary>How each iteration selects which steps to run (default SEQUENTIAL).</summary>
+    [JsonPropertyName("stepSelection")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadStepSelection? StepSelection { get; set; }
 
     /// <summary>Ordered list of request steps fired in sequence each iteration (max 50).</summary>
     [JsonPropertyName("steps")]
@@ -307,6 +705,26 @@ public class LoadScenarioStatus
 
     [JsonPropertyName("p99Millis")]
     public double? P99Millis { get; set; }
+
+    /// <summary>99.9th-percentile coordinated-omission-corrected latency (ms), from the per-run HDR histogram.</summary>
+    [JsonPropertyName("p999Millis")]
+    public double? P999Millis { get; set; }
+
+    /// <summary>Iterations that were due but never dispatched because a safety cap was hit (rate-limit + inflight-cap throttles).</summary>
+    [JsonPropertyName("droppedIterations")]
+    public long? DroppedIterations { get; set; }
+
+    /// <summary>In-run threshold verdict: PASS (all thresholds satisfied) or FAIL (any breached); absent when no thresholds or none evaluated yet.</summary>
+    [JsonPropertyName("verdict")]
+    public LoadVerdict? Verdict { get; set; }
+
+    /// <summary>True when this run was terminated early by an abortOnFail threshold breach; absent means false.</summary>
+    [JsonPropertyName("abortedByThreshold")]
+    public bool? AbortedByThreshold { get; set; }
+
+    /// <summary>Per-threshold results behind the <see cref="Verdict"/> (present when thresholds were evaluated).</summary>
+    [JsonPropertyName("thresholdResults")]
+    public List<LoadThresholdResult>? ThresholdResults { get; set; }
 
     [JsonPropertyName("runId")]
     public string? RunId { get; set; }
@@ -388,6 +806,115 @@ public sealed class LoadScenarioStopResult
     /// <summary>Overall status string returned by the server.</summary>
     [JsonPropertyName("status")]
     public string? Status { get; set; }
+}
+
+/// <summary>The network scheme of a <see cref="LoadGenerateTarget"/>.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LoadTargetScheme
+{
+    http,
+    https
+}
+
+/// <summary>
+/// An explicit network target applied to every generated load step (overrides each request's own
+/// Host/secure routing), used by the generate-from-OpenAPI / generate-from-recording operations.
+/// </summary>
+public sealed class LoadGenerateTarget
+{
+    [JsonPropertyName("host")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Host { get; set; }
+
+    [JsonPropertyName("port")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Port { get; set; }
+
+    [JsonPropertyName("scheme")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadTargetScheme? Scheme { get; set; }
+}
+
+/// <summary>The request body for <c>PUT /mockserver/loadScenario/generateFromOpenAPI</c>.</summary>
+public sealed class GenerateFromOpenApiRequest
+{
+    /// <summary>The generated scenario name (the unique registry key) (required).</summary>
+    [JsonPropertyName("name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Name { get; set; }
+
+    /// <summary>The OpenAPI spec as an inline JSON/YAML payload, a URL, or a file/classpath reference (required).</summary>
+    [JsonPropertyName("specUrlOrPayload")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SpecUrlOrPayload { get; set; }
+
+    /// <summary>Optional explicit network target for every generated step (overrides the spec's servers[0]).</summary>
+    [JsonPropertyName("target")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadGenerateTarget? Target { get; set; }
+
+    /// <summary>Optional load profile; when omitted a conservative default is applied server-side.</summary>
+    [JsonPropertyName("profile")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadProfile? Profile { get; set; }
+}
+
+/// <summary>The request body for <c>PUT /mockserver/loadScenario/generateFromRecording</c>.</summary>
+public sealed class GenerateFromRecordingRequest
+{
+    /// <summary>The generated scenario name (the unique registry key) (required).</summary>
+    [JsonPropertyName("name")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Name { get; set; }
+
+    /// <summary>Optional generation mode: VERBATIM (default) or TEMPLATIZED.</summary>
+    [JsonPropertyName("mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadRecordingMode? Mode { get; set; }
+
+    /// <summary>Optional matcher selecting which recorded requests to include; absent means all.</summary>
+    [JsonPropertyName("requestFilter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HttpRequest? RequestFilter { get; set; }
+
+    /// <summary>Optional cap on the number of VERBATIM steps (keeps the first N recorded requests).</summary>
+    [JsonPropertyName("maxSteps")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxSteps { get; set; }
+
+    /// <summary>Optional explicit network target applied to every generated step.</summary>
+    [JsonPropertyName("target")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadGenerateTarget? Target { get; set; }
+
+    /// <summary>Optional load profile; when omitted a conservative default is applied server-side.</summary>
+    [JsonPropertyName("profile")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LoadProfile? Profile { get; set; }
+}
+
+/// <summary>
+/// The result of a load-scenario generate operation (<c>generateFromOpenAPI</c> /
+/// <c>generateFromRecording</c>): the loaded scenario's name, its lifecycle state, and the generated
+/// definition so a client/UI can show and edit it before triggering a run.
+/// </summary>
+public sealed class LoadScenarioGenerateResult
+{
+    /// <summary>Overall status string returned by the server (e.g. "loaded").</summary>
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    /// <summary>The generated scenario name (the unique registry key).</summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    /// <summary>The lifecycle state of the generated scenario (LOADED).</summary>
+    [JsonPropertyName("state")]
+    public LoadScenarioState? State { get; set; }
+
+    /// <summary>The generated scenario definition.</summary>
+    [JsonPropertyName("scenario")]
+    public LoadScenario? Scenario { get; set; }
 }
 
 // ===========================================================================

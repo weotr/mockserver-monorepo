@@ -129,16 +129,32 @@ NPMRC
   # actually resolvable from the registry before returning. mockserver-client-node
   # is published second and depends on mockserver-node, so its `npm install`
   # must not run until mockserver-node's new version is downloadable.
+  #
+  # We MUST probe the same document `npm install` reads to resolve dependency
+  # versions: the abbreviated "install" packument at the package root, requested
+  # with the `application/vnd.npm.install-v1+json` Accept header. The per-version
+  # document (registry.npmjs.org/<pkg>/<version>) goes live almost immediately
+  # after publish, but the packument that `npm i` resolves against is served
+  # through a more heavily CDN-cached path and propagates with a longer lag — so
+  # probing the per-version URL passed while `npm i` of the dependent package
+  # still got ETARGET (No matching version found). Asserting the version key is
+  # present in the install packument is the honest precondition.
   log_info "[$pkg] waiting for $npm_name@$RELEASE_VERSION to be installable from npm"
   local waited=0
   # 300s ceiling — npm global propagation is typically well under a minute.
-  until curl -fsI --connect-timeout 10 --max-time 15 -o /dev/null \
-      "https://registry.npmjs.org/$npm_name/$RELEASE_VERSION" 2>/dev/null; do
+  # Match the version only as a `versions{}` JSON key ("<version>":) using a
+  # fixed-string grep, so the `.` in the version is a literal (not a regex
+  # wildcard) and we cannot false-match the version appearing as a dist-tag
+  # value, a `version` field, or a tarball URL.
+  until curl -fsS --connect-timeout 10 --max-time 15 \
+      -H 'Accept: application/vnd.npm.install-v1+json' \
+      "https://registry.npmjs.org/$npm_name" 2>/dev/null \
+      | grep -qF -- "\"$RELEASE_VERSION\":"; do
     if [[ "$waited" -ge 300 ]]; then
-      log_error "[$pkg] $npm_name@$RELEASE_VERSION still not visible on npm after ${waited}s"
+      log_error "[$pkg] $npm_name@$RELEASE_VERSION still not resolvable from npm install metadata after ${waited}s"
       return 1
     fi
-    log_info "[$pkg] not yet visible on npm (${waited}s elapsed), waiting..."
+    log_info "[$pkg] not yet resolvable from npm install metadata (${waited}s elapsed), waiting..."
     sleep 10
     waited=$((waited + 10))
   done

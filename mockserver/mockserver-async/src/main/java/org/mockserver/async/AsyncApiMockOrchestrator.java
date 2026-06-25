@@ -108,7 +108,7 @@ public class AsyncApiMockOrchestrator {
                 }
 
                 PublishOptions options = buildPublishOptions(ch, msg, correlationHeaders);
-                LOG.info("Publishing example to channel '{}': {}", ch.getName(), payload);
+                LOG.debug("Publishing example to channel '{}': {}", ch.getName(), payload);
                 publisher.publish(ch.getName(), payload, options);
                 Metrics.incrementAsyncMessagePublished(ch.getName());
             }
@@ -203,7 +203,7 @@ public class AsyncApiMockOrchestrator {
      *
      * @param intervalMillis the interval between publish cycles in milliseconds
      */
-    public void startPublishing(long intervalMillis) {
+    public synchronized void startPublishing(long intervalMillis) {
         if (scheduler != null && !scheduler.isShutdown()) {
             LOG.warn("Scheduled publishing already running; stop() first");
             return;
@@ -220,7 +220,7 @@ public class AsyncApiMockOrchestrator {
     /**
      * Stop periodic publishing.
      */
-    public void stop() {
+    public synchronized void stop() {
         if (scheduler != null) {
             scheduler.shutdownNow();
             scheduler = null;

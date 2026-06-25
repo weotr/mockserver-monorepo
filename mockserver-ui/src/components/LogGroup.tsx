@@ -100,7 +100,7 @@ function LogGroup({ group, open: openProp, onToggleOpen }: LogGroupProps) {
       <Box className="group-copy-btn" sx={{ position: 'absolute', top: 2, right: 2, opacity: 0 }}>
         <CopyButton text={groupText} />
       </Box>
-      <Collapse in={open}>
+      <Collapse in={open} unmountOnExit>
         <Box
           sx={{
             ml: 4,

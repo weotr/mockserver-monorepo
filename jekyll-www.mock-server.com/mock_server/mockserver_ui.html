@@ -8,24 +8,28 @@ subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2026-06-10T00:00:00+01:00
+  lastmod: 2026-06-22T00:00:00+01:00
 ---
 
-<p>MockServer has a real-time dashboard that gives you full visibility into what MockServer is doing. Thirteen views are available from the navigation bar at the top of the page:</p>
+<p>MockServer has a real-time dashboard that gives you full visibility into what MockServer is doing. The following views are available from the navigation bar at the top of the page:</p>
 
 <ul>
     <li><strong><a href="#ui_get_started_section">Get Started</a></strong> — guided first-run view: import an OpenAPI spec, set up a proxy, try a quick-start recipe, or browse the docs</li>
     <li><strong><a href="#ui_dashboard_section">Dashboard</a></strong> — four panels showing log messages, active expectations, received requests, and proxied requests</li>
     <li><strong><a href="#ui_traffic_section">Traffic</a></strong> — every captured request in a master list, with a rich detail pane on the right for LLM and MCP traffic, a <strong>Replay</strong> button to re-issue a captured request, and a <strong>Compare</strong> toggle to diff two requests field-by-field</li>
+    <li><strong><a href="#ui_sessions_section">Trace</a></strong> — related requests grouped into swim-lanes — including LLM agent runs — to follow a multi-step flow end to end, plus a <strong>Compare</strong> tab for diffing two captured runs side-by-side</li>
     <li><strong><a href="#ui_breakpoints_section">Breakpoints</a></strong> — pause, inspect, and manipulate live stream frames (SSE, gRPC, WebSocket, GraphQL subscription) and request/response exchanges; see <a href="/mock_server/interactive_breakpoints.html">Interactive Breakpoints</a></li>
     <li><strong><a href="#ui_composer_section">Mocks</a></strong> — create or edit expectations of every kind (HTTP, gRPC, DNS, MCP, LLM), import them (OpenAPI, WSDL, HAR, Postman), and insert engine-aware template snippets without writing any code</li>
     <li><strong><a href="#ui_chaos_section">Chaos</a></strong> — configure and inject HTTP, gRPC, and TCP faults (chaos experiments) that apply to all forwarded requests to a given upstream host or service. The HTTP fault set covers error responses, dropped connections, latency, body corruption, slow-response chunking, quotas/rate limits, count and time windows, gradual degradation, and a GraphQL error envelope, with a TTL so chaos auto-expires</li>
     <li><strong><a href="#ui_performance_section">Performance</a></strong> — create and run <a href="/mock_server/load_injection.html">load scenarios</a>: a stage-builder for VU and arrival-rate stages with ramp curves, live run status (current stage, target, active VUs), and a combined toggleable latency/throughput metrics graph</li>
-    <li><strong><a href="#ui_async_section">AsyncAPI</a></strong> — inspect the AsyncAPI broker mock: loaded spec, active channels, and messages recorded from broker subscriptions</li>
-    <li><strong><a href="#ui_sessions_section">Sessions</a></strong> — isolated LLM conversation sessions grouped into swim-lanes, plus a <strong>Compare</strong> tab for diffing two captured runs side-by-side</li>
+    <li><strong><a href="#ui_optimise_section">LLM Optimise</a></strong> — analyse captured LLM traffic for cost, token, latency, and prompt-hygiene opportunities, and export an optimisation brief</li>
+    <li><strong><a href="#ui_async_section">Async</a></strong> — inspect the AsyncAPI broker mock: loaded spec, active channels, and messages recorded from broker subscriptions</li>
+    <li><strong><a href="#ui_grpc_section">gRPC</a></strong> — list mocked gRPC services and methods loaded from protobuf descriptors, with streaming kind and health serving status</li>
     <li><strong><a href="#ui_library_section">Library</a></strong> — import expectations, export traffic, and manage cassette files, WASM modules, and gRPC descriptors</li>
     <li><strong><a href="#ui_drift_section">Drift</a></strong> — review mock drift records where stubbed responses diverge from the real upstream</li>
-    <li><strong><a href="#ui_verification_section">Verification</a></strong> — assert that MockServer received the requests you expected (a single request a given number of times, or an ordered sequence) without writing test code</li>
+    <li><strong><a href="#ui_verification_section">Verify</a></strong> — assert that MockServer received the requests you expected (a single request a given number of times, or an ordered sequence) without writing test code</li>
+    <li><strong><a href="#ui_contract_section">Contract</a></strong> — run an OpenAPI spec's operations against a live service and validate every response against the contract</li>
+    <li><strong><a href="#ui_cluster_section">Cluster</a></strong> — view the state-backend cluster this node participates in: node id, coordinator, and member roles</li>
     <li><strong><a href="#ui_metrics_section">Metrics</a></strong> — JVM, request-latency, chaos, expectations-by-type, and MCP-tool-call charts (shown when metrics are enabled)</li>
 </ul>
 
@@ -52,6 +56,21 @@ sitemap:
 <p>The <span class="keyword">openUI()</span> method pauses for 1 second after launching the browser to allow the UI to start collecting logs. This ensures logs are visible even if MockServer is shutdown quickly by a test shutdown function (After, AfterClass, AfterAll, etc.). The pause period can be configured using <span class="keyword">openUI(TimeUnit timeUnit, long pause)</span>.</p>
 
 <p>To simplify debugging when multiple MockServer instances are created, if the <a href="/mock_server/debugging_issues.html#logging-levels">logLevel</a> is set to <span class="string_literal">DEBUG</span> and the <strong><a href="/mock_server/configuration_properties.html#button_configuration_launch_ui__debug">launchUIForLogLevelDebug</a></strong> configuration property is enabled (default: false), the <span class="this_value">ClientAndServer</span> constructor will automatically launch the UI.</p>
+
+<a id="ui_real_time_updates" class="anchor" href="#ui_real_time_updates">&nbsp;</a>
+
+<h2>Real-Time Updates</h2>
+
+<p>The dashboard connects to MockServer via WebSocket and receives updates automatically. The connection status is shown in the title bar as a coloured chip:</p>
+
+<ul>
+    <li><strong style="color: green;">Connected</strong> — actively receiving updates</li>
+    <li><strong style="color: orange;">Connecting</strong> — attempting to establish a connection</li>
+    <li><strong style="color: red;">Error</strong> — connection failed (will auto-retry with exponential backoff)</li>
+    <li><strong>Disconnected</strong> — not connected to MockServer</li>
+</ul>
+
+<p>Updates are throttled to at most one per second to prevent UI flooding during high-traffic scenarios.</p>
 
 <a id="ui_features_section" class="anchor" href="#ui_features_section">&nbsp;</a>
 
@@ -179,7 +198,7 @@ sitemap:
         <tr>
             <td><strong>LLM / AI Debugging</strong></td>
             <td>Mock LLM providers like OpenAI and Anthropic, and inspect agent runs — conversations, tool calls, tokens, and cost — grouped by session.</td>
-            <td>Opens the <a href="#ui_sessions_section">Sessions</a> view</td>
+            <td>Opens the <a href="#ui_sessions_section">Trace</a> view</td>
         </tr>
         <tr>
             <td><strong>Mocking</strong></td>
@@ -194,7 +213,7 @@ sitemap:
     </tbody>
 </table>
 
-<p>Below the cards, a <strong>More in the tabs above</strong> list links to the remaining views — <a href="#ui_dashboard_section">Dashboard</a> (active mocks &amp; live event log), <a href="#ui_library_section">Library</a> (import / export, Postman, WSDL, HAR), <a href="#ui_verification_section">Verification</a> (assert which requests were received), <a href="#ui_drift_section">Drift</a> (spot when an upstream API changes), <a href="#ui_async_section">Async</a> (Kafka / MQTT / AMQP broker mocking), <a href="#ui_performance_section">Performance</a> (load scenarios and live metrics graphs), and <a href="#ui_metrics_section">Metrics</a> (Prometheus stats).</p>
+<p>Below the cards, a <strong>More in the tabs above</strong> list links to the remaining views — <a href="#ui_dashboard_section">Dashboard</a> (active mocks &amp; live event log), <a href="#ui_library_section">Library</a> (import / export, Postman, WSDL, HAR), <a href="#ui_verification_section">Verify</a> (assert which requests were received), <a href="#ui_drift_section">Drift</a> (spot when an upstream API changes), <a href="#ui_async_section">Async</a> (Kafka / MQTT / AMQP broker mocking), <a href="#ui_performance_section">Performance</a> (load scenarios and live metrics graphs), and <a href="#ui_metrics_section">Metrics</a> (Prometheus stats).</p>
 
 <p>When the first expectation or traffic record arrives, MockServer automatically navigates to the Dashboard view. The Get Started view remains accessible at any time via the <strong>Get Started</strong> button (rocket icon) in the navigation bar.</p>
 
@@ -226,7 +245,7 @@ sitemap:
 
 <h2>Request Filter</h2>
 
-<p>The Request Filter panel (toggled with <code>Esc</code> or by clicking the filter icon) appears on the Dashboard, Traffic, and Sessions views. It filters all panels by request properties:</p>
+<p>The Request Filter panel (toggled with <code>Esc</code> or by clicking the filter icon) appears on the Dashboard, Traffic, and Trace views. It filters all panels by request properties:</p>
 
 <ul>
     <li><strong>Method</strong> — HTTP method (GET, POST, PUT, DELETE, etc.)</li>
@@ -388,6 +407,26 @@ sitemap:
 
 <p>Replay is distinct from <a href="/mock_server/persisting_expectations.html">cassette replay</a> (which loads saved expectations from a file) — it re-issues a single captured request to a live upstream and shows the live response.</p>
 
+<a id="ui_sessions_section" class="anchor" href="#ui_sessions_section">&nbsp;</a>
+
+<h2>Trace</h2>
+
+<img class="ui_image" src="/images/MockServerSessions.png" alt="MockServer Trace">
+
+<p>The Trace view groups related requests together — including LLM agent runs — so you can follow a multi-step flow end to end. It organises captured LLM traffic into swim-lanes grouped by isolated conversation session, and has two tabs: <strong>Traces</strong> and <strong>Compare</strong>.</p>
+
+<p>On the <strong>Traces</strong> tab, each swim-lane is labelled <code>&lt;scenarioName&gt; / &lt;isolation-value&gt;</code> (for example, <code>weather-agent / agent-A</code>) and shows chips for each captured turn. Click a chip to open the conversation view for that turn directly below the swim-lane.</p>
+
+<p>The scenario name is the conversation name you supplied (or that MockServer auto-generated) when you registered the LLM conversation mock. The isolation value is the specific header, query parameter, or cookie value that identifies this session within the scenario — for example, the value of the <code>x-session-id</code> request header.</p>
+
+<p>An <strong>Unscoped requests</strong> strip at the bottom holds requests that did not match any isolated scenario — for example, requests made outside a scripted conversation or without an isolation header.</p>
+
+<p>Trace is most useful when you have set up <a href="/mock_server/ai_mcp_tools.html#create_llm_conversation">LLM conversation mocks with per-session isolation</a>. Each unique session identifier (header, query parameter, or cookie value) gets its own swim-lane, so you can trace multiple concurrent test sessions independently.</p>
+
+<h3>Compare</h3>
+
+<p>The Trace view's second tab, <strong>Compare</strong>, compares two captured conversation runs side-by-side. Pick <strong>Run A</strong> and <strong>Run B</strong> from the available sessions and the view shows a structural trajectory diff: the tool-call chain for each run and a per-turn token usage table. This makes it easy to spot regressions in agent behaviour between test runs.</p>
+
 <a id="ui_breakpoints_section" class="anchor" href="#ui_breakpoints_section">&nbsp;</a>
 
 <h2>Breakpoints</h2>
@@ -414,7 +453,7 @@ sitemap:
 
 <p>The Mocks view lets you create or edit mock expectations without writing any code. Open it using the <strong>Mocks</strong> button in the navigation bar.</p>
 
-<img class="ui_image_half_width" src="/images/MockServerComposer.png" alt="MockServer Composer">
+<img class="ui_image" src="/images/MockServerComposer.png" alt="MockServer Composer">
 
 <p>At the top, choose an <strong>Expectation kind</strong>:</p>
 
@@ -606,7 +645,9 @@ sitemap:
 
 <h2>Performance</h2>
 
-<p>The <strong>Performance</strong> view lets you create, run, and monitor <a href="/mock_server/load_injection.html">load scenarios</a> directly from the dashboard. Load generation must be enabled first (<code>loadGenerationEnabled=true</code>); until then the panel shows the configuration flag needed to unlock it.</p>
+<p>The <strong>Performance</strong> view lets you create, run, and monitor <a href="/mock_server/load_injection.html">load scenarios</a> directly from the dashboard — server-side load generation that drives traffic at a target and charts live throughput and latency. Switch to it using the <strong>Performance</strong> button in the navigation bar. Load generation must be enabled first (<a href="/mock_server/configuration_properties.html">configuration property</a> <code>loadGenerationEnabled</code> / <code>MOCKSERVER_LOAD_GENERATION_ENABLED</code>); until then the panel shows the configuration flag needed to unlock it.</p>
+
+<img class="ui_image" src="/images/MockServerPerformance.png" alt="MockServer Performance Load Scenarios">
 
 <p>The view has three areas:</p>
 
@@ -617,19 +658,30 @@ sitemap:
             <li><strong>RATE</strong> (open model) — hold or ramp an arrival rate in iterations per second, with an optional <code>maxVus</code> cap on the auto-scaling VU pool</li>
             <li><strong>PAUSE</strong> — drive no load for the duration (lets the target recover between stages)</li>
         </ul>
-        Ramp stages accept a <strong>curve</strong> of <strong>LINEAR</strong>, <strong>QUADRATIC</strong>, or <strong>EXPONENTIAL</strong>. Set the duration in milliseconds for each stage.
-    </li>
-    <li><strong>Live status</strong> — once a scenario starts, the panel shows the current stage index, stage type (<code>VU</code> / <code>RATE</code> / <code>PAUSE</code>), current target (active VUs or arrival rate), elapsed time, requests sent, and success/failure counts. The status polls <code>GET /mockserver/loadScenario</code> and refreshes automatically.</li>
+        Ramp stages accept a <strong>curve</strong> of <strong>LINEAR</strong>, <strong>QUADRATIC</strong>, or <strong>EXPONENTIAL</strong>, and each stage's duration is set in milliseconds. A scenario also has a <strong>Template type</strong> (the engine used to render each step's path and body, e.g. Velocity), optional <strong>Labels</strong>, an optional <strong>Max requests</strong> cap, and one or more <strong>Steps</strong> — the request each virtual user issues per iteration (method, path, target host/port and scheme, an optional templated body and headers, and a think-time delay between steps).</li>
+    <li><strong>Live status</strong> — once a scenario starts, the panel shows the running scenario name and run id, the current stage index, stage type (<code>VU</code> / <code>RATE</code> / <code>PAUSE</code>), current target (active VUs or arrival rate), elapsed time, requests sent, success / error rate, and latency percentiles (p50 / p95 / p99). The status polls <code>GET /mockserver/loadScenario</code> and refreshes automatically.</li>
     <li><strong>Metrics graph</strong> — a toggleable combined chart showing throughput (requests/second) and p95 latency over the lifetime of the run, drawn from the <code>mock_server_load_*</code> Prometheus family. The graph requires <code>metricsEnabled=true</code>.</li>
 </ul>
 
-<p>Use the <strong>Run</strong> button to start the scenario (<code>PUT /mockserver/loadScenario</code>) and the <strong>Stop</strong> button to terminate it early (<code>DELETE /mockserver/loadScenario</code>). See <a href="/mock_server/load_injection.html">Performance Testing / Load Injection</a> for the full REST API reference, safety caps, SLO integration, and Prometheus metric catalogue.</p>
+<p>Two buttons sit below the form: <strong>Load</strong> registers the scenario without running it (staged ready to trigger), and <strong>Load &amp; Run</strong> registers it and starts it immediately; while a run is active, <strong>Edit running</strong> and <strong>Stop</strong> replace them. The same lifecycle is available over the control plane: <code>PUT /mockserver/loadScenario</code> registers a scenario, <code>PUT /mockserver/loadScenario/start</code> triggers it, and <code>DELETE /mockserver/loadScenario</code> stops it. Enable <code>sloTrackingEnabled</code> as well to record latency / error SLO samples for the run. See <a href="/mock_server/load_injection.html">Performance Testing / Load Injection</a> for the full REST API reference, safety caps, SLO integration, and Prometheus metric catalogue.</p>
+
+<a id="ui_optimise_section" class="anchor" href="#ui_optimise_section">&nbsp;</a>
+
+<h2>LLM Optimise</h2>
+
+<p>The LLM Optimise view analyses captured LLM traffic and produces an optimisation brief — concrete, ranked opportunities to cut inference cost and latency and tighten prompt hygiene. Switch to it using the <strong>LLM Optimise</strong> button in the navigation bar. It is read-only analysis over traffic MockServer has already proxied or recorded; it does not change any mocks.</p>
+
+<img class="ui_image" src="/images/MockServerOptimise.png" alt="MockServer LLM Optimise">
+
+<p>A header strip summarises the analysed traffic — estimated total cost, input and output token totals, call count, and latency — with a <strong>Session</strong> selector to scope the analysis (for example, all captured LLM traffic). Below it, <strong>Detected opportunities</strong> lists each finding as a card with a severity, an explanation, and a concrete <strong>Recommendation</strong>. Signals include repeated identical system prompts (candidates for prompt caching), large static context resent every turn, tool lookups that could be made deterministic, oversized tool results, duplicate consecutive calls, and output-token bloat.</p>
+
+<p>Use <strong>Copy optimisation brief</strong> to copy a Markdown summary for an LLM or teammate to act on, or <strong>Download bundle</strong> for the full JSON. The same report is available over the control plane and as an <a href="/mock_server/ai_mcp_tools.html">MCP tool</a>. See <a href="/mock_server/ai_optimisation.html">LLM Optimisation</a> for the full signal set.</p>
 
 <a id="ui_async_section" class="anchor" href="#ui_async_section">&nbsp;</a>
 
-<h2>AsyncAPI</h2>
+<h2>Async</h2>
 
-<p>The AsyncAPI view shows the live status of the <a href="/mock_server/asyncapi_messaging.html">AsyncAPI broker mock</a> — MockServer's message-broker mocking for Kafka, AMQP, MQTT, and other async transports. Switch to it using the <strong>Async</strong> button in the navigation bar. The view polls the server every few seconds and refreshes automatically; you can also refresh on demand.</p>
+<p>The Async view shows the live status of the <a href="/mock_server/asyncapi_messaging.html">AsyncAPI broker mock</a> — MockServer's message-broker mocking for Kafka, AMQP, MQTT, and other async transports. Switch to it using the <strong>Async</strong> button in the navigation bar. The view polls the server every few seconds and refreshes automatically; you can also refresh on demand.</p>
 
 <img class="ui_image" src="/images/MockServerAsyncAPI.png" alt="MockServer AsyncAPI Broker Mock">
 
@@ -643,23 +695,15 @@ sitemap:
 
 <p>Load a spec from the <strong>AsyncAPI broker mock</strong> entry in the title-bar Tools menu (or via the <code>PUT /mockserver/asyncapi</code> endpoint). To see recorded messages, enable consumers in your broker configuration and publish messages to the channels. If the optional AsyncAPI module is not on the server's classpath, the view shows an <em>unavailable</em> notice instead.</p>
 
-<a id="ui_sessions_section" class="anchor" href="#ui_sessions_section">&nbsp;</a>
+<a id="ui_grpc_section" class="anchor" href="#ui_grpc_section">&nbsp;</a>
 
-<h2>Sessions</h2>
+<h2>gRPC</h2>
 
-<img class="ui_image" src="/images/MockServerSessions.png" alt="MockServer Sessions">
+<p>The gRPC view lists the gRPC services MockServer can mock and inspect, loaded from compiled protobuf descriptors. Switch to it using the <strong>gRPC</strong> button in the navigation bar. The view polls the server and refreshes automatically.</p>
 
-<p>The Sessions view organises captured LLM traffic into swim-lanes grouped by isolated conversation session. Each swim-lane is labelled <code>&lt;scenarioName&gt; / &lt;isolation-value&gt;</code> (for example, <code>weather-agent / agent-A</code>) and shows chips for each captured turn. Click a chip to open the conversation view for that turn directly below the swim-lane.</p>
+<img class="ui_image" src="/images/MockServerGRPC.png" alt="MockServer gRPC Services">
 
-<p>The scenario name is the conversation name you supplied (or that MockServer auto-generated) when you registered the LLM conversation mock. The isolation value is the specific header, query parameter, or cookie value that identifies this session within the scenario — for example, the value of the <code>x-session-id</code> request header.</p>
-
-<p>An <strong>Unscoped requests</strong> strip at the bottom holds requests that did not match any isolated scenario — for example, requests made outside a scripted conversation or without an isolation header.</p>
-
-<p>Sessions are most useful when you have set up <a href="/mock_server/ai_mcp_tools.html#create_llm_conversation">LLM conversation mocks with per-session isolation</a>. Each unique session identifier (header, query parameter, or cookie value) gets its own swim-lane, so you can trace multiple concurrent test sessions independently.</p>
-
-<h3>Compare</h3>
-
-<p>The Sessions view has a second tab, <strong>Compare</strong>, for comparing two captured conversation runs side-by-side. Pick <strong>Run A</strong> and <strong>Run B</strong> from the available sessions and the view shows a structural trajectory diff: the tool-call chain for each run and a per-turn token usage table. This makes it easy to spot regressions in agent behaviour between test runs.</p>
+<p>For each loaded service it shows every method with its input &rarr; output message types and its streaming <strong>Kind</strong> (unary, server stream, client stream, or bidirectional stream), plus the service's health-check serving status (for example, <strong>SERVING</strong>). Load descriptors by uploading a <code>FileDescriptorSet</code> in the <a href="#ui_library_section">Library</a> view's <strong>gRPC Descriptors</strong> sub-tab, by calling <code>PUT /mockserver/grpc/descriptors</code>, or by configuring a descriptor / proto directory at startup. See <a href="/mock_server/grpc_mocking.html">gRPC Mocking</a> for how to mock gRPC methods.</p>
 
 <a id="ui_library_section" class="anchor" href="#ui_library_section">&nbsp;</a>
 
@@ -724,9 +768,9 @@ sitemap:
 
 <a id="ui_verification_section" class="anchor" href="#ui_verification_section">&nbsp;</a>
 
-<h2>Verification</h2>
+<h2>Verify</h2>
 
-<p>The Verification view lets you assert — straight from the dashboard — that MockServer actually received the requests you expected, without writing any test code. It checks against the requests MockServer has already recorded: a pass means it happened, and a failure shows the closest matching requests and the actual count so you can see what went wrong. Switch to it using the <strong>Verify</strong> button in the navigation bar.</p>
+<p>The Verify view lets you assert — straight from the dashboard — that MockServer actually received the requests you expected, without writing any test code. It checks against the requests MockServer has already recorded: a pass means it happened, and a failure shows the closest matching requests and the actual count so you can see what went wrong. Switch to it using the <strong>Verify</strong> button in the navigation bar.</p>
 
 <img class="ui_image" src="/images/MockServerVerification.png" alt="MockServer Verification">
 
@@ -738,6 +782,26 @@ sitemap:
 </ul>
 
 <p>Each request matcher accepts the same fields as the rest of MockServer: a method, a path, header name/value lines, query <code>key=value</code> lines, and a body to match as a substring or JSON. Leave a field blank to match any value. This is the visual equivalent of the <a href="/mock_server/verification.html">verification API</a> — handy for confirming, during exploratory testing, that a client made the calls you expected.</p>
+
+<a id="ui_contract_section" class="anchor" href="#ui_contract_section">&nbsp;</a>
+
+<h2>Contract</h2>
+
+<p>The Contract view runs an OpenAPI spec's operations against a live service and validates every response against the spec — contract testing without writing any test code. Switch to it using the <strong>Contract</strong> button in the navigation bar.</p>
+
+<img class="ui_image" src="/images/MockServerContract.png" alt="MockServer Contract Test">
+
+<p>Supply the <strong>OpenAPI spec</strong> as a URL, file path, or inline document, set the <strong>Target base URL</strong> of the service to exercise, and optionally narrow the run to a single <strong>operationId</strong>. Click <strong>Run contract test</strong> and MockServer calls each operation and checks the responses (status, headers, and body schema) against the contract, reporting any violations. See <a href="/mock_server/using_openapi.html">Using OpenAPI</a> for how MockServer works with OpenAPI specifications.</p>
+
+<a id="ui_cluster_section" class="anchor" href="#ui_cluster_section">&nbsp;</a>
+
+<h2>Cluster</h2>
+
+<p>The Cluster view shows the state-backend cluster this MockServer node participates in. Switch to it using the <strong>Cluster</strong> button in the navigation bar. A standalone server reports a single local node; when MockServer is run with a shared (clustered) state backend, every member node appears here.</p>
+
+<img class="ui_image" src="/images/MockServerCluster.png" alt="MockServer Cluster Status">
+
+<p>A status chip summarises the topology (for example, <strong>Single node</strong> with a member count). The view shows this node's <strong>Node ID</strong> and the current <strong>Coordinator</strong>, followed by a table of cluster members — each member's id, its <strong>Role</strong> (such as Coordinator), and which row is the local node. This makes it easy to confirm cluster membership and which node is coordinating shared state.</p>
 
 <a id="ui_metrics_section" class="anchor" href="#ui_metrics_section">&nbsp;</a>
 
@@ -757,18 +821,3 @@ sitemap:
     <li><strong>Expectations by type</strong> — the number of active expectations broken down by action type (one line per type), and <strong>MCP tool calls</strong> per tool.</li>
     <li><strong>JVM heap memory</strong> and <strong>Threads &amp; GC</strong> — heap used/committed, thread counts, garbage-collection totals, and related JVM runtime figures.</li>
 </ul>
-
-<a id="ui_real_time_updates" class="anchor" href="#ui_real_time_updates">&nbsp;</a>
-
-<h2>Real-Time Updates</h2>
-
-<p>The dashboard connects to MockServer via WebSocket and receives updates automatically. The connection status is shown in the title bar as a coloured chip:</p>
-
-<ul>
-    <li><strong style="color: green;">Connected</strong> — actively receiving updates</li>
-    <li><strong style="color: orange;">Connecting</strong> — attempting to establish a connection</li>
-    <li><strong style="color: red;">Error</strong> — connection failed (will auto-retry with exponential backoff)</li>
-    <li><strong>Disconnected</strong> — not connected to MockServer</li>
-</ul>
-
-<p>Updates are throttled to at most one per second to prevent UI flooding during high-traffic scenarios.</p>

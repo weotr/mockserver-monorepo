@@ -156,11 +156,11 @@ Raw binary handler"]
 
 ### Connection Delay
 
-A configurable connection delay can be applied before protocol detection begins. When `connectionDelayMillis` is set to a non-zero value, `PortUnificationHandler.decode()` sleeps for the configured duration before inspecting the first bytes. This simulates slow connection establishment for testing timeout handling in clients.
+A configurable connection delay can be applied before protocol detection begins. When `connectionDelayMillis` is set to a non-zero value, `PortUnificationHandler.channelActive()` suppresses auto-read on the new channel and schedules the first read to resume after the configured duration, so the first inbound bytes (and protocol detection) are deferred without blocking the event loop. This simulates slow connection establishment for testing timeout handling in clients.
 
 Configuration: `ConfigurationProperties.connectionDelayMillis(long millis)`, system property `mockserver.connectionDelayMillis`, environment variable `MOCKSERVER_CONNECTION_DELAY_MILLIS`. Default: 0 (no delay).
 
-**Warning:** The delay blocks the Netty I/O thread. For large delays or high connection rates, this may impact server throughput.
+**Non-blocking:** The delay defers the first read via the event loop's scheduler instead of sleeping, so it does not stall other channels sharing the same worker thread. The delay is applied once per channel at `channelActive`.
 
 ### TCP Chaos Handler
 
@@ -703,6 +703,31 @@ stateDiagram-v2
     CommandRequest --> [*]: Unsupported command (close)
     RelayEstablished --> [*]: Connection closed
 ```
+
+## SSL and Decoder Fault Logging
+
+Netty's `exceptionCaught` fires for both benign connection closes and genuine faults. MockServer distinguishes these two categories using `ExceptionHandling.isSslOrDecoderFault(Throwable)`:
+
+| Exception type | Classification | Logged at |
+|---------------|----------------|-----------|
+| `SSLException` (as `cause`) | SSL/decoder fault | **WARN** |
+| `DecoderException` | SSL/decoder fault | **WARN** |
+| `NotSslRecordException` | SSL/decoder fault | **WARN** |
+| Connection reset / broken pipe (regex + stack match) | Benign close | silent |
+| Other unexpected exceptions | Unexpected | **ERROR** |
+
+The `isSslOrDecoderFault` predicate is wired into the `exceptionCaught` handler of every handler that could receive these exceptions:
+
+- `PortUnificationHandler` (protocol detection)
+- `HttpRequestHandler` (main request dispatcher)
+- `BinaryRequestProxyingHandler` (raw binary proxy)
+- `SocksProxyHandler` (SOCKS4/5)
+- `UpstreamProxyRelayHandler` / `DownstreamProxyRelayHandler` / `RelayConnectHandler` (relay handlers)
+- `CallbackWebSocketServerHandler` (WebSocket callback channel)
+- `McpStreamableHttpHandler` (MCP streaming)
+- `DashboardWebSocketHandler` (dashboard WebSocket)
+
+This means genuine SSL negotiation failures (e.g., client sends plain HTTP to a TLS port, or a non-TLS client probes a TLS port) surface at WARN and are visible in logs, while normal connection teardowns remain silent. `ExceptionHandling.isSslOrDecoderFault` mirrors the predicate already in `connectionClosedException` but as a positive match so callers can route specifically to WARN rather than silently drop.
 
 ## Class Reference
 

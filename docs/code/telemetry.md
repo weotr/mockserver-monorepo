@@ -60,7 +60,7 @@ Custom labels from scenario/step `labels` maps are passed as OTEL `Attributes` o
 
 ### OTLP Endpoint Resolution (`OtelEndpoints`)
 
-Resolves per-signal OTLP HTTP endpoints (`/v1/metrics`, `/v1/traces`) from the single configured base URL (`mockserver.otelEndpoint`). Shared by both the metrics and trace exporters.
+Resolves per-signal OTLP HTTP endpoints (`/v1/metrics`, `/v1/traces`) from the single configured base URL (`mockserver.otelEndpoint`). Shared by both the metrics and trace exporters. When the MockServer-specific property/env is unset, `ConfigurationProperties.otelEndpoint()` falls back to the OpenTelemetry-standard `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable before defaulting to empty, so existing OTel deployments work without extra configuration; the MockServer-specific value always takes precedence.
 
 ### W3C Trace Context Propagation (`W3CTraceContext`, `TraceContextHandler`)
 
@@ -99,7 +99,7 @@ The handler is `@Sharable` (no per-channel mutable state; state lives in the cha
 |----------|------|---------|-------------|
 | `mockserver.otelMetricsEnabled` | boolean | false | Export metrics via OTLP |
 | `mockserver.otelTracesEnabled` | boolean | false | Export GenAI spans via OTLP |
-| `mockserver.otelEndpoint` | string | (empty) | OTLP collector base URL |
+| `mockserver.otelEndpoint` | string | (empty) | OTLP collector base URL; falls back to the standard `OTEL_EXPORTER_OTLP_ENDPOINT` env var when unset |
 | `mockserver.otelMetricsExportIntervalSeconds` | long | 60 | Metrics push interval |
 | `mockserver.otelPropagateTraceContext` | boolean | false | Copy W3C trace headers to responses |
 | `mockserver.otelGenerateTraceId` | boolean | false | Generate trace IDs for requests without `traceparent` |

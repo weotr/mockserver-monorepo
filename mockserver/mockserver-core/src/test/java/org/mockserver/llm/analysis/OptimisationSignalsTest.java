@@ -201,4 +201,201 @@ public class OptimisationSignalsTest {
         assertThat(signals.detect(Collections.emptyList()), is(empty()));
         assertThat(signals.detect(null), is(empty()));
     }
+
+    // --- LOW_CACHE_HIT_RATE ---
+
+    @Test
+    public void lowCacheHitRateDetectedWhenRepeatedPrefixUncached() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            calls.add(call(i).setSystemPromptFingerprint("cache001").setSystemPromptTokens(3000)
+                .setInputTokens(4000).setEstimatedCostUsd(0.02));
+        }
+        // cachedInputTokens 0 → ratio 0 < 0.5; notYetCached = 3000*(4-1) = 9000 >= 2000 and ratio<0.2 → HIGH
+        Optional<Signal> signal = findSignal(signals.detect(calls, Arrays.asList("OPENAI"), 0L), "LOW_CACHE_HIT_RATE");
+        assertTrue(signal.isPresent());
+        assertEquals("HIGH", signal.get().getSeverity());
+        assertEquals(Long.valueOf(9000), signal.get().getEstimatedWastedInputTokens());
+        assertThat(signal.get().getAffectedCalls(), contains(0, 1, 2, 3));
+        // OpenAI → prefix-caching advice, no config snippet
+        assertNotNull(signal.get().getFix());
+        assertNull(signal.get().getFix().getConfigSnippet());
+    }
+
+    @Test
+    public void lowCacheHitRateProvidesAnthropicCacheControlSnippet() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setProvider("ANTHROPIC").setSystemPromptFingerprint("cache002")
+                .setSystemPromptTokens(2500).setInputTokens(3000).setEstimatedCostUsd(0.02));
+        }
+        Optional<Signal> signal = findSignal(signals.detect(calls, Arrays.asList("ANTHROPIC"), 0L), "LOW_CACHE_HIT_RATE");
+        assertTrue(signal.isPresent());
+        assertNotNull(signal.get().getFix().getConfigSnippet());
+        assertTrue(signal.get().getFix().getConfigSnippet().contains("cache_control"));
+    }
+
+    @Test
+    public void lowCacheHitRateNotFiredWhenAlreadyWellCached() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setSystemPromptFingerprint("cache003").setSystemPromptTokens(1000)
+                .setInputTokens(2000).setEstimatedCostUsd(0.01));
+        }
+        // cached well above target → ratio 0.8 >= 0.5 → no signal
+        assertNull(findSignal(signals.detect(calls, Arrays.asList("OPENAI"), 4800L), "LOW_CACHE_HIT_RATE").orElse(null));
+    }
+
+    @Test
+    public void lowCacheHitRateNotFiredWithoutRepeatedPrefix() {
+        List<Call> calls = Arrays.asList(
+            call(0).setSystemPromptFingerprint("uniq0001").setSystemPromptTokens(3000).setInputTokens(4000).setEstimatedCostUsd(0.02),
+            call(1).setSystemPromptFingerprint("uniq0002").setSystemPromptTokens(3000).setInputTokens(4000).setEstimatedCostUsd(0.02));
+        assertNull(findSignal(signals.detect(calls, Arrays.asList("OPENAI"), 0L), "LOW_CACHE_HIT_RATE").orElse(null));
+    }
+
+    // --- MODEL_OVERSPEND ---
+
+    @Test
+    public void modelOverspendDetectedForTrivialCallsOnExpensiveModel() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setProvider("OPENAI").setModel("gpt-4o")
+                .setOutputTokens(50).setInputTokens(200).setEstimatedCostUsd(0.01));
+        }
+        Optional<Signal> signal = findSignal(signals.detect(calls), "MODEL_OVERSPEND");
+        assertTrue(signal.isPresent());
+        assertEquals("LOW", signal.get().getSeverity());
+        assertThat(signal.get().getAffectedCalls(), contains(0, 1, 2));
+        assertNotNull(signal.get().getEstimatedSavingUsd());
+        assertNull(signal.get().getEstimatedWastedInputTokens());
+    }
+
+    @Test
+    public void modelOverspendNotFiredForSingleCandidate() {
+        List<Call> calls = Arrays.asList(
+            call(0).setProvider("OPENAI").setModel("gpt-4o").setOutputTokens(50).setInputTokens(200).setEstimatedCostUsd(0.01),
+            call(1).setProvider("OPENAI").setModel("gpt-4o").setOutputTokens(900).setInputTokens(200).setEstimatedCostUsd(0.01));
+        // only one trivial candidate (call 1 output >= 256) → no fire
+        assertNull(findSignal(signals.detect(calls), "MODEL_OVERSPEND").orElse(null));
+    }
+
+    @Test
+    public void modelOverspendNotFiredWhenSavingFractionTooSmall() {
+        // gpt-4.1-nano (0.1+0.4=0.5 blended) vs cheapest gpt-4.1-nano itself → savingFraction 0 → no fire.
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setProvider("OPENAI").setModel("gpt-4.1-nano")
+                .setOutputTokens(50).setInputTokens(200).setEstimatedCostUsd(0.001));
+        }
+        assertNull(findSignal(signals.detect(calls), "MODEL_OVERSPEND").orElse(null));
+    }
+
+    @Test
+    public void modelOverspendNotFiredWhenCallsHaveTools() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setProvider("OPENAI").setModel("gpt-4o").setOutputTokens(50).setInputTokens(200)
+                .setEstimatedCostUsd(0.01).setToolCalls(Collections.singletonList(new ToolCall().setName("x").setArgsFingerprint("aa"))));
+        }
+        assertNull(findSignal(signals.detect(calls), "MODEL_OVERSPEND").orElse(null));
+    }
+
+    // --- UNUSED_TOOL_SCHEMA ---
+
+    @Test
+    public void unusedToolSchemaDetectedWhenToolsNeverInvoked() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setInputTokens(2000).setEstimatedCostUsd(0.02)
+                .setDefinedToolNames(Arrays.asList("get_weather", "get_news")).setDefinedToolTokens(900));
+        }
+        Optional<Signal> signal = findSignal(signals.detect(calls), "UNUSED_TOOL_SCHEMA");
+        assertTrue(signal.isPresent());
+        assertThat(signal.get().getAffectedCalls(), contains(0, 1, 2));
+        // 3 calls * round(900 * 2/2) = 2700 wasted >= 1000 → MEDIUM
+        assertEquals("MEDIUM", signal.get().getSeverity());
+        assertEquals(Long.valueOf(2700), signal.get().getEstimatedWastedInputTokens());
+    }
+
+    @Test
+    public void unusedToolSchemaSeverityLowForSmallWaste() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            calls.add(call(i).setInputTokens(2000).setEstimatedCostUsd(0.02)
+                .setDefinedToolNames(Arrays.asList("unused_tool")).setDefinedToolTokens(100));
+        }
+        Optional<Signal> signal = findSignal(signals.detect(calls), "UNUSED_TOOL_SCHEMA");
+        assertTrue(signal.isPresent());
+        // 2 * 100 = 200 < 1000 → LOW
+        assertEquals("LOW", signal.get().getSeverity());
+    }
+
+    @Test
+    public void unusedToolSchemaNotFiredWhenAllToolsInvoked() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setDefinedToolNames(Arrays.asList("get_weather")).setDefinedToolTokens(400)
+                .setToolCalls(Collections.singletonList(new ToolCall().setName("get_weather").setArgsFingerprint("aa"))));
+        }
+        assertNull(findSignal(signals.detect(calls), "UNUSED_TOOL_SCHEMA").orElse(null));
+    }
+
+    @Test
+    public void unusedToolSchemaNotFiredForSingleAffectedCall() {
+        List<Call> calls = Arrays.asList(
+            call(0).setDefinedToolNames(Arrays.asList("unused")).setDefinedToolTokens(900).setInputTokens(2000).setEstimatedCostUsd(0.01),
+            call(1).setDefinedToolNames(Collections.emptyList()).setDefinedToolTokens(0).setInputTokens(2000));
+        assertNull(findSignal(signals.detect(calls), "UNUSED_TOOL_SCHEMA").orElse(null));
+    }
+
+    // --- urgency ordering ---
+
+    @Test
+    public void urgencyIsComputedFromSeverityAndCallShare() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            calls.add(call(i).setSystemPromptFingerprint("urg00001").setSystemPromptTokens(3000)
+                .setInputTokens(4000).setEstimatedCostUsd(0.02).setOutputTokens(100));
+        }
+        List<Signal> result = signals.detect(calls, Arrays.asList("OPENAI"), 0L);
+        Signal repeated = findSignal(result, "REPEATED_SYSTEM_PROMPT").orElseThrow(AssertionError::new);
+        // HIGH severityWeight 1.0 * callShare 1.0 (4/4) = 1.0
+        assertEquals(1.0, repeated.getUrgency(), 1e-9);
+    }
+
+    @Test
+    public void signalsSortedByUrgencyDescending() {
+        List<Call> calls = new ArrayList<>();
+        // 4 calls all share a HIGH repeated prompt (urgency 1.0); add one isolated LOW bloat call.
+        for (int i = 0; i < 4; i++) {
+            calls.add(call(i).setSystemPromptFingerprint("ord00001").setSystemPromptTokens(3000)
+                .setInputTokens(4000).setEstimatedCostUsd(0.02).setOutputTokens(100));
+        }
+        calls.add(call(4).setOutputTokens(9000)); // LOW bloat, callShare 1/5
+        List<Signal> result = signals.detect(calls, Arrays.asList("OPENAI"), 0L);
+        // urgency must be non-increasing across the list
+        for (int i = 1; i < result.size(); i++) {
+            assertTrue("urgency should be descending",
+                result.get(i - 1).getUrgency() >= result.get(i).getUrgency());
+        }
+        assertEquals("HIGH", result.get(0).getSeverity());
+    }
+
+    @Test
+    public void everySignalHasAFix() {
+        List<Call> calls = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            calls.add(call(i).setProvider("OPENAI").setModel("gpt-4o")
+                .setSystemPromptFingerprint("fix00001").setSystemPromptTokens(3000)
+                .setInputTokens(4000).setEstimatedCostUsd(0.02).setOutputTokens(50)
+                .setDefinedToolNames(Arrays.asList("unused_tool")).setDefinedToolTokens(900));
+        }
+        List<Signal> result = signals.detect(calls, Arrays.asList("OPENAI"), 0L);
+        assertTrue(result.size() >= 3);
+        for (Signal s : result) {
+            assertNotNull("signal " + s.getId() + " must have a fix", s.getFix());
+            assertNotNull(s.getFix().getSummary());
+        }
+    }
 }

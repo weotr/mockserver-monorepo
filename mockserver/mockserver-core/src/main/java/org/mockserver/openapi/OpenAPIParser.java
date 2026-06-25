@@ -48,53 +48,58 @@ public class OpenAPIParser {
     }
 
     public static OpenAPI buildOpenAPI(String specUrlOrPayload, MockServerLogger mockServerLogger) {
-        OpenAPI openAPI = openAPILRUCache.get(specUrlOrPayload);
-        if (openAPI == null) {
-            SwaggerParseResult swaggerParseResult = null;
-            List<AuthorizationValue> auths = null;
-            ParseOptions parseOptions = new ParseOptions();
-            parseOptions.setResolve(true);
-            parseOptions.setResolveFully(true);
-            parseOptions.setResolveCombinators(true);
-            parseOptions.setSkipMatches(true);
-            parseOptions.setAllowEmptyString(true);
-            parseOptions.setCamelCaseFlattenNaming(true);
+        // getOrCompute is atomic (ConcurrentHashMap.computeIfAbsent semantics): for an absent key the
+        // parse + addMissingOperationIds runs at most once and the single resulting OpenAPI is shared by
+        // all racing callers. A previous get-then-put allowed two threads to each parse and then mutate
+        // (operationId dedup) their own copy and clobber the cache, racing on the shared instance.
+        return openAPILRUCache.getOrCompute(specUrlOrPayload, key -> parseOpenAPI(key, mockServerLogger));
+    }
 
-            List<String> errorMessage = new ArrayList<>();
-            try {
-                if (OpenAPIParser.isSpecUrl(specUrlOrPayload)) {
-                    specUrlOrPayload = specUrlOrPayload.replaceAll("\\\\", "/");
-                    List<SwaggerParserExtension> parserExtensions = getExtensions();
-                    for (SwaggerParserExtension extension : parserExtensions) {
-                        swaggerParseResult = extension.readLocation(specUrlOrPayload, auths, parseOptions);
-                        openAPI = swaggerParseResult.getOpenAPI();
-                        if (openAPI != null) {
-                            break;
-                        } else {
-                            errorMessage.addAll(swaggerParseResult.getMessages());
-                        }
-                    }
-                } else {
-                    swaggerParseResult = new OpenAPIV3Parser().readContents(specUrlOrPayload, auths, parseOptions);
+    private static OpenAPI parseOpenAPI(String specUrlOrPayload, MockServerLogger mockServerLogger) {
+        OpenAPI openAPI = null;
+        SwaggerParseResult swaggerParseResult = null;
+        List<AuthorizationValue> auths = null;
+        ParseOptions parseOptions = new ParseOptions();
+        parseOptions.setResolve(true);
+        parseOptions.setResolveFully(true);
+        parseOptions.setResolveCombinators(true);
+        parseOptions.setSkipMatches(true);
+        parseOptions.setAllowEmptyString(true);
+        parseOptions.setCamelCaseFlattenNaming(true);
+
+        List<String> errorMessage = new ArrayList<>();
+        try {
+            if (OpenAPIParser.isSpecUrl(specUrlOrPayload)) {
+                specUrlOrPayload = specUrlOrPayload.replaceAll("\\\\", "/");
+                List<SwaggerParserExtension> parserExtensions = getExtensions();
+                for (SwaggerParserExtension extension : parserExtensions) {
+                    swaggerParseResult = extension.readLocation(specUrlOrPayload, auths, parseOptions);
                     openAPI = swaggerParseResult.getOpenAPI();
-                    if (openAPI == null) {
+                    if (openAPI != null) {
+                        break;
+                    } else {
                         errorMessage.addAll(swaggerParseResult.getMessages());
                     }
                 }
-            } catch (Throwable throwable) {
-                throw new IllegalArgumentException(OPEN_API_LOAD_ERROR + (errorMessage.isEmpty() ? ", " + throwable.getMessage() : ", " + Joiner.on(", ").skipNulls().join(errorMessage)), throwable);
-            }
-            if (openAPI == null) {
-                if (swaggerParseResult != null) {
-                    String message = errorMessage.stream().filter(Objects::nonNull).collect(Collectors.joining(" and ")).trim();
-                    throw new IllegalArgumentException((OPEN_API_LOAD_ERROR + (isNotBlank(message) ? ", " + message : "")));
-                } else {
-                    throw new IllegalArgumentException(OPEN_API_LOAD_ERROR);
+            } else {
+                swaggerParseResult = new OpenAPIV3Parser().readContents(specUrlOrPayload, auths, parseOptions);
+                openAPI = swaggerParseResult.getOpenAPI();
+                if (openAPI == null) {
+                    errorMessage.addAll(swaggerParseResult.getMessages());
                 }
             }
-            addMissingOperationIds(openAPI, mockServerLogger);
-            openAPILRUCache.put(specUrlOrPayload, openAPI);
+        } catch (Throwable throwable) {
+            throw new IllegalArgumentException(OPEN_API_LOAD_ERROR + (errorMessage.isEmpty() ? ", " + throwable.getMessage() : ", " + Joiner.on(", ").skipNulls().join(errorMessage)), throwable);
         }
+        if (openAPI == null) {
+            if (swaggerParseResult != null) {
+                String message = errorMessage.stream().filter(Objects::nonNull).collect(Collectors.joining(" and ")).trim();
+                throw new IllegalArgumentException((OPEN_API_LOAD_ERROR + (isNotBlank(message) ? ", " + message : "")));
+            } else {
+                throw new IllegalArgumentException(OPEN_API_LOAD_ERROR);
+            }
+        }
+        addMissingOperationIds(openAPI, mockServerLogger);
         return openAPI;
     }
 

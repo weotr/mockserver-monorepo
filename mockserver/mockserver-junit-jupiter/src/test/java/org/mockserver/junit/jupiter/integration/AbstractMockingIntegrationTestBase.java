@@ -65,7 +65,9 @@ public abstract class AbstractMockingIntegrationTestBase {
         HttpHeaderNames.ACCESS_CONTROL_MAX_AGE.toString(),
         HttpHeaderNames.KEEP_ALIVE.toString(),
         "version",
-        "x-cors"
+        "x-cors",
+        // closest-match hint header (on by default on unmatched 404s)
+        "x-mockserver-closest-match-hint"
     );
 
     protected static EchoServer insecureEchoServer;

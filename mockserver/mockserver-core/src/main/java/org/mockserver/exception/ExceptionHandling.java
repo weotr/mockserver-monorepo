@@ -175,6 +175,25 @@ public class ExceptionHandling {
         return true;
     }
 
+    /**
+     * returns true if the exception is a genuine SSL or decoder fault, i.e. the SSL/decoder subset
+     * that {@link #connectionClosedException(Throwable)} returns false for at lines 123-124 (an
+     * {@link SSLException} cause, a {@link DecoderException}, or a {@link NotSslRecordException}).
+     * Note that {@code connectionClosedException} also returns false for benign connection resets
+     * via its message-regex and stack-trace inspection; those are NOT matched here. Callers can use
+     * this to surface real SSL/decoder faults at WARN rather than dropping them silently alongside
+     * benign connection closes.
+     */
+    public static boolean isSslOrDecoderFault(Throwable throwable) {
+        // mirrors the SSL/decoder predicate at connectionClosedException line 123. The
+        // NotSslRecordException check is NOT redundant: it extends SSLException (not
+        // DecoderException), and the first check inspects getCause() rather than the throwable
+        // itself, so a directly-thrown NotSslRecordException (null/non-SSL cause) is only caught here.
+        return throwable.getCause() instanceof SSLException
+            || throwable instanceof DecoderException
+            || throwable instanceof NotSslRecordException;
+    }
+
     private static final List<Class<? extends Exception>> SSL_HANDSHAKE_FAILURE_CLASSES = Arrays.asList(SSLException.class, SSLHandshakeException.class, CertPathValidatorException.class, SignatureException.class);
     public static boolean sslHandshakeException(Throwable throwable) {
         for (Class<? extends Throwable> cause : getCauses(throwable)) {

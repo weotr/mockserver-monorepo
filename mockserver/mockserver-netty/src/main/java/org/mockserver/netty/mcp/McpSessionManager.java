@@ -65,15 +65,21 @@ public class McpSessionManager {
     }
 
     public McpSession getSession(String sessionId) {
-        McpSession session = sessions.get(sessionId);
-        if (session != null) {
-            if (clock.getAsLong() - session.getLastAccessedAt() > SESSION_TTL_MILLIS) {
-                sessions.remove(sessionId);
+        if (sessionId == null) {
+            return null;
+        }
+        // Atomically read-then-conditionally-expire so a concurrent caller cannot observe (and touch)
+        // a session that another thread is expiring, and so an expired entry is removed exactly once.
+        return sessions.compute(sessionId, (id, session) -> {
+            if (session == null) {
                 return null;
             }
+            if (clock.getAsLong() - session.getLastAccessedAt() > SESSION_TTL_MILLIS) {
+                return null; // returning null removes the mapping
+            }
             session.touch();
-        }
-        return session;
+            return session;
+        });
     }
 
     public boolean isValidSession(String sessionId) {

@@ -83,10 +83,12 @@ keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirec
     <tbody>
         <tr><td><code class="inline code">transparentProxyEnabled</code></td><td><code class="inline code">false</code></td><td>Enable transparent proxy mode</td></tr>
         <tr><td><code class="inline code">transparentProxyTproxy</code></td><td><code class="inline code">false</code></td><td>Enable TPROXY (IP_TRANSPARENT) original-destination resolution. Requires the native epoll transport on Linux and <code class="inline code">CAP_NET_ADMIN</code>. Used together with <code class="inline code">transparentProxyEnabled</code>.</td></tr>
+        <tr><td><code class="inline code">transparentProxyEbpf</code></td><td><code class="inline code">false</code></td><td>Enable eBPF socket-metadata original-destination resolution. Requires the native epoll transport on Linux and <code class="inline code">CAP_BPF</code>. MockServer reads the pinned BPF map only — an external BPF program must populate it. Used together with <code class="inline code">transparentProxyEnabled</code>.</td></tr>
+        <tr><td><code class="inline code">transparentProxyEbpfMapPath</code></td><td><code class="inline code">/sys/fs/bpf/mockserver_orig_dst</code></td><td>Path to the pinned BPF map read by the eBPF resolver (a hash map keyed by socket cookie). Only used when <code class="inline code">transparentProxyEbpf</code> is <code class="inline code">true</code>.</td></tr>
     </tbody>
 </table>
 
-<p>Environment variables: <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED</code>, <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_TPROXY</code></p>
+<p>Environment variables: <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_ENABLED</code>, <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_TPROXY</code>, <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_EBPF</code>, <code class="inline code">MOCKSERVER_TRANSPARENT_PROXY_EBPF_MAP_PATH</code></p>
 
 <h3>iptables init container example</h3>
 
@@ -150,11 +152,11 @@ keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirec
 <p>The webhook Docker image (<code class="inline code">mockserver/mockserver-webhook</code>) is published to Docker Hub and ECR Public by the release pipeline alongside the main MockServer image. Install with the webhook enabled:</p>
 
 <pre class="prettyprint lang-sh code"><code class="code"># Install with the admission webhook enabled
-helm install mockserver mockserver/mockserver \
+helm install mockserver oci://ghcr.io/mock-server/charts/mockserver \
   --set webhook.enabled=true
 
 # Or with cert-manager for TLS (if cert-manager is installed)
-helm install mockserver mockserver/mockserver \
+helm install mockserver oci://ghcr.io/mock-server/charts/mockserver \
   --set webhook.enabled=true \
   --set webhook.certManager.enabled=true</code></pre>
 

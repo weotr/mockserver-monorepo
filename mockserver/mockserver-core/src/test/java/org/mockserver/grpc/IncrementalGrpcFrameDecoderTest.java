@@ -7,9 +7,11 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.lessThan;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
@@ -258,5 +260,30 @@ public class IncrementalGrpcFrameDecoderTest {
         GrpcException exception = assertThrows(GrpcException.class, () -> decoder.feed(header.array()));
         assertThat("exception should mention maximum allowed",
             exception.getMessage().contains("exceeds maximum allowed"), is(true));
+    }
+
+    /**
+     * A "decompression bomb": a compressed frame whose declared (compressed) length is
+     * well under MAX_MESSAGE_SIZE — so it passes the header length check — but whose
+     * decompressed output exceeds MAX_MESSAGE_SIZE. The decompressed-output size cap in
+     * decompress() must reject it with a GrpcException rather than expanding the payload.
+     */
+    @Test
+    public void shouldThrowWhenDecompressedOutputExceedsMaximum() {
+        IncrementalGrpcFrameDecoder decoder = new IncrementalGrpcFrameDecoder();
+
+        // 5 MiB of highly-compressible repeating bytes (> 4 MiB MAX_MESSAGE_SIZE); gzip
+        // shrinks this to a few KiB, so the COMPRESSED frame fits under the buffer/length caps.
+        byte[] oversized = new byte[5 * 1024 * 1024];
+        byte[] frame = GrpcFrameCodec.encode(oversized, true);
+
+        // sanity: the compressed frame must itself be under MAX_MESSAGE_SIZE so it passes
+        // the declared-length header check and reaches the decompress path
+        assertThat("frame should carry the compressed flag", frame[0], is((byte) 1));
+        assertThat("compressed frame must be under the cap", frame.length, is(lessThan(4 * 1024 * 1024)));
+
+        GrpcException exception = assertThrows(GrpcException.class, () -> decoder.feed(frame));
+        assertThat("exception should mention decompressed maximum",
+            exception.getMessage(), containsString("decompressed gRPC message size exceeds maximum allowed"));
     }
 }

@@ -1312,4 +1312,236 @@ public class McpStreamableHttpHandlerTest {
 
         return sessionId;
     }
+
+    // ---- control-plane authorization for MCP tool calls ----
+
+    /**
+     * Builds a fresh handler stack whose HttpState has control-plane authorization configured
+     * (a verified principal authenticated with the given scopes, mapped to read/mutate/admin
+     * roles), and returns a channel plus an already-initialised session over it. The
+     * authentication SPI returns a verified result carrying {@code scopes} so the SAME
+     * authorizer/role model the HTTP control plane uses applies to tool calls.
+     */
+    private AuthzFixture newAuthorizedFixture(boolean authorizationEnabled, java.util.Set<String> scopes) throws Exception {
+        java.util.Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> mapping = new java.util.LinkedHashMap<>();
+        mapping.put("admins", org.mockserver.authentication.authorization.ControlPlaneRole.ADMIN);
+        mapping.put("mutators", org.mockserver.authentication.authorization.ControlPlaneRole.MUTATE);
+        mapping.put("readers", org.mockserver.authentication.authorization.ControlPlaneRole.READ);
+
+        org.mockserver.configuration.Configuration cfg = configuration()
+            .controlPlaneAuthorizationEnabled(authorizationEnabled)
+            .controlPlaneScopeMapping(mapping);
+        HttpState authzState = new HttpState(cfg, new MockServerLogger(), mock(Scheduler.class));
+        authzState.setControlPlaneAuthenticationHandler(new AuthenticationHandler() {
+            @Override
+            public boolean controlPlaneRequestAuthenticated(HttpRequest request) {
+                return true;
+            }
+
+            @Override
+            public org.mockserver.authentication.AuthenticationResult authenticate(HttpRequest request) {
+                return org.mockserver.authentication.AuthenticationResult.authenticated("principal", "verified-oidc", java.util.Map.of(), scopes);
+            }
+        });
+        McpSessionManager authzSessions = new McpSessionManager(authzState.getMockServerLogger());
+        EmbeddedChannel authzChannel = new EmbeddedChannel(new McpStreamableHttpHandler(authzState, server, authzSessions));
+
+        // initialize + notifications/initialized over the authz channel
+        FullHttpResponse init = postOn(authzChannel, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}", null);
+        String sessionId = init.headers().get("Mcp-Session-Id");
+        init.release();
+        FullHttpResponse notif = postOn(authzChannel, "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", sessionId);
+        if (notif != null) {
+            notif.release();
+        }
+        return new AuthzFixture(authzChannel, sessionId, authzState);
+    }
+
+    private FullHttpResponse postOn(EmbeddedChannel ch, String body, String sessionId) {
+        FullHttpRequest request = new DefaultFullHttpRequest(
+            HttpVersion.HTTP_1_1, HttpMethod.POST, "/mockserver/mcp",
+            Unpooled.copiedBuffer(body, StandardCharsets.UTF_8));
+        request.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json");
+        if (sessionId != null) {
+            request.headers().set("Mcp-Session-Id", sessionId);
+        }
+        ch.writeInbound(request);
+        return awaitOutboundFrom(ch);
+    }
+
+    private FullHttpResponse callTool(EmbeddedChannel ch, String sessionId, String toolName, ObjectNode arguments) {
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("name", toolName);
+        params.set("arguments", arguments != null ? arguments : objectMapper.createObjectNode());
+        ObjectNode rpc = objectMapper.createObjectNode();
+        rpc.put("jsonrpc", "2.0");
+        rpc.put("id", 99);
+        rpc.put("method", "tools/call");
+        rpc.set("params", params);
+        return postOn(ch, rpc.toString(), sessionId);
+    }
+
+    private static class AuthzFixture {
+        final EmbeddedChannel channel;
+        final String sessionId;
+        final HttpState httpState;
+
+        AuthzFixture(EmbeddedChannel channel, String sessionId, HttpState httpState) {
+            this.channel = channel;
+            this.sessionId = sessionId;
+            this.httpState = httpState;
+        }
+    }
+
+    @Test
+    public void shouldRejectMutatingToolWhenAuthorizationEnabledAndCallerLacksMutateRole() throws Exception {
+        AuthzFixture fixture = newAuthorizedFixture(true, java.util.Set.of("readers"));
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("method", "GET");
+        args.put("path", "/x");
+        FullHttpResponse response = callTool(fixture.channel, fixture.sessionId, "create_expectation", args);
+
+        assertThat(response, notNullValue());
+        JsonNode json = parseResponse(response);
+        // a denied tool call returns a JSON-RPC error mirroring the HTTP 403 ("Forbidden for control plane")
+        assertThat(json.path("error").path("code").asInt(), is(JsonRpcMessage.INVALID_REQUEST));
+        assertThat(json.path("error").path("message").asText(), containsString("Forbidden for control plane"));
+        // and no result (no expectation created)
+        assertThat(json.path("result").isMissingNode() || json.path("result").isNull(), is(true));
+
+        response.release();
+        fixture.channel.close();
+    }
+
+    @Test
+    public void shouldAllowReadToolWhenAuthorizationEnabledAndCallerHasReadRole() throws Exception {
+        AuthzFixture fixture = newAuthorizedFixture(true, java.util.Set.of("readers"));
+
+        FullHttpResponse response = callTool(fixture.channel, fixture.sessionId, "get_status", null);
+
+        assertThat(response, notNullValue());
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        assertThat(json.path("error").isMissingNode() || json.path("error").isNull(), is(true));
+        assertThat(json.path("result").path("isError").asBoolean(false), is(false));
+
+        response.release();
+        fixture.channel.close();
+    }
+
+    @Test
+    public void shouldAllowMutatingToolWhenAuthorizationEnabledAndCallerHasMutateRole() throws Exception {
+        AuthzFixture fixture = newAuthorizedFixture(true, java.util.Set.of("mutators"));
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("method", "GET");
+        args.put("path", "/x");
+        FullHttpResponse response = callTool(fixture.channel, fixture.sessionId, "create_expectation", args);
+
+        assertThat(response, notNullValue());
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        assertThat(json.path("error").isMissingNode() || json.path("error").isNull(), is(true));
+        // the create_expectation tool ran and reported success
+        assertThat(json.path("result").path("isError").asBoolean(false), is(false));
+
+        response.release();
+        fixture.channel.close();
+    }
+
+    @Test
+    public void shouldRejectReadToolWhenAuthorizationEnabledAndCallerHasNoMappedRole() throws Exception {
+        // fail-closed: a verified principal whose scopes map to NO role is denied even reads
+        AuthzFixture fixture = newAuthorizedFixture(true, java.util.Set.of("unmapped-scope"));
+
+        FullHttpResponse response = callTool(fixture.channel, fixture.sessionId, "get_status", null);
+
+        assertThat(response, notNullValue());
+        JsonNode json = parseResponse(response);
+        assertThat(json.path("error").path("code").asInt(), is(JsonRpcMessage.INVALID_REQUEST));
+        assertThat(json.path("error").path("message").asText(), containsString("Forbidden for control plane"));
+
+        response.release();
+        fixture.channel.close();
+    }
+
+    @Test
+    public void shouldNotEnforceAuthorizationForAnyToolWhenAuthorizationDisabled() throws Exception {
+        // authorization disabled (the default) -> behaviour unchanged: a mutating tool runs even
+        // with no mapped role / empty scopes
+        AuthzFixture fixture = newAuthorizedFixture(false, java.util.Set.of());
+
+        ObjectNode args = objectMapper.createObjectNode();
+        args.put("method", "GET");
+        args.put("path", "/x");
+        FullHttpResponse mutate = callTool(fixture.channel, fixture.sessionId, "create_expectation", args);
+        assertThat(mutate, notNullValue());
+        assertThat(mutate.status(), is(HttpResponseStatus.OK));
+        JsonNode mutateJson = parseResponse(mutate);
+        assertThat(mutateJson.path("error").isMissingNode() || mutateJson.path("error").isNull(), is(true));
+        assertThat(mutateJson.path("result").path("isError").asBoolean(false), is(false));
+        mutate.release();
+
+        FullHttpResponse read = callTool(fixture.channel, fixture.sessionId, "get_status", null);
+        assertThat(read, notNullValue());
+        assertThat(read.status(), is(HttpResponseStatus.OK));
+        JsonNode readJson = parseResponse(read);
+        assertThat(readJson.path("error").isMissingNode() || readJson.path("error").isNull(), is(true));
+        read.release();
+
+        fixture.channel.close();
+    }
+
+    @Test
+    public void shouldRejectMutatingToolInBatchWhenAuthorizationEnabledAndCallerLacksMutateRole() throws Exception {
+        // A batch tools/call is dispatched element-by-element through the same authorization
+        // check, so a mutating tool inside a batch must be denied for a READ-only principal and
+        // must not mutate state — while a read tool in the same batch still succeeds.
+        AuthzFixture fixture = newAuthorizedFixture(true, java.util.Set.of("readers"));
+
+        String batch = "[" +
+            // element 1: a permitted READ tool
+            "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"tools/call\",\"params\":{\"name\":\"get_status\",\"arguments\":{}}}," +
+            // element 2: a forbidden MUTATE tool
+            "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"tools/call\",\"params\":{\"name\":\"create_expectation\",\"arguments\":{\"method\":\"GET\",\"path\":\"/batch-forbidden\",\"statusCode\":201}}}" +
+            "]";
+        FullHttpResponse response = postOn(fixture.channel, batch, fixture.sessionId);
+
+        assertThat(response, notNullValue());
+        assertThat(response.status(), is(HttpResponseStatus.OK));
+        JsonNode json = parseResponse(response);
+        assertThat(json.isArray(), is(true));
+        assertThat(json.size(), is(2));
+
+        // locate each response by its JSON-RPC id (batch responses may be unordered)
+        JsonNode readResponse = null;
+        JsonNode mutateResponse = null;
+        for (JsonNode element : json) {
+            if (element.path("id").asInt() == 40) {
+                readResponse = element;
+            } else if (element.path("id").asInt() == 41) {
+                mutateResponse = element;
+            }
+        }
+        assertThat(readResponse, notNullValue());
+        assertThat(mutateResponse, notNullValue());
+
+        // the READ tool element succeeded
+        assertThat(readResponse.path("error").isMissingNode() || readResponse.path("error").isNull(), is(true));
+        assertThat(readResponse.path("result").path("isError").asBoolean(false), is(false));
+
+        // the MUTATE tool element was forbidden
+        assertThat(mutateResponse.path("error").path("code").asInt(), is(JsonRpcMessage.INVALID_REQUEST));
+        assertThat(mutateResponse.path("error").path("message").asText(), containsString("Forbidden for control plane"));
+        assertThat(mutateResponse.path("result").isMissingNode() || mutateResponse.path("result").isNull(), is(true));
+
+        // and the expectation was NOT created (the forbidden batch element did not mutate state)
+        assertThat(fixture.httpState.firstMatchingExpectation(
+                HttpRequest.request().withMethod("GET").withPath("/batch-forbidden")),
+            is(nullValue()));
+
+        response.release();
+        fixture.channel.close();
+    }
 }

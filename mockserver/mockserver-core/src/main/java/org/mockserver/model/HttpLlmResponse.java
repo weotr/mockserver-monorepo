@@ -112,7 +112,11 @@ public class HttpLlmResponse extends Action<HttpLlmResponse> {
      */
     @JsonIgnore
     public LlmConversationMatcher getConversationMatcher() {
-        if (conversationMatcher == null && conversationPredicates != null && conversationPredicates.hasAnyPredicate()) {
+        // Double-checked lazy init via a single local read of the volatile field, so
+        // we never observe a partially-built matcher and never re-read the field after
+        // the null check (withConversationPredicates can null it concurrently).
+        LlmConversationMatcher result = conversationMatcher;
+        if (result == null && conversationPredicates != null && conversationPredicates.hasAnyPredicate()) {
             LlmConversationMatcher matcher = new LlmConversationMatcher();
             matcher.withProvider(provider);
             if (conversationPredicates.getTurnIndex() != null) {
@@ -136,9 +140,10 @@ public class HttpLlmResponse extends Action<HttpLlmResponse> {
             if (conversationPredicates.getNormalization() != null) {
                 matcher.withNormalization(conversationPredicates.getNormalization());
             }
-            conversationMatcher = matcher;
+            result = matcher;
+            conversationMatcher = result;
         }
-        return conversationMatcher;
+        return result;
     }
 
     @Override

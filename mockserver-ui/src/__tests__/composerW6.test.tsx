@@ -54,7 +54,7 @@ describe('ComposerView Quick / Advanced mode', () => {
     try { globalThis.sessionStorage?.clear(); } catch { /* noop */ }
   });
 
-  it('defaults to Quick mode and shows the minimal field set only', () => {
+  it('defaults to Quick mode and shows the minimal field set only', async () => {
     renderComposer();
     expect(screen.getByLabelText('Quick mock')).toHaveAttribute('aria-pressed', 'true');
     // Quick card present
@@ -66,8 +66,10 @@ describe('ComposerView Quick / Advanced mode', () => {
     expect(screen.getByLabelText('Content-Type')).toBeInTheDocument();
     // Response body is now a Monaco editor (test-setup renders it as a textarea
     // with data-testid="monaco-textarea"); the "Response body" caption labels it.
-    expect(screen.getByText('Response body')).toBeInTheDocument();
-    expect(screen.getByTestId('monaco-textarea')).toBeInTheDocument();
+    // The editor is loaded via a lazy/Suspense split point (JsonEditorLazy keeps
+    // monaco out of the main bundle), so it resolves asynchronously — await it.
+    expect(await screen.findByText('Response body')).toBeInTheDocument();
+    expect(await screen.findByTestId('monaco-textarea')).toBeInTheDocument();
     // Advanced machinery is hidden (the kind selector, action-type radios, and
     // cross-cutting panels). Note "2 · Respond with" is intentionally shared
     // with the Quick card, so it is NOT a discriminator.

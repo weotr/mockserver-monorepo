@@ -229,6 +229,84 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetDashboardAnalyticsEnabled() {
+        boolean original = ConfigurationProperties.dashboardAnalyticsEnabled();
+        try {
+            // then - default value
+            assertThat(configuration.dashboardAnalyticsEnabled(), equalTo(true));
+
+            // when - system property setter
+            ConfigurationProperties.dashboardAnalyticsEnabled(false);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.dashboardAnalyticsEnabled(), equalTo(false));
+            assertThat(System.getProperty("mockserver.dashboardAnalyticsEnabled"), equalTo("false"));
+            assertThat(configuration.dashboardAnalyticsEnabled(), equalTo(false));
+            ConfigurationProperties.dashboardAnalyticsEnabled(original);
+
+            // when - setter
+            configuration.dashboardAnalyticsEnabled(false);
+
+            // then - getter
+            assertThat(configuration.dashboardAnalyticsEnabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.dashboardAnalyticsEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetDashboardAnalyticsEndpoint() {
+        String original = ConfigurationProperties.dashboardAnalyticsEndpoint();
+        try {
+            // then - default value
+            assertThat(configuration.dashboardAnalyticsEndpoint(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.dashboardAnalyticsEndpoint("https://analytics.example.com");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.dashboardAnalyticsEndpoint(), equalTo("https://analytics.example.com"));
+            assertThat(System.getProperty("mockserver.dashboardAnalyticsEndpoint"), equalTo("https://analytics.example.com"));
+            assertThat(configuration.dashboardAnalyticsEndpoint(), equalTo("https://analytics.example.com"));
+            ConfigurationProperties.dashboardAnalyticsEndpoint(original);
+
+            // when - setter
+            configuration.dashboardAnalyticsEndpoint("https://other.example.com");
+
+            // then - getter
+            assertThat(configuration.dashboardAnalyticsEndpoint(), equalTo("https://other.example.com"));
+        } finally {
+            ConfigurationProperties.dashboardAnalyticsEndpoint(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetDashboardAnalyticsKey() {
+        String original = ConfigurationProperties.dashboardAnalyticsKey();
+        try {
+            // then - default value
+            assertThat(configuration.dashboardAnalyticsKey(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.dashboardAnalyticsKey("phc_test_key");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.dashboardAnalyticsKey(), equalTo("phc_test_key"));
+            assertThat(System.getProperty("mockserver.dashboardAnalyticsKey"), equalTo("phc_test_key"));
+            assertThat(configuration.dashboardAnalyticsKey(), equalTo("phc_test_key"));
+            ConfigurationProperties.dashboardAnalyticsKey(original);
+
+            // when - setter
+            configuration.dashboardAnalyticsKey("phc_other_key");
+
+            // then - getter
+            assertThat(configuration.dashboardAnalyticsKey(), equalTo("phc_other_key"));
+        } finally {
+            ConfigurationProperties.dashboardAnalyticsKey(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetChaosAutoHaltEnabled() {
         boolean original = ConfigurationProperties.chaosAutoHaltEnabled();
         try {
@@ -1717,6 +1795,32 @@ public class ConfigurationTest {
             assertThat(configuration.attachMismatchDiagnosticToResponse(), equalTo(true));
         } finally {
             ConfigurationProperties.attachMismatchDiagnosticToResponse(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetClosestMatchHintEnabled() {
+        boolean original = ConfigurationProperties.closestMatchHintEnabled();
+        try {
+            // then - default value (true)
+            assertThat(configuration.closestMatchHintEnabled(), equalTo(true));
+
+            // when - system property setter
+            ConfigurationProperties.closestMatchHintEnabled(false);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.closestMatchHintEnabled(), equalTo(false));
+            assertThat(System.getProperty("mockserver.closestMatchHintEnabled"), equalTo("false"));
+            assertThat(configuration.closestMatchHintEnabled(), equalTo(false));
+            ConfigurationProperties.closestMatchHintEnabled(original);
+
+            // when - setter
+            configuration.closestMatchHintEnabled(false);
+
+            // then - getter
+            assertThat(configuration.closestMatchHintEnabled(), equalTo(false));
+        } finally {
+            ConfigurationProperties.closestMatchHintEnabled(original);
         }
     }
 

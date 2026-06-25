@@ -1,7 +1,7 @@
 {
   "name": "mockserver-node",
   "description": "Node.js module and Grunt plugin to start and stop MockServer",
-  "version": "7.1.0",
+  "version": "7.2.0",
   "homepage": "http://mock-server.com",
   "types": "index.d.ts",
   "bin": {
@@ -36,8 +36,7 @@
     "downloadJar.js",
     "downloadBinary.js",
     "bin",
-    "mockserver-netty-7.1.0-jar-with-dependencies.jar",
-    "stop_MockServer.sh"
+    "mockserver-netty-7.2.0-jar-with-dependencies.jar"
   ],
   "devDependencies": {
     "grunt": "~1.6.2",

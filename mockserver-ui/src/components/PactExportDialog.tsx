@@ -17,6 +17,7 @@ import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { humanizeError, type HumanError } from '../lib/errorMessage';
 import { monospaceFontFamily } from '../theme';
 import HumanErrorAlert from './HumanErrorAlert';
+import { trackFeature } from '../lib/analytics';
 
 interface PactExportDialogProps {
   open: boolean;
@@ -63,6 +64,7 @@ export default function PactExportDialog({ open, onClose, connectionParams }: Pa
     setPactText(null);
     try {
       const pact = await exportPact(connectionParams, consumer, provider);
+      trackFeature('export_performed');
       setPactText(JSON.stringify(pact, null, 2));
     } catch (e) {
       setError(humanizeError(e));

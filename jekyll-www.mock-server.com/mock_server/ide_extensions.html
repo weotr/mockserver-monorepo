@@ -159,7 +159,7 @@ sitemap:
 
 <h3>JSON Snippets</h3>
 
-<p>In any <span class="inline_code">.json</span> file, type one of the following prefixes and press <span class="inline_code">Tab</span> to expand a full expectation template:</p>
+<p>In any <span class="inline_code">.json</span> or <span class="inline_code">.jsonc</span> file (unlike schema validation, snippets are not restricted to <span class="inline_code">*.mockserver.json(c)</span>), type one of the following prefixes and press <span class="inline_code">Tab</span> to expand a full expectation template:</p>
 
 <table>
     <thead>
@@ -338,6 +338,7 @@ sitemap:
     <li>Click <strong>Open Dashboard in IDE</strong> to open the embedded Dashboard — inspect live traffic and active expectations without switching windows</li>
     <li>Create a file named <span class="inline_code">expectations.mockserver.json</span> — schema validation and auto-completion activate automatically</li>
     <li>Click <strong>Load Expectations</strong> to send expectations to the server, then use <strong>Show Drift Report</strong> to spot where the real upstream has drifted from your stubs</li>
+    <li>Proxy real traffic, then run <strong>Save Recorded Expectations (Java DSL)</strong> to turn captured requests straight into paste-ready test code (or <strong>(JSON)</strong> for a replayable expectation file)</li>
 </ol>
 
 <p>For more information see <a href="/mock_server/mockserver_ui.html">MockServer Dashboard</a> and <a href="/mock_server/running_mock_server.html">Running MockServer</a>.</p>

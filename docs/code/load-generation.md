@@ -84,7 +84,9 @@ triggered by name. Preloading is fail-soft: an invalid definition logs a WARN an
 
 | Type | Purpose |
 |------|---------|
-| `LoadScenario` | `name`, ordered `steps`, `profile`, `templateType` (default `VELOCITY`), optional `maxRequests`, optional `labels` (`Map<String,String>` — scenario-level custom metric labels). |
+| `LoadScenario` | `name`, ordered `steps`, `profile`, `templateType` (default `VELOCITY`), optional `maxRequests`, optional `labels` (`Map<String,String>` — scenario-level custom metric labels), optional `pacing` (`LoadPacing` — adaptive iteration pacing; see [Adaptive pacing (think-time)](#adaptive-pacing-think-time)), optional `feeder` (`LoadFeeder` — parameterized test data; see [Data feeders](#data-feeders)). |
+| `LoadPacing` | a `mode` ∈ `{NONE, CONSTANT_PACING, CONSTANT_THROUGHPUT}` (default `NONE`) and a `value` — the target per-VU iteration **cycle** (closed model only). |
+| `LoadFeeder` | an inline dataset (`rows`, or raw `data` + `format`) and a selection `strategy` ∈ `{CIRCULAR, RANDOM, SEQUENTIAL}` (default `CIRCULAR`); one row per iteration is exposed as `iteration.data`. |
 | `LoadStep` | a `request` (reuses `HttpRequest`; template strings live in its fields), an optional `thinkTime` (`Delay`) — inter-step pacing only, an optional `name` (used as the `route` metric label when set; otherwise the path is auto-templatized), and optional `labels` (`Map<String,String>` — step-level custom metric labels that override scenario labels for this step). |
 | `LoadProfile` | a `List<LoadStage> stages` run in sequence. |
 | `LoadStage` | one slice of the run: a `type` ∈ `{VU, RATE, PAUSE}`, a required `durationMillis` (> 0), an optional `curve` ∈ `{LINEAR, EXPONENTIAL, QUADRATIC}` (ramps only; default `LINEAR`), and the setpoint fields for its type (see below). |
@@ -104,10 +106,175 @@ and `iteration.getIndex()` (JavaScript) all resolve.
 | `vuIteration` | the iteration count within that virtual user (0-based) |
 | `elapsedMillis` | millis since the scenario started |
 | `count` | total requests dispatched so far |
+| `captured` | per-iteration cross-step captured variables (a `Map<String,String>`); see [Cross-step capture / correlation](#cross-step-capture--correlation) |
+| `data` | the data-feeder row selected for this iteration (a `Map<String,String>`, empty when there is no feeder); see [Data feeders](#data-feeders) |
 
-Only the request `path` and `body` are rendered in v1 (the most commonly templated fields). The render
-path is a new internal overload (`TemplateEngine.renderTemplate(template, request, iteration)`); the
+The request `path`, `body` **and header values** are rendered (the most commonly templated fields). The
+render path is an internal overload (`TemplateEngine.renderTemplate(template, request, iteration)`); the
 existing response/forward template path is untouched (it passes a `null` iteration).
+
+## Cross-step capture / correlation
+
+A later step often needs a value produced by an earlier step — the classic case is a **login step that
+returns a token** which subsequent steps must send as a bearer credential. Each `LoadStep` can declare
+`captures`: rules that extract a value from **that step's response** and bind it to a named variable that
+later steps read from their templated request fields.
+
+### Scope — per-iteration
+
+The captured-variable map is **per-iteration**: it is created fresh at the start of every iteration (one
+virtual user's single pass through the ordered steps — i.e. one user "session"), threaded through that
+iteration's chained step dispatches, and **never shared** across virtual users or across a VU's
+successive iterations. This is the correct, race-free correlation scope: each simulated user gets its own
+token. A value captured in step 1 is visible to steps 2..N of the *same* iteration only.
+
+### Capture sources
+
+A `LoadCapture` has a `name` (the variable), a `source`, an `expression`, and an optional `defaultValue`:
+
+| `source` | `expression` is | Extracts |
+|----------|-----------------|----------|
+| `BODY_JSONPATH` | a JSONPath | the JSONPath result over the response body (single-element lists are unwrapped; scalars stringified) |
+| `HEADER` | a header name | the first value of that response header |
+| `BODY_REGEX` | a regex | capture **group 1** of the first match over the response body string |
+
+Capture is **best-effort and never fails the run**: on no match (or any extraction error — logged at
+debug) the variable falls back to `defaultValue` when set, otherwise it is left unset.
+
+### Referencing captured variables
+
+Captured variables are exposed on the `iteration` template object under `captured`, so a subsequent
+step references them by key — in the **path, body, and header** templates:
+
+- Velocity: `$iteration.captured.token`
+- Mustache: `{{iteration.captured.token}}`
+
+Both engines resolve a member access on a `Map<String,String>` getter (`IterationContext.getCaptured()`)
+by key, so the syntax is uniform across them.
+
+### Example — login → token → authenticated call
+
+```json
+{
+  "name": "login-then-fetch",
+  "templateType": "MUSTACHE",
+  "profile": { "stages": [ { "type": "VU", "targetVus": 5, "durationMillis": 30000 } ] },
+  "steps": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/login",
+        "headers": { "Host": [ "api" ] },
+        "body": { "username": "user{{iteration.vuId}}", "password": "pw" }
+      },
+      "captures": [
+        { "name": "token", "source": "BODY_JSONPATH", "expression": "$.token" }
+      ]
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/account",
+        "headers": {
+          "Host": [ "api" ],
+          "Authorization": [ "Bearer {{iteration.captured.token}}" ]
+        }
+      }
+    }
+  ]
+}
+```
+
+Step 1 logs in and captures the response body's `$.token` into `token`; step 2 — same iteration — sends
+it as `Authorization: Bearer <token>`. With 5 VUs, each VU's iterations each capture and replay their own
+token independently.
+
+## Data feeders
+
+A scenario can drive its templates from a **parameterized dataset** ("data feeder"): per iteration the
+orchestrator selects one row and exposes it as `iteration.data`, so each iteration sends different data
+(distinct users, ids, payloads). This is the load-test analogue of Gatling feeders / k6 `SharedArray` /
+JMeter CSV Data Set.
+
+### Dataset — inline rows, or raw data
+
+The dataset is always **inline in the scenario body** (there is no external URL or file source in this
+version — that avoids adding an SSRF / arbitrary-file-read surface to a self-load feature; an external
+source is a possible future enhancement). Supply **one** of two equivalent forms:
+
+| Form | Shape | Notes |
+|------|-------|-------|
+| `rows` | a list of column-to-value objects | the **primary** mechanism — JSON-native, round-trips with no parsing |
+| `data` + `format` | a raw string parsed server-side into rows | `format` ∈ `{CSV, JSON}` |
+
+`data`/`format` parsing happens once at scenario load:
+
+- **CSV** — the first line is the header row; subsequent lines are rows. The parser is RFC 4180-ish
+  (reuses the project `CsvTemplateHelper`), so **embedded commas, doubled quotes and newlines inside
+  quoted fields are handled**. A row with fewer fields than the header leaves the missing columns unset.
+- **JSON** — an array of flat objects, e.g. `[{"user":"a"},{"user":"b"}]`; scalar values are stringified.
+
+The raw `data` string is the **source of truth**: it serialises back verbatim (the derived rows are not
+re-emitted), so a `data`/`format` feeder round-trips without double-parsing. When both `rows` and `data`
+are present, `rows` wins.
+
+### Selection strategy
+
+| `strategy` | Row chosen per iteration | Exhaustion |
+|------------|--------------------------|------------|
+| `CIRCULAR` (default) | `rows[globalIteration % size]` | never exhausts — sustained load cycles the dataset |
+| `RANDOM` | a uniformly random row (`ThreadLocalRandom`) | never exhausts |
+| `SEQUENTIAL` | `rows[globalIteration]`, once each in order | the **run COMPLETES** once the dataset is exhausted |
+
+`CIRCULAR` and `SEQUENTIAL` index by a **global per-iteration counter**, so rows are distributed across
+all VUs and iterations. `SEQUENTIAL` is the data-driven "replay this dataset exactly once" mode — the
+exhaustion check is applied at iteration launch (no iteration runs past the dataset) and completes the
+run through the normal complete path, composing with the VU/RATE models (no `maxRequests` needed).
+
+### Referencing feeder data
+
+The selected row is exposed on the `iteration` object under `data`, referenced by column in the **path,
+body and header** templates — the same mechanism as `captured`:
+
+- Velocity: `$iteration.data.user`
+- Mustache: `{{iteration.data.user}}`
+
+An absent/empty feeder leaves `iteration.data` an empty map (behaviour unchanged).
+
+### Example — SEQUENTIAL replay of an inline dataset
+
+```json
+{
+  "name": "replay-users",
+  "templateType": "MUSTACHE",
+  "profile": { "stages": [ { "type": "VU", "targetVus": 3, "durationMillis": 600000 } ] },
+  "feeder": {
+    "strategy": "SEQUENTIAL",
+    "rows": [
+      { "user": "alice", "id": "1" },
+      { "user": "bob",   "id": "2" },
+      { "user": "carol", "id": "3" }
+    ]
+  },
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/users/{{iteration.data.id}}",
+        "headers": { "Host": [ "api" ], "X-User": [ "{{iteration.data.user}}" ] }
+      }
+    }
+  ]
+}
+```
+
+Three iterations run (one per row, in order) across the 3 VUs, then the run completes — even though the
+stage duration is far from elapsed. Swap `strategy` to `CIRCULAR` (or omit it) to cycle the same dataset
+under sustained load instead. The `rows` array could equally be supplied as raw CSV:
+
+```json
+"feeder": { "format": "CSV", "data": "user,id\nalice,1\nbob,2\ncarol,3" }
+```
 
 ## Stages, arrival-rate and curves
 
@@ -169,6 +336,32 @@ injector could not meet the requested rate. Caps are never exceeded.
 Sequences and pauses compose freely — e.g. a VU warm-up, then a pause, then a ramping-arrival-rate
 soak, then a constant-rate hold — up to `loadGenerationMaxStages` stages.
 
+### Named load shapes
+
+A profile may instead carry a single declarative **shape** (`LoadShape`) describing a common traffic
+pattern by name, rather than spelling out every stage. A shape is **pure sugar**: `LoadShapes.expand`
+turns it into ordinary `LoadStage`s, and `LoadProfile.getStages()` returns that expansion — so the
+orchestrator, the validator, and every cap check run unchanged. A profile uses **either** an explicit
+`stages` list **or** a `shape`; if both are set the explicit stages win (the shape is ignored).
+
+Each shape drives one **metric** — `VU` (concurrent virtual users, closed model; expands to `VU`
+stages, setpoints rounded to whole VUs) or `RATE` (arrival rate in iterations/second, open model;
+expands to `RATE` stages, fractional rates preserved). Expanded `RATE` stages leave `maxVus` unset, so
+the global `loadGenerationMaxVirtualUsers` cap governs the auto-scaled VU pool — a shape never imposes
+its own lower cap.
+
+| Shape | Expands into | Parameters (only these are read) |
+|-------|--------------|----------------------------------|
+| `SPIKE` | ramp `baseline→peak`, hold `peak`, ramp `peak→baseline`, optional hold `baseline` | `baseline`, `peak`, `rampUpMillis`, `holdMillis`, `rampDownMillis`, optional `recoveryHoldMillis`; `curve` shapes both ramps |
+| `STAIRS` | for `i` in `0..steps-1`: a **pure hold** at `start + i*step` for `stepDurationMillis` (discrete steps, no inter-step ramp) | `start`, `step`, `steps`, `stepDurationMillis` |
+| `RAMP_HOLD` | ramp `0→target` along `curve`, then hold `target` | `target`, `rampMillis`, `holdMillis`, optional `curve` (default `LINEAR`) |
+
+Any zero/absent duration (or zero `steps`) simply drops that stage from the expansion, so e.g. a SPIKE
+with `rampDownMillis=0` expands to ramp-up + hold only. A shape whose parameters expand to **no**
+stages — or whose expansion exceeds a cap (max stages, peak VUs/rate, total duration) — is rejected by
+`validate` with a clear error, because validation runs over the expanded stages exactly as it does for
+explicit ones.
+
 ## REST API
 
 All endpoints are control-plane endpoints (subject to `controlPlaneRequestAuthenticated`). The model is
@@ -177,8 +370,11 @@ All endpoints are control-plane endpoints (subject to `controlPlaneRequestAuthen
 | Verb | Path | Behaviour |
 |------|------|-----------|
 | `PUT` | `/mockserver/loadScenario` | **Load/register** a scenario by `name` (does NOT run). Allowed even when `loadGenerationEnabled=false`. `400 {error}` when invalid or a cap is exceeded; `200 {status:loaded, name, state:LOADED}` otherwise. Loading the same name replaces. |
+| `PUT` | `/mockserver/loadScenario/generateFromOpenAPI` | **Seed** a scenario from an OpenAPI spec, then load/register it (does NOT run, allowed when disabled). Body `{name, specUrlOrPayload, target?, profile?}`. One step per operation; returns the generated scenario for editing. See [Seed a scenario from an OpenAPI spec](#seed-a-scenario-from-an-openapi-spec). |
+| `PUT` | `/mockserver/loadScenario/generateFromRecording` | **Seed** a scenario from recorded proxy traffic, then load/register it (does NOT run, allowed when disabled). Body `{name, mode?, requestFilter?, maxSteps?, target?, profile?}`. `VERBATIM` (default) = one step per recorded request; `TEMPLATIZED` = one weighted step per unique route (weight == hit count, `stepSelection: WEIGHTED`, reproducing the recorded traffic mix). Returns the generated scenario for editing. See [Seed a scenario from recorded traffic](#seed-a-scenario-from-recorded-traffic). |
 | `GET` | `/mockserver/loadScenario` | List ALL registered scenarios: `{ scenarios:[ { name, state, startDelayMillis, definition, ...live status fields when active/run } ] }`. State ∈ `LOADED/PENDING/RUNNING/COMPLETED/STOPPED`. |
 | `GET` | `/mockserver/loadScenario/{name}` | One scenario (definition + state + status); `404` if not registered. |
+| `GET` | `/mockserver/loadScenario/{name}/report` | **End-of-run summary report** for the run (live snapshot if running, retained terminal snapshot if finished). JSON by default; `?format=junit` returns a JUnit-XML `<testsuite>` with `application/xml`. `404` if the scenario never ran. See [Summary report](#summary-report). |
 | `DELETE` | `/mockserver/loadScenario/{name}` | Remove from the registry (stops it first if running). |
 | `DELETE` | `/mockserver/loadScenario` | Clear the whole registry (stops all running). |
 | `PUT` | `/mockserver/loadScenario/start` | **Trigger** registered scenario(s) to run. Body `{names:[...]}` or `{name:"a"}`. Requires `loadGenerationEnabled` (else `403`); `404` if a name isn't registered; `400` if it would exceed `loadGenerationMaxConcurrentScenarios`. Returns the triggered names + resulting states (`PENDING`/`RUNNING`). |
@@ -253,6 +449,137 @@ curl -X PUT http://localhost:1080/mockserver/loadScenario/start \
 }
 ```
 
+## Seed a scenario from an OpenAPI spec
+
+`PUT /mockserver/loadScenario/generateFromOpenAPI` turns an OpenAPI specification into an editable,
+immediately-runnable `LoadScenario` and registers it in the `LOADED` state — it generates **no traffic**
+and (like `PUT /loadScenario`) is allowed even when `loadGenerationEnabled=false`. The generated scenario
+is returned in the response so a client/UI can show and edit it before triggering a run.
+
+`LoadScenarioFromOpenAPI.generate(...)` reuses the **same OpenAPI parse** the expectation converter uses
+(`OpenAPIParser.buildOpenAPI` + `OpenAPISerialiser.retrieveOperations`) and the **same example engine**
+(`ExampleBuilder`), so steps line up with what `PUT /mockserver/openapi/expectation` would mock:
+
+- **one `LoadStep` per operation**, in the stable path-then-method order, each with the operation's
+  method and server-prefixed path;
+- a **representative request-body example** (built from the request-body schema) plus a `Content-Type`
+  header, for operations that declare a body;
+- **plain, ordered steps** — no per-step weighting in v1.
+
+### Request body
+
+```json
+{
+  "name": "petstore-load",
+  "specUrlOrPayload": "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+  "target": { "host": "petstore.svc", "port": 8080, "scheme": "http" },
+  "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 30000 } ] }
+}
+```
+
+`specUrlOrPayload` is accepted **identically to `PUT /mockserver/openapi/expectation`** — an inline
+JSON/YAML payload (string or embedded object), a URL, or a file/classpath reference. `target` and
+`profile` are optional.
+
+### Target precedence
+
+Each step's target is carried as the request's `Host` header and `secure` flag (the routing surface every
+load step uses), resolved by this precedence:
+
+1. an explicit `target` (with a `host`) in the request body — wins;
+2. otherwise the spec's `servers[0]` URL — its host, port and `https` scheme are applied;
+3. otherwise the request is left **path-only** — the operator edits in a target before running.
+
+### Default profile
+
+When no `profile` is supplied a conservative default is applied — a single short constant-VU stage
+(5 VUs for 30s) — so the scenario runs out of the box yet stays safe. Edit the returned profile (ramps,
+rate stages, duration) before scaling up.
+
+```bash
+curl -X PUT http://localhost:1080/mockserver/loadScenario/generateFromOpenAPI \
+  -d '{ "name": "petstore-load", "specUrlOrPayload": "https://.../petstore.yaml" }'
+#  -> { "status":"loaded", "name":"petstore-load", "state":"LOADED", "scenario": { ...editable... } }
+
+# then edit if needed and trigger as usual
+curl -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "petstore-load" }'
+```
+
+A missing `name`/`specUrlOrPayload`, an unparseable spec, a spec with no operations, or a generated
+scenario that fails validation all return `400 {error}`.
+
+## Seed a scenario from recorded traffic
+
+`PUT /mockserver/loadScenario/generateFromRecording` turns traffic **previously recorded by MockServer
+in proxy/recording mode** into an editable, immediately-runnable `LoadScenario` and registers it in the
+`LOADED` state — it generates **no traffic** and (like `PUT /loadScenario`) is allowed even when
+`loadGenerationEnabled=false`. The generated scenario is returned so a client/UI can show and edit it
+before triggering a run. This is the **record-to-load** flow: capture real traffic through the proxy,
+then replay its shape as a load test.
+
+`LoadScenarioFromRecording.generate(...)` reuses the **same recorded-request retrieval** the recorded-
+requests control plane uses (`MockServerEventLog.retrieveRequests`, the `RECEIVED_REQUEST` entries),
+optionally narrowed by a `requestFilter`, and the **same route templatizer** the metrics layer uses
+(`MetricLabels.routeOf`).
+
+### Modes
+
+| Mode | Steps produced |
+|------|----------------|
+| `VERBATIM` (default) | One `LoadStep` per recorded request, **in recorded order**, preserving the concrete path, body and headers. An optional `maxSteps` keeps only the first N recorded requests (the orchestrator's `loadGenerationMaxSteps` also caps). |
+| `TEMPLATIZED` | Recorded requests are **deduplicated by `(method, templatised-path)`** — id-shaped segments such as `/orders/123` collapse to `/orders/{id}` — keeping one representative example per unique route, **ordered by descending hit frequency** (most-hit routes first). One step per unique route, with each step's `weight` set to that route's **observed hit count** and the scenario marked [`stepSelection: WEIGHTED`](#weighted-step-selection), so each iteration picks a route in proportion to its recorded frequency — reproducing the recorded traffic **mix**. |
+
+### Request body
+
+```json
+{
+  "name": "replay-prod-traffic",
+  "mode": "TEMPLATIZED",
+  "requestFilter": { "path": "/orders/.*" },
+  "maxSteps": 100,
+  "target": { "host": "staging.svc", "port": 8080, "scheme": "http" },
+  "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 30000 } ] }
+}
+```
+
+All fields except `name` are optional. `requestFilter` is a standard **HttpRequest matcher** — when
+present only the recorded requests it matches are converted; when absent **all** recorded requests are
+used. `maxSteps` applies to `VERBATIM` (`TEMPLATIZED` is naturally bounded by the number of unique routes).
+
+### Target precedence
+
+Each step's target is carried as the request's `Host` header and `secure` flag, resolved by this
+precedence:
+
+1. an explicit `target` (with a `host`) in the request body — applied to **every** step (its `Host`
+   header is replaced and the `secure` flag set from the scheme);
+2. otherwise each recorded request's **own routing is left untouched** — recorded proxied requests
+   already carry their upstream target.
+
+### Default profile
+
+When no `profile` is supplied the same conservative default as the OpenAPI seeder is applied — a single
+short constant-VU stage (5 VUs for 30s) — so the scenario runs out of the box yet stays safe. Edit the
+returned profile before scaling up.
+
+```bash
+# record some traffic through the proxy first, then:
+curl -X PUT http://localhost:1080/mockserver/loadScenario/generateFromRecording \
+  -d '{ "name": "replay-prod-traffic", "mode": "TEMPLATIZED" }'
+#  -> { "status":"loaded", "name":"replay-prod-traffic", "state":"LOADED", "scenario": { ...editable... } }
+
+# then edit if needed and trigger as usual
+curl -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "replay-prod-traffic" }'
+```
+
+A missing `name`, no recorded requests to convert (none recorded, or none matching `requestFilter`), an
+invalid `mode`, or a generated scenario that fails validation all return `400 {error}`.
+
+> The `TEMPLATIZED` seeder now emits a **weighted mix**: each route's `weight` is its observed hit
+> count and the scenario is marked [`stepSelection: WEIGHTED`](#weighted-step-selection), so each
+> iteration fires a route in proportion to its recorded frequency. Edit the weights (or switch back to
+> `SEQUENTIAL`) on the returned scenario if you want different behaviour.
+
 ## Timing and concurrency
 
 The scheduler thread does **no I/O** — it only computes ramp setpoints and hands each request to the
@@ -260,6 +587,81 @@ injected sender, which returns a `CompletableFuture` immediately. Step and itera
 *scheduled* (`scheduler.schedule(nextStep, thinkTimeMillis, …)`), never `Thread.sleep`-ed via
 `Delay.applyDelay()`, so a slow target never blocks a worker thread. There is **no dedicated thread per
 virtual user**: a VU "loop" is a chain of `CompletableFuture` completion callbacks.
+
+### Adaptive pacing (think-time)
+
+Adaptive pacing targets a fixed per-virtual-user iteration **cycle** time, so a closed-model VU starts
+a new iteration at most once per cycle (Locust `constant_pacing` / `constant_throughput`, Gatling
+`pace`). Set it via the scenario-level `pacing` (`LoadPacing`) object:
+
+| `mode` | `value` means | target cycle |
+|--------|---------------|--------------|
+| `NONE` (default) | — | none (the next iteration launches immediately) |
+| `CONSTANT_PACING` | target cycle in **milliseconds** | `value` ms |
+| `CONSTANT_THROUGHPUT` | target iterations/second **per VU** | `1000 / value` ms |
+
+At the closed-model reschedule point, the orchestrator measures how long the iteration's work took
+(`elapsedMillis`, from `TimeService.nanoTime()`) and waits `max(0, round(cycleMillis - elapsedMillis))`
+before launching that VU's next iteration. If the iteration finished inside the cycle it waits out the
+remainder; **on overrun it starts immediately (waits 0)** — pacing never makes a slow VU go faster, it
+only smooths a fast one toward the target rate.
+
+Scope and composition:
+
+- **Closed-model VU loop only.** One-shot open-model `RATE` iterations ignore pacing — their arrival
+  rate already governs the spacing between starts.
+- **Composes with per-step `thinkTime`.** `thinkTime` adds intra-iteration pauses *between steps*;
+  pacing targets the *whole iteration cycle* and only delays the *start of the next iteration*. Because
+  pacing measures the full iteration elapsed time (which includes any `thinkTime` waits), the two
+  combine naturally: if per-step think-times already consume the cycle, pacing adds no extra wait.
+- **Latency measurement is unchanged.** Pacing only affects *when* the next iteration launches; the
+  coordinated-omission-corrected in-flight latency sample is untouched (no coordinated-omission games).
+
+`pacing.value` must be `> 0` when `mode` is not `NONE` (rejected by validation otherwise).
+
+### Weighted step selection
+
+By default every iteration runs **all** steps in declared order — a multi-step user journey
+(`stepSelection: SEQUENTIAL`, the original behaviour). An alternative mode lets one scenario model a
+**mixed workload**: with `stepSelection: WEIGHTED`, each iteration runs exactly **ONE** step, chosen at
+random with probability proportional to each step's `weight` (Gatling `randomSwitch`, Locust `@task`
+weights). This expresses, in a single run, a traffic mix such as 70% browse / 20% search / 10% checkout.
+
+| `stepSelection` | steps run per iteration | `weight` |
+|-----------------|-------------------------|----------|
+| `SEQUENTIAL` (default) | all steps, in declared order | ignored (may be present but unused) |
+| `WEIGHTED` | exactly one step, chosen by weight | per-step relative weight (absent = `1.0`); must be `> 0` |
+
+The pick uses a cumulative-weight scan over a uniform draw in `[0, totalWeight)`
+(`ThreadLocalRandom.nextDouble(totalWeight)`), computed once per iteration. After the chosen step runs,
+the iteration ends exactly as a SEQUENTIAL iteration does after its last step — the closed-model VU loop
+reschedules its next iteration (with pacing) and the one-shot `RATE` model ends the VU.
+
+```json
+{
+  "name": "mixed-shop-workload",
+  "stepSelection": "WEIGHTED",
+  "profile": { "stages": [ { "type": "VU", "vus": 20, "durationMillis": 60000 } ] },
+  "steps": [
+    { "name": "browse",   "weight": 7, "request": { "method": "GET",  "path": "/products" } },
+    { "name": "search",   "weight": 2, "request": { "method": "GET",  "path": "/search?q=shoes" } },
+    { "name": "checkout", "weight": 1, "request": { "method": "POST", "path": "/checkout" } }
+  ]
+}
+```
+
+Validation: under `WEIGHTED`, there must be at least one step and every step's effective weight
+(absent = `1.0`) must be `> 0` with a positive total; a non-positive weight is rejected. `SEQUENTIAL`
+ignores weights entirely (a weight may be present but is unused, so a scenario can be flipped between
+modes freely).
+
+Interaction with other features:
+
+- **Cross-step capture is meaningful only under `SEQUENTIAL`.** A WEIGHTED iteration runs a single step,
+  so there is no later step to consume a captured variable. (Capture rules on a WEIGHTED step do no harm
+  — they simply have no subsequent step to feed.)
+- **Feeder data and pacing apply to both modes.** One feeder row is selected per iteration and the
+  pacing cycle governs the next-iteration launch identically, regardless of `stepSelection`.
 
 ## Decoupling
 
@@ -297,6 +699,69 @@ traffic; the SLO feature owns *judging* it.
 > latency samples under `Scope.FORWARD` keyed by host. Scope or time-bound the verification window to exclude
 > synthetic load if you need to assert only on real traffic.
 
+## In-run thresholds (pass/fail verdicts)
+
+A scenario can carry **in-run thresholds** that are evaluated *while the run executes* and yield a
+PASS/FAIL verdict — independent of, and complementary to, post-run `verifySLO`. Use them to fail a CI
+load test the moment a metric breaches its budget.
+
+- **Model** — `LoadScenario.thresholds` is a list of `LoadThreshold`, each a `{metric, comparator,
+  threshold}` triple. `metric` is one of `LATENCY_P50/P95/P99/P999` (milliseconds), `ERROR_RATE` (a
+  0–1 fraction) or `THROUGHPUT_RPS` (requests/second). `comparator` reuses the SLO feature's
+  `SloObjective.Comparator` (`LESS_THAN`, `LESS_THAN_OR_EQUAL`, `GREATER_THAN`,
+  `GREATER_THAN_OR_EQUAL`). The verdict is **PASS iff every threshold holds, FAIL if any breaches**.
+- **Per-run evaluation, not the global SLO store** — thresholds are computed on each control tick from
+  *this run's own* data: latency percentiles from a `copy()` of the run's HDR `latencyHistogram`,
+  `ERROR_RATE = failed / max(1, requestsSent)`, and `THROUGHPUT_RPS = requestsSent /
+  max(0.001s, elapsed/1000)`. This deliberately does **not** read `SloSampleStore`, which aggregates
+  *all* forward traffic rather than this one run. The verdict stays `null` until at least one request
+  has completed (a run is never failed on zero samples), and is always `null` for a scenario with no
+  thresholds (unchanged behaviour).
+- **`abortOnFail` + `abortGraceMillis`** — when `abortOnFail` is true, a FAIL verdict stops the run
+  early (terminal `STOPPED` state, `abortedByThreshold` set) via the normal stop path, carrying the
+  final FAIL verdict and breach detail. `abortGraceMillis` suppresses the *abort action* for the first
+  N ms of the run so noisy startup samples cannot trigger a premature abort (analogous to k6's
+  `delayAbortEval`); thresholds are still evaluated and a verdict still reported during the grace
+  window. `abortOnFail` defaults to false (the run always finishes its stages); a normally-completed
+  run does a final evaluation so it carries PASS/FAIL.
+- **Status DTO** — `LoadScenarioStatus` (the `GET /mockserver/loadScenario` list entry) exposes
+  `verdict` (`"PASS"`/`"FAIL"`/absent), `abortedByThreshold`, and `thresholdResults` (each `{metric,
+  comparator, threshold, observed, satisfied}`).
+- **CI mapping** — clients should map a terminal `verdict == FAIL` to a non-zero process exit code so a
+  breached load test fails the pipeline. (The client convenience methods that do this are a later wave;
+  for now poll the status and inspect `verdict` directly.)
+
+## Summary report
+
+`GET /mockserver/loadScenario/{name}/report` produces an **end-of-run summary report** derived from the
+run's status snapshot — the live snapshot while running, or the **retained terminal snapshot** once
+finished (so you can fetch the report after a `COMPLETED`/`STOPPED` run). `404` if the scenario never
+ran. The report is built by `org.mockserver.load.LoadScenarioReport` purely from existing
+`LoadScenarioStatus` fields (it adds no hot-path tracking).
+
+Two renderings of the same data:
+
+- **JSON** (default) — `{ scenario, runId, state, verdict, abortedByThreshold, timing:{
+  startedAtEpochMillis, endedAtEpochMillis, durationMillis }, counts:{ requestsSent, succeeded, failed,
+  droppedIterations, errorRate }, latencyMillis:{ p50, p95, p99, p999 }, thresholdResults:[ { metric,
+  comparator, threshold, observed, satisfied } ] }`. `errorRate = failed / max(1, requestsSent)`.
+- **JUnit XML** (`?format=junit`, `application/xml`) — a `<testsuite name="load:{scenario}" tests=…
+  failures=… time={durationSeconds}>` with one `<testcase name="threshold: {metric} {comparator}
+  {threshold}">` per threshold (a breach adds a `<failure>`), plus a `<testcase name="run completed">`
+  that fails when the run was `abortedByThreshold`, carries a `FAIL` verdict, or stopped with request
+  failures. p95/p99/error-rate (and the other counts/percentiles) are emitted as `<properties>` and a
+  `<system-out>` line so CI consumers (Buildkite, JUnit) render them. The scenario name and all messages
+  are XML-escaped, so a name containing `& < > " '` is safe.
+
+```bash
+# JSON report for a finished run
+curl http://localhost:1080/mockserver/loadScenario/checkout-load/report
+
+# JUnit XML — drop into a CI test-report artifact so a breached threshold fails the build
+curl 'http://localhost:1080/mockserver/loadScenario/checkout-load/report?format=junit' \
+  -o load-report.xml
+```
+
 ## Metrics & Observability
 
 Every completed load-scenario dispatch is recorded into the `mock_server_load_*` Prometheus metric family **and** mirrored over OTLP by `OtelMetricsExporter`. This gives a real-time view of the injector alongside your system-under-test in Grafana/Datadog/Tempo without any external load tool. The family is registered whenever `metricsEnabled=true` (the `loadGenerationEnabled` flag only gates the PUT endpoint, not metric registration).
@@ -311,7 +776,7 @@ scenario, run_id, step, route, method, status_class
 
 | Metric name | Prom type | OTEL type | Labels | Description |
 |-------------|-----------|-----------|--------|-------------|
-| `mock_server_load_request_duration_seconds` | Histogram | DoubleHistogram | fixed + custom | Round-trip latency per dispatch; histogram buckets enable `histogram_quantile` at any percentile |
+| `mock_server_load_request_duration_seconds` | Histogram | DoubleHistogram | fixed + custom | Round-trip latency per dispatch, **coordinated-omission-corrected** — measured from the iteration's scheduled-due time (before the in-flight permit / RPS-token acquire), so it includes any queue wait the self-load guard imposes when the target is overloaded. Histogram buckets enable `histogram_quantile` at any percentile |
 | `mock_server_load_requests` | Counter | LongCounter | fixed + custom | Completed dispatches |
 | `mock_server_load_request_bytes` | Counter | LongCounter (`By`) | fixed + custom | Outbound request bytes |
 | `mock_server_load_response_bytes` | Counter | LongCounter (`By`) | fixed + custom | Inbound response bytes |
@@ -388,7 +853,11 @@ Then in the scenario JSON:
 
 ### Percentile queries
 
-The status DTO (`GET /mockserver/loadScenario`) returns `p50Millis`, `p95Millis`, and `p99Millis` computed from the histogram buckets. Any other percentile is queryable via PromQL without a pre-defined summary:
+The status DTO (`GET /mockserver/loadScenario`) returns `p50Millis`, `p95Millis`, `p99Millis`, and `p999Millis` read from a **per-run HDR histogram** (auto-resizing, ~3 significant digits, recording milliseconds). The HDR histogram is the authoritative percentile source, so these values are exact (not bucket-bounded) and are populated **even when Prometheus metrics are disabled**. The recorded latency is coordinated-omission-corrected (see the duration metric above), so the percentiles reflect real tail behaviour rather than a queue-wait-excluded best case.
+
+The DTO also returns `droppedIterations`: the count of iterations that were due but never dispatched because a safety cap was hit (the sum of the `rate_limit` and `inflight_cap` throttles for the run, across all three throttle sites — the RATE-stage VU-cap shortfall, the in-flight-permit miss, and the RPS-token miss). MockServer's caps are intentional, so dropped iterations are surfaced as a first-class truncated-distribution signal rather than hidden by fabricating synthetic latency samples — the percentiles describe only the iterations that actually ran.
+
+Any other percentile is queryable via PromQL against the coordinated-omission-corrected Prometheus histogram without a pre-defined summary:
 
 ```promql
 histogram_quantile(0.99,
@@ -425,7 +894,12 @@ The **Performance** panel (`LoadScenarioPanel.tsx`, view = `performance`) is the
 ## Deferred
 
 - Distributed / multi-node load.
-- In-run thresholds (pass/fail decided during the run, as opposed to post-run `verifySLO`).
-- Seeding scenario *definitions* from recorded traffic or an OpenAPI spec (preloading from a JSON file is supported via `loadScenarioInitializationJsonPath`).
-- Programmatic cross-step capture (v1 uses template-side `$scenario.set/get`).
-- Dashboard UI, client libraries, and codegen for the registry/start/stop surface (later waves; the core + REST API land first).
+- Client libraries and codegen for the new fields/endpoints (cross-step `captures`, `thresholds`,
+  `shape`, `pacing`, `feeder`, `stepSelection`/`weight`, and the `generateFromOpenAPI`/`generateFromRecording`/`report`
+  endpoints) — later waves; the core, REST API, **and dashboard UI** land first. (The dashboard UI already
+  exposes all of these.)
+
+> Seeding scenario *definitions* from recorded traffic **is now supported** via
+> [`PUT /mockserver/loadScenario/generateFromRecording`](#seed-a-scenario-from-recorded-traffic) (preloading
+> from a JSON file via `loadScenarioInitializationJsonPath`, and seeding from an OpenAPI spec via
+> [`PUT /mockserver/loadScenario/generateFromOpenAPI`](#seed-a-scenario-from-an-openapi-spec), remain available too).

@@ -77,12 +77,12 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
     }
 
     @Override
-    public synchronized <T> T executeTemplate(String template, HttpRequest request, Class<? extends DTO<T>> dtoClass) {
+    public <T> T executeTemplate(String template, HttpRequest request, Class<? extends DTO<T>> dtoClass) {
         return executeTemplateInternal(template, request, null, null, dtoClass, false);
     }
 
     @Override
-    public synchronized <T> T executeTemplate(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass) {
+    public <T> T executeTemplate(String template, HttpRequest request, HttpResponse response, Class<? extends DTO<T>> dtoClass) {
         return executeTemplateInternal(template, request, response, null, dtoClass, true);
     }
 
@@ -92,7 +92,7 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
      * load-scenario step can vary its output per iteration. Identical to
      * {@link #executeTemplate(String, HttpRequest, Class)} when {@code iteration} is null.
      */
-    public synchronized <T> T executeTemplate(String template, HttpRequest request, org.mockserver.load.IterationContext iteration, Class<? extends DTO<T>> dtoClass) {
+    public <T> T executeTemplate(String template, HttpRequest request, org.mockserver.load.IterationContext iteration, Class<? extends DTO<T>> dtoClass) {
         return executeTemplateInternal(template, request, null, iteration, dtoClass, false);
     }
 

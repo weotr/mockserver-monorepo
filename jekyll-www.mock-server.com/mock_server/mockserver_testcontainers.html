@@ -200,6 +200,8 @@ var response = await httpClient.GetStringAsync($"{url}/hello");
 
 <p>Use <span class="inline_code">GetUrl()</span> for the HTTP base URL, <span class="inline_code">GetSecureUrl()</span> for HTTPS, and <span class="inline_code">GetConnectionString()</span> for <span class="inline_code">host:port</span>.</p>
 
+<p>The example above drives MockServer over its REST API; or point the <a href="/mock_server/mockserver_clients.html#dotnet-mockserver-client"><span class="inline_code">MockServer.Client</span></a> package at the container URL for a typed fluent API instead.</p>
+
 </div>
 
 <button id="button_dotnet_configuration" class="accordion title"><strong>Builder Configuration</strong></button>
@@ -264,6 +266,8 @@ await container.stop();</code></pre>
 
 <p><span class="inline_code">MockServerContainer.start(options?)</span> accepts an optional <span class="inline_code">image</span>, <span class="inline_code">serverPort</span>, and <span class="inline_code">env</span> map. The started container exposes <span class="inline_code">getUrl()</span>, <span class="inline_code">getEndpoint()</span> (alias), <span class="inline_code">getSecureEndpoint()</span>, <span class="inline_code">getHost()</span>, and <span class="inline_code">getPort()</span>.</p>
 
+<p>The example above drives MockServer over its REST API; or point the <a href="/mock_server/mockserver_clients.html#javascript-mockserver-client"><span class="inline_code">mockserver-client</span></a> package at the container URL for a typed fluent API instead.</p>
+
 </div>
 
 <a id="python-testcontainers" class="anchor" href="#python-testcontainers">&nbsp;</a>
@@ -302,6 +306,8 @@ with MockServerContainer() as mockserver:
 
 <p>The container is automatically stopped when the <span class="inline_code">with</span> block exits. Helpers <span class="inline_code">get_url()</span>, <span class="inline_code">get_secure_url()</span>, <span class="inline_code">get_host()</span>, and <span class="inline_code">get_port()</span> expose the connection details.</p>
 
+<p>The example above drives MockServer over its REST API; or point the <a href="/mock_server/mockserver_clients.html#python-mockserver-client"><span class="inline_code">mockserver</span></a> package at the container URL for a typed fluent API instead.</p>
+
 </div>
 
 <button id="button_python_configuration" class="accordion title"><strong>Configuration Helpers</strong></button>
@@ -335,9 +341,9 @@ with MockServerContainer() as mockserver:
 <pre class="prettyprint lang-toml code"><code class="code">[dev-dependencies]
 testcontainers-mockserver = "7.0"
 testcontainers = { version = "0.23", features = ["blocking"] }
-reqwest = { version = "0.13", features = ["blocking"] }</code></pre>
+reqwest = { version = "0.12", features = ["blocking"] }</code></pre>
 
-<p>Requires Rust 1.70+ and Docker.</p>
+<p>Requires Rust 1.70+ (2021 edition) and Docker.</p>
 
 </div>
 
@@ -383,6 +389,8 @@ async fn test_with_mockserver_async() {
     // ... use base_url with an async HTTP client
 }</code></pre>
 
+<p>The examples above drive MockServer over its REST API; or point the <a href="/mock_server/mockserver_clients.html#rust-mockserver-client"><span class="inline_code">mockserver-client</span></a> crate at the container base URL for a typed fluent API instead.</p>
+
 </div>
 
 <button id="button_rust_configuration" class="accordion title"><strong>Configuration</strong></button>
@@ -390,7 +398,7 @@ async fn test_with_mockserver_async() {
 
 <pre class="prettyprint lang-rust code"><code class="code">use testcontainers_mockserver::MockServer;
 
-let image = MockServer::new("mockserver-7.1.0")
+let image = MockServer::new("mockserver-7.2.0")
     .with_env("MOCKSERVER_LOG_LEVEL", "DEBUG")
     .with_env("MOCKSERVER_MAX_EXPECTATIONS", "500")
     .with_server_port(9090);</code></pre>
@@ -410,7 +418,7 @@ let image = MockServer::new("mockserver-7.1.0")
 
 <pre class="prettyprint lang-sh code"><code class="code">go get github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go</code></pre>
 
-<p>Requires Go 1.22+ and Docker.</p>
+<p>Requires Go 1.25+ and Docker.</p>
 
 </div>
 
@@ -459,6 +467,8 @@ func Example() {
 }</code></pre>
 
 <p><span class="inline_code">mockserver.Run(ctx, image, opts...)</span> accepts optional <span class="inline_code">testcontainers.ContainerCustomizer</span> values. The container waits for <span class="inline_code">/mockserver/status</span> to return HTTP 200 before <span class="inline_code">Run</span> returns. Use <span class="inline_code">ctr.URL(ctx)</span> for the HTTP base URL and <span class="inline_code">ctr.ServerPort(ctx)</span> for the mapped port.</p>
+
+<p>The example above drives MockServer over its REST API; or point the <a href="/mock_server/mockserver_clients.html#go-mockserver-client"><span class="inline_code">mockserver-client-go</span></a> package at the container URL for a typed fluent API instead.</p>
 
 </div>
 

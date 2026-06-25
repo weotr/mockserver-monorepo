@@ -86,9 +86,9 @@ In addition it is possible to <a href="#docker_container_customization">customis
 
 <h3>JVM Heap Size</h3>
 
-<p>The default JVM heap size in the Docker container is determined by the JVM's container-aware defaults (typically 25% of the container's memory limit). For high-throughput use cases or large response bodies, you may need to increase the heap size using <span class="inline_code">JAVA_TOOL_OPTIONS</span>:</p>
+<p>The Docker image caps the JVM heap at 75% of the container's memory limit (it sets <span class="inline_code">-XX:MaxRAMPercentage=75.0</span>). <strong>Always run the container with an explicit memory limit</strong> (for example <span class="inline_code">--memory=1g</span>) &mdash; without one the JVM sizes its heap off the host's total memory and can be OOM-killed under load. To set an explicit heap (for high-throughput use cases or large response bodies), pass <span class="inline_code">-Xmx</span> via <span class="inline_code">JAVA_TOOL_OPTIONS</span>, which disables the 75% cap:</p>
 
-<pre><code class="code">docker run -d --rm -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> --env <span class="annotation">JAVA_TOOL_OPTIONS</span>=<span class="string_literal">"-Xmx512m"</span> mockserver/mockserver</code></pre>
+<pre><code class="code">docker run -d --rm -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> --memory=<span class="numeric_literal">1g</span> --env <span class="annotation">JAVA_TOOL_OPTIONS</span>=<span class="string_literal">"-Xmx512m"</span> mockserver/mockserver</code></pre>
 
 <p>If MockServer becomes slow or unresponsive under sustained load, see the <a href="/mock_server/performance.html#troubleshooting_performance">troubleshooting guide</a> for recommended memory and logging configuration.</p>
 

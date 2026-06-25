@@ -95,6 +95,8 @@
 
 <p>All fields are optional; the defaults produce a fully functional mock IdP.</p>
 
+<p><strong>About the two ports in the defaults:</strong> <code>http://localhost:8080</code> refers to <em>your</em> Service Provider application (the <code>spEntityId</code>, ACS, and SLO URLs are where MockServer POSTs the signed SAML response, so they point at your app), while <code>http://localhost:1080</code> is MockServer itself acting as the IdP (metadata, SSO, and logout endpoints). This is not a typo &mdash; change the <code>sp*</code> URLs to wherever your application actually listens.</p>
+
 <table>
     <thead>
         <tr><th>Field</th><th>Default</th><th>Description</th></tr>

@@ -21,14 +21,14 @@ sitemap:
 
 <p>To ensure that the persisted expectations are loaded the next time MockServer starts the <a href="/mock_server/configuration_properties.html#button_configuration_initialization_json_path">initializationJsonPath</a> and <a href="/mock_server/configuration_properties.html#button_configuration_persisted_expectations_file_path">persistedExpectationsPath</a> should match and the <a href="/mock_server/configuration_properties.html#button_configuration_persist_expectations_as_json">persistExpectations</a> should be set to <strong>true</strong> as follows:</p>
 
-<pre class="prettyprint lang-javascript code"><code class="code">MOCKSERVER_PERSIST_EXPECTATIONS=true \
+<pre class="prettyprint lang-bash code"><code class="code">MOCKSERVER_PERSIST_EXPECTATIONS=true \
 MOCKSERVER_PERSISTED_EXPECTATIONS_PATH=mockserverInitialization.json \
 MOCKSERVER_INITIALIZATION_JSON_PATH=mockserverInitialization.json \
 java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080,1081 -logLevel INFO</code></pre>
 
 <p>or</p>
 
-<pre class="prettyprint lang-javascript code"><code class="code">java \
+<pre class="prettyprint lang-bash code"><code class="code">java \
 -Dmockserver.persistExpectations=true \
 -Dmockserver.persistedExpectationsPath=mockserverInitialization.json \
 -Dmockserver.initializationJsonPath=mockserverInitialization.json \
@@ -46,14 +46,14 @@ java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependen
   <li>to replay recorded expectations on restart, set <a href="/mock_server/configuration_properties.html#button_configuration_initialization_json_path">initializationJsonPath</a> to the same file path</li>
 </ol>
 
-<pre class="prettyprint lang-javascript code"><code class="code">MOCKSERVER_PERSIST_RECORDED_EXPECTATIONS=true \
+<pre class="prettyprint lang-bash code"><code class="code">MOCKSERVER_PERSIST_RECORDED_EXPECTATIONS=true \
 MOCKSERVER_PERSISTED_RECORDED_EXPECTATIONS_PATH=recordedExpectations.json \
 MOCKSERVER_INITIALIZATION_JSON_PATH=recordedExpectations.json \
 java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080,1081 -logLevel INFO</code></pre>
 
 <p>or</p>
 
-<pre class="prettyprint lang-javascript code"><code class="code">java \
+<pre class="prettyprint lang-bash code"><code class="code">java \
 -Dmockserver.persistRecordedExpectations=true \
 -Dmockserver.persistedRecordedExpectationsPath=recordedExpectations.json \
 -Dmockserver.initializationJsonPath=recordedExpectations.json \
@@ -109,9 +109,11 @@ java -jar ~/Downloads/mockserver-netty-{{ site.mockserver_version }}-no-dependen
 
 <p>An optional <span class="inline_code">blobStoreKeyPrefix</span> applies to all cloud backends so multiple deployments can share one bucket or container without colliding.</p>
 
+<p>The full set of accepted <span class="inline_code">blobStoreType</span> values is <span class="inline_code">filesystem</span> (the default), <span class="inline_code">s3</span>, <span class="inline_code">gcs</span>, <span class="inline_code">azure</span>, and <span class="inline_code">memory</span>. The <span class="inline_code">memory</span> backend keeps blobs in process only &mdash; useful for tests or ephemeral runs where you want the persistence code path exercised without writing to disk or a cloud store.</p>
+
 <p>Example (S3) running the Docker image &mdash; note that you must use an image with the relevant <span class="inline_code">mockserver-blob-*</span> module (and its cloud SDK) on the classpath:</p>
 
-<pre class="prettyprint lang-javascript code"><code class="code">MOCKSERVER_BLOB_STORE_TYPE=s3 \
+<pre class="prettyprint lang-bash code"><code class="code">MOCKSERVER_BLOB_STORE_TYPE=s3 \
 MOCKSERVER_BLOB_STORE_BUCKET=my-mockserver-fixtures \
 MOCKSERVER_BLOB_STORE_REGION=eu-west-1 \
 MOCKSERVER_BLOB_STORE_KEY_PREFIX=ci-shared/ \

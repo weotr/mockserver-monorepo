@@ -23,13 +23,13 @@ Run all four gates in order. **Any failure stops the merge** and leaves the work
    - Gate 1/2/3 results in one line each
    Then **proceed automatically** to the locked rebase. Do NOT wait for approval. Fail-closed: if any of gates 1–3 did not return a clean PASS, stop and leave the worktree intact. A user can interject at any time to halt.
 
-6. **Locked rebase.** Acquire `flock --timeout 300 .git/agent-rebase.lock` and inside the lock:
+6. **Locked rebase (linear history — never a merge commit).** Acquire `flock --timeout 300 .git/agent-rebase.lock` and inside the lock:
    ```bash
    git fetch origin master --quiet
-   git rebase origin/master
-   git push origin HEAD:master
+   git rebase origin/master            # rebase, never merge
+   git push origin HEAD:master         # always a fast-forward after the rebase
    ```
-   If `flock` is missing (older macOS), fall back to the `mkdir`-based mutex documented in the rule.
+   **Always rebase, never merge** — `master` is kept a strictly linear history with no merge commits. Do NOT `git merge` the worktree branch into master, do NOT use `git pull` without `--rebase`, and when several worktrees are ready, rebase them one at a time under the lock (never via an intermediate "integration branch"). See `.opencode/rules/worktree-workflow.md` → *Linear History — No Merge Commits*. If `flock` is missing (older macOS), fall back to the `mkdir`-based mutex documented in the rule.
 
 7. **Cleanup.** On successful push only:
    ```bash

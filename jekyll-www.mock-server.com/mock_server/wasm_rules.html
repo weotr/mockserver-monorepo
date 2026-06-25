@@ -14,6 +14,8 @@ sitemap:
 
 <p>MockServer supports WebAssembly (WASM) modules as custom body matchers. This lets you write complex matching logic in any language that compiles to WASM (Rust, C, Go, AssemblyScript, etc.) and upload the compiled module to MockServer at runtime.</p>
 
+<p>The real constraint behind &ldquo;any language&rdquo; is the module shape: it must be a <strong>standalone core-WASM</strong> module with <strong>no WASI imports</strong> (the chicory interpreter registers no host functions, so a module that imports WASI &mdash; or anything else &mdash; will not instantiate and the match fails closed). It must export <span class="inline_code">match</span> (or <span class="inline_code">match_request</span>) and use a single linear memory. In practice this means compiling for a freestanding/no-WASI target &mdash; for example Rust's <span class="inline_code">wasm32-unknown-unknown</span> (not <span class="inline_code">wasm32-wasi</span>), or a TinyGo <span class="inline_code">-target=wasm-unknown</span> build.</p>
+
 <p>The WASM module runs inside a pure-Java interpreter (<a href="https://github.com/dylibso/chicory">chicory</a>, on its stable 1.x release line), so no native libraries or JNI are required. The module is sandboxed and cannot access the host filesystem, network, or JVM.</p>
 
 <h3>Enabling WASM support</h3>

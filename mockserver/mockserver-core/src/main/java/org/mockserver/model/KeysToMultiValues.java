@@ -224,7 +224,7 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
     public List<T> getEntries() {
         if (!isEmpty()) {
             ArrayList<T> headers = new ArrayList<>();
-            for (NottableString nottableString : multimap.keySet().toArray(new NottableString[0])) {
+            for (NottableString nottableString : multimap.keySet()) {
                 headers.add(build(nottableString, multimap.get(nottableString)));
             }
             return headers;
@@ -248,7 +248,7 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
     public List<String> getValues(final String name) {
         if (!isEmpty() && name != null) {
             List<String> values = new ArrayList<>();
-            for (NottableString key : multimap.keySet().toArray(new NottableString[0])) {
+            for (NottableString key : multimap.keySet()) {
                 if (key != null && key.equalsIgnoreCase(name)) {
                     values.addAll(serialiseNottableStrings(multimap.get(key)));
                 }
@@ -261,7 +261,7 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
 
     String getFirstValue(final String name) {
         if (!isEmpty()) {
-            for (NottableString key : multimap.keySet().toArray(new NottableString[0])) {
+            for (NottableString key : multimap.keySet()) {
                 if (key != null && key.equalsIgnoreCase(name)) {
                     Collection<NottableString> nottableStrings = multimap.get(key);
                     if (!nottableStrings.isEmpty()) {
@@ -278,7 +278,7 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
 
     public boolean containsEntry(final String name) {
         if (!isEmpty()) {
-            for (NottableString key : multimap.keySet().toArray(new NottableString[0])) {
+            for (NottableString key : multimap.keySet()) {
                 if (key != null && key.equalsIgnoreCase(name)) {
                     return true;
                 }
@@ -293,11 +293,11 @@ public abstract class KeysToMultiValues<T extends KeyToMultiValue, K extends Key
 
     boolean containsEntry(final NottableString name, final NottableString value) {
         if (!isEmpty() && name != null && value != null) {
-            for (NottableString entryKey : multimap.keySet().toArray(new NottableString[0])) {
+            for (NottableString entryKey : multimap.keySet()) {
                 if (entryKey != null && entryKey.equalsIgnoreCase(name)) {
                     Collection<NottableString> nottableStrings = multimap.get(entryKey);
                     if (nottableStrings != null) {
-                        for (NottableString entryValue : nottableStrings.toArray(new NottableString[0])) {
+                        for (NottableString entryValue : nottableStrings) {
                             if (value.equalsIgnoreCase(entryValue)) {
                                 return true;
                             }

@@ -60,6 +60,10 @@ The next release publishes automatically. **To rotate the key:** regenerate, upd
    `LABEL io.modelcontextprotocol.server.name="com.mock-server/mockserver"` (set in
    `docker/Dockerfile`). The Docker Image step pushes that label before the MCP step runs, so on a
    full release the label is live on Docker Hub when publish fires.
+3. **`description` ≤ 100 characters.** The registry rejects a longer `description` with HTTP 422
+   (`expected length <= 100`). `mcp.sh` guards this before the live `validate` so an over-length
+   value fails fast with the actual length. Keep the `server.json` `description` at 100 chars or
+   fewer when editing it.
 
 `verify.sh` does a soft post-release check that the registry lists the new version.
 

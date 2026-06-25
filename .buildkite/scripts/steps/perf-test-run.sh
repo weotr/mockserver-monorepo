@@ -53,7 +53,10 @@ trap cleanup EXIT
 CORES="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)"
 SERVER_CPUS=""; UPSTREAM_CPUS=""; K6_CPUS=""
 if [ "$CORES" -ge 16 ]; then
-  SERVER_CPUS="0-5"; UPSTREAM_CPUS="6"; K6_CPUS="8-13"   # 7,14,15 left for kernel/docker/sampler
+  # Defaults: server=0-5 upstream=6 k6=8-13 (7,14,15 left for kernel/docker/sampler).
+  # Each cpuset is overridable via PERF_SERVER_CPUS / PERF_UPSTREAM_CPUS / PERF_K6_CPUS
+  # so a re-run can, e.g., hand k6 more cores to drive higher arrival rates.
+  SERVER_CPUS="${PERF_SERVER_CPUS:-0-5}"; UPSTREAM_CPUS="${PERF_UPSTREAM_CPUS:-6}"; K6_CPUS="${PERF_K6_CPUS:-8-13}"
   echo "--- core-pinning enabled (${CORES} vCPU): server=$SERVER_CPUS upstream=$UPSTREAM_CPUS k6=$K6_CPUS"
 else
   echo "--- WARNING: ${CORES} vCPU (<16) — core-pinning skipped; numbers will be noisier"
@@ -64,10 +67,21 @@ docker network create "$NETWORK" >/dev/null
 
 start_mockserver() {
   local name="$1" cpus="$2" alias="$3" publish="${4:-}"
+  # PERF_SERVER_JAVA_OPTS (when set) is passed through as JAVA_TOOL_OPTIONS so a
+  # re-run can opt into a tuned JVM (e.g. low-pause GC + a larger heap) for nicer
+  # documentation-site throughput/latency figures. Applied to BOTH the SUT and
+  # the upstream so the upstream never becomes the bottleneck under those tuned
+  # rates. Request logging is deliberately left ON (we don't disable it here) so
+  # the growth phase stays meaningful. Built as an array element so the value
+  # survives intact as a SINGLE -e pair even though it contains spaces; unset =>
+  # the array is empty and no -e flag is added, identical behaviour.
+  local java_opts_arg=()
+  [ -n "${PERF_SERVER_JAVA_OPTS:-}" ] && java_opts_arg=(-e "JAVA_TOOL_OPTIONS=$PERF_SERVER_JAVA_OPTS")
   # shellcheck disable=SC2046
   docker run -d --rm --name "$name" --network "$NETWORK" --network-alias "$alias" \
     $(cpuset_arg "$cpus") \
     ${publish:+-p 127.0.0.1::1080} \
+    ${java_opts_arg[@]+"${java_opts_arg[@]}"} \
     -e MOCKSERVER_LOG_LEVEL=ERROR \
     -e MOCKSERVER_DISABLE_SYSTEM_OUT=true \
     -e MOCKSERVER_METRICS_ENABLED=true \
@@ -132,6 +146,27 @@ run_regression() {
 run_regression "http" "http://${SERVER_ALIAS}:1080" "false" "regression-http.json"
 run_regression "https_h2" "https://${SERVER_ALIAS}:1080" "true" "regression-https.json"
 
+# --- throughput-vs-latency sweep ----------------------------------------------
+# Offers an ascending ladder of fixed arrival rates against the SAME core-pinned
+# SUT and records the achieved-throughput / latency-percentile knee curve.
+# sweep.js seeds + resets MockServer itself in setup()/teardown(). Durations are
+# bounded via K6_SWEEP_* env so it adds only ~3-4 min to the run; the CI-default
+# ladder + short steps below override sweep.js's longer interactive defaults.
+echo "--- sweep.js (throughput-vs-latency knee curve)"
+# shellcheck disable=SC2046
+docker run --rm --network "$NETWORK" $(cpuset_arg "$K6_CPUS") \
+  -v "$REPO_ROOT/mockserver-performance-test/k6:/k6:ro" \
+  -v "$OUT_DIR:/out" \
+  -e "BASE_URL=http://${SERVER_ALIAS}:1080" \
+  -e "PROTO=http" \
+  -e "K6_SWEEP_RATES=${K6_SWEEP_RATES:-500,1000,2000,4000,8000,16000}" \
+  -e "K6_SWEEP_STEP=${K6_SWEEP_STEP:-15s}" \
+  -e "K6_SWEEP_GAP=${K6_SWEEP_GAP:-5s}" \
+  -e "K6_SWEEP_RESULT_PATH=/out/sweep.json" \
+  ${K6_SWEEP_PRE_VUS:+-e K6_SWEEP_PRE_VUS="$K6_SWEEP_PRE_VUS"} \
+  ${K6_SWEEP_MAX_VUS:+-e K6_SWEEP_MAX_VUS="$K6_SWEEP_MAX_VUS"} \
+  "$K6_IMAGE" run /k6/sweep.js
+
 # --- resource sampler (background) --------------------------------------------
 # Append timestamped CPU% (docker stats) + heap bytes + gc seconds (metrics) every
 # SAMPLE_INTERVAL seconds. Runs only during the growth phase so the trajectory is
@@ -193,6 +228,7 @@ BRANCH="${BUILDKITE_BRANCH:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>
 TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 INSTANCE_TYPE="$(curl -s --max-time 2 http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null || echo "${PERF_INSTANCE_TYPE:-unknown}")"
 GROWTH_JSON="$(cat "$OUT_DIR/growth.json" 2>/dev/null || echo '{}')"
+SWEEP_JSON="$(cat "$OUT_DIR/sweep.json" 2>/dev/null || echo '{}')"
 
 jq -n \
   --arg commit "$COMMIT" --arg branch "$BRANCH" --arg ts "$TS" \
@@ -202,6 +238,7 @@ jq -n \
   --slurpfile http "$OUT_DIR/regression-http.json" \
   --slurpfile https "$OUT_DIR/regression-https.json" \
   --argjson growth "$GROWTH_JSON" \
+  --argjson sweep "$SWEEP_JSON" \
   --arg cpu_start "$CPU_START" --arg cpu_end "$CPU_END" --arg cpu_peak "$CPU_PEAK" --arg cpu_ratio "$CPU_RATIO" \
   --arg heap_start "$HEAP_START" --arg heap_end "$HEAP_END" --arg heap_peak "$HEAP_PEAK" --arg heap_ratio "$HEAP_RATIO" \
   --arg gc_delta "$GC_DELTA" --arg threads_peak "$THREADS_PEAK" \
@@ -219,20 +256,25 @@ jq -n \
       heap_used_bytes: { start: ($heap_start|tonumber), end: ($heap_end|tonumber), peak: ($heap_peak|tonumber), ratio: (try ($heap_ratio|tonumber) catch null) },
       gc_seconds_delta: ($gc_delta|tonumber),
       threads_peak: ($threads_peak|tonumber)
-    }
+    },
+    sweep: $sweep
   }' > "$RESULT_JSON"
 
 echo "--- result.json"
 cat "$RESULT_JSON"
 
+# Standalone sweep artifact (also embedded under .sweep in result.json above).
+cp "$OUT_DIR/sweep.json" "$REPO_ROOT/perf-sweep.json" 2>/dev/null || echo '{}' > "$REPO_ROOT/perf-sweep.json"
+
 if command -v buildkite-agent >/dev/null 2>&1; then
   cp "$RESULT_JSON" "$REPO_ROOT/perf-result.json"
   buildkite-agent artifact upload "perf-result.json" || true
+  buildkite-agent artifact upload "perf-sweep.json" || true
   # Record the commit this run actually executed against. perf-test-guard.sh
   # reads this (via last_perf_run_commit) to decide "new commit since last run"
   # — keyed off real runs, NOT the lint build that passes on every push.
   buildkite-agent meta-data set "perf_regression_ran_commit" "$COMMIT" || true
 else
   cp "$RESULT_JSON" "$REPO_ROOT/perf-result.json"
-  echo "(local run) result copied to $REPO_ROOT/perf-result.json"
+  echo "(local run) result + sweep copied to $REPO_ROOT/perf-result.json, $REPO_ROOT/perf-sweep.json"
 fi

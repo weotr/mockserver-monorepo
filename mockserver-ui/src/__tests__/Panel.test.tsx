@@ -29,8 +29,42 @@ describe('Panel', () => {
         <div />
       </Panel>,
     );
-    const input = screen.getByPlaceholderText('Search...');
+    const input = screen.getByLabelText('Search');
     expect(input).toHaveValue('hello');
+  });
+
+  it('hints the search operators in the placeholder', () => {
+    render(
+      <Panel title="Test" count={0} searchValue="" onSearchChange={() => {}}>
+        <div />
+      </Panel>,
+    );
+    const input = screen.getByLabelText('Search');
+    const placeholder = input.getAttribute('placeholder') ?? '';
+    // The placeholder must surface the real operators from lib/searchMatcher.ts.
+    expect(placeholder).toContain('status:>=400');
+    expect(placeholder).toContain('method:POST');
+    expect(placeholder).toContain('path:/api/*');
+    expect(placeholder).toContain('/regex/');
+  });
+
+  it('shows a help affordance describing every supported search operator', async () => {
+    const user = userEvent.setup();
+    render(
+      <Panel title="Test" count={0} searchValue="" onSearchChange={() => {}}>
+        <div />
+      </Panel>,
+    );
+    const help = screen.getByLabelText('Search operator help');
+    await user.hover(help);
+    // Tooltip content is portalled into the document on hover; assert each
+    // operator from lib/searchMatcher.ts is documented.
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent('status:>=400');
+    expect(tip).toHaveTextContent('method:POST');
+    expect(tip).toHaveTextContent('path:/api/*');
+    expect(tip).toHaveTextContent('/regex/');
+    expect(tip).toHaveTextContent('case-insensitive');
   });
 
   it('applies a transition and a hover style to the panel surface for motion', () => {
@@ -81,7 +115,7 @@ describe('Panel', () => {
       </Panel>,
     );
 
-    const input = screen.getByPlaceholderText('Search...');
+    const input = screen.getByLabelText('Search');
     await user.type(input, 'abc');
 
     expect(onChange).toHaveBeenCalledTimes(3);

@@ -120,6 +120,25 @@ public class MTLSAuthenticationHandlerTest {
     }
 
     @Test
+    public void shouldNotValidateExpiredCertificate() {
+        // given - a client certificate whose signature chains to the control plane CA but whose
+        // validity window is in the past (expired 2023-01-01). It must NOT authenticate: a correctly
+        // signed but expired client cert is rejected by the X509Certificate.checkValidity() check.
+        AuthenticationHandler authenticationHandler = new MTLSAuthenticationHandler(
+            mockServerLogger,
+            PEMToFile.x509ChainFromPEMFile("org/mockserver/authentication/mtls/ca.pem").toArray(new X509Certificate[0])
+        );
+        HttpRequest request = new JDKCertificateToMockServerX509Certificate(mockServerLogger).setClientCertificates(
+            request(),
+            PEMToFile.x509ChainFromPEMFile("org/mockserver/authentication/mtls/expired-leaf-cert.pem").toArray(new X509Certificate[0])
+        );
+
+        // when
+        AuthenticationException authenticationException = assertThrows(AuthenticationException.class, () -> authenticationHandler.controlPlaneRequestAuthenticated(request));
+        assertThat(authenticationException.getMessage(), equalTo("control plane request failed authentication no client certificates can be validated by control plane CA"));
+    }
+
+    @Test
     public void shouldNotValidateCertificate() {
         // given
         AuthenticationHandler authenticationHandler = new MTLSAuthenticationHandler(

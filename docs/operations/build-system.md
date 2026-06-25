@@ -19,6 +19,47 @@ The monorepo contains multiple projects with different build tools:
 
 CI builds are orchestrated by `.buildkite/scripts/generate-pipeline.sh` which selects pipelines based on changed files. See [CI/CD](../infrastructure/ci-cd.md) for details.
 
+## Local Development Behind a Corporate TLS-Inspection Proxy
+
+**TL;DR — if dependency downloads fail locally with TLS/`certificate verify failed`/`unable to get local issuer certificate` errors, your machine is behind a TLS-inspection proxy and the toolchains don't trust the corporate root CA. Point each toolchain at a *combined* CA bundle (system roots + corporate root). This is configured ONLY in your user/shell environment — never in repo files or pipeline scripts. CI agents have no proxy, so pipelines are unaffected and must stay that way.**
+
+### Why this happens
+
+A corporate TLS-inspection (MITM) proxy re-signs HTTPS traffic with a certificate chained to a corporate root CA. Package managers (npm, pip, cargo, composer, gem, go) and HTTP clients reject it because the corporate root is not in their default trust store. CI build agents run outside the proxy, so they never see this — which is exactly why the fix must live outside the repo.
+
+### One-time setup (new laptop / new engineer)
+
+1. Obtain the corporate root CA (PEM) from IT, e.g. `tesco_root_ca.pem`.
+2. Build a **combined** bundle (system roots + corporate root) once and keep it at a stable path, e.g. `~/.tesco-ca/ca-bundle-with-tesco.pem`:
+   ```bash
+   mkdir -p ~/.tesco-ca
+   # system roots from the OpenSSL/certifi default + the corporate root, concatenated:
+   cat "$(python3 -m certifi 2>/dev/null || echo /etc/ssl/cert.pem)" ~/path/to/tesco_root_ca.pem \
+     > ~/.tesco-ca/ca-bundle-with-tesco.pem
+   ```
+3. Add the per-toolchain settings below to your **shell profile** (`~/.zshrc`) and user configs. Nothing here is committed.
+
+### Per-toolchain settings (user/shell scope only)
+
+| Toolchain | Where it runs | Setting (local only) |
+|-----------|---------------|----------------------|
+| Anything in Docker via `.buildkite/scripts/run-in-docker.sh` (PHP/Python/Ruby/Go/Rust/.NET/Node) | container | `export LOCAL_DOCKER_CA_BUNDLE=~/.tesco-ca/ca-bundle-with-tesco.pem` — the wrapper mounts it read-only and points every in-container tool at it (opt-in; unset in CI). |
+| npm — direct **and** the `mockserver/mockserver-netty` Maven `build-ui` step (frontend-maven-plugin) | host | `~/.npmrc` with `cafile=/Users/<you>/.tesco-ca/ca-bundle-with-tesco.pem` (npm always reads user `~/.npmrc`, so the Maven plugin's bundled node picks it up too). |
+| Node (direct scripts) | host | `export NODE_EXTRA_CA_CERTS=~/.tesco-ca/ca-bundle-with-tesco.pem` |
+| Python / pip / requests | host | `export PIP_CERT=~/.tesco-ca/ca-bundle-with-tesco.pem REQUESTS_CA_BUNDLE=~/.tesco-ca/ca-bundle-with-tesco.pem SSL_CERT_FILE=~/.tesco-ca/ca-bundle-with-tesco.pem` |
+| Ruby / bundler / rubygems | host | `export SSL_CERT_FILE=~/.tesco-ca/ca-bundle-with-tesco.pem BUNDLE_SSL_CA_CERT=~/.tesco-ca/ca-bundle-with-tesco.pem` |
+| Rust / cargo | host | `export CARGO_HTTP_CAINFO=~/.tesco-ca/ca-bundle-with-tesco.pem` |
+| Go (and git clone over HTTPS) | host | `export SSL_CERT_FILE=~/.tesco-ca/ca-bundle-with-tesco.pem GIT_SSL_CAINFO=~/.tesco-ca/ca-bundle-with-tesco.pem` |
+| AWS CLI / SDK / Terraform | host | `export AWS_CA_BUNDLE=~/.tesco-ca/ca-bundle-with-tesco.pem` (see [AGENTS.md](../../AGENTS.md) → AWS Prerequisites) |
+
+The Java/Maven build itself usually works because the JDK trust store already chains Maven Central correctly; if a JVM HTTPS download fails (e.g. the frontend-maven-plugin downloading node from nodejs.org on a *cold* build), import the corporate root into a JDK trust store and pass `-Djavax.net.ssl.trustStore=...`, or pre-warm `mockserver-netty/target/frontend` once on a network without the proxy.
+
+### Non-negotiable: keep proxy config out of the repo and pipelines
+
+- **Never** add `cafile`/`strict-ssl`/proxy settings to a committed `.npmrc`, `pom.xml`, `pip.conf`, `Cargo` config, or any `.buildkite/scripts/**` step — that would break or skew CI, which has no proxy.
+- The only repo-side hook is the **opt-in, env-gated** `LOCAL_DOCKER_CA_BUNDLE` branch in `run-in-docker.sh`: it does nothing unless the variable is set, and CI never sets it.
+- All other settings live in your shell profile and user-level config files (`~/.npmrc`, `~/.zshrc`).
+
 ## Java Server Build (mockserver/)
 
 ### Maven Configuration

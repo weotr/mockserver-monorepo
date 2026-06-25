@@ -1191,6 +1191,134 @@ public sealed class MockServerClient : IDisposable
         return await StartLoadScenariosAsync(name).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Fetch the end-of-run summary report for a load scenario run
+    /// (GET /mockserver/loadScenario/{name}/report). Returns the raw report body: the JSON report by
+    /// default, or a JUnit-XML &lt;testsuite&gt; document when <paramref name="format"/> is "junit".
+    /// </summary>
+    /// <param name="name">The load scenario name.</param>
+    /// <param name="format">Optional report format; pass "junit" for the JUnit-XML rendering, otherwise the JSON report.</param>
+    /// <exception cref="MockServerClientException">If the scenario never ran (HTTP 404).</exception>
+    public string GetLoadScenarioReport(string name, string? format = null)
+        => GetLoadScenarioReportAsync(name, format).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Fetch the end-of-run summary report for a load scenario run (async). See <see cref="GetLoadScenarioReport"/>.
+    /// </summary>
+    public async Task<string> GetLoadScenarioReportAsync(string name, string? format = null)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        var path = $"/mockserver/loadScenario/{Uri.EscapeDataString(name)}/report";
+        if (!string.IsNullOrEmpty(format))
+            path += $"?format={Uri.EscapeDataString(format)}";
+        var (statusCode, body) = await GetAsync(path).ConfigureAwait(false);
+
+        if (statusCode == 404)
+            throw new MockServerClientException($"No load scenario run for name '{name}' (HTTP 404): {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to get load scenario report '{name}' (HTTP {statusCode}): {body}");
+
+        return body;
+    }
+
+    /// <summary>
+    /// Seed an editable load scenario from an OpenAPI specification and load (register) it under
+    /// <paramref name="name"/> in the LOADED state (PUT /mockserver/loadScenario/generateFromOpenAPI).
+    /// Generates no traffic and is allowed even when load generation is disabled. The generated
+    /// scenario is returned so it can be shown and edited before triggering a run.
+    /// </summary>
+    /// <param name="name">The generated scenario name (the unique registry key).</param>
+    /// <param name="specUrlOrPayload">The OpenAPI spec as an inline JSON/YAML payload, a URL, or a file/classpath reference.</param>
+    /// <param name="target">Optional explicit network target for every generated step (overrides the spec's servers[0]).</param>
+    /// <param name="profile">Optional load profile; when omitted a conservative default is applied.</param>
+    /// <exception cref="MockServerClientException">If the request is invalid (HTTP 400).</exception>
+    public LoadScenarioGenerateResult GenerateLoadScenarioFromOpenAPI(
+        string name, string specUrlOrPayload, LoadGenerateTarget? target = null, LoadProfile? profile = null)
+        => GenerateLoadScenarioFromOpenAPIAsync(name, specUrlOrPayload, target, profile).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Seed a load scenario from an OpenAPI specification (async). See <see cref="GenerateLoadScenarioFromOpenAPI"/>.
+    /// </summary>
+    public async Task<LoadScenarioGenerateResult> GenerateLoadScenarioFromOpenAPIAsync(
+        string name, string specUrlOrPayload, LoadGenerateTarget? target = null, LoadProfile? profile = null)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+        if (specUrlOrPayload == null) throw new ArgumentNullException(nameof(specUrlOrPayload));
+
+        var json = JsonSerializer.Serialize(new GenerateFromOpenApiRequest
+        {
+            Name = name,
+            SpecUrlOrPayload = specUrlOrPayload,
+            Target = target,
+            Profile = profile
+        }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/loadScenario/generateFromOpenAPI", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid generateFromOpenAPI request: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to generate load scenario from OpenAPI (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioGenerateResult>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioGenerateResult { Name = name };
+    }
+
+    /// <summary>
+    /// Seed an editable load scenario from previously recorded proxy traffic and load (register) it
+    /// under <paramref name="name"/> in the LOADED state
+    /// (PUT /mockserver/loadScenario/generateFromRecording). Generates no traffic and is allowed even
+    /// when load generation is disabled. The generated scenario is returned so it can be shown and
+    /// edited before triggering a run.
+    /// </summary>
+    /// <param name="name">The generated scenario name (the unique registry key).</param>
+    /// <param name="mode">Optional generation mode: VERBATIM (default) or TEMPLATIZED.</param>
+    /// <param name="requestFilter">Optional matcher selecting which recorded requests to include; null means all.</param>
+    /// <param name="target">Optional explicit network target applied to every generated step.</param>
+    /// <param name="maxSteps">Optional cap on the number of VERBATIM steps (keeps the first N recorded requests).</param>
+    /// <param name="profile">Optional load profile; when omitted a conservative default is applied.</param>
+    /// <exception cref="MockServerClientException">If the request is invalid or there is nothing to convert (HTTP 400).</exception>
+    public LoadScenarioGenerateResult GenerateLoadScenarioFromRecording(
+        string name, LoadRecordingMode? mode = null, HttpRequest? requestFilter = null,
+        LoadGenerateTarget? target = null, int? maxSteps = null, LoadProfile? profile = null)
+        => GenerateLoadScenarioFromRecordingAsync(name, mode, requestFilter, target, maxSteps, profile).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Seed a load scenario from recorded proxy traffic (async). See <see cref="GenerateLoadScenarioFromRecording"/>.
+    /// </summary>
+    public async Task<LoadScenarioGenerateResult> GenerateLoadScenarioFromRecordingAsync(
+        string name, LoadRecordingMode? mode = null, HttpRequest? requestFilter = null,
+        LoadGenerateTarget? target = null, int? maxSteps = null, LoadProfile? profile = null)
+    {
+        if (name == null) throw new ArgumentNullException(nameof(name));
+
+        var json = JsonSerializer.Serialize(new GenerateFromRecordingRequest
+        {
+            Name = name,
+            Mode = mode,
+            RequestFilter = requestFilter,
+            Target = target,
+            MaxSteps = maxSteps,
+            Profile = profile
+        }, JsonOptions);
+        var (statusCode, body) = await PutAsync("/mockserver/loadScenario/generateFromRecording", json).ConfigureAwait(false);
+
+        if (statusCode == 400)
+            throw new MockServerClientException($"Invalid generateFromRecording request: {body}");
+        if (statusCode >= 400)
+            throw new MockServerClientException($"Failed to generate load scenario from recording (HTTP {statusCode}): {body}");
+
+        if (!string.IsNullOrEmpty(body))
+        {
+            var result = JsonSerializer.Deserialize<LoadScenarioGenerateResult>(body, JsonOptions);
+            if (result != null) return result;
+        }
+        return new LoadScenarioGenerateResult { Name = name };
+    }
+
     // -------------------------------------------------------------------
     // SRE control plane: service chaos
     // -------------------------------------------------------------------

@@ -40,13 +40,15 @@ describe('StandardReview preview diff', () => {
     expect(screen.queryByTestId('standard-review-diff')).not.toBeInTheDocument();
   });
 
-  it('renders a before→after diff when editing an existing expectation', () => {
+  it('renders a before→after diff when editing an existing expectation', async () => {
     const original = JSON.stringify({ id: 'abc-123', httpRequest: { path: '/api/widgets' } }, null, 2);
     renderReview(original);
 
     expect(screen.getByTestId('standard-review-diff')).toBeInTheDocument();
+    // The diff is loaded via a lazy/Suspense split point (JsonDiffViewerLazy keeps
+    // monaco out of the main bundle), so its panes resolve asynchronously.
     // "before" pane is the loaded expectation, verbatim.
-    expect(screen.getByTestId('monaco-diff-original')).toHaveValue(original);
+    expect(await screen.findByTestId('monaco-diff-original')).toHaveValue(original);
     // "after" pane is the outgoing JSON that will be PUT — identical to the JSON
     // codegen the Copy tab shows, so the preview is faithful.
     const modified = screen.getByTestId('monaco-diff-modified') as HTMLTextAreaElement;

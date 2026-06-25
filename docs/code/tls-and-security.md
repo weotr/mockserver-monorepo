@@ -66,6 +66,8 @@ MockServer maintains an in-memory CA with default DN:
 - **ST**: `England`
 - **C**: `UK`
 
+**Certificate validity period**: both the CA and dynamically-generated leaf certificates are valid for **10 years** from server startup (`KeyAndCertificateFactory.CERTIFICATE_VALIDITY_YEARS = 10`). The HTTP/3 self-signed fallback certificate uses the same constant. This long validity avoids certificate expiry during normal development and test usage.
+
 Custom CA certificates can be loaded from PEM files via configuration.
 
 ### Key Classes
@@ -132,6 +134,22 @@ When forwarding requests, MockServer's `NettyHttpClient` needs to trust upstream
 | `ANY` | Trust all certificates (insecure, useful for testing) |
 | `JVM` | Use the JVM's default truststore |
 | `CUSTOM` | Use a custom CA chain from configuration |
+
+### Forward Target SSRF Validation
+
+When `forwardProxyBlockPrivateNetworks` is `true` (default `false`), MockServer validates the target host before opening any outbound connection. `InetAddressValidator.validateForwardTarget` resolves the hostname and rejects addresses in these ranges:
+
+| Blocked range | Reason |
+|--------------|--------|
+| `169.254.169.254` / `fd00:ec2::254` | Cloud instance metadata (AWS/GCP/Azure/Oracle) |
+| Loopback (`127.0.0.0/8`, `::1`) | Localhost |
+| Link-local (`169.254.0.0/16`, `fe80::/10`) | Link-local |
+| RFC 1918 private / RFC 4193 unique-local (`fc00::/7`) | Private network |
+| Wildcard / any-local | Bind-all addresses |
+
+The validation runs in `HttpForwardActionHandler`, `HttpForwardValidateActionHandler`, `HttpForwardWithFallbackActionHandler`, `HttpForwardTemplateActionHandler`, and several `HttpState` call sites that accept an explicit forward target. After validation, the address is passed as an **unresolved** `InetSocketAddress` (`InetSocketAddress.createUnresolved`), so the actual DNS lookup happens on the Netty event loop rather than the calling thread — this guards against a TOCTOU window between validation and connection.
+
+The feature is opt-in because MockServer is most commonly used to mock services running on localhost, Docker bridge networks, or Kubernetes service IPs, where blocking private addresses would prevent normal usage.
 
 ## Mutual TLS (mTLS)
 
@@ -233,10 +251,12 @@ Classes: `ControlPlaneRole` (enum, `o.m.authentication.authorization`) with `sat
 | `PUT /mockserver/configuration` (mutates live config) | yes | **yes** | Routed through the shared `HttpState.controlPlaneRequestAuthenticated` gate, so it takes the same read/mutate authorization as `handle`-dispatched mutations (classified `MUTATE`). A read-only principal is `403`'d; mutate/admin proceed. |
 | `GET /mockserver/configuration` | yes | yes | Same gate, classified `READ`. |
 | `GET /mockserver/openapi.yaml`, `GET /mockserver/llm/optimisationReport` | yes | yes | Reads; routed through the shared gate. |
-| `PUT /mockserver/status`, `PUT /mockserver/bind`, `PUT /mockserver/stop` | **no** | **no** | Pre-existing: these lifecycle endpoints are **neither authenticated nor authorized** (they sit before the auth choke point). An attacker who can reach the port can bind extra ports or stop the server regardless of roles — authorization does not change this. Restrict network reachability of the control port if this matters. |
-| MCP control plane (`POST /mockserver/mcp` over HTTP/1.1, HTTP/2 and HTTP/3) | yes | **no (out of scope for Wave-2)** | MCP tools can mutate the control plane (`create_expectation`, `clear_expectations`, `reset`, …) by calling `HttpState` directly, not via `handle`. MCP requests are **authenticated** (same mTLS/JWT/OIDC as every control-plane route) but the per-tool **read/mutate authorization** is **not yet enforced** — the operation is only known after JSON-RPC body parsing inside the tool executor, so a verified read-only principal could still invoke a mutating MCP tool. If you enable authorization and also expose MCP, treat MCP access as mutate-capable and restrict who can authenticate to the MCP endpoint. Wiring per-tool authorization into the MCP tool layer is tracked as later work. |
+| `GET /mockserver/status`, `GET /mockserver/ready` | **no** | **no** | Deliberately open: these are liveness/readiness probes and must be reachable by health-check infrastructure without credentials. |
+| `PUT /mockserver/bind` | yes | **yes (MUTATE)** | Auth-gated in `HttpRequestHandler` via the same `controlPlaneRequestAuthenticated` call as every other mutation. An unauthenticated caller receives 401/403 before any port is rebound. Default (no auth configured) is a no-op: the gate returns true and binding proceeds. |
+| `PUT /mockserver/stop` | yes | **yes (MUTATE)** | Auth-gated identically to `/bind` — an unauthenticated caller cannot stop the server. Default (no auth configured) is a no-op: the gate returns true and `/stop` proceeds. |
+| MCP control plane (`POST /mockserver/mcp` over HTTP/1.1, HTTP/2, HTTP/3, and JSON-RPC batch) | yes | **yes — per-tool read/mutate** | MCP requests are **authenticated** (same mTLS/JWT/OIDC as every control-plane route). When `controlPlaneAuthorizationEnabled` is true, per-tool **read/mutate authorization** is enforced: `McpToolRegistry` classifies each tool as read or mutate (fail-closed — an unclassified tool defaults to MUTATE), and `McpRequestProcessor` calls `HttpState.controlPlaneToolAuthorized` before executing the tool. A read-only principal is `403`'d on mutating tools (`create_expectation`, `clear_expectations`, `reset`, etc.). When `controlPlaneAuthorizationEnabled` is false (the default), no authorization check runs. |
 
-HTTP/3 non-MCP control-plane requests re-dispatch into `HttpState.handle`, so they inherit full authorization automatically; only the MCP-over-HTTP/3 path shares the MCP out-of-scope status above.
+HTTP/3 non-MCP control-plane requests re-dispatch into `HttpState.handle`, so they inherit full authorization automatically.
 
 ### Enriched Authentication SPI (`AuthenticationResult`)
 
@@ -256,7 +276,7 @@ default AuthenticationResult authenticate(HttpRequest request) {
 
 The MCP endpoint (`/mockserver/mcp`) enforces the same control-plane **authentication** as all other control-plane routes. When `controlPlaneTLSMutualAuthenticationCAChain` and/or `controlPlaneJWTAuthenticationJWKSource` are configured, MCP requests must satisfy the same mTLS and/or JWT requirements. Unauthenticated MCP requests receive a `401 Unauthorized` response with a JSON-RPC error body. This ensures that enabling MCP does not widen the attack surface of a secured MockServer instance.
 
-**Authorization caveat.** MCP **authentication** is enforced, but the coarse read/mutate **authorization** described above is **not yet applied per-tool** at the MCP layer (see the coverage table above): MCP tools can mutate the control plane, so with `controlPlaneAuthorizationEnabled=true` a verified read-only principal could still invoke a mutating MCP tool. Treat MCP access as mutate-capable when authorization is enabled.
+**Per-tool authorization.** When `controlPlaneAuthorizationEnabled=true`, per-tool read/mutate authorization is enforced at the MCP layer (see the coverage table above): `McpToolRegistry` classifies each tool as read or mutate (fail-closed), and `McpRequestProcessor` enforces the role check via `HttpState.controlPlaneToolAuthorized` before executing any tool call.
 
 ### Authentication Classes
 

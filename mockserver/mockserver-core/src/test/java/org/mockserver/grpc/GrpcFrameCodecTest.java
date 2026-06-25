@@ -111,4 +111,26 @@ public class GrpcFrameCodecTest {
         buffer.putInt(-1);
         GrpcFrameCodec.decode(buffer.array());
     }
+
+    /**
+     * A "decompression bomb": a compressed frame whose declared (compressed) length is
+     * well under MAX_MESSAGE_SIZE — so it passes the header length check — but whose
+     * decompressed output exceeds MAX_MESSAGE_SIZE. The decompressed-output size cap must
+     * reject it with a GrpcException rather than allocating the expanded payload.
+     */
+    @Test
+    public void shouldRejectFrameThatDecompressesBeyondMaximum() {
+        // 5 MiB of highly-compressible repeating bytes (> 4 MiB MAX_MESSAGE_SIZE); gzip
+        // shrinks this to a few KiB, so the COMPRESSED frame easily fits under the cap.
+        byte[] oversized = new byte[5 * 1024 * 1024];
+        byte[] frame = GrpcFrameCodec.encode(oversized, true);
+
+        // sanity: the compressed frame must itself be under the cap so it passes the
+        // declared-length header check and reaches the decompress path
+        assertThat(frame[0], is((byte) 1));
+        assertThat(frame.length, lessThan(4 * 1024 * 1024));
+
+        GrpcException exception = org.junit.Assert.assertThrows(GrpcException.class, () -> GrpcFrameCodec.decode(frame));
+        assertThat(exception.getMessage(), containsString("decompressed gRPC message size exceeds maximum allowed"));
+    }
 }

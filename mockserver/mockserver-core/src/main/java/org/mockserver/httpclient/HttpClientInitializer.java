@@ -10,6 +10,7 @@ import io.netty.handler.codec.http2.*;
 import io.netty.handler.logging.LogLevel;
 import io.netty.handler.proxy.HttpProxyHandler;
 import io.netty.handler.proxy.Socks5ProxyHandler;
+import io.netty.handler.timeout.ReadTimeoutHandler;
 import org.mockserver.codec.MockServerBinaryClientCodec;
 import org.mockserver.codec.MockServerHttpClientCodec;
 import org.mockserver.codec.StreamingAwareHttpObjectAggregator;
@@ -23,9 +24,11 @@ import org.mockserver.socket.tls.NettySslContextFactory;
 import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import static org.apache.commons.lang3.StringUtils.isNotBlank;
+import static org.mockserver.httpclient.NettyHttpClient.CONNECTION_POOL;
 import static org.mockserver.httpclient.NettyHttpClient.REMOTE_SOCKET;
 import static org.mockserver.httpclient.NettyHttpClient.SECURE;
 import static org.slf4j.event.Level.TRACE;
@@ -108,7 +111,31 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
         }
     }
 
+    /**
+     * Guards an in-flight upstream read with a {@link ReadTimeoutHandler} sized from
+     * {@code maxSocketTimeoutInMillis}, so a stalled upstream that connects but never sends a response
+     * times out and completes the response future exceptionally (via {@link HttpClientHandler#exceptionCaught})
+     * instead of leaving the channel and {@link java.util.concurrent.CompletableFuture} open forever.
+     * <p>
+     * The handler is added ONLY on non-pooled channels. A pooled keep-alive channel sits idle in the
+     * {@link HttpForwardConnectionPool} between requests (with {@code AUTO_READ} on), where a blanket
+     * read timeout would fire during legitimate idle keep-alive and tear the connection down — so for
+     * pooled channels the pool's own idle eviction owns the lifecycle and no read timeout is armed. A
+     * non-pooled channel writes its single request immediately after connect and is closed after the
+     * one response, so arming the read timeout at pipeline-build time is correct for it.
+     */
+    private void addReadTimeoutHandlerIfNotPooled(ChannelPipeline pipeline) {
+        if (configuration == null || pipeline.channel().attr(CONNECTION_POOL).get() != null) {
+            return;
+        }
+        long readTimeoutMillis = configuration.maxSocketTimeoutInMillis();
+        if (readTimeoutMillis > 0) {
+            pipeline.addLast(new ReadTimeoutHandler(readTimeoutMillis, TimeUnit.MILLISECONDS));
+        }
+    }
+
     private void configureHttp1Pipeline(ChannelPipeline pipeline) {
+        addReadTimeoutHandlerIfNotPooled(pipeline);
         pipeline.addLast(new HttpClientCodec());
         pipeline.addLast(new HttpContentDecompressor());
         pipeline.addLast(new TimeToFirstByteHandler());
@@ -123,6 +150,7 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
     }
 
     private void configureHttp2Pipeline(ChannelPipeline pipeline) {
+        addReadTimeoutHandlerIfNotPooled(pipeline);
         final Http2Connection connection = new DefaultHttp2Connection(false);
         final HttpToHttp2ConnectionHandlerBuilder http2ConnectionHandlerBuilder = new HttpToHttp2ConnectionHandlerBuilder()
             .frameListener(

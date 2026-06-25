@@ -8,7 +8,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 
-import {BinaryResponse, DnsResponse, Expectation, ExpectationId, GrpcStreamResponse, HttpChaosProfile, HttpClassCallback, HttpRequest, HttpRequestAndHttpResponse, HttpResponse, HttpSseResponse, HttpWebSocketResponse, KeyToMultiValue, LoadScenario, LoadScenarioStatus, LoadScenarioEntry, LoadScenarioList, LoadScenarioRegistration, LoadScenarioStartResult, LoadScenarioStopResult, OpenAPIExpectation, RequestDefinition, Times, TimeToLive,} from './mockServer';
+import {BinaryResponse, DnsResponse, Expectation, ExpectationId, GenerateLoadScenarioFromOpenAPIRequest, GenerateLoadScenarioFromRecordingRequest, GrpcStreamResponse, HttpChaosProfile, HttpClassCallback, HttpError, HttpForward, HttpOverrideForwardedRequest, HttpRequest, HttpRequestAndHttpResponse, HttpResponse, HttpSseResponse, HttpTemplate, HttpWebSocketResponse, KeyToMultiValue, LoadScenario, LoadScenarioGenerationResult, LoadScenarioReport, LoadScenarioStatus, LoadScenarioEntry, LoadScenarioList, LoadScenarioRegistration, LoadScenarioStartResult, LoadScenarioStopResult, OpenAPIExpectation, RequestDefinition, Times, TimeToLive,} from './mockServer';
 import {Llm, LlmConversationBuilder, LlmFailoverBuilder, LlmMockBuilder} from './llm';
 import {McpMockBuilder} from './mcpMockBuilder';
 
@@ -134,6 +134,54 @@ export type RequestResponse = SuccessFullRequest | string;
 
 export type PathOrRequestDefinition = string | Expectation | RequestDefinition | undefined | null;
 
+/**
+ * Fluent, chainable expectation builder returned by MockServerClient.when(...),
+ * mirroring the Java client's ForwardChainExpectation. The optional builder
+ * methods (withTimes/withTimeToLive/withPriority/withId) refine the expectation
+ * before a terminal action method (respond/forward/error/callback/forwardCallback)
+ * finishes building it and sends it to the MockServer.
+ */
+export interface ForwardChainExpectation {
+    withTimes(times: Times | number): ForwardChainExpectation;
+
+    withTimeToLive(timeToLive: TimeToLive): ForwardChainExpectation;
+
+    withPriority(priority: number): ForwardChainExpectation;
+
+    withId(id: string): ForwardChainExpectation;
+
+    /**
+     * Respond with the given response when the expectation is matched. Accepts a
+     * plain httpResponse object, a response template (HttpTemplate), or a
+     * server-side response class-callback (HttpClassCallback).
+     */
+    respond(response: HttpResponse | HttpTemplate | HttpClassCallback): Promise<RequestResponse>;
+
+    /**
+     * Forward the matched request. Accepts an httpForward target, a forward
+     * template (HttpTemplate), a forward class-callback (HttpClassCallback), or an
+     * override-forwarded-request action (HttpOverrideForwardedRequest).
+     */
+    forward(forward: HttpForward | HttpTemplate | HttpClassCallback | HttpOverrideForwardedRequest): Promise<RequestResponse>;
+
+    /**
+     * Return an error (e.g. drop the connection) when the expectation is matched.
+     */
+    error(error: HttpError): Promise<RequestResponse>;
+
+    /**
+     * Generate the response locally in this JS process via a callback invoked over
+     * the callback WebSocket (equivalent to mockWithCallback).
+     */
+    callback(requestHandler: (request: HttpRequest) => HttpResponse): Promise<RequestResponse>;
+
+    /**
+     * Rewrite the forwarded request locally in this JS process via a callback
+     * invoked over the callback WebSocket (equivalent to mockWithForwardCallback).
+     */
+    forwardCallback(forwardHandler: (request: HttpRequest) => HttpRequest): Promise<RequestResponse>;
+}
+
 export interface MockServerClient {
     openAPIExpectation(expectation: OpenAPIExpectation): Promise<RequestResponse>;
 
@@ -186,6 +234,19 @@ export interface MockServerClient {
     forwardWithClassCallback(requestMatcher: string | RequestDefinition, callbackClass: string | HttpClassCallback, times?: Times | number, priority?: number, timeToLive?: TimeToLive, id?: string): Promise<RequestResponse>;
 
     mockSimpleResponse<T = any>(path: string, responseBody: T, statusCode?: number): Promise<RequestResponse>;
+
+    /**
+     * Start building an expectation with a fluent, chainable API that mirrors the
+     * Java client's MockServerClient.when(...). Returns a ForwardChainExpectation
+     * whose terminal methods (respond/forward/error/callback/forwardCallback)
+     * finish building the expectation and send it to the MockServer.
+     *
+     * @param requestMatcher the path to match (string) or a full request matcher object
+     * @param times the number of times the requestMatcher should be matched (optional)
+     * @param timeToLive the time this expectation should be used to match requests (optional)
+     * @param priority the priority with which this expectation is used to match requests, high first (optional)
+     */
+    when(requestMatcher: string | RequestDefinition, times?: Times | number, timeToLive?: TimeToLive, priority?: number): ForwardChainExpectation;
 
     respondWithSse(requestMatcher: string | RequestDefinition, sseResponse: HttpSseResponse, times?: Times | number, priority?: number, timeToLive?: TimeToLive, id?: string): Promise<RequestResponse>;
 
@@ -252,6 +313,30 @@ export interface MockServerClient {
     stopLoadScenarios(names?: string | string[]): Promise<LoadScenarioStopResult>;
 
     runLoadScenario(scenario: LoadScenario): Promise<LoadScenarioStartResult>;
+
+    /**
+     * Retrieve the end-of-run summary report for a load scenario run. With no
+     * `format` (or any value other than "junit") the JSON report is parsed and
+     * resolved as a {@link LoadScenarioReport}; with `format="junit"` the
+     * JUnit-XML document is resolved as a string. Rejects 404 if the named
+     * scenario has never run.
+     */
+    getLoadScenarioReport(name: string, format?: string): Promise<LoadScenarioReport | string>;
+
+    /**
+     * Generate (and register) an editable load scenario from an OpenAPI spec —
+     * one step per operation. Loaded in the LOADED state without generating any
+     * traffic; allowed even when loadGenerationEnabled is false.
+     */
+    generateLoadScenarioFromOpenAPI(request: GenerateLoadScenarioFromOpenAPIRequest): Promise<LoadScenarioGenerationResult>;
+
+    /**
+     * Generate (and register) an editable load scenario from traffic previously
+     * recorded by MockServer in proxy/recording mode. Loaded in the LOADED state
+     * without generating any traffic; allowed even when loadGenerationEnabled is
+     * false.
+     */
+    generateLoadScenarioFromRecording(request: GenerateLoadScenarioFromRecordingRequest): Promise<LoadScenarioGenerationResult>;
 
     /**
      * Obtain a handle to a named stateful scenario, exposing typed helpers over

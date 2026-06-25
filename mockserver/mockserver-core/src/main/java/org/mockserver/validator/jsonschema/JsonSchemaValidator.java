@@ -299,6 +299,16 @@ public class JsonSchemaValidator extends ObjectWithReflectiveEqualsHashCodeToStr
     }
 
     public String isValid(String json, boolean addOpenAPISpecificationMessage) {
+        return isValid(json, addOpenAPISpecificationMessage, true);
+    }
+
+    /**
+     * @param allowMetaSchemaRetry when true, a one-shot "Unknown MetaSchema" failure rebuilds the
+     *                             validator against the dialect named in the error and retries exactly
+     *                             once (with this flag false), so a retry that also fails propagates
+     *                             instead of recursing unboundedly.
+     */
+    private String isValid(String json, boolean addOpenAPISpecificationMessage, boolean allowMetaSchemaRetry) {
         String validationResult = "";
         if (isNotBlank(json)) {
             try {
@@ -307,9 +317,9 @@ public class JsonSchemaValidator extends ObjectWithReflectiveEqualsHashCodeToStr
                 String strictJson = OBJECT_MAPPER.writeValueAsString(OBJECT_MAPPER.readTree(json));
                 validationResult = formatProcessingReport(validator.validate(strictJson, InputFormat.JSON), addOpenAPISpecificationMessage);
             } catch (Throwable throwable) {
-                if (isNotBlank(throwable.getMessage()) && throwable.getMessage().contains("Unknown MetaSchema")) {
+                if (allowMetaSchemaRetry && isNotBlank(throwable.getMessage()) && throwable.getMessage().contains("Unknown MetaSchema")) {
                     validator = getSchemaRegistry(throwable.getMessage()).getSchema(this.schema, InputFormat.JSON);
-                    return isValid(json, addOpenAPISpecificationMessage);
+                    return isValid(json, addOpenAPISpecificationMessage, false);
                 }
                 mockServerLogger.logEvent(
                     new LogEntry()

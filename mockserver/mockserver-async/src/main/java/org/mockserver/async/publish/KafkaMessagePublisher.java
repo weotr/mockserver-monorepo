@@ -114,7 +114,15 @@ public class KafkaMessagePublisher implements MessagePublisher {
                 record.headers().add(new RecordHeader(header.getKey(), value));
             }
         }
-        producer.send(record);
+        // Asynchronous send with a callback so delivery failures are surfaced rather than
+        // silently swallowed. The publish-success metric is incremented by
+        // AsyncApiMockOrchestrator.publishAll(); on Kafka the actual broker delivery is
+        // asynchronous, so a logged failure here may follow a counted publish attempt.
+        producer.send(record, (metadata, exception) -> {
+            if (exception != null) {
+                LOG.warn("Failed to deliver message to Kafka topic '{}': {}", channel, exception.getMessage());
+            }
+        });
     }
 
     @Override

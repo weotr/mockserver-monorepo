@@ -1,0 +1,65 @@
+{
+  "proto": "http",
+  "points": [
+    {
+      "offered_rps": 500,
+      "achieved_rps": 500.1,
+      "p50_ms": 0.911,
+      "p90_ms": 1.341,
+      "p95_ms": 1.603,
+      "p99_ms": 3.074,
+      "p999_ms": 7.33,
+      "error_rate": 0
+    },
+    {
+      "offered_rps": 1000,
+      "achieved_rps": 1000.1,
+      "p50_ms": 0.686,
+      "p90_ms": 0.839,
+      "p95_ms": 0.927,
+      "p99_ms": 1.797,
+      "p999_ms": 6.398,
+      "error_rate": 0
+    },
+    {
+      "offered_rps": 2000,
+      "achieved_rps": 2000.1,
+      "p50_ms": 0.281,
+      "p90_ms": 0.459,
+      "p95_ms": 0.764,
+      "p99_ms": 5.953,
+      "p999_ms": 14.371,
+      "error_rate": 0
+    },
+    {
+      "offered_rps": 4000,
+      "achieved_rps": 4000,
+      "p50_ms": 0.228,
+      "p90_ms": 0.305,
+      "p95_ms": 0.355,
+      "p99_ms": 3.307,
+      "p999_ms": 10.797,
+      "error_rate": 0
+    },
+    {
+      "offered_rps": 8000,
+      "achieved_rps": 8000.1,
+      "p50_ms": 0.235,
+      "p90_ms": 0.301,
+      "p95_ms": 0.453,
+      "p99_ms": 7.389,
+      "p999_ms": 13.654,
+      "error_rate": 0
+    },
+    {
+      "offered_rps": 16000,
+      "achieved_rps": 15949.3,
+      "p50_ms": 0.303,
+      "p90_ms": 0.919,
+      "p95_ms": 5.579,
+      "p99_ms": 22.534,
+      "p999_ms": 32.698,
+      "error_rate": 0
+    }
+  ]
+}

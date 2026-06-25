@@ -1052,6 +1052,143 @@ var mockServerClient;
             return mockAnyResponse(createExpectation(path, responseBody, statusCode));
         };
         /**
+         * Start building an expectation with a fluent, chainable API that mirrors
+         * the Java client's `MockServerClient.when(...)` / `ForwardChainExpectation`.
+         * Returns a chain object whose terminal methods (`.respond`, `.forward`,
+         * `.error`, `.callback`, `.forwardCallback`) finish building the expectation
+         * and send it to the MockServer using the same path as `mockAnyResponse`.
+         *
+         *, for example:
+         *
+         *   client.when({ path: '/somePath' })
+         *       .respond({ statusCode: 200, body: 'some_response_body' });
+         *
+         *   // with times / timeToLive / priority (positional, like the Java client):
+         *   client.when({ path: '/somePath' }, 2, { timeToLive: 60, timeUnit: 'SECONDS' }, 10)
+         *       .respond({ statusCode: 201 });
+         *
+         *   // or build fluently before choosing the action:
+         *   client.when({ path: '/somePath' })
+         *       .withTimes(2)
+         *       .withPriority(10)
+         *       .withId('my-id')
+         *       .forward({ host: 'localhost', port: 8081 });
+         *
+         * The returned chain exposes:
+         *   .withTimes(times)            number, or a full { remainingTimes, unlimited } object
+         *   .withTimeToLive(timeToLive)  a full timeToLive object
+         *   .withPriority(priority)      number (higher matches first)
+         *   .withId(id)                  the unique expectation id
+         *   .respond(response)           an httpResponse object, a template, or a class-callback action
+         *   .forward(forward)            an httpForward object, a template, or a class-callback action
+         *   .error(error)                an httpError action
+         *   .callback(requestHandler)    a local JS response callback (over the callback WebSocket)
+         *   .forwardCallback(handler)    a local JS forward callback (over the callback WebSocket)
+         *
+         * Each terminal method returns the same promise-like result as the
+         * existing builders, so it can be awaited or used with `.then(...)`.
+         *
+         * @param requestMatcher the path to match (string) or a full request matcher object
+         * @param times the number of times the requestMatcher should be matched (optional)
+         * @param timeToLive the time this expectation should be used to match requests (optional)
+         * @param priority the priority with which this expectation is used to match requests, high first (optional)
+         */
+        var when = function (requestMatcher, times, timeToLive, priority) {
+            var state = {
+                requestMatcher: requestMatcher,
+                times: times,
+                timeToLive: timeToLive,
+                priority: priority,
+                id: undefined
+            };
+            // Detect which top-level action property a respond/forward action maps
+            // to, mirroring the overloads of ForwardChainExpectation.respond/forward.
+            // A plain object with a `callbackClass` is a class callback; one with a
+            // `template`/`templateType` is a template; otherwise the natural action.
+            var responseActionProperty = function (action) {
+                if (action && typeof action === "object") {
+                    if (typeof action.callbackClass === "string") {
+                        return "httpResponseClassCallback";
+                    }
+                    if (typeof action.template === "string" || typeof action.templateType === "string") {
+                        return "httpResponseTemplate";
+                    }
+                }
+                return "httpResponse";
+            };
+            var forwardActionProperty = function (action) {
+                if (action && typeof action === "object") {
+                    if (typeof action.callbackClass === "string") {
+                        return "httpForwardClassCallback";
+                    }
+                    if (typeof action.template === "string" || typeof action.templateType === "string") {
+                        return "httpForwardTemplate";
+                    }
+                    if (typeof action.httpRequest === "object" || typeof action.requestOverride === "object" || typeof action.requestModifier === "object") {
+                        return "httpOverrideForwardedRequest";
+                    }
+                }
+                return "httpForward";
+            };
+            var send = function (actionProperty, action) {
+                return mockAnyResponse(createAdvancedResponseExpectation(actionProperty, state.requestMatcher, action, state.times, state.priority, state.timeToLive, state.id));
+            };
+            var chain = {
+                withTimes: function (times) {
+                    state.times = times;
+                    return chain;
+                },
+                withTimeToLive: function (timeToLive) {
+                    state.timeToLive = timeToLive;
+                    return chain;
+                },
+                withPriority: function (priority) {
+                    state.priority = priority;
+                    return chain;
+                },
+                withId: function (id) {
+                    state.id = id;
+                    return chain;
+                },
+                /**
+                 * Finish the expectation with a response action and send it.
+                 * The action property is auto-detected from the object shape:
+                 * an object with a string `template`/`templateType` becomes an
+                 * httpResponseTemplate, one with a string `callbackClass` becomes
+                 * an httpResponseClassCallback, otherwise a plain httpResponse.
+                 *
+                 * @param response an httpResponse object, a response template, or a class-callback action
+                 */
+                respond: function (response) {
+                    return send(responseActionProperty(response), response);
+                },
+                /**
+                 * Finish the expectation with a forward action and send it. The
+                 * action property is auto-detected from the object shape: a string
+                 * `template`/`templateType` becomes an httpForwardTemplate, a
+                 * `callbackClass` becomes an httpForwardClassCallback, an object
+                 * carrying an `httpRequest`/`requestOverride`/`requestModifier`
+                 * becomes an httpOverrideForwardedRequest, otherwise a plain
+                 * httpForward.
+                 *
+                 * @param forward an httpForward object, a forward template, a class-callback, or an override-forwarded-request action
+                 */
+                forward: function (forward) {
+                    return send(forwardActionProperty(forward), forward);
+                },
+                error: function (error) {
+                    return send("httpError", error);
+                },
+                callback: function (requestHandler) {
+                    return mockWithCallback(state.requestMatcher, requestHandler, state.times, state.priority, state.timeToLive, state.id);
+                },
+                forwardCallback: function (forwardHandler) {
+                    return mockWithForwardCallback(state.requestMatcher, forwardHandler, state.times, state.priority, state.timeToLive, state.id);
+                }
+            };
+            return chain;
+        };
+        /**
          * Build the expectation object shared by all advanced response builders.
          * The requestMatcher may be a path string or a full request matcher object.
          * The supplied responseAction is set on the expectation under the given
@@ -2023,6 +2160,97 @@ var mockServerClient;
                 }
             };
         };
+        /**
+         * Retrieve the end-of-run summary report for a load scenario run. The
+         * default JSON report carries counts, latency percentiles, the threshold
+         * verdict and per-threshold results; with `format="junit"` the server
+         * returns a JUnit-XML <testsuite> document instead (resolved as a raw
+         * string). Rejects 404 if the scenario has never run.
+         *
+         * @param name the unique scenario name
+         * @param format optional report format - "junit" for the JUnit-XML form,
+         *        omitted (or anything else) for the JSON report
+         * @return promise resolving to the parsed JSON report, or the raw
+         *         JUnit-XML string when format === "junit"
+         */
+        var getLoadScenarioReport = function (name, format) {
+            var path = "/mockserver/loadScenario/" + encodeURIComponent(name) + "/report";
+            if (format) {
+                path += "?format=" + encodeURIComponent(format);
+            }
+            return {
+                then: function (sucess, error) {
+                    makeGetRequest(host, port, path)
+                        .then(function (result) {
+                            if (sucess) {
+                                if (format === "junit") {
+                                    sucess(result.body);
+                                } else {
+                                    sucess(result.body ? JSON.parse(result.body) : result);
+                                }
+                            }
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
+        /**
+         * Generate (and register) an editable load scenario from an OpenAPI
+         * specification - one step per operation. Like loadScenario(...), this
+         * registers the scenario in the LOADED state and generates no traffic, so
+         * it is allowed even when the server was started without
+         * `loadGenerationEnabled=true`.
+         *
+         * @param request {name, specUrlOrPayload, target?, profile?}
+         * @return promise resolving to the parsed JSON
+         *         ({status: "loaded", name, state, scenario})
+         */
+        var generateLoadScenarioFromOpenAPI = function (request) {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/loadScenario/generateFromOpenAPI", request)
+                        .then(function (result) {
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
+        /**
+         * Generate (and register) an editable load scenario from traffic
+         * previously recorded by MockServer in proxy/recording mode. Like
+         * loadScenario(...), this registers the scenario in the LOADED state and
+         * generates no traffic, so it is allowed even when the server was started
+         * without `loadGenerationEnabled=true`.
+         *
+         * @param request {name, mode?, requestFilter?, maxSteps?, target?, profile?}
+         * @return promise resolving to the parsed JSON
+         *         ({status: "loaded", name, state, scenario})
+         */
+        var generateLoadScenarioFromRecording = function (request) {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/loadScenario/generateFromRecording", request)
+                        .then(function (result) {
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
 
         // -------------------------------------------------------------------
         // Stateful scenario (state-machine) management
@@ -2387,6 +2615,7 @@ var mockServerClient;
             respondWithClassCallback: respondWithClassCallback,
             forwardWithClassCallback: forwardWithClassCallback,
             mockSimpleResponse: mockSimpleResponse,
+            when: when,
             respondWithSse: respondWithSse,
             respondWithWebSocket: respondWithWebSocket,
             respondWithDns: respondWithDns,
@@ -2422,6 +2651,9 @@ var mockServerClient;
             startLoadScenarios: startLoadScenarios,
             stopLoadScenarios: stopLoadScenarios,
             runLoadScenario: runLoadScenario,
+            getLoadScenarioReport: getLoadScenarioReport,
+            generateLoadScenarioFromOpenAPI: generateLoadScenarioFromOpenAPI,
+            generateLoadScenarioFromRecording: generateLoadScenarioFromRecording,
             bind: bind,
             retrieveRecordedRequests: retrieveRecordedRequests,
             retrieveRecordedRequestsAndResponses: retrieveRecordedRequestsAndResponses,

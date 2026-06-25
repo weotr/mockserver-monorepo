@@ -15,11 +15,12 @@ import java.util.Map;
  * unknown model so callers can distinguish "free/known-zero" from "unpriceable".
  *
  * <p><strong>Companion dashboard pricing table</strong>
- * {@code mockserver-ui/src/lib/llmPricing.ts} maintains a parallel (and
- * possibly-lagging) table with the same prefix-walk semantics. There is no
- * automated drift check between the two — keep them aligned when refreshing
- * rates. This table currently carries newer model families that the UI table
- * has not yet been updated with.
+ * {@code mockserver-ui/src/lib/llmPricing.ts} maintains a parallel table with
+ * the same prefix-walk semantics, and is kept in sync with this table. A
+ * UI-side drift guard ({@code mockserver-ui/src/__tests__/llmPricing.test.ts})
+ * snapshots the expected prefixes and rates and fails if the dashboard table
+ * drifts from them, so when refreshing rates update both tables together and
+ * update that test's canonical snapshot to match.
  *
  * <p><strong>Pricing source / freshness:</strong> rates are public provider
  * list prices captured 2026-06 (newer families) / 2025-Q4 (original entries).
@@ -28,6 +29,29 @@ import java.util.Map;
  * Gemini (ai.google.dev/pricing).
  */
 public final class LlmPricing {
+
+    /**
+     * The cheapest model in a provider's pricing table — its prefix label and
+     * blended (input+output per-million) rate. Returned by {@link #cheapestModel(Provider)}
+     * so a caller can suggest a smaller model for trivial work.
+     */
+    public static final class ModelOption {
+        private final String label;
+        private final double blendedPerMillion;
+
+        public ModelOption(String label, double blendedPerMillion) {
+            this.label = label;
+            this.blendedPerMillion = blendedPerMillion;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public double getBlendedPerMillion() {
+            return blendedPerMillion;
+        }
+    }
 
     /** Input/output list price in USD per million tokens. */
     public static final class PricingEntry {
@@ -169,5 +193,62 @@ public final class LlmPricing {
         }
         return (inputTokens / 1_000_000.0) * pricing.getInputPerMillion()
             + (outputTokens / 1_000_000.0) * pricing.getOutputPerMillion();
+    }
+
+    /**
+     * Return the provider's pricing table, or {@code null} when the provider has
+     * no prefix table (OLLAMA flat-free, AZURE deployment names, unknown).
+     */
+    private static List<Map.Entry<String, PricingEntry>> tableFor(Provider provider) {
+        if (provider == null) {
+            return null;
+        }
+        switch (provider) {
+            case ANTHROPIC:
+            case BEDROCK:
+                return ANTHROPIC_PRICING;
+            case OPENAI:
+            case OPENAI_RESPONSES:
+                return OPENAI_PRICING;
+            case GEMINI:
+                return GEMINI_PRICING;
+            default:
+                // AZURE_OPENAI (deployment names), OLLAMA (flat free), unknown.
+                return null;
+        }
+    }
+
+    /**
+     * The cheapest model in the provider's pricing table by blended
+     * (input+output per-million) rate, or {@code null} for OLLAMA / unknown /
+     * tableless providers. Deterministic: ties resolve to the first table entry.
+     */
+    public static ModelOption cheapestModel(Provider provider) {
+        List<Map.Entry<String, PricingEntry>> table = tableFor(provider);
+        if (table == null || table.isEmpty()) {
+            return null;
+        }
+        Map.Entry<String, PricingEntry> cheapest = null;
+        double cheapestBlended = Double.MAX_VALUE;
+        for (Map.Entry<String, PricingEntry> e : table) {
+            double blended = e.getValue().getInputPerMillion() + e.getValue().getOutputPerMillion();
+            if (blended < cheapestBlended) {
+                cheapestBlended = blended;
+                cheapest = e;
+            }
+        }
+        return cheapest == null ? null : new ModelOption(cheapest.getKey(), cheapestBlended);
+    }
+
+    /**
+     * The blended (input+output per-million) rate for a provider/model, or
+     * {@code null} when the model is unpriced.
+     */
+    public static Double blendedPerMillion(Provider provider, String model) {
+        PricingEntry pricing = getPricing(provider, model);
+        if (pricing == null) {
+            return null;
+        }
+        return pricing.getInputPerMillion() + pricing.getOutputPerMillion();
     }
 }

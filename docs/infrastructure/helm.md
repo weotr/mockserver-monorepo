@@ -28,8 +28,8 @@ initializerJson.json"]
 
 | Chart | Path | Version | Purpose |
 |-------|------|---------|---------|
-| `mockserver` | `helm/mockserver/` | 7.1.0 | Main deployment chart (includes optional ConfigMap) |
-| `mockserver-config` | `helm/mockserver-config/` | 7.1.0 | Example external ConfigMap chart (for reference) |
+| `mockserver` | `helm/mockserver/` | 7.2.0 | Main deployment chart (includes optional ConfigMap) |
+| `mockserver-config` | `helm/mockserver-config/` | 7.2.0 | Example external ConfigMap chart (for reference) |
 
 ## mockserver Chart
 
@@ -66,6 +66,15 @@ app:
   readOnlyRootFilesystem: false
   serviceAccountName: default
   runAsUser: 65534
+  # Extra JVM flags delivered via JAVA_TOOL_OPTIONS. The image already caps the
+  # heap at 75% of the container memory limit (-XX:MaxRAMPercentage=75.0 in the
+  # ENTRYPOINT), so a memory limit alone is often sufficient. To change the cap,
+  # set an explicit -Xmx — that disables MaxRAMPercentage:
+  #   jvmOptions: "-Xmx512m"
+  # Note: setting a different -XX:MaxRAMPercentage via jvmOptions has NO effect:
+  # JAVA_TOOL_OPTIONS is prepended before the ENTRYPOINT args, so the ENTRYPOINT
+  # flag is applied last and wins. Use -Xmx to override the heap cap instead.
+  jvmOptions: ""
   config:
     enabled: false
     properties: ""
@@ -198,6 +207,24 @@ When `app.persistence.enabled=true`, the chart:
 
 **Backward compatibility:** Disabled by default. When disabled, no PVC, volumes, volumeMounts, or env vars are added — the chart behaves identically to before this feature was added. `podSecurityContext` likewise defaults to `{}`, so no pod-level `securityContext` is emitted unless set.
 
+### JVM Heap Tuning (`app.jvmOptions`)
+
+The MockServer Docker image starts the JVM with `-XX:MaxRAMPercentage=75.0` in its `ENTRYPOINT`, which caps the heap at 75% of the container's `resources.limits.memory`. MockServer's in-memory request/expectation ring buffers size off the heap, so setting a memory limit is strongly recommended.
+
+`app.jvmOptions` is delivered to the JVM via the `JAVA_TOOL_OPTIONS` environment variable (`deployment.yaml`). The JVM **prepends** `JAVA_TOOL_OPTIONS` flags before the command-line args, so the `ENTRYPOINT`'s `-XX:MaxRAMPercentage=75.0` is evaluated last. The primary use case is overriding the heap cap with an explicit `-Xmx`, which disables `MaxRAMPercentage` regardless of flag order:
+
+```yaml
+app:
+  jvmOptions: "-Xmx512m"
+resources:
+  limits:
+    memory: 768Mi  # keep -Xmx + JVM overhead + OS inside the limit
+```
+
+Setting a different `-XX:MaxRAMPercentage` via `jvmOptions` has no effect: because `JAVA_TOOL_OPTIONS` is prepended, the `ENTRYPOINT`'s flag appears last and wins. Use `-Xmx` to pin a specific heap size instead.
+
+Without a `resources.limits.memory`, the JVM sizes the heap off total node memory and can be OOM-killed under load.
+
 **Pod securityContext / PVC permissions:** on clusters with restrictive defaults the pod may be unable to write to the mounted volume, so persistence silently fails. Set a pod-level `fsGroup` so the volume is group-owned and writable, e.g. `--set podSecurityContext.fsGroup=2000`. `podSecurityContext` is the general-purpose hook for any pod-level securityContext field (the container-level `securityContext` continues to carry `runAsUser` / `readOnlyRootFilesystem` / `allowPrivilegeEscalation`).
 
 **PVC retention:** Chart-managed PVCs are NOT deleted by `helm uninstall`. Delete the PVC manually if you want to remove persisted data: `kubectl delete pvc <release-name> -n <namespace>`.
@@ -306,7 +333,7 @@ The two probes are deliberately split so a slow startup does not get the pod res
 helm install mockserver oci://ghcr.io/mock-server/charts/mockserver
 
 # Pin a version
-helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 7.1.0
+helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 7.2.0
 
 # --- Option B: Legacy HTTP repo ------------------------------------------
 helm repo add mockserver https://www.mock-server.com
@@ -454,7 +481,7 @@ cosign verify --key https://www.mock-server.com/mockserver-cosign.pub ghcr.io/mo
 
 > **IAM note:** signing is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`,
 > so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret (not just
-> `GetSecretValue`) or the probe fails and signing is silently skipped — the cause of the 7.1.0 chart
+> `GetSecretValue`) or the probe fails and signing is silently skipped — the cause of the 7.2.0 chart
 > publishing unsigned until the grant was added to `read_release_secrets`.
 
 To enable signing:

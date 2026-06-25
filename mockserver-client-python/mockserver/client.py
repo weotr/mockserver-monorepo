@@ -281,6 +281,79 @@ class MockServerClient:
         """Convenience: register *scenario* then immediately start it."""
         return self._run(self._async_client.run_load_scenario(scenario))
 
+    def get_load_scenario_report(
+        self, name: str, format: str | None = None
+    ) -> dict | str:
+        """Fetch the end-of-run summary report for a load scenario run.
+
+        Returns the JSON report by default; pass ``format="junit"`` to receive
+        the JUnit-XML ``<testsuite>`` document as a string. Raises an error if
+        the scenario never ran (``404``).
+        """
+        return self._run(
+            self._async_client.get_load_scenario_report(name, format)
+        )
+
+    def generate_load_scenario_from_openapi(
+        self,
+        name: str | None = None,
+        spec_url_or_payload: str | None = None,
+        *,
+        target: dict | None = None,
+        profile: LoadProfile | dict | None = None,
+        body: dict | None = None,
+    ) -> dict:
+        """Seed and register an editable load scenario from an OpenAPI spec.
+
+        One step is produced per OpenAPI operation. *spec_url_or_payload* is the
+        spec as an inline JSON/YAML payload, a URL, or a file/classpath
+        reference; *target* an optional ``{host, port, scheme}`` override and
+        *profile* an optional :class:`LoadProfile`. Pass a fully-formed *body*
+        dict to override the individual arguments. Registration generates no
+        traffic and is allowed even when ``loadGenerationEnabled`` is off.
+        """
+        return self._run(
+            self._async_client.generate_load_scenario_from_openapi(
+                name,
+                spec_url_or_payload,
+                target=target,
+                profile=profile,
+                body=body,
+            )
+        )
+
+    def generate_load_scenario_from_recording(
+        self,
+        name: str | None = None,
+        *,
+        mode: str | None = None,
+        request_filter: HttpRequest | dict | None = None,
+        target: dict | None = None,
+        max_steps: int | None = None,
+        profile: LoadProfile | dict | None = None,
+        body: dict | None = None,
+    ) -> dict:
+        """Seed and register an editable load scenario from recorded traffic.
+
+        *mode* is ``VERBATIM`` (default) or ``TEMPLATIZED``; *request_filter*
+        selects which recorded requests to include; *max_steps* caps VERBATIM
+        steps; *target* (``{host, port, scheme}``) overrides routing; *profile*
+        overrides the conservative default. Pass a fully-formed *body* dict to
+        override the individual arguments. Registration generates no traffic and
+        is allowed even when ``loadGenerationEnabled`` is off.
+        """
+        return self._run(
+            self._async_client.generate_load_scenario_from_recording(
+                name,
+                mode=mode,
+                request_filter=request_filter,
+                target=target,
+                max_steps=max_steps,
+                profile=profile,
+                body=body,
+            )
+        )
+
     def scenario(self, name: str) -> SyncScenarioHandle:
         """Return a handle to the named stateful scenario, wrapping the
         ``/mockserver/scenario/{name}`` control-plane endpoints.

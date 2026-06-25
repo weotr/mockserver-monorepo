@@ -1,9 +1,6 @@
 package org.mockserver.openapi;
 
-import org.junit.After;
-import org.junit.Before;
 import org.junit.Test;
-import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.mock.Expectation;
 import org.mockserver.model.HttpResponse;
@@ -56,15 +53,9 @@ public class OpenAPIConverterGenerationOptionsTest {
         "  }" +
         "}";
 
-    @Before
-    public void setUp() {
-        ConfigurationProperties.generateRealisticExampleValues(false);
-    }
-
-    @After
-    public void tearDown() {
-        ConfigurationProperties.generateRealisticExampleValues(false);
-    }
+    // Realistic generation is requested per-import via the reserved options map ("realisticValues": true)
+    // rather than the JVM-global generateRealisticExampleValues flag, so this class mutates no shared
+    // state and runs safely in the parallel Surefire phase.
 
     private String responseBody(Map<String, Object> operationsAndResponses) {
         List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(SPEC, operationsAndResponses);
@@ -75,6 +66,8 @@ public class OpenAPIConverterGenerationOptionsTest {
 
     private static Map<String, Object> optionsMap(Object seed, Map<String, Object> fieldOverrides) {
         Map<String, Object> options = new HashMap<>();
+        // request realistic generation explicitly via the options map rather than the global flag
+        options.put("realisticValues", true);
         if (seed != null) {
             options.put("seed", seed);
         }
@@ -89,8 +82,6 @@ public class OpenAPIConverterGenerationOptionsTest {
 
     @Test
     public void sameSpecAndSeedProducesIdenticalBodyTwice() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-
         String first = responseBody(optionsMap(2024, null));
         String second = responseBody(optionsMap(2024, null));
 
@@ -99,8 +90,6 @@ public class OpenAPIConverterGenerationOptionsTest {
 
     @Test
     public void differentSeedProducesDifferentBody() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-
         String seedA = responseBody(optionsMap(1, null));
         String seedB = responseBody(optionsMap(987654, null));
 
@@ -109,8 +98,6 @@ public class OpenAPIConverterGenerationOptionsTest {
 
     @Test
     public void fieldOverridePinsThatFieldWhileOthersGenerate() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-
         String body = responseBody(optionsMap(42, Map.of("userId", "system-user-123")));
 
         assertThat(body, containsString("\"userId\""));
@@ -120,15 +107,10 @@ public class OpenAPIConverterGenerationOptionsTest {
     }
 
     @Test
-    public void nothingSuppliedLeavesGenerationUnchanged() {
-        ConfigurationProperties.generateRealisticExampleValues(true);
-
-        // import with options absent vs. an explicit seed-42 options object: identical, proving
-        // the untouched default path still uses the historic fixed seed of 42.
-        Map<String, Object> noOptions = new HashMap<>();
-        noOptions.put("getUser", "200");
-
-        String defaultBody = responseBody(noOptions);
+    public void noSeedSuppliedUsesHistoricFixedSeed() {
+        // realistic import with no seed supplied vs. an explicit seed-42 options object: identical,
+        // proving the untouched default path still uses the historic fixed seed of 42.
+        String defaultBody = responseBody(optionsMap(null, null));
         String seed42Body = responseBody(optionsMap(42, null));
 
         assertThat(defaultBody, is(seed42Body));

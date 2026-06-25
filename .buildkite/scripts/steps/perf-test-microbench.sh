@@ -66,3 +66,41 @@ cat "$OUT_JSON"
 if command -v buildkite-agent >/dev/null 2>&1; then
   buildkite-agent artifact upload "perf-microbench.json" || true
 fi
+
+# --- scaling sweep ------------------------------------------------------------
+# Second JMH backstop: run-scaling.sh runs MatchingBenchmark (scan cost GROWS with
+# expectationCount) + CandidateIndexBenchmark (SCAN grows, INDEX stays flat) over a
+# FIXED param sweep and emits perf-scaling.json {scaling:{matching,candidate_index}}.
+# It rebuilds mockserver-core + the benchmark module itself (same prep as above) and
+# uploads its own artifact when buildkite-agent is present. Bounded by JMH_ARGS_SCALING
+# (consistent with the microbench iteration budget above) so it stays inside the step
+# timeout; the sweep crosses MANY param combos, so a JVM-fork is spawned per combo.
+SCALING_RAW="mockserver/mockserver-benchmark/perf-scaling.json"
+JMH_ARGS_SCALING="${JMH_ARGS_SCALING:--f 1 -wi 3 -i 5 -r 2 -w 2}"
+
+echo "--- running scaling sweep (run-scaling.sh)"
+# shellcheck disable=SC2016
+"$SCRIPT_DIR/../run-in-docker.sh" \
+  -i "$MAVEN_IMAGE" \
+  -m "${MAVEN_MEMORY:-7g}" \
+  --entrypoint bash \
+  -w /build \
+  -e "JMH_ARGS_SCALING=$JMH_ARGS_SCALING" \
+  -- -c '
+    set -euo pipefail
+    cd /build/mockserver/mockserver-benchmark        # run-scaling.sh resolves the reactor root from here
+    SCALING_RESULT_PATH="$(pwd)/perf-scaling.json" ./run-scaling.sh
+  '
+
+if [ ! -f "$REPO_ROOT/$SCALING_RAW" ]; then
+  echo "ERROR: scaling sweep did not produce $SCALING_RAW" >&2
+  exit 1
+fi
+cp "$REPO_ROOT/$SCALING_RAW" "$REPO_ROOT/perf-scaling.json"
+
+echo "--- perf-scaling.json"
+cat "$REPO_ROOT/perf-scaling.json"
+
+if command -v buildkite-agent >/dev/null 2>&1; then
+  buildkite-agent artifact upload "perf-scaling.json" || true
+fi

@@ -98,7 +98,7 @@ public class MockServerClient implements Stoppable {
     private ClientConfiguration configuration;
     private ProxyConfiguration proxyConfiguration;
     private Supplier<String> controlPlaneJWTSupplier;
-    private NettyHttpClient nettyHttpClient;
+    private volatile NettyHttpClient nettyHttpClient;
     private RequestDefinitionSerializer requestDefinitionSerializer = new RequestDefinitionSerializer(MOCK_SERVER_LOGGER);
     private ExpectationIdSerializer expectationIdSerializer = new ExpectationIdSerializer(MOCK_SERVER_LOGGER);
     private LogEventRequestAndResponseSerializer httpRequestResponseSerializer = new LogEventRequestAndResponseSerializer(MOCK_SERVER_LOGGER);
@@ -304,10 +304,7 @@ public class MockServerClient implements Stoppable {
     }
 
     private MockServerEventBus getMockServerEventBus() {
-        if (EVENT_BUS_MAP.get(this.port()) == null) {
-            EVENT_BUS_MAP.put(this.port(), new MockServerEventBus());
-        }
-        return EVENT_BUS_MAP.get(this.port());
+        return EVENT_BUS_MAP.computeIfAbsent(this.port(), k -> new MockServerEventBus());
     }
 
     private void removeMockServerEventBus() {
@@ -360,7 +357,14 @@ public class MockServerClient implements Stoppable {
     }
 
     private NettyHttpClient getNettyHttpClient() {
-        if (nettyHttpClient == null) {
+        NettyHttpClient localClient = nettyHttpClient;
+        if (localClient != null) {
+            return localClient;
+        }
+        synchronized (this) {
+            if (nettyHttpClient != null) {
+                return nettyHttpClient;
+            }
             NettySslContextFactory nettySslContextFactory = new NettySslContextFactory(configuration.toServerConfiguration(), MOCK_SERVER_LOGGER, false);
             Function<SslContextBuilder, SslContext> clientSslContextBuilderFunction = NettySslContextFactory.clientSslContextBuilderFunction;
             if (configuration.controlPlaneTLSMutualAuthenticationRequired()) {
@@ -394,8 +398,8 @@ public class MockServerClient implements Stoppable {
                 false,
                 nettySslContextFactory.withClientSslContextBuilderFunction(clientSslContextBuilderFunction)
             );
+            return nettyHttpClient;
         }
-        return nettyHttpClient;
     }
 
     private HttpResponse sendRequest(HttpRequest request, boolean ignoreErrors, boolean throwClientException) {
@@ -2904,6 +2908,108 @@ public class MockServerClient implements Stoppable {
         return startLoadScenarios(scenario.getName());
     }
 
+    /**
+     * Retrieve the end-of-run summary report for a load scenario run via
+     * {@code GET /mockserver/loadScenario/{name}/report}. The report is derived from the
+     * run's status snapshot — the live snapshot while running, or the retained terminal
+     * snapshot once finished — and carries counts, latency percentiles, the threshold
+     * verdict and per-threshold results. The server responds {@code 404} if the named
+     * scenario never ran.
+     *
+     * @param name the unique name of the load scenario whose run report is wanted
+     * @return JSON string describing the run report (counts, percentiles, threshold verdict)
+     */
+    public String getLoadScenarioReport(String name) {
+        return getLoadScenarioReport(name, null);
+    }
+
+    /**
+     * Retrieve the end-of-run summary report for a load scenario run via
+     * {@code GET /mockserver/loadScenario/{name}/report}, selecting the rendering with the
+     * {@code format} query parameter. The default JSON form (when {@code format} is
+     * {@code null} or empty, or any value other than {@code "junit"}) carries counts,
+     * latency percentiles and per-threshold results; {@code format="junit"} renders the
+     * same data as a JUnit-XML {@code <testsuite>} so a load run becomes a first-class CI
+     * test artifact. The server responds {@code 404} if the named scenario never ran.
+     *
+     * @param name   the unique name of the load scenario whose run report is wanted
+     * @param format the report format (e.g. {@code "junit"}); {@code null} or empty selects the default JSON report
+     * @return the run report as a JSON string (or a JUnit-XML document when {@code format="junit"})
+     */
+    public String getLoadScenarioReport(String name, String format) {
+        HttpRequest request = request()
+            .withMethod("GET")
+            .withPath(calculatePath("loadScenario/" + name + "/report"));
+        if (format != null && !format.isEmpty()) {
+            request.withQueryStringParameter("format", format);
+        }
+        HttpResponse httpResponse = sendRequest(request, false);
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Generate an editable load scenario from an OpenAPI specification and load (register)
+     * it via {@code PUT /mockserver/loadScenario/generateFromOpenAPI}. The generated
+     * scenario is registered in the {@code LOADED} state — exactly like
+     * {@link #loadScenario(LoadScenario)}, it drives no traffic and is allowed even when
+     * {@code loadGenerationEnabled} is off — and is returned so it can be shown and edited
+     * before a run is triggered.
+     *
+     * <p>The body is a JSON object the caller builds, carrying at least {@code name} and
+     * {@code specUrlOrPayload} (the OpenAPI spec as an inline JSON/YAML payload, a URL, or a
+     * file/classpath reference), with optional {@code target} and {@code profile}, e.g.
+     * {@code {"name":"petstore-load","specUrlOrPayload":"..."}}.
+     *
+     * @param jsonBody the JSON request body ({@code {name, specUrlOrPayload, target?, profile?}})
+     * @return JSON string describing the generated, loaded scenario ({@code {"status":"loaded","name":...,"scenario":...}})
+     */
+    public String generateLoadScenarioFromOpenAPI(String jsonBody) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("loadScenario/generateFromOpenAPI"))
+                .withBody(jsonBody != null ? jsonBody : "", StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && httpResponse.getStatusCode() != null && httpResponse.getStatusCode() >= 400) {
+            throw new ClientException(formatLogMessage("error:{}while generating load scenario from OpenAPI", httpResponse.getBodyAsString()));
+        }
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    /**
+     * Generate an editable load scenario from recorded proxy traffic and load (register) it
+     * via {@code PUT /mockserver/loadScenario/generateFromRecording}. The generated scenario
+     * is registered in the {@code LOADED} state — exactly like
+     * {@link #loadScenario(LoadScenario)}, it drives no traffic and is allowed even when
+     * {@code loadGenerationEnabled} is off — and is returned so it can be shown and edited
+     * before a run is triggered.
+     *
+     * <p>The body is a JSON object the caller builds, carrying at least {@code name}, with an
+     * optional {@code mode} ({@code VERBATIM} (default) = one step per recorded request;
+     * {@code TEMPLATIZED} = one step per unique route), plus optional {@code requestFilter},
+     * {@code maxSteps}, {@code target} and {@code profile}, e.g.
+     * {@code {"name":"replay-prod-traffic","mode":"TEMPLATIZED"}}.
+     *
+     * @param jsonBody the JSON request body ({@code {name, mode?, requestFilter?, maxSteps?, target?, profile?}})
+     * @return JSON string describing the generated, loaded scenario ({@code {"status":"loaded","name":...,"scenario":...}})
+     */
+    public String generateLoadScenarioFromRecording(String jsonBody) {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("loadScenario/generateFromRecording"))
+                .withBody(jsonBody != null ? jsonBody : "", StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && httpResponse.getStatusCode() != null && httpResponse.getStatusCode() >= 400) {
+            throw new ClientException(formatLogMessage("error:{}while generating load scenario from recording", httpResponse.getBodyAsString()));
+        }
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
     private static String namesBody(String... names) {
         StringBuilder body = new StringBuilder("{\"names\":[");
         for (int i = 0; i < names.length; i++) {
@@ -3317,6 +3423,248 @@ public class MockServerClient implements Stoppable {
             return httpResponseSerializer.deserialize(httpResponse.getBodyAsString());
         }
         return httpResponse;
+    }
+
+    // -------------------------------------------------------------------
+    // Contract testing & Pact
+    // -------------------------------------------------------------------
+
+    private static final ObjectMapper CONTRACT_OBJECT_MAPPER = new ObjectMapper();
+
+    /**
+     * Result of validating a single operation/request against an OpenAPI specification.
+     *
+     * @param operationId      the OpenAPI operationId exercised (contract test), or {@code null}
+     * @param method           the HTTP method
+     * @param path             the request path
+     * @param matchedOperation the {@code METHOD /path} spec operation matched (traffic validation), or {@code null}
+     * @param statusCode       the HTTP status code received (contract test), or {@code 0} when not applicable
+     * @param passed           whether the request and response conformed to the spec
+     * @param requestErrors    request-side validation errors (empty when none)
+     * @param responseErrors   response-side validation errors (empty when none)
+     */
+    public record ContractResult(
+        String operationId,
+        String method,
+        String path,
+        String matchedOperation,
+        int statusCode,
+        boolean passed,
+        List<String> requestErrors,
+        List<String> responseErrors
+    ) {
+    }
+
+    /**
+     * Structured report returned by {@link #contractTest} and {@link #trafficValidate}.
+     *
+     * @param total     the total number of operations / requests validated
+     * @param passed    the number that conformed to the spec
+     * @param failed    the number that did not conform
+     * @param allPassed {@code true} when every result passed
+     * @param results   the per-operation / per-request results
+     */
+    public record ContractReport(int total, int passed, int failed, boolean allPassed, List<ContractResult> results) {
+    }
+
+    /**
+     * Run an OpenAPI contract test against a live service: every operation in the spec is exercised
+     * against {@code baseUrl} and the response is validated against the spec. Wraps
+     * {@code PUT /mockserver/contractTest}.
+     *
+     * @param spec    a URL, file path, or inline OpenAPI specification
+     * @param baseUrl the base URL of the service under test (e.g. {@code http://localhost:8080})
+     * @return the structured contract-test report
+     */
+    public ContractReport contractTest(String spec, String baseUrl) {
+        return contractTest(spec, baseUrl, null);
+    }
+
+    /**
+     * Run an OpenAPI contract test against a live service, optionally restricted to a single operation.
+     * Wraps {@code PUT /mockserver/contractTest}.
+     *
+     * @param spec        a URL, file path, or inline OpenAPI specification
+     * @param baseUrl     the base URL of the service under test (e.g. {@code http://localhost:8080})
+     * @param operationId an optional operationId filter; when non-blank only that operation is exercised
+     * @return the structured contract-test report
+     */
+    public ContractReport contractTest(String spec, String baseUrl, String operationId) {
+        if (isBlank(spec)) {
+            throw new IllegalArgumentException("contractTest(spec, baseUrl) requires a non null spec");
+        }
+        if (isBlank(baseUrl)) {
+            throw new IllegalArgumentException("contractTest(spec, baseUrl) requires a non null baseUrl");
+        }
+        ObjectNode requestBody = CONTRACT_OBJECT_MAPPER.createObjectNode();
+        requestBody.put("spec", spec);
+        requestBody.put("baseUrl", baseUrl);
+        if (isNotBlank(operationId)) {
+            requestBody.put("operationId", operationId);
+        }
+        return parseContractReport(sendContractPut("contractTest", requestBody));
+    }
+
+    /**
+     * Validate the recorded request/response traffic against an OpenAPI specification. Wraps
+     * {@code PUT /mockserver/trafficValidate}.
+     *
+     * @param spec a URL, file path, or inline OpenAPI specification
+     * @return the structured traffic-validation report
+     */
+    public ContractReport trafficValidate(String spec) {
+        if (isBlank(spec)) {
+            throw new IllegalArgumentException("trafficValidate(spec) requires a non null spec");
+        }
+        ObjectNode requestBody = CONTRACT_OBJECT_MAPPER.createObjectNode();
+        requestBody.put("spec", spec);
+        return parseContractReport(sendContractPut("trafficValidate", requestBody));
+    }
+
+    /**
+     * Import a Pact v3 consumer contract as expectations. Wraps {@code PUT /mockserver/pact/import}.
+     *
+     * @param pactJson the Pact v3 contract JSON document
+     * @return the upserted expectations as a JSON array string (as returned by the server)
+     */
+    public String pactImport(String pactJson) {
+        if (isBlank(pactJson)) {
+            throw new IllegalArgumentException("pactImport(pactJson) requires a non null pact contract JSON");
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("pact/import"))
+                .withBody(pactJson, StandardCharsets.UTF_8),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : null;
+    }
+
+    /**
+     * Export the active expectations as a Pact v3 consumer contract. Wraps {@code PUT /mockserver/pact}.
+     *
+     * @param consumer the consumer name, or {@code null}/blank to use the server default
+     * @param provider the provider name, or {@code null}/blank to use the server default
+     * @return the Pact v3 contract JSON document
+     */
+    public String pactExport(String consumer, String provider) {
+        HttpRequest pactExportRequest = request()
+            .withMethod("PUT")
+            .withContentType(APPLICATION_JSON_UTF_8)
+            .withPath(calculatePath("pact"));
+        if (isNotBlank(consumer)) {
+            pactExportRequest.withQueryStringParameter("consumer", consumer);
+        }
+        if (isNotBlank(provider)) {
+            pactExportRequest.withQueryStringParameter("provider", provider);
+        }
+        HttpResponse httpResponse = sendRequest(pactExportRequest, false);
+        return httpResponse != null ? httpResponse.getBodyAsString() : null;
+    }
+
+    /**
+     * Verify a Pact v3 consumer contract against the active expectations. Wraps
+     * {@code PUT /mockserver/pact/verify}. The server replies {@code 202 ACCEPTED} when every
+     * interaction matches an expectation and {@code 406 NOT_ACCEPTABLE} otherwise; the verification
+     * report body is returned in both cases.
+     *
+     * @param pactJson the Pact v3 contract JSON document
+     * @return the verification report JSON document
+     */
+    public String pactVerify(String pactJson) {
+        if (isBlank(pactJson)) {
+            throw new IllegalArgumentException("pactVerify(pactJson) requires a non null pact contract JSON");
+        }
+        // Use throwClientException=false: the server replies 406 NOT_ACCEPTABLE (>= 400) with the
+        // verification report body on a FAIL verdict, which is an expected outcome — the report must be
+        // returned to the caller, not raised as a ClientException.
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("pact/verify"))
+                .withBody(pactJson, StandardCharsets.UTF_8),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : null;
+    }
+
+    private String sendContractPut(String path, ObjectNode requestBody) {
+        String body;
+        try {
+            body = CONTRACT_OBJECT_MAPPER.writeValueAsString(requestBody);
+        } catch (Exception e) {
+            throw new ClientException("Unable to serialize " + path + " request", e);
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath(path))
+                .withBody(body, StandardCharsets.UTF_8),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : null;
+    }
+
+    private ContractReport parseContractReport(String body) {
+        if (isBlank(body)) {
+            throw new ClientException("empty response from contract endpoint");
+        }
+        try {
+            JsonNode root = CONTRACT_OBJECT_MAPPER.readTree(body);
+            if (root.has("error")) {
+                throw new ClientException("contract endpoint returned an error: " + root.path("error").asText());
+            }
+            // The contract-test report keys the total as "totalOperations"; the traffic-validation
+            // report keys it as "totalRequests" — accept either.
+            int total = root.has("totalOperations") ? root.path("totalOperations").asInt()
+                : root.path("totalRequests").asInt();
+            int passed = root.path("passed").asInt();
+            int failed = root.path("failed").asInt();
+            boolean allPassed = root.path("allPassed").asBoolean();
+            List<ContractResult> results = new ArrayList<>();
+            JsonNode resultsNode = root.path("results");
+            if (resultsNode.isArray()) {
+                for (JsonNode resultNode : resultsNode) {
+                    results.add(new ContractResult(
+                        textOrNull(resultNode, "operationId"),
+                        textOrNull(resultNode, "method"),
+                        textOrNull(resultNode, "path"),
+                        textOrNull(resultNode, "matchedOperation"),
+                        resultNode.has("statusCodeReceived") ? resultNode.path("statusCodeReceived").asInt() : 0,
+                        resultNode.path("passed").asBoolean(),
+                        readStringArray(resultNode, "validationErrors", "requestErrors"),
+                        readStringArray(resultNode, "responseErrors")
+                    ));
+                }
+            }
+            return new ContractReport(total, passed, failed, allPassed, results);
+        } catch (ClientException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ClientException("Unable to parse contract report response: " + body, e);
+        }
+    }
+
+    private static String textOrNull(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value != null && !value.isNull() ? value.asText() : null;
+    }
+
+    private static List<String> readStringArray(JsonNode node, String... fieldNames) {
+        List<String> values = new ArrayList<>();
+        for (String fieldName : fieldNames) {
+            JsonNode array = node.get(fieldName);
+            if (array != null && array.isArray()) {
+                for (JsonNode element : array) {
+                    values.add(element.asText());
+                }
+            }
+        }
+        return values;
     }
 
     // -------------------------------------------------------------------

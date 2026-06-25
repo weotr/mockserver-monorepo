@@ -136,6 +136,18 @@ if ! jq --arg v "$RELEASE_VERSION" --arg ref "$IMAGE_REF" --arg name "$SERVER_NA
 fi
 mv "$TMP_JSON" "$SERVER_JSON"
 
+# Fail fast on the registry's fixed 100-char limit for `description`. The live
+# `validate` below already rejects an over-length value, but only as an opaque
+# upstream HTTP 422 ("expected length <= 100"). Surface it here with a clear,
+# actionable message and the actual length so a manifest edit is obvious — this
+# is the one server.json field a human routinely changes. (MCP registry
+# constraint, see docs/operations/mcp-registry-publishing.md.)
+DESC_LEN=$(jq -r '.description | length' "$SERVER_JSON")
+if [[ "$DESC_LEN" -gt 100 ]]; then
+  log_error "server.json description is $DESC_LEN chars — the MCP registry allows <= 100. Shorten the \"description\" field in server.json."
+  exit 1
+fi
+
 log_info "Validate server.json against the live registry schema"
 if ! "$MCP_BIN" validate "$SERVER_JSON"; then
   log_error "server.json failed schema validation — refusing to publish"

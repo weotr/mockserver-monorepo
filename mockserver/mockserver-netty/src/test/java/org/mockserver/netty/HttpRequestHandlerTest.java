@@ -247,6 +247,157 @@ public class HttpRequestHandlerTest {
     }
 
     @Test
+    public void shouldRejectStopWhenControlPlaneAuthEnabledAndNotAuthenticated() throws InterruptedException {
+        // given - control-plane auth configured but the request carries no/invalid creds
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> false);
+        HttpRequest stopRequest = request("/mockserver/stop").withMethod("PUT");
+
+        // when
+        embeddedChannel.writeInbound(stopRequest);
+
+        // then - 401 and the server is NOT stopped
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(401));
+        assertThat(httpResponse.getBodyAsString(), containsString("Unauthorized for control plane"));
+        TimeUnit.SECONDS.sleep(1); // give any (erroneously) spawned stop thread time to run
+        verify(server, never()).stop();
+    }
+
+    @Test
+    public void shouldStopWhenControlPlaneAuthEnabledAndAuthenticated() throws InterruptedException {
+        // given - control-plane auth configured and the request is authenticated
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> true);
+        HttpRequest stopRequest = request("/mockserver/stop").withMethod("PUT");
+
+        // when
+        embeddedChannel.writeInbound(stopRequest);
+
+        // then - 200 and the server is stopped
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        TimeUnit.SECONDS.sleep(1); // ensure stop thread has run
+        verify(server).stop();
+    }
+
+    @Test
+    public void shouldRejectBindWhenControlPlaneAuthEnabledAndNotAuthenticated() {
+        // given - control-plane auth configured but the request carries no/invalid creds
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> false);
+        HttpRequest bindRequest = request("/mockserver/bind")
+            .withMethod("PUT")
+            .withBody(portBindingSerializer.serialize(
+                portBinding(1090, 1090)
+            ));
+
+        // when
+        embeddedChannel.writeInbound(bindRequest);
+
+        // then - 401 and no ports are (re)bound
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(401));
+        assertThat(httpResponse.getBodyAsString(), containsString("Unauthorized for control plane"));
+        verify(server, never()).bindServerPorts(anyList());
+    }
+
+    @Test
+    public void shouldBindWhenControlPlaneAuthEnabledAndAuthenticated() {
+        // given - control-plane auth configured and the request is authenticated
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> true);
+        when(server.bindServerPorts(anyList())).thenReturn(Arrays.asList(1090, 1090));
+        HttpRequest bindRequest = request("/mockserver/bind")
+            .withMethod("PUT")
+            .withBody(portBindingSerializer.serialize(
+                portBinding(1090, 1090)
+            ));
+
+        // when
+        embeddedChannel.writeInbound(bindRequest);
+
+        // then - 200 and the ports are bound
+        verify(server).bindServerPorts(Arrays.asList(1090, 1090));
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), is(portBindingSerializer.serialize(
+            portBinding(1090, 1090)
+        )));
+    }
+
+    @Test
+    public void shouldForbidStopForReadOnlyPrincipalWhenAuthorizationEnabled() throws InterruptedException {
+        // given - control-plane authorization enabled with a verified READ-only principal;
+        // PUT /stop shuts the server down, so it must be classified MUTATE and rejected with
+        // 403 (not 401) at the Netty layer — a read-only principal cannot stop the server
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest stopRequest = request("/mockserver/stop").withMethod("PUT");
+
+        // when
+        embeddedChannel.writeInbound(stopRequest);
+
+        // then - 403 and the server is NOT stopped
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(403));
+        assertThat(httpResponse.getBodyAsString(), containsString("Forbidden for control plane"));
+        TimeUnit.SECONDS.sleep(1); // give any (erroneously) spawned stop thread time to run
+        verify(server, never()).stop();
+    }
+
+    @Test
+    public void shouldReturnStatusWhenControlPlaneAuthEnabledWithoutCredentials() {
+        // given - control-plane auth configured and rejecting; /status (liveness) must stay
+        // open so k8s liveness/readiness probes never need credentials
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> false);
+        when(server.getLocalPorts()).thenReturn(Arrays.asList(1090, 1090));
+        HttpRequest statusRequest = request("/mockserver/status").withMethod("PUT");
+
+        // when
+        embeddedChannel.writeInbound(statusRequest);
+
+        // then - still 200 with port binding, no auth challenge
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        assertThat(httpResponse.getBodyAsString(), is(portBindingSerializer.serialize(
+            portBinding(1090, 1090)
+        )));
+    }
+
+    @Test
+    public void shouldStopWhenNoControlPlaneAuthConfigured() throws InterruptedException {
+        // given - default config: NO control-plane auth handler set. The shared gate is a
+        // no-op (returns true), so /stop must still work with no credentials.
+        HttpRequest stopRequest = request("/mockserver/stop").withMethod("PUT");
+
+        // when
+        embeddedChannel.writeInbound(stopRequest);
+
+        // then
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+        TimeUnit.SECONDS.sleep(1); // ensure stop thread has run
+        verify(server).stop();
+    }
+
+    @Test
+    public void shouldBindWhenNoControlPlaneAuthConfigured() {
+        // given - default config: NO control-plane auth handler set. The shared gate is a
+        // no-op (returns true), so /bind must still work with no credentials.
+        when(server.bindServerPorts(anyList())).thenReturn(Arrays.asList(1090, 1090));
+        HttpRequest bindRequest = request("/mockserver/bind")
+            .withMethod("PUT")
+            .withBody(portBindingSerializer.serialize(
+                portBinding(1090, 1090)
+            ));
+
+        // when
+        embeddedChannel.writeInbound(bindRequest);
+
+        // then
+        verify(server).bindServerPorts(Arrays.asList(1090, 1090));
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(200));
+    }
+
+    @Test
     public void shouldRetrieveRecordedExpectations() {
         // given
         httpStateHandler.log(

@@ -54,8 +54,24 @@ sed_i() {
 if is_dry_run; then
   log_dry "would: rewrite version refs across changelog, jekyll config, packages, docs"
 else
-  TODAY=$(date +%Y-%m-%d)
-  sed_i "s/^## \[Unreleased\]/## [Unreleased]\n\n### Added\n\n### Changed\n\n### Fixed\n\n## [$RELEASE_VERSION] - $TODAY/" "$REPO_ROOT/changelog.md"
+  # Roll the changelog: open a fresh empty [Unreleased] and stamp a dated
+  # [RELEASE_VERSION] section from the previous Unreleased content.
+  #
+  # IDEMPOTENT: only roll if a [RELEASE_VERSION] section does not already exist.
+  # This step runs on full, maven-only AND post-maven, and the sed below matches
+  # the always-present "## [Unreleased]" header — so without this guard a retried
+  # full run or a post-maven re-run inserts ANOTHER "## [RELEASE_VERSION]" block
+  # below the re-created Unreleased header every single time it runs. That is the
+  # bug that duplicated the 7.1.0 section across its repeated re-runs (its many
+  # "update version references to 7.1.0" commits), later cleaned up by hand in
+  # commit af8d1a3e5 "removed duplicate entries from the changelog.md".
+  RELEASE_VERSION_RE=$(printf '%s' "$RELEASE_VERSION" | sed 's/\./\\./g')
+  if grep -qE "^## \[$RELEASE_VERSION_RE\]" "$REPO_ROOT/changelog.md"; then
+    log_info "changelog.md already has a [$RELEASE_VERSION] section — skipping changelog rollover (idempotent re-run)"
+  else
+    TODAY=$(date +%Y-%m-%d)
+    sed_i "s/^## \[Unreleased\]/## [Unreleased]\n\n### Added\n\n### Changed\n\n### Fixed\n\n## [$RELEASE_VERSION] - $TODAY/" "$REPO_ROOT/changelog.md"
+  fi
 
   JEKYLL_CONFIG="$REPO_ROOT/jekyll-www.mock-server.com/_config.yml"
   sed_i "s/^mockserver_version: .*/mockserver_version: $RELEASE_VERSION/" "$JEKYLL_CONFIG"

@@ -120,7 +120,7 @@ mockserver.enableCORSForAllResponses=false</code></pre>
             <td><span class="this_value">(none)</span></td>
             <td>Load a set of expectations from a JSON file when MockServer starts — useful for shared or CI setups</td>
         </tr>
-        <tr>
+        <tr id="button_configuration_metrics_enabled">
             <td><span class="inline_code">metricsEnabled</span></td>
             <td><span class="inline_code">MOCKSERVER_METRICS_ENABLED</span></td>
             <td><span class="this_value">false</span></td>
@@ -758,8 +758,9 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 
 <button id="button_configuration_attach_mismatch_diagnostic_to_response" class="accordion title"><strong>Attach Mismatch Diagnostic To Unmatched Response</strong></button>
 <div class="panel title">
-    <p>When enabled, if no expectation matches an incoming request the 404 response carries the closest-match diagnostic: an <span class="inline_code">x-mockserver-closest-match</span> header plus a JSON body describing which expectation came closest to matching and which fields differed. This lets you see why a mock did not match directly from the response, without checking the MockServer logs or dashboard.</p>
-    <p>Useful when debugging in test environments. Leave it disabled (the default) for any production-facing use, as the diagnostic exposes expectation internals in the response.</p>
+    <p>When enabled, if no expectation matches an incoming request the 404 response carries the <strong>verbose</strong> closest-match diagnostic: an <span class="inline_code">x-mockserver-closest-match</span> header plus a JSON body describing which expectation came closest to matching and which fields differed. This lets you see why a mock did not match directly from the response, without checking the MockServer logs or dashboard.</p>
+    <p>Useful when debugging in test environments. Leave it disabled (the default) for any production-facing use, as the diagnostic exposes expectation internals in the response body.</p>
+    <p>This is the verbose, opt-in counterpart of <span class="inline_code">closestMatchHintEnabled</span> (a compact, header-only hint that is <em>on by default</em>). The two use different header names and are independent: if both are enabled an unmatched 404 carries <strong>both</strong> headers (<span class="inline_code">x-mockserver-closest-match</span> with the JSON body, and <span class="inline_code">x-mockserver-closest-match-hint</span> with the one-line summary).</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.attachMismatchDiagnosticToResponse(boolean enable)</code></pre>
@@ -771,6 +772,24 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.attachMismatchDiagnosticToResponse=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.attachMismatchDiagnosticToResponse="true"</code></pre>
+</div>
+
+<button id="button_configuration_closest_match_hint_enabled" class="accordion title"><strong>Closest Match Hint On Unmatched Response</strong></button>
+<div class="panel title">
+    <p>When enabled (the default), if no expectation matches an incoming request the 404 response carries a single concise <span class="inline_code">x-mockserver-closest-match-hint</span> header naming the closest expectation and the first field that differed (for example <span class="inline_code">expectation 1a2b: method did not match (expected POST but was GET)</span>). This answers &ldquo;why didn&rsquo;t my mock match?&rdquo; straight from the response, without opening the MockServer logs or dashboard.</p>
+    <p>The hint is <strong>header-only and length-bounded</strong> &mdash; it never adds a response body, so it cannot leak large or sensitive expectation contents. That is what makes it safe to enable by default. Its verbose counterpart, <span class="inline_code">attachMismatchDiagnosticToResponse</span> (off by default), additionally writes a full JSON diff body under a different header (<span class="inline_code">x-mockserver-closest-match</span>); the two are independent, so enabling both yields <strong>both</strong> headers on an unmatched 404.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Set this to <span class="inline_code">false</span> if you need unmatched 404 responses to be byte-for-byte free of the extra header (for example a test that asserts the exact response).</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.closestMatchHintEnabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.closestMatchHintEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLOSEST_MATCH_HINT_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.closestMatchHintEnabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.closestMatchHintEnabled="true"</code></pre>
 </div>
 
 <button id="button_configuration_forward_proxy_block_private_networks" class="accordion title"><strong>Block Forwarding To Private Networks (SSRF Protection)</strong></button>
@@ -1584,7 +1603,7 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p><strong>Required scopes</strong> &mdash; a comma- or space-separated list of scopes the token must contain to be accepted. When empty (the default) any validly-signed, in-audience token is accepted.</p>
     <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
     <p>Java Code:</p>
-    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcRequiredScopes(String requiredScopes)</code></pre>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneOidcRequiredScopes(Set&lt;String&gt; requiredScopes)</code></pre>
     <p>System Property:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneOidcRequiredScopes=...</code></pre>
     <p>Environment Variable:</p>
@@ -1619,7 +1638,7 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p><strong>Scope mapping</strong> &mdash; maps required scopes (or groups) to control-plane operations such as read and write, letting fine-grained scopes gate which admin actions a caller may perform. Has effect only when control-plane authorization is enabled.</p>
     <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span></p>
     <p>Java Code:</p>
-    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneScopeMapping(String scopeMapping)</code></pre>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.controlPlaneScopeMapping(Map&lt;String, ControlPlaneRole&gt; scopeMapping)</code></pre>
     <p>System Property:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneScopeMapping=...</code></pre>
     <p>Environment Variable:</p>
@@ -1795,6 +1814,10 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationEnabled=...</code></pre>
     <p>Environment Variable:</p>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_LOAD_GENERATION_ENABLED=...</code></pre>
+    <p><strong>Suppress Event Log</strong> &mdash; keep the server's own load-generation traffic out of the request event log. When <span class="this_value">true</span> (the default) requests generated by a load scenario are flagged with an in-process-only marker so they are skipped by the driver's bounded event log, leaving it free for the requests under test. The marker is never sent on the wire, so it cannot reach an upstream target and disable that target's logging. Set to <span class="this_value">false</span> to record load-generation traffic in the driver's event log too. Default is <span class="this_value">true</span>.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationSuppressEventLog(boolean suppress)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.loadGenerationSuppressEventLog=... &nbsp; MOCKSERVER_LOAD_GENERATION_SUPPRESS_EVENT_LOG=...</code></pre>
     <p><strong>Max Virtual Users</strong> &mdash; hard cap on the concurrent virtual users a scenario may drive; a profile asking for more is rejected. Default is <span class="this_value">50</span>.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">50</span></p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.loadGenerationMaxVirtualUsers(int maxVirtualUsers)</code></pre>
@@ -1860,11 +1883,42 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.perExpectationMetricsEnabled(boolean enabled)</code></pre>
     <p>System Property:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.perExpectationMetrics=...</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.perExpectationMetricsEnabled=...</code></pre>
     <p>Environment Variable:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_PER_EXPECTATION_METRICS=...</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_PER_EXPECTATION_METRICS_ENABLED=...</code></pre>
     <p>Example:</p>
-    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsEnabled="true" -Dmockserver.perExpectationMetrics="true"</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsEnabled="true" -Dmockserver.perExpectationMetricsEnabled="true"</code></pre>
+    <p>The legacy <span class="inline_code">-Dmockserver.perExpectationMetrics</span> / <span class="inline_code">MOCKSERVER_PER_EXPECTATION_METRICS</span> form is still accepted for backward compatibility.</p>
+</div>
+
+<button id="button_configuration_slow_request_threshold_millis" class="accordion title"><strong>Slow Request Threshold</strong></button>
+<div class="panel title">
+    <p>Threshold in milliseconds for flagging slow forwarded requests. When a forwarded request's total time exceeds this threshold, MockServer emits a <span class="inline_code">WARN</span>-level log entry identifying the slow request and increments the <span class="inline_code">mock_server_slow_requests_total</span> Prometheus counter (visible when <span class="inline_code">metricsEnabled</span> is on). This makes it easy to spot upstreams that are responding slowly without trawling the full event log.</p>
+    <p>This is <strong>off by default</strong> (threshold <span class="this_value">0</span>, no requests flagged). Set it to the latency above which a forwarded request should be considered slow for your environment.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">0</span> (disabled)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.slowRequestThresholdMillis(long milliseconds)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.slowRequestThresholdMillis=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_SLOW_REQUEST_THRESHOLD_MILLIS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.slowRequestThresholdMillis="2000"</code></pre>
+</div>
+
+<button id="button_configuration_metrics_request_duration_route_labels" class="accordion title"><strong>Metrics Request Duration Route Labels</strong></button>
+<div class="panel title">
+    <p>When enabled (alongside <span class="inline_code">metricsEnabled</span>), MockServer registers an additional histogram <span class="inline_code">mock_server_request_duration_by_method_seconds</span> with a <span class="inline_code">method</span> label for the HTTP method (GET, POST, etc.), alongside the unlabelled <span class="inline_code">mock_server_request_duration_seconds</span>. This lets you break request-latency percentiles down per HTTP method.</p>
+    <p>This is <strong>off by default</strong>. Cardinality is bounded to the set of standard HTTP methods, so enabling it adds only a small, fixed number of label values.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.metricsRequestDurationRouteLabels(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsRequestDurationRouteLabels=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsEnabled="true" -Dmockserver.metricsRequestDurationRouteLabels="true"</code></pre>
 </div>
 
 <button id="button_configuration_redact_secrets_in_recorded_expectations" class="accordion title"><strong>Redact Secrets In Recorded Expectations</strong></button>
@@ -1915,6 +1969,47 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.redactSecretsInLog="true"</code></pre>
 </div>
 
+<a id="dashboard_analytics_configuration" class="anchor" href="#dashboard_analytics_configuration">&nbsp;</a>
+
+<h2>Dashboard Analytics Configuration:</h2>
+
+<button id="button_configuration_dashboard_analytics_enabled" class="accordion title"><strong>Dashboard Analytics Enabled</strong></button>
+<div class="panel title">
+    <p>Master kill switch for the dashboard's anonymous usage analytics. When set to <span class="inline_code">false</span>, the analytics module never loads — no PostHog chunk is fetched, no events are sent, and the consent banner is suppressed. Use this to disable analytics across an entire deployment regardless of any other configuration.</p>
+    <p>Analytics is also inactive unless <span class="inline_code">dashboardAnalyticsEndpoint</span> and <span class="inline_code">dashboardAnalyticsKey</span> are both set to non-empty values, so setting this switch alone has no effect unless an endpoint and key are also provided.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED=...</code></pre>
+    <p>Example (disable globally):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsEnabled="false"</code></pre>
+</div>
+
+<button id="button_configuration_dashboard_analytics_endpoint" class="accordion title"><strong>Dashboard Analytics Endpoint</strong></button>
+<div class="panel title">
+    <p>The base URL of a self-hosted PostHog instance to which anonymous dashboard usage events are sent (the PostHog <span class="inline_code">api_host</span> value, for example <span class="inline_code">https://posthog.example.com</span>). When this property is blank or absent, analytics is disabled regardless of the other analytics settings. MockServer never uses the PostHog cloud endpoint by default — an operator must explicitly supply their own self-hosted endpoint.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (analytics disabled)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsEndpoint=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsEndpoint="https://posthog.example.com"</code></pre>
+</div>
+
+<button id="button_configuration_dashboard_analytics_key" class="accordion title"><strong>Dashboard Analytics Key</strong></button>
+<div class="panel title">
+    <p>The PostHog write-only project API key for the self-hosted instance identified by <span class="inline_code">dashboardAnalyticsEndpoint</span>. When this property is blank or absent, analytics is disabled. The key is transmitted to the dashboard browser as part of the server configuration and is used only to authenticate with the PostHog ingest API — it cannot read or export any data.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (analytics disabled)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsKey=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DASHBOARD_ANALYTICS_KEY=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsKey="phc_xxxxxxxxxxxxxxxxxxxx"</code></pre>
+</div>
+
 <button id="button_configuration_otel" class="accordion title"><strong>OpenTelemetry (Metrics, GenAI Spans &amp; Trace Context)</strong></button>
 <div class="panel title">
     <p>MockServer can export to an OpenTelemetry (OTLP) collector, in two independent parts that are each <strong>off by default</strong> and <strong>fail-soft</strong> (a startup error logs one line and never stops the server or affects a response). Both use the OTLP HTTP/protobuf exporter with the JDK HTTP client (no gRPC/OkHttp) and share the same endpoint.</p>
@@ -1928,9 +2023,10 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.otelTracesEnabled(boolean enabled)</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelTracesEnabled=... &nbsp; MOCKSERVER_OTEL_TRACES_ENABLED=...</code></pre>
-    <p><strong>OTLP endpoint (shared)</strong> &mdash; the collector base URL (e.g. <span class="inline_code">http://localhost:4318</span>); the <span class="inline_code">/v1/metrics</span> and <span class="inline_code">/v1/traces</span> paths are appended per signal. Empty uses the OTLP default (<span class="inline_code">http://localhost:4318</span>).</p>
+    <p><strong>OTLP endpoint (shared)</strong> &mdash; the collector base URL (e.g. <span class="inline_code">http://localhost:4318</span>); the <span class="inline_code">/v1/metrics</span> and <span class="inline_code">/v1/traces</span> paths are appended per signal.</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.otelEndpoint(String baseUrl)</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelEndpoint=... &nbsp; MOCKSERVER_OTEL_ENDPOINT=...</code></pre>
+    <p>When this property is not set (a blank or whitespace-only <span class="inline_code">MOCKSERVER_OTEL_ENDPOINT</span> env var is treated as unset), the OpenTelemetry-standard <span class="inline_code">OTEL_EXPORTER_OTLP_ENDPOINT</span> environment variable is honoured as a fallback &mdash; the MockServer-specific value always takes precedence. When neither this property nor the standard <span class="inline_code">OTEL_EXPORTER_OTLP_ENDPOINT</span> is set, the empty value causes the OTel SDK to fall back to its default (<span class="inline_code">http://localhost:4318</span>).</p>
     <p>Example (both signals to a collector):</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelMetricsEnabled="true" -Dmockserver.otelTracesEnabled="true" -Dmockserver.otelEndpoint="http://otel-collector:4318"</code></pre>
     <p><strong>3. W3C Trace Context propagation</strong> &mdash; extract the W3C <span class="inline_code">traceparent</span> and <span class="inline_code">tracestate</span> headers from incoming requests and optionally copy them to mock responses. This lets callers correlate request-response pairs within a distributed trace when MockServer sits in a service mesh or test harness. The handler is always present in the pipeline but is a no-op unless enabled.</p>

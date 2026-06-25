@@ -59,25 +59,46 @@ public class LlmOptimisationBriefRenderer {
         // 1. Framing preamble
         md.append("> ").append(FRAMING_PREAMBLE).append("\n\n");
 
+        // 2. Verdict (always present, even on the empty path)
+        appendVerdict(md, report);
+
         if (empty) {
             md.append("## Run summary\n\n");
             md.append("No LLM traffic captured for this session.\n");
             return md.toString();
         }
 
-        // 2. Run summary
+        // 3. Run summary
         appendRunSummary(md, report);
 
-        // 3. Per-call table
+        // 4. Per-call table
         appendPerCallTable(md, report);
 
-        // 4. Detected opportunities (signals already HIGH-first from the builder)
+        // 5. Detected opportunities (urgency-ranked from the builder)
         appendOpportunities(md, report);
 
-        // 5. Conversations & tool definitions appendix (redacted)
+        // 6. Conversations & tool definitions appendix (redacted)
         appendAppendix(md, report, exchanges, redactor);
 
         return md.toString();
+    }
+
+    private void appendVerdict(StringBuilder md, LlmOptimisationReport report) {
+        LlmOptimisationReport.Verdict v = report != null && report.getVerdict() != null
+            ? report.getVerdict() : new LlmOptimisationReport.Verdict();
+        md.append("## Verdict\n\n");
+        md.append("- Grade: ").append(v.getGrade()).append("\n");
+        md.append("- ").append(v.getRationale()).append("\n");
+        int percent = (int) Math.round(v.getSavingFractionOfSpend() * 100);
+        md.append("- Est. ").append(formatUsd(v.getTotalEstimatedSavingUsd()))
+            .append(" (").append(percent).append("% of spend) / ")
+            .append(formatTokens(v.getTotalWastedInputTokens())).append(" tokens recoverable\n");
+        if (report != null && report.getTotals() != null) {
+            LlmOptimisationReport.Totals t = report.getTotals();
+            md.append("- Cache hit rate: ").append(formatPercent(t.getCacheHitRatio())).append("\n");
+            md.append("- One-shot rate: ").append(formatPercent(t.getOneShotRate())).append("\n");
+        }
+        md.append("\n");
     }
 
     private void appendRunSummary(StringBuilder md, LlmOptimisationReport report) {
@@ -94,7 +115,9 @@ public class LlmOptimisationBriefRenderer {
         md.append("- Estimated cost: ").append(formatUsd(t.getEstimatedCostUsd()))
             .append(t.isCostIsEstimated() ? " (estimated — usage not reported upstream)" : "").append("\n");
         md.append("- Total latency: ").append(t.getTotalLatencyMs()).append(" ms\n");
-        md.append("- Tool calls: ").append(t.getToolCallCount()).append("\n\n");
+        md.append("- Tool calls: ").append(t.getToolCallCount()).append("\n");
+        md.append("- Cache hit rate: ").append(formatPercent(t.getCacheHitRatio())).append("\n");
+        md.append("- One-shot rate: ").append(formatPercent(t.getOneShotRate())).append("\n\n");
     }
 
     private void appendPerCallTable(StringBuilder md, LlmOptimisationReport report) {
@@ -133,7 +156,32 @@ public class LlmOptimisationBriefRenderer {
             if (signal.getEstimatedSavingUsd() != null) {
                 md.append("- Estimated saving: ").append(formatUsd(signal.getEstimatedSavingUsd())).append("\n");
             }
-            md.append("- Recommendation: ").append(signal.getRecommendation()).append("\n\n");
+            md.append("- Recommendation: ").append(signal.getRecommendation()).append("\n");
+            appendFix(md, signal.getFix());
+            md.append("\n");
+        }
+    }
+
+    private void appendFix(StringBuilder md, LlmOptimisationReport.Fix fix) {
+        if (fix == null) {
+            return;
+        }
+        StringBuilder line = new StringBuilder("- Fix:");
+        if (fix.getSummary() != null) {
+            line.append(' ').append(fix.getSummary());
+        }
+        if (fix.getAction() != null) {
+            line.append(fix.getSummary() != null ? " — " : " ").append(fix.getAction());
+        }
+        md.append(line).append("\n");
+        if (fix.getConfigSnippet() != null) {
+            md.append("\n```config\n").append(fix.getConfigSnippet()).append("\n```\n");
+        }
+        if (fix.getExampleExpectation() != null) {
+            md.append("\n```json\n").append(fix.getExampleExpectation()).append("\n```\n");
+        }
+        if (fix.getDocsUrl() != null) {
+            md.append("- Docs: ").append(fix.getDocsUrl()).append("\n");
         }
     }
 
@@ -240,6 +288,10 @@ public class LlmOptimisationBriefRenderer {
 
     private static String formatUsd(double usd) {
         return String.format("$%.4f", usd);
+    }
+
+    private static String formatPercent(double fraction) {
+        return Math.round(fraction * 100) + "%";
     }
 
     private static String formatIntList(List<Integer> values) {

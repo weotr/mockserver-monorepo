@@ -174,7 +174,7 @@
 
 <h3>Configuring JVM Heap Size</h3>
 
-<p>The default JVM heap in the MockServer Docker image is determined by the JVM's container-aware defaults (typically 25% of the container's memory limit). To set an explicit heap size, use the <span class="inline_code">JAVA_TOOL_OPTIONS</span> environment variable:</p>
+<p>The MockServer Docker image caps the JVM heap at 75% of the container's memory limit (<span class="inline_code">-XX:MaxRAMPercentage=75.0</span>), so the in-memory ring buffers size off a bounded heap. <strong>Always run the container with an explicit memory limit</strong> (for example <span class="inline_code">--memory=1g</span>, or <span class="inline_code">resources.limits.memory</span> in Kubernetes) &mdash; without one the JVM sizes its heap off the host's total memory, and the default ring sizes (<span class="inline_code">maxLogEntries</span> and <span class="inline_code">maxExpectations</span>, which derive from available heap) scale up with it, so MockServer can be OOM-killed under load. This cap only applies when you have not set an explicit heap; to change it, set an explicit <span class="inline_code">-Xmx</span> via the <span class="inline_code">JAVA_TOOL_OPTIONS</span> environment variable (a different <span class="inline_code">-XX:MaxRAMPercentage</span> passed via <span class="inline_code">JAVA_TOOL_OPTIONS</span> will <strong>not</strong> take effect, because the image's entrypoint applies its own value last):</p>
 
 <pre class="code" style="padding: 2px;"><code class="code">docker run -d --rm -p 1080:1080 \
   -e JAVA_TOOL_OPTIONS="-Xmx512m" \
@@ -204,6 +204,7 @@
 
 <p>This creates a <span class="inline_code">memoryUsage_&lt;date&gt;.csv</span> file that records heap usage, log entry count, and expectation count over time. If you see heap usage consistently near the maximum, increase <span class="inline_code">-Xmx</span> or reduce <span class="inline_code">maxLogEntries</span>.</p>
 
+<a id="scalability_configuration" class="anchor" href="#scalability_configuration">&nbsp;</a>
 <h2>Scalability Configuration:</h2>
 
 <button id="button_configuration_use_native_transport" class="accordion title"><strong>Use Native Transport (Epoll)</strong></button>

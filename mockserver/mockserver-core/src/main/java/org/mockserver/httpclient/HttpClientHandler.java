@@ -153,7 +153,7 @@ public class HttpClientHandler extends SimpleChannelInboundHandler<Message> {
     }
 
     private boolean isNotSslException(Throwable cause) {
-        return !(cause.getCause() instanceof SSLException || cause instanceof DecoderException | cause instanceof NotSslRecordException);
+        return !(cause.getCause() instanceof SSLException || cause instanceof DecoderException || cause instanceof NotSslRecordException);
     }
 
     private boolean isNotConnectionReset(Throwable cause) {

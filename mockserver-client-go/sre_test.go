@@ -393,6 +393,321 @@ func TestClient_RunLoadScenario(t *testing.T) {
 	}
 }
 
+func TestClient_LoadScenario_AdvancedFields(t *testing.T) {
+	var body []byte
+	ts := stubServer(t, 200, `{"name":"adv","state":"LOADED"}`, nil, nil, &body)
+	defer ts.Close()
+
+	weight := 7.0
+	baseline := 0.0
+	peak := 50.0
+	scenario := LoadScenario{
+		Name:    "adv",
+		Profile: &LoadProfile{Shape: &LoadShape{Type: LoadShapeSpike, Metric: LoadShapeMetricVU, Curve: RampLinear, Baseline: &baseline, Peak: &peak, RampUpMillis: 10000, HoldMillis: 30000, RampDownMillis: 10000}},
+		Thresholds: []LoadThreshold{
+			{Metric: LoadThresholdLatencyP999, Comparator: "LESS_THAN", Threshold: 500},
+			{Metric: LoadThresholdErrorRate, Comparator: "LESS_THAN_OR_EQUAL", Threshold: 0.01},
+		},
+		AbortOnFail:      true,
+		AbortGraceMillis: 5000,
+		Pacing:           &LoadPacing{Mode: LoadPacingConstantThroughput, Value: 2},
+		Feeder:           &LoadFeeder{Rows: []map[string]string{{"user": "alice"}, {"user": "bob"}}, Strategy: LoadFeederRandom},
+		StepSelection:    StepSelectionWeighted,
+		Steps: []LoadStep{
+			{
+				Request: &HttpRequest{Method: "GET", Path: "/api/$iteration.data.user"},
+				Name:    "browse",
+				Weight:  &weight,
+				Captures: []LoadCapture{
+					{Name: "token", Source: LoadCaptureBodyJSONPath, Expression: "$.token", DefaultValue: "none"},
+				},
+			},
+		},
+	}
+
+	client := NewFromURL(ts.URL)
+	if _, err := client.LoadScenario(scenario); err != nil {
+		t.Fatal(err)
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+
+	// stepSelection
+	if m["stepSelection"] != "WEIGHTED" {
+		t.Errorf("expected stepSelection WEIGHTED, got %v", m["stepSelection"])
+	}
+	// abortOnFail / abortGraceMillis
+	if m["abortOnFail"] != true {
+		t.Errorf("expected abortOnFail true, got %v", m["abortOnFail"])
+	}
+	if m["abortGraceMillis"].(float64) != 5000 {
+		t.Errorf("expected abortGraceMillis 5000, got %v", m["abortGraceMillis"])
+	}
+
+	// thresholds
+	thresholds := m["thresholds"].([]interface{})
+	if len(thresholds) != 2 {
+		t.Fatalf("expected 2 thresholds, got %d", len(thresholds))
+	}
+	th0 := thresholds[0].(map[string]interface{})
+	if th0["metric"] != "LATENCY_P999" || th0["comparator"] != "LESS_THAN" || th0["threshold"].(float64) != 500 {
+		t.Errorf("unexpected threshold[0]: %v", th0)
+	}
+
+	// pacing
+	pacing := m["pacing"].(map[string]interface{})
+	if pacing["mode"] != "CONSTANT_THROUGHPUT" || pacing["value"].(float64) != 2 {
+		t.Errorf("unexpected pacing: %v", pacing)
+	}
+
+	// feeder
+	feeder := m["feeder"].(map[string]interface{})
+	if feeder["strategy"] != "RANDOM" {
+		t.Errorf("unexpected feeder strategy: %v", feeder["strategy"])
+	}
+	rows := feeder["rows"].([]interface{})
+	if len(rows) != 2 || rows[0].(map[string]interface{})["user"] != "alice" {
+		t.Errorf("unexpected feeder rows: %v", rows)
+	}
+
+	// profile.shape
+	profile := m["profile"].(map[string]interface{})
+	shape := profile["shape"].(map[string]interface{})
+	if shape["type"] != "SPIKE" || shape["metric"] != "VU" {
+		t.Errorf("unexpected shape: %v", shape)
+	}
+	// A meaningful zero (baseline=0) must still be serialised (pointer + omitempty).
+	if v, ok := shape["baseline"]; !ok || v.(float64) != 0 {
+		t.Errorf("expected shape baseline 0 present, got %v (present=%v)", v, ok)
+	}
+	if shape["peak"].(float64) != 50 {
+		t.Errorf("expected shape peak 50, got %v", shape["peak"])
+	}
+	// An unset profile shape field (target) must be omitted.
+	if _, ok := shape["target"]; ok {
+		t.Errorf("did not expect target on a SPIKE shape, got %v", shape["target"])
+	}
+
+	// step weight + captures
+	steps := m["steps"].([]interface{})
+	step0 := steps[0].(map[string]interface{})
+	if step0["weight"].(float64) != 7 {
+		t.Errorf("expected step weight 7, got %v", step0["weight"])
+	}
+	captures := step0["captures"].([]interface{})
+	cap0 := captures[0].(map[string]interface{})
+	if cap0["name"] != "token" || cap0["source"] != "BODY_JSONPATH" || cap0["expression"] != "$.token" || cap0["defaultValue"] != "none" {
+		t.Errorf("unexpected capture[0]: %v", cap0)
+	}
+}
+
+func TestClient_LoadScenario_OptionalAdvancedFieldsOmitted(t *testing.T) {
+	// A scenario that sets none of the new fields must not emit them (backward
+	// compatible — existing scenarios are unchanged on the wire).
+	body, err := json.Marshal(sampleScenario())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+	for _, k := range []string{"thresholds", "abortOnFail", "abortGraceMillis", "pacing", "feeder", "stepSelection"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("expected %q to be omitted on a basic scenario, got %v", k, m[k])
+		}
+	}
+	steps := m["steps"].([]interface{})
+	step0 := steps[0].(map[string]interface{})
+	for _, k := range []string{"weight", "captures"} {
+		if _, ok := step0[k]; ok {
+			t.Errorf("expected step %q to be omitted, got %v", k, step0[k])
+		}
+	}
+	profile := m["profile"].(map[string]interface{})
+	if _, ok := profile["shape"]; ok {
+		t.Errorf("expected profile shape to be omitted, got %v", profile["shape"])
+	}
+}
+
+func TestClient_LoadScenarioStatus_TerminalVerdictFields(t *testing.T) {
+	// The terminal verdict / threshold fields are emitted FLAT on the entry and
+	// promoted onto the entry via the embedded LoadScenarioStatus.
+	ts := stubServer(t, 200, `{"name":"adv","state":"STOPPED","p999Millis":612.3,"droppedIterations":4,"verdict":"FAIL","abortedByThreshold":true,"thresholdResults":[{"metric":"LATENCY_P999","comparator":"LESS_THAN","threshold":500,"observed":612.3,"satisfied":false}]}`, nil, nil, nil)
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	entry, err := client.GetLoadScenario("adv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.P999Millis != 612.3 || entry.DroppedIterations != 4 {
+		t.Errorf("unexpected percentile/dropped: %+v", entry)
+	}
+	if entry.Verdict != "FAIL" || !entry.AbortedByThreshold {
+		t.Errorf("unexpected verdict fields: %+v", entry)
+	}
+	if len(entry.ThresholdResults) != 1 {
+		t.Fatalf("expected 1 threshold result, got %d", len(entry.ThresholdResults))
+	}
+	tr := entry.ThresholdResults[0]
+	if tr.Metric != LoadThresholdLatencyP999 || tr.Observed != 612.3 || tr.Satisfied {
+		t.Errorf("unexpected threshold result: %+v", tr)
+	}
+}
+
+func TestClient_GetLoadScenarioReport_JSON(t *testing.T) {
+	var method, path, query string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method = r.Method
+		path = r.URL.Path
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"scenario":"adv","verdict":"PASS"}`))
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	report, err := client.GetLoadScenarioReport("adv", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != "GET" {
+		t.Errorf("expected GET, got %s", method)
+	}
+	if path != "/mockserver/loadScenario/adv/report" {
+		t.Errorf("unexpected path %s", path)
+	}
+	if query != "" {
+		t.Errorf("expected no query for JSON report, got %q", query)
+	}
+	if report != `{"scenario":"adv","verdict":"PASS"}` {
+		t.Errorf("unexpected report body: %s", report)
+	}
+}
+
+func TestClient_GetLoadScenarioReport_JUnit(t *testing.T) {
+	var path, query, escapedPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		escapedPath = r.URL.EscapedPath()
+		query = r.URL.Query().Get("format")
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`<testsuite name="adv"/>`))
+	}))
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	report, err := client.GetLoadScenarioReport("checkout load", "junit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/mockserver/loadScenario/checkout load/report" {
+		t.Errorf("unexpected decoded path %s", path)
+	}
+	if escapedPath != "/mockserver/loadScenario/checkout%20load/report" {
+		t.Errorf("expected escaped path, got %s", escapedPath)
+	}
+	if query != "junit" {
+		t.Errorf("expected format=junit, got %q", query)
+	}
+	if report != `<testsuite name="adv"/>` {
+		t.Errorf("unexpected report body: %s", report)
+	}
+}
+
+func TestClient_GetLoadScenarioReport_NotFound(t *testing.T) {
+	ts := stubServer(t, 404, `{"error":"no run"}`, nil, nil, nil)
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	if _, err := client.GetLoadScenarioReport("never-ran", ""); err == nil {
+		t.Fatal("expected error for 404 status")
+	}
+}
+
+func TestClient_GenerateLoadScenarioFromOpenAPI(t *testing.T) {
+	var method, path string
+	var body []byte
+	ts := stubServer(t, 200, `{"status":"loaded","name":"petstore-load","state":"LOADED","scenario":{"name":"petstore-load"}}`, &method, &path, &body)
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	result, err := client.GenerateLoadScenarioFromOpenAPI(map[string]interface{}{
+		"name":             "petstore-load",
+		"specUrlOrPayload": "https://example.com/petstore.yaml",
+		"target":           map[string]interface{}{"host": "petstore.svc", "port": 8080, "scheme": "http"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != "PUT" {
+		t.Errorf("expected PUT, got %s", method)
+	}
+	if path != "/mockserver/loadScenario/generateFromOpenAPI" {
+		t.Errorf("unexpected path %s", path)
+	}
+	var sent map[string]interface{}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+	if sent["name"] != "petstore-load" || sent["specUrlOrPayload"] != "https://example.com/petstore.yaml" {
+		t.Errorf("unexpected sent body: %v", sent)
+	}
+	m := result.(map[string]interface{})
+	if m["status"] != "loaded" || m["name"] != "petstore-load" {
+		t.Errorf("unexpected result: %v", m)
+	}
+}
+
+func TestClient_GenerateLoadScenarioFromRecording(t *testing.T) {
+	var method, path string
+	var body []byte
+	ts := stubServer(t, 200, `{"status":"loaded","name":"replay","state":"LOADED","scenario":{"name":"replay"}}`, &method, &path, &body)
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	result, err := client.GenerateLoadScenarioFromRecording(map[string]interface{}{
+		"name": "replay",
+		"mode": "TEMPLATIZED",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != "PUT" {
+		t.Errorf("expected PUT, got %s", method)
+	}
+	if path != "/mockserver/loadScenario/generateFromRecording" {
+		t.Errorf("unexpected path %s", path)
+	}
+	var sent map[string]interface{}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("body not valid JSON: %v", err)
+	}
+	if sent["name"] != "replay" || sent["mode"] != "TEMPLATIZED" {
+		t.Errorf("unexpected sent body: %v", sent)
+	}
+	m := result.(map[string]interface{})
+	if m["status"] != "loaded" {
+		t.Errorf("unexpected result: %v", m)
+	}
+}
+
+func TestClient_GenerateLoadScenarioFromOpenAPI_Error(t *testing.T) {
+	ts := stubServer(t, 400, `{"error":"missing name"}`, nil, nil, nil)
+	defer ts.Close()
+
+	client := NewFromURL(ts.URL)
+	if _, err := client.GenerateLoadScenarioFromOpenAPI(map[string]interface{}{}); err == nil {
+		t.Fatal("expected error for 400 status")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // 2. Service chaos
 // ---------------------------------------------------------------------------

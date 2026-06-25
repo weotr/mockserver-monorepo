@@ -40,7 +40,10 @@ public class HttpForwardActionHandler extends HttpForwardAction {
             );
             return badGatewayFuture(httpRequest);
         }
-        return sendRequest(httpRequest, new InetSocketAddress(httpForward.getHost(), httpForward.getPort()), null);
+        // SSRF validation above has already resolved and vetted the host. Hand the connect path an
+        // unresolved address so Netty's event-loop resolver performs the (blocking) DNS lookup off the
+        // calling thread instead of resolving synchronously here via the InetSocketAddress constructor.
+        return sendRequest(httpRequest, InetSocketAddress.createUnresolved(httpForward.getHost(), httpForward.getPort()), null);
     }
 
 }

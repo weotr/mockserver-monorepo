@@ -10,7 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-public class MockServerExtension implements ParameterResolver, BeforeAllCallback, AfterAllCallback {
+public class MockServerExtension implements ParameterResolver, BeforeAllCallback, BeforeEachCallback, AfterAllCallback {
     private static final ExtensionContext.Namespace NAMESPACE = ExtensionContext.Namespace.create(MockServerExtension.class);
     private static final String CLIENT_KEY = "clientAndServer";
     private static final String OWNER_KEY = "ownerExtension";
@@ -18,6 +18,7 @@ public class MockServerExtension implements ParameterResolver, BeforeAllCallback
     protected ClientAndServer customClientAndServer;
     protected ClientAndServer clientAndServer;
     protected boolean perTestSuite;
+    protected boolean resetBeforeEach;
 
     public MockServerExtension() {
 
@@ -45,6 +46,15 @@ public class MockServerExtension implements ParameterResolver, BeforeAllCallback
         ensureStarted(context);
     }
 
+    @Override
+    public void beforeEach(ExtensionContext context) {
+        // beforeAll has already run ensureStarted, so clientAndServer and the
+        // resetBeforeEach flag are deterministically set by the time we get here.
+        if (resetBeforeEach && clientAndServer != null && clientAndServer.isRunning()) {
+            clientAndServer.reset();
+        }
+    }
+
     private void ensureStarted(ExtensionContext context) {
         ExtensionContext.Store store = context.getStore(NAMESPACE);
         ClientAndServer existing = store.get(CLIENT_KEY, ClientAndServer.class);
@@ -57,6 +67,7 @@ public class MockServerExtension implements ParameterResolver, BeforeAllCallback
         if (mockServerSettingsOptional.isPresent()) {
             MockServerSettings mockServerSettings = mockServerSettingsOptional.get();
             perTestSuite = mockServerSettings.perTestSuite();
+            resetBeforeEach = mockServerSettings.resetBeforeEach();
             for (int port : mockServerSettings.ports()) {
                 ports.add(port);
             }

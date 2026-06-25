@@ -1,0 +1,35 @@
+meta {
+  name: seed a load scenario from an OpenAPI specification
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/mockserver/loadScenario/generateFromOpenAPI
+  body: json
+  auth: inherit
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "name": "petstore-load",
+    "specUrlOrPayload": "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+    "target": {
+      "host": "petstore.svc",
+      "port": 8080,
+      "scheme": "http"
+    }
+  }
+}
+
+docs {
+  Generates an editable load scenario from an OpenAPI spec and loads (registers) it into the registry under "name" in the LOADED state — exactly like PUT /mockserver/loadScenario, it generates no traffic and is allowed even when loadGenerationEnabled is false. One step is produced per OpenAPI operation (in a stable path-then-method order), each with the operation's method and server-prefixed path, a representative request-body example, and a Content-Type header. The spec is accepted identically to PUT /mockserver/openapi/expectation — an inline JSON/YAML payload, a URL, or a file/classpath reference. Target precedence for where each request is sent (carried as the request's Host header and secure flag): an explicit "target" wins, else the spec's servers[0] URL, else the request is left path-only for the operator to edit. When no "profile" is supplied a conservative default is applied (one short constant-VU stage) so the scenario is immediately runnable yet safe — the operator edits it before scaling up. The generated scenario is returned so a client/UI can show and edit it before triggering a run.
+  
+  the scenario name plus the OpenAPI spec (with optional target and profile)
+  
+  Full API reference: https://www.mock-server.com/mock_server/mockserver_clients.html
+}

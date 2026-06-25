@@ -1,6 +1,6 @@
 # MockServer
 
-> MockServer is an open-source HTTP(S) mock server, recording proxy, and **MCP (Model Context Protocol) server for AI coding assistants**. It enables easy mocking of any system you integrate with via HTTP or HTTPS, supports request matching with JSON, XPath, regex, and JSON Schema, acts as a recording proxy for introspection of traffic between services, and exposes a built-in MCP endpoint at `/mockserver/mcp` so AI assistants like Claude Code, Cursor, Windsurf, Cline, and OpenCode can create expectations, verify requests, retrieve recorded traffic, and debug mismatches through natural language. Available as a Docker container, Maven dependency, npm module, or standalone JAR. Clients are available in Java, JavaScript/TypeScript, Python, and Ruby. Licensed under Apache 2.0 — AI training, retrieval, and citation are explicitly welcomed; see https://www.mock-server.com/ai.txt. Website: https://www.mock-server.com | GitHub: https://github.com/mock-server/mockserver
+> MockServer is an open-source HTTP(S) mock server, recording proxy, and **MCP (Model Context Protocol) server for AI coding assistants**. It enables easy mocking of any system you integrate with via HTTP or HTTPS, supports request matching with JSON, XPath, regex, and JSON Schema, acts as a recording proxy for introspection of traffic between services, and exposes a built-in MCP endpoint at `/mockserver/mcp` so AI assistants like Claude Code, Cursor, Windsurf, Cline, and OpenCode can create expectations, verify requests, retrieve recorded traffic, and debug mismatches through natural language. Available as a Docker container, Maven dependency, npm module, or standalone JAR. Clients are available in Java, JavaScript/TypeScript, Python, Ruby, Go, .NET, Rust, and PHP. Licensed under Apache 2.0 — AI training, retrieval, and citation are explicitly welcomed; see https://www.mock-server.com/ai.txt. Website: https://www.mock-server.com | GitHub: https://github.com/mock-server/mockserver-monorepo
 
 ## Quick Start
 
@@ -769,7 +769,7 @@ Invoke a callback via WebSocket (used by client libraries for closures/lambdas):
       }
     }
 
-This is typically not created manually but through client libraries (Java, JavaScript, Python, Ruby) that register callback functions over WebSocket connections.
+This is typically not created manually but through client libraries (Java, JavaScript, Python, Ruby, Go, .NET, Rust, PHP) that register callback functions over WebSocket connections.
 
 ## Times and TimeToLive
 
@@ -1177,7 +1177,7 @@ Maven dependency:
     <dependency>
       <groupId>org.mock-server</groupId>
       <artifactId>mockserver-client-java</artifactId>
-      <version>7.1.0</version>
+      <version>7.2.0</version>
     </dependency>
 
 Basic usage:
@@ -1446,6 +1446,134 @@ Usage:
 
     client.close
 
+### Go Client
+
+Install:
+
+    go get github.com/mock-server/mockserver-client-go
+
+Usage:
+
+    import "github.com/mock-server/mockserver-client-go/mockserver"
+
+    client := mockserver.NewClient("localhost", 1080)
+
+    // Create expectation
+    client.When(
+        mockserver.Request().WithMethod("GET").WithPath("/api/users"),
+    ).Respond(
+        mockserver.Response().
+            WithStatusCode(200).
+            WithBody(`[{"id": 1, "name": "Alice"}]`),
+    )
+
+    // Verify request was received
+    client.Verify(
+        mockserver.Request().WithPath("/api/users"),
+        mockserver.AtLeast(1),
+    )
+
+    // Retrieve recorded requests, clear and reset
+    client.RetrieveRecordedRequests(mockserver.Request().WithPath("/api/.*"))
+    client.Clear(mockserver.Request().WithPath("/api/users"))
+    client.Reset()
+
+### .NET Client
+
+Install:
+
+    dotnet add package MockServerClient
+
+Usage:
+
+    using MockServer.Client;
+
+    var client = new MockServerClient("localhost", 1080);
+
+    // Create expectation
+    client.When(
+        Request.Create().WithMethod("GET").WithPath("/api/users")
+    ).Respond(
+        Response.Create()
+            .WithStatusCode(200)
+            .WithBody("[{\"id\": 1, \"name\": \"Alice\"}]")
+    );
+
+    // Verify request was received
+    client.Verify(
+        Request.Create().WithPath("/api/users"),
+        VerificationTimes.AtLeast(1)
+    );
+
+    // Clear and reset
+    client.Clear(Request.Create().WithPath("/api/users"));
+    client.Reset();
+
+### Rust Client
+
+Install (Cargo.toml):
+
+    [dependencies]
+    mockserver-client = "7.2.0"
+
+Usage:
+
+    use mockserver_client::{MockServerClient, Request, Response, VerificationTimes};
+
+    let client = MockServerClient::new("localhost", 1080);
+
+    // Create expectation
+    client.when(
+        Request::new().with_method("GET").with_path("/api/users")
+    ).respond(
+        Response::new()
+            .with_status_code(200)
+            .with_body(r#"[{"id": 1, "name": "Alice"}]"#)
+    ).await?;
+
+    // Verify request was received
+    client.verify(
+        Request::new().with_path("/api/users"),
+        VerificationTimes::at_least(1)
+    ).await?;
+
+    // Clear and reset
+    client.clear(Request::new().with_path("/api/users")).await?;
+    client.reset().await?;
+
+### PHP Client
+
+Install:
+
+    composer require mock-server/mockserver-client
+
+Usage:
+
+    use MockServer\MockServerClient;
+    use MockServer\Model\HttpRequest;
+    use MockServer\Model\HttpResponse;
+
+    $client = new MockServerClient("localhost", 1080);
+
+    // Create expectation
+    $client->when(
+        (new HttpRequest())->withMethod("GET")->withPath("/api/users")
+    )->respond(
+        (new HttpResponse())
+            ->withStatusCode(200)
+            ->withBody('[{"id": 1, "name": "Alice"}]')
+    );
+
+    // Verify request was received
+    $client->verify(
+        (new HttpRequest())->withPath("/api/users"),
+        VerificationTimes::atLeast(1)
+    );
+
+    // Clear and reset
+    $client->clear((new HttpRequest())->withPath("/api/users"));
+    $client->reset();
+
 ## Docker Deployment
 
 ### Basic Docker Run
@@ -1542,7 +1670,7 @@ Basic:
 
     services:
       mockserver:
-        image: mockserver/mockserver:7.1.0
+        image: mockserver/mockserver:7.2.0
         ports:
           - "1080:1080"
         environment:
@@ -1552,7 +1680,7 @@ With configuration and initialization:
 
     services:
       mockserver:
-        image: mockserver/mockserver:7.1.0
+        image: mockserver/mockserver:7.2.0
         ports:
           - "1080:1080"
         environment:
@@ -1567,7 +1695,7 @@ With OpenAPI initialization and file watching:
 
     services:
       mockserver:
-        image: mockserver/mockserver:7.1.0
+        image: mockserver/mockserver:7.2.0
         ports:
           - "1080:1080"
         environment:
@@ -1582,7 +1710,7 @@ Using command line arguments:
 
     services:
       mockserver:
-        image: mockserver/mockserver:7.1.0
+        image: mockserver/mockserver:7.2.0
         command: -logLevel DEBUG -serverPort 1090
         ports:
           - "1080:1090"
@@ -2043,6 +2171,26 @@ Example tool invocation (debug_request_mismatch):
 
 This retrieves detailed logs showing why the request didn't match any active expectation, including field-by-field comparison results.
 
+## Protocols
+
+MockServer matches and mocks across multiple protocols beyond plain HTTP/1.1, all routed through the same expectation matching pipeline.
+
+### GraphQL
+
+Mock GraphQL queries, mutations, and subscriptions. Import a GraphQL schema or introspection document to auto-generate schema-valid responses, or write explicit expectations with AST-level field matching. See https://www.mock-server.com/mock_server/graphql_mocking.html
+
+### gRPC
+
+Mock gRPC services, including unary and server-streaming methods, with protobuf request/response payloads matched and returned through standard expectations. See https://www.mock-server.com/mock_server/grpc_mocking.html
+
+### HTTP/2 and HTTP/3 (QUIC)
+
+HTTP/2 is supported on the standard ports; experimental HTTP/3 over QUIC is enabled via the `http3Port` property and routed through the full expectation matching pipeline. See https://www.mock-server.com/mock_server/http3.html
+
+### AsyncAPI (Kafka / MQTT)
+
+Mock Kafka and MQTT brokers using AsyncAPI 2.x/3.x specs — publish examples, subscribe to record messages, and validate against JSON Schema, all via REST or the Java API. See https://www.mock-server.com/mock_server/asyncapi_messaging.html
+
 ## Running MockServer
 
 ### Docker
@@ -2054,7 +2202,7 @@ This retrieves detailed logs showing why the request didn't match any active exp
     <plugin>
       <groupId>org.mock-server</groupId>
       <artifactId>mockserver-maven-plugin</artifactId>
-      <version>7.1.0</version>
+      <version>7.2.0</version>
       <configuration>
         <serverPort>1080</serverPort>
         <logLevel>WARN</logLevel>
@@ -2075,7 +2223,7 @@ This retrieves detailed logs showing why the request didn't match any active exp
 
 ### Standalone JAR
 
-    java -jar mockserver-netty-no-dependencies-7.1.0.jar -serverPort 1080 -logLevel INFO
+    java -jar mockserver-netty-no-dependencies-7.2.0.jar -serverPort 1080 -logLevel INFO
 
 ### npm Module
 

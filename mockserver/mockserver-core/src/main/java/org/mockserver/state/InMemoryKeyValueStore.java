@@ -71,6 +71,13 @@ public class InMemoryKeyValueStore<V> implements KeyValueStore<V> {
             return false;
         }
         synchronized (entry) {
+            // Identity guard: a concurrent remove+put can swap a fresh entry in
+            // under the same key while we hold the lock on the OLD entry object
+            // (synchronized on a stale entry gives no mutual exclusion against
+            // the new one). Detect the swap and fail so the caller retries.
+            if (map.get(key) != entry) {
+                return false;
+            }
             if (entry.version.get() != expectedVersion) {
                 return false;
             }
@@ -88,10 +95,20 @@ public class InMemoryKeyValueStore<V> implements KeyValueStore<V> {
             return false;
         }
         synchronized (entry) {
+            // A concurrent remove+put can swap a fresh entry under this key while we
+            // hold the lock on the stale one; detect that and fail (symmetric with
+            // compareAndSet) rather than report success for a no-op remove.
+            if (map.get(key) != entry) {
+                return false;
+            }
             if (entry.version.get() != expectedVersion) {
                 return false;
             }
-            map.remove(key);
+            // Identity-conditional remove: an unconditional key-only remove could
+            // delete a DIFFERENT (valid) entry swapped in by a concurrent
+            // remove+put. VersionedEntry has no equals override, so remove(key,
+            // entry) compares by reference identity — exactly what we want.
+            map.remove(key, entry);
         }
         fireChanged(key);
         return true;

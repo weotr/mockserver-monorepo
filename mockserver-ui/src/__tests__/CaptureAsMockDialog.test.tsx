@@ -106,7 +106,9 @@ describe('CaptureAsMockDialog', () => {
     await user.click(screen.getByRole('tab', { name: 'Preview diff' }));
 
     // The diff is rendered (mocked DiffEditor exposes original/modified panes).
-    expect(screen.getByTestId('json-diff-viewer')).toBeInTheDocument();
+    // It loads via a lazy/Suspense split point (JsonDiffViewerLazy keeps monaco
+    // out of the main bundle), so it resolves asynchronously — await it.
+    expect(await screen.findByTestId('json-diff-viewer')).toBeInTheDocument();
     // "before" is an empty object — capture creates a brand-new mock.
     expect(screen.getByTestId('monaco-diff-original')).toHaveValue('{}');
     // "after" is the generated expectation JSON that will be registered.
@@ -120,7 +122,8 @@ describe('CaptureAsMockDialog', () => {
     renderDialog();
 
     await user.click(screen.getByRole('tab', { name: 'Preview diff' }));
-    const previewModified = (screen.getByTestId('monaco-diff-modified') as HTMLTextAreaElement).value;
+    // JsonDiffViewerLazy resolves asynchronously (Suspense), so await its pane.
+    const previewModified = ((await screen.findByTestId('monaco-diff-modified')) as HTMLTextAreaElement).value;
 
     await user.click(screen.getByRole('tab', { name: 'Copy as JSON' }));
     const copyJson = screen.getByText(/httpLlmResponse/).textContent ?? '';

@@ -416,6 +416,98 @@ module MockServer
       start_load_scenarios(name)
     end
 
+    # Fetch the end-of-run summary report for a load scenario run.
+    #
+    # Returns the report derived from the run's status snapshot (live while
+    # running, or the retained terminal snapshot once finished). With no +format+
+    # (or any value other than +"junit"+) the JSON report is parsed and returned
+    # as a Hash carrying counts, latency percentiles, the threshold verdict and
+    # per-threshold results. With +format: "junit"+ the raw JUnit-XML
+    # +<testsuite>+ document is returned as a String so a load run becomes a
+    # first-class CI test artifact.
+    #
+    # @param name [String] the unique scenario name
+    # @param format [String, nil] +"junit"+ for the JUnit-XML report, otherwise JSON
+    # @return [Hash, String] parsed JSON report (default) or the raw JUnit-XML String
+    # @raise [Error] if the scenario never ran (404) or another failure occurs
+    def get_load_scenario_report(name, format = nil)
+      query_params = {}
+      query_params['format'] = format if format
+      status, response_body = do_request(
+        'GET', "/mockserver/loadScenario/#{encode_path_segment(name)}/report", nil,
+        query_params.empty? ? nil : query_params
+      )
+      if status == 404
+        raise Error, "Load scenario report not found (status=404): #{name}"
+      end
+      if status >= 400
+        raise Error, "Failed to get load scenario report (status=#{status}): #{response_body}"
+      end
+
+      return response_body if format == 'junit'
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Generate (and register) a load scenario from an OpenAPI specification.
+    #
+    # Produces an editable scenario - one step per OpenAPI operation - and loads
+    # it into the registry under +name+ in the LOADED state; it generates no
+    # traffic and is allowed even when load generation is disabled.
+    #
+    # @param name [String] the generated scenario name (the unique registry key)
+    # @param spec_url_or_payload [String] OpenAPI spec as inline JSON/YAML, a URL,
+    #   or a file/classpath reference
+    # @param target [Hash, nil] explicit network target for every generated step
+    #   (e.g. { "host" => ..., "port" => ..., "scheme" => "http" })
+    # @param profile [LoadProfile, Hash, nil] optional traffic profile (a
+    #   conservative default is applied when omitted)
+    # @return [Hash] parsed response of the form
+    #   { "status" => "loaded", "name" => ..., "state" => ..., "scenario" => {...} }
+    def generate_load_scenario_from_openapi(name, spec_url_or_payload, target: nil, profile: nil)
+      payload = { 'name' => name, 'specUrlOrPayload' => spec_url_or_payload }
+      payload['target'] = target if target
+      payload['profile'] = profile.respond_to?(:to_h) ? profile.to_h : profile if profile
+      body = JSON.generate(payload)
+      status, response_body = request('PUT', '/mockserver/loadScenario/generateFromOpenAPI', body)
+      if status >= 400
+        raise Error, "Failed to generate load scenario from OpenAPI (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Generate (and register) a load scenario from recorded proxy traffic.
+    #
+    # Converts requests previously recorded by MockServer in proxy/recording mode
+    # into an editable scenario and loads it into the registry under +name+ in the
+    # LOADED state; it generates no traffic and is allowed even when load
+    # generation is disabled.
+    #
+    # @param name [String] the generated scenario name (the unique registry key)
+    # @param mode [String, nil] +VERBATIM+ (default) or +TEMPLATIZED+
+    # @param request_filter [HttpRequest, Hash, nil] optional matcher selecting
+    #   which recorded requests to include (absent means all)
+    # @param target [Hash, nil] explicit network target applied to every step
+    # @param max_steps [Integer, nil] optional cap on the number of VERBATIM steps
+    # @return [Hash] parsed response of the form
+    #   { "status" => "loaded", "name" => ..., "state" => ..., "scenario" => {...} }
+    def generate_load_scenario_from_recording(name, mode: nil, request_filter: nil,
+                                              target: nil, max_steps: nil)
+      payload = { 'name' => name }
+      payload['mode'] = mode if mode
+      payload['requestFilter'] = request_filter.respond_to?(:to_h) ? request_filter.to_h : request_filter if request_filter
+      payload['target'] = target if target
+      payload['maxSteps'] = max_steps if max_steps
+      body = JSON.generate(payload)
+      status, response_body = request('PUT', '/mockserver/loadScenario/generateFromRecording', body)
+      if status >= 400
+        raise Error, "Failed to generate load scenario from recording (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
     # -------------------------------------------------------------------
     # Stateful scenarios (state machine control plane)
     # -------------------------------------------------------------------

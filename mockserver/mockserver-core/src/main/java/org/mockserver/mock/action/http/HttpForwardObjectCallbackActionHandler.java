@@ -184,6 +184,9 @@ public class HttpForwardObjectCallbackActionHandler extends HttpForwardAction {
                         .setArguments(badGatewayResponse())
                 );
             }
+            // The client disconnected before it could handle the forwarded request: the forward callback
+            // registered above will never fire, so unregister it to avoid a registry leak before responding.
+            webSocketClientRegistry.unregisterForwardCallbackHandler(webSocketCorrelationId);
             actionHandler.writeForwardActionResponse(badGatewayFuture(request), responseWriter, request, httpObjectCallback, synchronous, expectationPostProcessor);
         } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
             mockServerLogger.logEvent(
@@ -230,7 +233,14 @@ public class HttpForwardObjectCallbackActionHandler extends HttpForwardAction {
                                 .setArguments(badGatewayResponse())
                         );
                     }
+                    // The client disconnected before it could override the response: the response callback
+                    // registered above will never fire, so unregister it (avoids a registry leak) and write a
+                    // single badGateway response. We then RETURN to skip the overridden-response write below —
+                    // otherwise we would write a second response on the same connection AND block a scheduler
+                    // thread until maxFutureTimeoutInMillis on a future that can never be completed.
+                    webSocketClientRegistry.unregisterResponseCallbackHandler(webSocketCorrelationId);
                     actionHandler.writeForwardActionResponse(badGatewayFuture(request), responseWriter, request, httpObjectCallback, synchronous, expectationPostProcessor);
+                    return;
                 } else if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
                     mockServerLogger.logEvent(
                         new LogEntry()

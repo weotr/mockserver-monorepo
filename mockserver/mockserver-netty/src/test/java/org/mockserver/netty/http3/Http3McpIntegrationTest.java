@@ -359,6 +359,53 @@ public class Http3McpIntegrationTest {
         assertThat("OPTIONS should return 200 even with auth enabled", result.status, is("200"));
     }
 
+    // ---- control-plane authorization over HTTP/3 ----
+
+    @Test
+    public void shouldRejectMutatingToolWhenAuthorizationEnabledAndCallerLacksMutateRoleOverHttp3() throws Exception {
+        // mirror the TCP-path test (McpStreamableHttpHandlerTest
+        // .shouldRejectMutatingToolWhenAuthorizationEnabledAndCallerLacksMutateRole) over HTTP/3:
+        // a verified READ-only principal calling a MUTATE tool must be denied.
+        java.util.Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> mapping = new java.util.LinkedHashMap<>();
+        mapping.put("readers", org.mockserver.authentication.authorization.ControlPlaneRole.READ);
+        mapping.put("mutators", org.mockserver.authentication.authorization.ControlPlaneRole.MUTATE);
+        startMockServer(configuration()
+            .controlPlaneAuthorizationEnabled(true)
+            .controlPlaneScopeMapping(mapping));
+
+        HttpState httpState = getHttpState(mockServer);
+        httpState.setControlPlaneAuthenticationHandler(new AuthenticationHandler() {
+            @Override
+            public boolean controlPlaneRequestAuthenticated(org.mockserver.model.HttpRequest request) {
+                return true;
+            }
+
+            @Override
+            public org.mockserver.authentication.AuthenticationResult authenticate(org.mockserver.model.HttpRequest request) {
+                return org.mockserver.authentication.AuthenticationResult.authenticated(
+                    "principal", "verified-oidc", java.util.Map.of(), java.util.Set.of("readers"));
+            }
+        });
+
+        String sessionId = initializeSession();
+
+        String callBody = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"create_expectation\",\"arguments\":{\"method\":\"GET\",\"path\":\"/h3-forbidden\",\"statusCode\":201}}}";
+        Http3ResponseCapture result = sendMcpRequest("POST", callBody, sessionId);
+
+        assertThat("status should be 200 (JSON-RPC error transport)", result.status, is("200"));
+        JsonNode json = objectMapper.readTree(result.body);
+        assertThat("denied mutating tool returns the forbidden JSON-RPC error",
+            json.path("error").path("message").asText(), containsString("Forbidden for control plane"));
+        assertThat("denied tool call produces no result",
+            json.path("result").isMissingNode() || json.path("result").isNull(), is(true));
+
+        // and the expectation was NOT created — a read-role principal could read it back, but here
+        // we assert the mutating call did not take effect by confirming no expectation matches
+        assertThat("the forbidden tool must not have mutated state",
+            httpState.firstMatchingExpectation(org.mockserver.model.HttpRequest.request().withMethod("GET").withPath("/h3-forbidden")),
+            is(nullValue()));
+    }
+
     // ---- CORS headers over HTTP/3 ----
 
     @Test
@@ -415,9 +462,18 @@ public class Http3McpIntegrationTest {
     }
 
     private void startMockServer() {
+        startMockServer(configuration());
+    }
+
+    /**
+     * Start an HTTP/3 MockServer with the given (partially configured) {@link Configuration};
+     * the HTTP/3 port and proxy-disable settings are always applied. Used by the control-plane
+     * authorization tests, which need the server to run with authorization enabled and a scope
+     * mapping.
+     */
+    private void startMockServer(Configuration config) {
         int udpPort = findAvailableUdpPort();
-        Configuration config = configuration()
-            .http3Port(udpPort)
+        config.http3Port(udpPort)
             .attemptToProxyIfNoMatchingExpectation(false);
         mockServer = new MockServer(config, 0);
         int http3Port = mockServer.getHttp3Port();

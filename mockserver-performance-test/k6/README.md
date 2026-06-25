@@ -16,6 +16,7 @@ regression gates), and Grafana-native dashboards.
 | `soak.js` | Sustained moderate load over a long duration to surface memory/GC/connection leaks. Pair with the Grafana stack to watch JVM heap. | p99 drift + error-rate. |
 | `regression.js` | Daily regression harness. Four `constant-arrival-rate` scenarios (`match`, `forward`, `template`, `large`) each tagged `op:<name>`. A warmup scenario runs first. Run twice per CI job — once `BASE_URL=http://...` and once `BASE_URL=https://... PROTO=https_h2` (HTTPS negotiates HTTP/2 via ALPN). Writes per-behaviour `{p50_ms, p95_ms, p99_ms, throughput_rps, error_rate}` keyed `<op>_<proto>` to `K6_RESULT_PATH`. | Notify-only (no k6 thresholds gate the CI build). |
 | `growth.js` | Resource-growth regression harness. Validates that latency does not climb as the request log fills (see issue #2329: O(n) eviction once the 100k `maxLogEntries` ring is full). Runs a sustained `load` scenario on the match path at a rate that fills `maxLogEntries` early; `window:first` and `window:last` probes measure the latency slope. Writes first/last-window p95 + ratio. | Notify-only. |
+| `sweep.js` | Throughput-vs-latency "knee" curve. Offers the match path (`GET /simple`) at an ascending LADDER of fixed arrival rates (`K6_SWEEP_RATES`); each rate is a staggered `constant-arrival-rate` step tagged `rate:<offered>`. Per step it records the ACHIEVED throughput, latency percentiles (p50/p90/p95/p99/p99.9), and error rate. Writes `{proto, points:[{offered_rps, achieved_rps, p50_ms…p999_ms, error_rate}]}` to `K6_SWEEP_RESULT_PATH` — the series plotted as a load-vs-latency knee curve on the docs site. | Notify-only (NO aborting thresholds — dropped iterations / degradation at the top of the ladder are the point). |
 
 ## Running
 
@@ -43,7 +44,45 @@ k6 run -e K6_FORWARD_SELF=true -e BASE_URL=http://localhost:1080 \
 
 # growth script
 k6 run -e BASE_URL=http://localhost:1080 mockserver-performance-test/k6/growth.js
+
+# sweep script — full default ladder (500…32000 rps); writes the knee-curve JSON
+k6 run -e K6_SWEEP_RESULT_PATH=/tmp/sweep-result.json \
+  mockserver-performance-test/k6/sweep.js
+
+# sweep with a short, low ladder (laptop-safe smoke)
+k6 run -e K6_SWEEP_RATES=200,500,1000 -e K6_SWEEP_STEP=8s \
+  -e K6_SWEEP_RESULT_PATH=/tmp/sweep-result.json \
+  mockserver-performance-test/k6/sweep.js
 ```
+
+### Throughput-vs-latency sweep (`sweep.js`)
+
+`sweep.js` offers the match path at an ascending ladder of FIXED arrival rates
+and records, per rate step, the achieved throughput, latency percentiles, and
+error rate — the data series plotted as the load-vs-latency "knee" curve. Each
+ladder rung is its own `constant-arrival-rate` scenario, staggered after the
+previous (`startTime` = sum of prior `step` + `gap` durations) with a short quiet
+gap so one step's tail does not bleed into the next step's percentiles. Every
+request is tagged `rate:<offered>` so the per-step submetrics are computed in the
+summary.
+
+There are deliberately **no aborting thresholds** — at the top of the ladder k6
+may drop iterations (VU-starved) and latency/errors degrade sharply; observing
+that degradation IS the point. The output JSON shape is a hard contract:
+
+```json
+{
+  "proto": "http",
+  "points": [
+    {"offered_rps": 500, "achieved_rps": 499.6, "p50_ms": 0.9, "p90_ms": 1.4,
+     "p95_ms": 1.8, "p99_ms": 3.2, "p999_ms": 7.1, "error_rate": 0.0}
+  ]
+}
+```
+
+A committed sample (a real run against MockServer 7.2.0 on Docker Desktop, ladder
+`500…16000` rps) lives at `k6/fixtures/sample-perf-sweep.json` — used to build
+and test the docs-site knee-curve chart without re-running a load test.
 
 ### Forward-path regression guard (`forward.js`)
 
@@ -143,6 +182,17 @@ All tunables are env-driven (see `lib/config.js`). Connection target resolves as
 | `K6_GROWTH_PROBE` | `30s` | Duration of the `window:first` and `window:last` probe scenarios |
 | `FORWARD_UPSTREAM_HOST` | `mockserver-upstream:1080` | Host:port of the dedicated upstream MockServer for `forward` expectations |
 | `K6_FORWARD_SELF` | – | When set to `true`, the `forward` expectation loops back to the same instance (`127.0.0.1:1080`) instead of requiring a separate upstream. Use for local single-container smoke only. |
+
+**sweep.js additional variables** (defined in `lib/config.js` `SWEEP` block):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `K6_SWEEP_RATES` | `500,1000,2000,4000,8000,16000,32000` | Comma-separated ascending ladder of offered arrival rates (req/s); one staggered `constant-arrival-rate` step per rung |
+| `K6_SWEEP_STEP` | `20s` | Duration each rate step holds |
+| `K6_SWEEP_GAP` | `5s` | Quiet gap between steps (no requests) so percentiles do not bleed across steps |
+| `K6_SWEEP_PRE_VUS` / `K6_SWEEP_MAX_VUS` | `200` / `4000` | VU pool for the sweep arrival-rate executors (pre-allocate enough so high rungs are not VU-starved) |
+| `PROTO` | `http` | Protocol tag recorded in the result (`https_h2` for an HTTPS+H2 run) |
+| `K6_SWEEP_RESULT_PATH` | `sweep-result.json` | File path where `handleSummary()` writes the knee-curve result JSON |
 
 ## Seeded expectations
 

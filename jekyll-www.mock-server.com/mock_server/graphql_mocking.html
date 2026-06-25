@@ -255,7 +255,24 @@ curl -s -X PUT "http://localhost:1080/mockserver/graphql" \
 
 <h2>GraphQL Subscriptions</h2>
 
-<p>MockServer generates a subscription expectation from the schema when a <code class="inline code">Subscription</code> root type is present. Subscription operations are matched using the same <code class="inline code">GRAPHQL</code> body type. The transport (WebSocket or SSE) depends on how the client connects; MockServer handles both via its WebSocket response action (<code class="inline code">httpWebSocketResponse</code>). See the <a href="/mock_server/creating_expectations.html">Creating Expectations</a> page for WebSocket response details.</p>
+<p>Subscription operations are matched with the same <code class="inline code">GRAPHQL</code> body type as queries and mutations, but <strong>delivery is not automatic</strong>: a matched subscription needs an <code class="inline code">httpWebSocketResponse</code> action that <em>you</em> wire up to push the subscription events back to the client over the WebSocket. The schema import generates the matching expectation; you supply the <code class="inline code">httpWebSocketResponse</code> with the events you want streamed (and an optional <code class="inline code">graphqlSubscriptionFilter</code> to deliver only events matching a given subscription query).</p>
+
+<p>A minimal subscription expectation that completes the <code class="inline code">graphql-ws</code> handshake and then streams two events:</p>
+
+<pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/expectation" -d '{
+    "httpRequest": { "method": "GET", "path": "/graphql" },
+    "httpWebSocketResponse": {
+        "subprotocol": "graphql-ws",
+        "messages": [
+            { "text": "{\"type\":\"connection_ack\"}" },
+            { "text": "{\"type\":\"next\",\"id\":\"1\",\"payload\":{\"data\":{\"messageAdded\":{\"id\":\"1\",\"text\":\"hello\"}}}}" },
+            { "text": "{\"type\":\"complete\",\"id\":\"1\"}", "delay": {"timeUnit": "MILLISECONDS", "value": 200} }
+        ],
+        "closeConnection": true
+    }
+}'</code></pre>
+
+<p>See the <a href="/mock_server/creating_expectations.html">Creating Expectations</a> page for the full <code class="inline code">httpWebSocketResponse</code> reference (per-message delays, binary frames, response matchers, and <code class="inline code">graphqlSubscriptionFilter</code>).</p>
 
 <a id="related" class="anchor" href="#related">&nbsp;</a>
 

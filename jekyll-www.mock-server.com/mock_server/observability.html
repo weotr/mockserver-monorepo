@@ -167,7 +167,7 @@ curl http://localhost:1080/mockserver/metrics</code></pre>
 </p>
 
 <ul>
-    <li><span class="inline_code">mock_server_http_chaos_injected_total</span> &mdash; counter with a <span class="inline_code">fault_type</span> label (drop, error, latency, truncate, malformed, slow, quota, graphql)</li>
+    <li><span class="inline_code">mock_server_http_chaos_injected_total</span> &mdash; counter with a <span class="inline_code">fault_type</span> label (drop, error, latency, truncate, malformed, slow, quota, rateLimit, graphql)</li>
     <li><span class="inline_code">mock_server_active_service_chaos</span> &mdash; gauge per <span class="inline_code">fault_type</span> of currently active chaos profiles</li>
     <li><span class="inline_code">mock_server_chaos_auto_halt_total</span> &mdash; counter that increments each time the <a href="/mock_server/chaos_testing.html">chaos auto-halt circuit-breaker</a> triggers</li>
 </ul>
@@ -246,7 +246,11 @@ sum(rate(mock_server_llm_cost_usd_total[1h]))</code></pre>
 <p>
     <span class="inline_code">otelEndpoint</span> is the base URL of the OTLP HTTP collector.
     MockServer appends <span class="inline_code">/v1/metrics</span> and <span class="inline_code">/v1/traces</span>
-    automatically.
+    automatically. If <span class="inline_code">MOCKSERVER_OTEL_ENDPOINT</span> is not set, MockServer
+    falls back to the standard OpenTelemetry <span class="inline_code">OTEL_EXPORTER_OTLP_ENDPOINT</span>
+    environment variable, so existing OTel deployments work without extra configuration.
+    See <a href="/mock_server/configuration_properties.html#button_configuration_otel">otelEndpoint</a>
+    in the configuration reference for details.
 </p>
 
 <p>

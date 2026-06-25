@@ -35,6 +35,25 @@ The following commands can cause **irreversible data loss** of uncommitted work.
 | `git reset --hard` | `git stash` then `git reset` (soft) |
 | `git clean -fd` | `git clean -fdn` (dry-run first to preview) |
 
+### Keep `master` Linear — No Merge Commits
+
+`master` is a **strictly linear history**. Reintegrate work by **rebasing onto
+the tip and fast-forwarding**, never by creating a merge commit. The following
+are **not allowed** on `master` (they introduce merge commits or rewrite shared
+history):
+
+| Command | Why it's disallowed |
+|---------|--------------------|
+| `git merge <branch>` into `master` (incl. `--no-ff`) | Creates a merge commit — breaks linear history. Rebase the branch instead. |
+| `git pull` (without `--rebase`) | A divergent pull records a merge commit. Always `git pull --rebase`. |
+| Pushing an "integration branch" that worktree branches were merged into | Same — fan-of-merges. Rebase each unit sequentially under the lock. |
+
+Reintegration is always: `git rebase origin/master` then a fast-forward
+`git push origin HEAD:master` (see `[[worktree-workflow]]` → *Linear History —
+No Merge Commits* and `[[commit-locking]]`). Rebasing worktree branches is safe
+because they are local-only and unpushed; this is **not** the banned
+"`git rebase` on shared branches" above.
+
 ### File Renames and Moves
 
 When renaming or moving files, **always use `git mv`** instead of the OS-level `mv` command.

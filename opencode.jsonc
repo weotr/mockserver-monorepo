@@ -37,6 +37,8 @@
   "permission": {
     "bash": {
       "*": "allow",
+      "scripts/ci/bk-pipeline-status.sh*": "allow",
+      "./scripts/ci/bk-pipeline-status.sh*": "allow",
       "git push --force*": "deny",
       "git reset --hard*": "deny",
       "git clean -fd*": "deny",

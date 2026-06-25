@@ -1068,6 +1068,11 @@ public class HttpActionHandler {
                                 );
                             }
                             returnBadGateway(responseWriter, request, "failed to connect to proxied socket due to exploratory HTTP proxy");
+                            // SSLException-family faults are surfaced by this sslHandshakeException
+                            // branch (richer TLS diagnostics). A plain DecoderException is NOT matched
+                            // here; it falls through to the !connectionClosedException ERROR branch
+                            // below, so it is still logged (never silently dropped) - no generic
+                            // isSslOrDecoderFault branch is needed.
                         } else if (sslHandshakeException(throwable)) {
                             mockServerLogger.logEvent(
                                 new LogEntry()
@@ -1248,6 +1253,10 @@ public class HttpActionHandler {
                     );
                 }
                 returnBadGateway(responseWriter, originalRequest, "failed to connect to proxied socket due to exploratory HTTP proxy");
+                // SSLException-family faults are surfaced by this sslHandshakeException branch
+                // (richer TLS diagnostics). A plain DecoderException is NOT matched here; it falls
+                // through to the !connectionClosedException ERROR branch below, so it is still logged
+                // (never silently dropped) - no generic isSslOrDecoderFault branch is needed.
             } else if (sslHandshakeException(throwable)) {
                 mockServerLogger.logEvent(
                     new LogEntry()
@@ -1311,7 +1320,9 @@ public class HttpActionHandler {
                 // validation proxy: request + response validation runs inside the scheduler
                 // (off the Netty event loop) to avoid blocking I/O threads on cold-cache OpenAPI parsing
                 final boolean validationEnabled = isValidationProxyEnabled();
-                InetSocketAddress targetAddress = new InetSocketAddress(mapping.getTargetHost(), mapping.getTargetPort());
+                // Unresolved so Netty's event-loop resolver performs the (blocking) DNS lookup rather
+                // than resolving synchronously here in the InetSocketAddress constructor.
+                InetSocketAddress targetAddress = InetSocketAddress.createUnresolved(mapping.getTargetHost(), mapping.getTargetPort());
                 scheduler.submit(() -> {
                     try {
                         // pre-flight request validation (enforce mode blocks with 400 before upstream call)
@@ -2957,35 +2968,41 @@ public class HttpActionHandler {
                 );
             }
         }
-        if (configuration.detailedVerificationFailures() && mockServerLogger.isEnabledForInstance(Level.DEBUG)) {
+        // Closest-match diagnostics. Up to three consumers can want the closest non-matching
+        // expectation: the DEBUG diff log, the verbose response diagnostic (header + JSON body),
+        // and the compact hint header. Each previously re-ran the (cold-path but non-trivial)
+        // matcher scan independently, so all three active meant scanning every expectation three
+        // times. Compute it ONCE here and thread the single result into all consumers — behaviour
+        // of each path is unchanged, only the redundant re-scans are removed.
+        boolean wantDebugDiffLog = configuration.detailedVerificationFailures() && mockServerLogger.isEnabledForInstance(Level.DEBUG);
+        boolean wantVerboseDiagnostic = configuration.attachMismatchDiagnosticToResponse();
+        boolean wantHintHeader = configuration.closestMatchHintEnabled();
+        if (wantDebugDiffLog || wantVerboseDiagnostic || wantHintHeader) {
+            org.mockserver.mock.RequestMatchers.ClosestMatchHint closestMatchHint = null;
             try {
-                java.util.Map<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> closestDiff = httpStateHandler.findClosestMatchDiff(request);
-                if (closestDiff != null && !closestDiff.isEmpty()) {
-                    String diffBody = org.mockserver.matchers.MatchDifferenceFormatter.formatDifferences(closestDiff);
-                    if (isNotBlank(diffBody)) {
-                        mockServerLogger.logEvent(
-                            new LogEntry()
-                                .setLogLevel(Level.DEBUG)
-                                .setHttpRequest(request)
-                                .setMessageFormat("closest match diff for unmatched request:{}")
-                                .setArguments(diffBody)
-                        );
-                    }
-                }
+                closestMatchHint = httpStateHandler.findClosestMatchHint(request);
             } catch (Exception e) {
                 if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
                     mockServerLogger.logEvent(
                         new LogEntry()
                             .setLogLevel(Level.TRACE)
-                            .setMessageFormat("exception generating closest match diff for 404 response:{}")
+                            .setMessageFormat("exception computing closest match for 404 response:{}")
                             .setArguments(e.getMessage())
                             .setThrowable(e)
                     );
                 }
             }
-        }
-        if (configuration.attachMismatchDiagnosticToResponse()) {
-            attachMismatchDiagnostic(request, response);
+            java.util.Map<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> closestDiff =
+                closestMatchHint == null ? null : closestMatchHint.getDifferences();
+            if (wantDebugDiffLog) {
+                logClosestMatchDiff(request, closestDiff);
+            }
+            if (wantVerboseDiagnostic) {
+                attachMismatchDiagnostic(response, closestDiff);
+            }
+            if (wantHintHeader) {
+                attachClosestMatchHint(response, closestMatchHint);
+            }
         }
         // breakpoint: RESPONSE-phase pause on the unmatched-404 before writing — lets a registered
         // matcher inspect / modify / abort the not-found response.
@@ -3007,9 +3024,39 @@ public class HttpActionHandler {
         responseWriter.writeResponse(request, response, false);
     }
 
-    private void attachMismatchDiagnostic(HttpRequest request, HttpResponse response) {
+    /**
+     * Emit the DEBUG closest-match diff log for an unmatched request using a precomputed diff
+     * (shared with the other closest-match consumers in {@link #returnNotFound}).
+     */
+    private void logClosestMatchDiff(HttpRequest request, java.util.Map<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> closestDiff) {
         try {
-            java.util.Map<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> closestDiff = httpStateHandler.findClosestMatchDiff(request);
+            if (closestDiff != null && !closestDiff.isEmpty()) {
+                String diffBody = org.mockserver.matchers.MatchDifferenceFormatter.formatDifferences(closestDiff);
+                if (isNotBlank(diffBody)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.DEBUG)
+                            .setHttpRequest(request)
+                            .setMessageFormat("closest match diff for unmatched request:{}")
+                            .setArguments(diffBody)
+                    );
+                }
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.TRACE)
+                        .setMessageFormat("exception generating closest match diff for 404 response:{}")
+                        .setArguments(e.getMessage())
+                        .setThrowable(e)
+                );
+            }
+        }
+    }
+
+    private void attachMismatchDiagnostic(HttpResponse response, java.util.Map<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> closestDiff) {
+        try {
             if (closestDiff != null && !closestDiff.isEmpty()) {
                 String summary = org.mockserver.matchers.MatchDifferenceFormatter.formatDifferences(closestDiff);
                 if (isNotBlank(summary)) {
@@ -3042,6 +3089,65 @@ public class HttpActionHandler {
                     new LogEntry()
                         .setLogLevel(Level.TRACE)
                         .setMessageFormat("exception attaching mismatch diagnostic to 404 response:{}")
+                        .setArguments(e.getMessage())
+                        .setThrowable(e)
+                );
+            }
+        }
+    }
+
+    /**
+     * Maximum length of the closest-match hint header value. The hint is deliberately compact — a single
+     * line naming the closest expectation and the first differing field/reason — so it stays well below
+     * typical HTTP header-size limits and never carries a meaningful slice of expectation contents.
+     */
+    private static final int CLOSEST_MATCH_HINT_MAX_LENGTH = 256;
+
+    static final String CLOSEST_MATCH_HINT_HEADER_NAME = "x-mockserver-closest-match-hint";
+
+    /**
+     * Attach a single, concise diagnostic header to a genuine data-plane no-match 404 describing why the
+     * closest expectation did not match: its id, the first differing field, and a short reason. This is
+     * header-only and length-bounded ({@link #CLOSEST_MATCH_HINT_MAX_LENGTH}); unlike
+     * {@link #attachMismatchDiagnostic} it never writes a response body, so no large or sensitive
+     * expectation contents are leaked. When no expectation came close (or none are configured) no header
+     * is added — the 404 is left byte-for-byte unchanged. Gated by {@code closestMatchHintEnabled} and only
+     * invoked from {@link #returnNotFound}, so control-plane responses and the handleAnyException error path
+     * are unaffected. The {@code hint} is precomputed once in {@link #returnNotFound} and shared with the
+     * other closest-match consumers.
+     */
+    private void attachClosestMatchHint(HttpResponse response, org.mockserver.mock.RequestMatchers.ClosestMatchHint hint) {
+        try {
+            if (hint == null || hint.getDifferences() == null || hint.getDifferences().isEmpty()) {
+                return;
+            }
+            java.util.Map.Entry<org.mockserver.matchers.MatchDifference.Field, java.util.List<String>> firstDiff =
+                hint.getDifferences().entrySet().iterator().next();
+            StringBuilder sb = new StringBuilder();
+            if (isNotBlank(hint.getExpectationId())) {
+                sb.append("expectation ").append(hint.getExpectationId()).append(": ");
+            }
+            sb.append(firstDiff.getKey().getName()).append(" did not match");
+            if (firstDiff.getValue() != null && !firstDiff.getValue().isEmpty() && isNotBlank(firstDiff.getValue().get(0))) {
+                sb.append(" (").append(firstDiff.getValue().get(0)).append(")");
+            }
+            int extraFields = hint.getDifferences().size() - 1;
+            if (extraFields > 0) {
+                sb.append("; +").append(extraFields).append(" more field(s) differ");
+            }
+            String headerValue = sb.toString().replaceAll("[\\r\\n]+", " ").trim();
+            if (headerValue.length() > CLOSEST_MATCH_HINT_MAX_LENGTH) {
+                headerValue = headerValue.substring(0, CLOSEST_MATCH_HINT_MAX_LENGTH - 3) + "...";
+            }
+            if (isNotBlank(headerValue)) {
+                response.withHeader(CLOSEST_MATCH_HINT_HEADER_NAME, headerValue);
+            }
+        } catch (Exception e) {
+            if (mockServerLogger.isEnabledForInstance(Level.TRACE)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.TRACE)
+                        .setMessageFormat("exception attaching closest match hint to 404 response:{}")
                         .setArguments(e.getMessage())
                         .setThrowable(e)
                 );
@@ -3255,7 +3361,9 @@ public class HttpActionHandler {
             String host = configuration.proxyRemoteHost();
             Integer port = configuration.proxyRemotePort();
             if (isNotBlank(host) && port != null) {
-                remoteAddress = new InetSocketAddress(host, port);
+                // Unresolved so Netty's event-loop resolver performs the (blocking) DNS lookup rather
+                // than resolving synchronously here in the InetSocketAddress constructor.
+                remoteAddress = InetSocketAddress.createUnresolved(host, port);
             }
         }
         return remoteAddress;

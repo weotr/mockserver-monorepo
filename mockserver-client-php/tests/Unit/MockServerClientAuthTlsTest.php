@@ -283,7 +283,10 @@ class MockServerClientAuthTlsTest extends TestCase
         $client->reset();
 
         $options = $history[0]['options'];
-        $this->assertArrayNotHasKey(RequestOptions::VERIFY, $options);
+        // Guzzle always records its own secure-by-default verify=true in the
+        // per-request options; the client must not override it with a custom CA
+        // path, and must add no client certificate or key.
+        $this->assertSame(true, $options[RequestOptions::VERIFY] ?? true);
         $this->assertArrayNotHasKey(RequestOptions::CERT, $options);
         $this->assertArrayNotHasKey(RequestOptions::SSL_KEY, $options);
     }

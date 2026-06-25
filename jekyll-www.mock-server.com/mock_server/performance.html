@@ -1,6 +1,6 @@
 ---
 title: Scalability & Latency
-description: "MockServer performance benchmarks: sub-2ms average latency at 95k requests/sec, tuning guidance for memory, thread pools, and log entry limits."
+description: "MockServer performance: a single instance serves tens of thousands of requests per second with sub-millisecond median latency, and request matching stays flat as expectations scale. Real, reproducible k6 and JMH benchmarks, plus tuning guidance."
 layout: page
 pageOrder: 3
 section: 'Operations'
@@ -8,448 +8,179 @@ subsection: true
 sitemap:
 priority: 0.8
 changefreq: 'monthly'
-lastmod: 2019-11-10T08:00:00+01:00
+lastmod: 2026-06-24T08:00:00+01:00
 ---
 
-<p itemprop="headline">Average of 1.58ms and p99 of 4ms for 150 parallel clients sending 95,228 requests per second.</p>
+<!--
+  All numbers on this page are produced by the automated performance pipeline and
+  regenerated for each measurement run — they are not hand-picked. The charts are
+  rendered from the pipeline's JSON output by images/perf-charts/render_perf_charts.py
+  and the figures here were refreshed from perf build #64 (ZGC, six server cores).
+-->
 
-<p>MockServer is build to support massive scale from a single instance:</p>
+<p itemprop="headline">A single MockServer instance holds sub-millisecond median latency up to 32,000 requests/sec on six CPU cores, and request matching stays flat &mdash; up to 177&times; faster than a linear scan &mdash; as you scale to thousands of expectations.</p>
+
+<p>MockServer is built for high throughput and low, <em>predictable</em> latency from a single instance. The figures below come from an automated performance suite that runs on a dedicated, core-pinned CI machine; every chart is regenerated from the measured data on each run, so what you see is reproducible rather than cherry-picked. Jump to <a href="#how_tested">how MockServer is performance tested</a> for the methodology, or run the suite yourself from <span class="inline_code">mockserver-performance-test/</span>.</p>
+
 <ul>
-    <li><a href="#apache_bench">Apache Benchmark</a> tested up to <strong>6,000 parallel clients</strong> and shows MockServer has an <strong>average of 1.58ms and p99 of 4ms for 150 parallel clients sending 95,228 requests per
-        second</strong></li>
-    <li><a href="#locust">Locust</a> tested up to <strong>3,000 parallel clients</strong> and shows MockServer has a <strong>p99 of 4ms for 150 parallel clients</strong></li>
+    <li><strong>Throughput &amp; latency:</strong> on six CPU cores a single instance holds a <strong>sub-millisecond median</strong> with a <strong>p99 around half a millisecond</strong> all the way to <strong>16,000 requests/sec</strong>, stays sub-millisecond at the median through <strong>32,000 requests/sec</strong>, and saturates near <strong>36,000 requests/sec</strong> &mdash; latency stays flat until that knee, then degrades gracefully (see the <a href="#chart_throughput">throughput vs latency</a> chart).</li>
+    <li><strong>Scales with expectations:</strong> request matching cost stays <strong>nearly flat</strong> as the number of registered expectations grows &mdash; <strong>up to 177&times; faster than a naive linear scan at 5,000 expectations</strong> &mdash; thanks to MockServer's candidate-matching index (see the <a href="#chart_matching">matcher scaling</a> chart).</li>
+    <li><strong>Protocol coverage:</strong> HTTP/1.1, HTTPS and HTTP/2 are all served with low overhead, measured side by side on every run (see <a href="#chart_protocols">latency by action</a>).</li>
 </ul>
 
-<p>Both performance testing frameworks show similar results up to 2,000 parallel clients at which point Locust reports warnings and the figures are no longer consistent with Apache Benchmark.</p>
+<h2>Performance at a glance</h2>
 
-<p>The following frameworks & techniques are used to maximise scalability:</p>
+<a id="chart_throughput" class="anchor" href="#chart_throughput">&nbsp;</a>
+<p>As offered load increases, achieved throughput tracks it almost exactly while latency percentiles stay flat &mdash; right up to the point the single instance saturates. That flat region is the headroom you can rely on; beyond it, latency rises predictably rather than collapsing.</p>
+<img class="ui_image" src="/images/perf_throughput_latency.png" alt="MockServer throughput vs latency: latency stays flat as throughput increases until the instance saturates, and achieved throughput tracks offered load">
+
+<a id="chart_matching" class="anchor" href="#chart_matching">&nbsp;</a>
+<p>Mock servers are often run with hundreds or thousands of expectations. MockServer keeps matching cheap at scale by narrowing each request to a small set of <em>candidate</em> expectations instead of testing every one. The difference grows with the number of expectations:</p>
+<img class="ui_image" src="/images/perf_matching_scaling.png" alt="Request matching time per request stays flat with MockServer's candidate index as the number of expectations grows, versus a steeply rising linear scan">
+
+<a id="chart_percentiles" class="anchor" href="#chart_percentiles">&nbsp;</a>
+<p>Even at the knee &mdash; around 32,000 requests/sec &mdash; the latency tail stays tight: a <strong>0.19&nbsp;ms median</strong>, a p95 of about 4&nbsp;ms and a p99 under 10&nbsp;ms.</p>
+<img class="ui_image" src="/images/perf_latency_percentiles.png" alt="MockServer response latency distribution at the throughput knee showing p50, p90, p95, p99 and p99.9">
+
+<a id="chart_protocols" class="anchor" href="#chart_protocols">&nbsp;</a>
+<p>The same actions measured over HTTP/1.1 and over HTTPS with HTTP/2 show that TLS and HTTP/2 add only a fraction of a millisecond &mdash; even a forwarded request or a large templated response stays within single-digit milliseconds:</p>
+<img class="ui_image" src="/images/perf_http_vs_h2.png" alt="Median latency by action (match, forward, template, large body) over HTTP/1.1 versus HTTPS with HTTP/2">
+
+<h2>What makes MockServer scale</h2>
+
+<p>The throughput and latency above come from a few deliberate design choices:</p>
 <ul>
-    <li><a target="_blank" href="https://netty.io" rel="noopener noreferrer">Netty</a> an asynchronous event-driven network application framework to maximise the scalability of HTTP and TLS</li>
-    <li><a target="_blank" href="https://lmax-exchange.github.io/disruptor" rel="noopener noreferrer">LMAX Disruptor</a> a high performance inter-thread messaging library to maximise the scalability of recording events (i.e. state) and logging</li>
-    <li><a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/ScheduledThreadPoolExecutor.html" rel="noopener noreferrer">ScheduledThreadPoolExecutor</a> a thread pool that can scheduled delayed tasks is used to execute delay response to avoid
-        blocking threads
+    <li><a target="_blank" href="https://netty.io" rel="noopener noreferrer">Netty</a> &mdash; an asynchronous, event-driven network framework. A small pool of event-loop threads handles many thousands of concurrent connections without a thread per request, which is what keeps latency flat as load rises. Where the OS supports it, MockServer uses Netty's <strong>native epoll transport</strong> for lower per-request overhead than the portable NIO transport.</li>
+    <li><strong>Candidate-matching index</strong> &mdash; instead of testing a request against every expectation in turn (an O(<em>n</em>) scan), MockServer indexes expectations so each request is compared only against a small candidate set. This is why matching cost stays nearly flat as expectations grow (chart above). It falls back to a scan only for expectations that cannot be indexed (for example, fully regex-based paths).</li>
+    <li><a target="_blank" href="https://lmax-exchange.github.io/disruptor" rel="noopener noreferrer">LMAX Disruptor</a> &mdash; a high-performance inter-thread messaging library used to record events (request log, recorded requests) and logging off the request path, so capturing state does not block responses.</li>
+    <li><strong>Forward-proxy connection pooling</strong> &mdash; when MockServer forwards or proxies requests upstream, connections are pooled and reused, avoiding per-request connection setup and ephemeral-port exhaustion under sustained forward load.</li>
+    <li><strong>Fail-fast matchers</strong> &mdash; request matching short-circuits on the first non-match, so non-matching expectations are rejected as cheaply as possible.</li>
+    <li><strong>Bounded in-memory log</strong> &mdash; the request/event log is a fixed-size ring buffer (<span class="inline_code">maxLogEntries</span>), so memory stays bounded under sustained load. For long-running, high-throughput instances this is the most important thing to tune &mdash; see <a href="#troubleshooting_performance">memory &amp; troubleshooting</a> below.</li>
+    <li><a target="_blank" href="https://docs.oracle.com/en/java/javase/17/docs/api/java.base/java/util/concurrent/ScheduledThreadPoolExecutor.html" rel="noopener noreferrer">ScheduledThreadPoolExecutor</a> &mdash; response delays are scheduled rather than blocking a thread, so simulated latency does not consume the event-loop threads.</li>
+</ul>
+
+<p>Most of these are configurable &mdash; thread-pool sizes, native transport, and matcher behaviour are covered under <a href="#scalability_configuration">scalability configuration</a> below.</p>
+
+<a id="how_tested" class="anchor" href="#how_tested">&nbsp;</a>
+<h2>How MockServer is performance tested</h2>
+
+<p>The numbers on this page are produced by a performance suite (<span class="inline_code">mockserver-performance-test/</span>) built around <a target="_blank" href="https://k6.io" rel="noopener noreferrer">k6</a> for load generation and the <a target="_blank" href="https://github.com/openjdk/jmh" rel="noopener noreferrer">JMH</a> microbenchmark harness for component-level measurement. A few principles make the results trustworthy:</p>
+
+<ul>
+    <li><strong>Open-model load (no coordinated omission).</strong> Load is generated at a fixed <em>arrival rate</em> rather than by a fixed number of looping clients. This avoids <a target="_blank" href="https://www.scylladb.com/2021/04/22/on-coordinated-omission/" rel="noopener noreferrer">coordinated omission</a> &mdash; the measurement artefact where slow responses hide further slow responses &mdash; so the reported latency is what a real caller would experience under that offered load.</li>
+    <li><strong>A ladder of test types,</strong> each answering a different question:
+        <ul>
+            <li><strong>load</strong> &mdash; steady throughput at a target rate; the CI pass/fail gate.</li>
+            <li><strong>sweep</strong> &mdash; steps the arrival rate up a ladder to find the throughput/latency knee (the <a href="#chart_throughput">first chart</a>).</li>
+            <li><strong>stress</strong> &mdash; pushes past the knee to find the breaking point.</li>
+            <li><strong>soak</strong> &mdash; sustained load over time to surface memory growth, GC pressure and leaks.</li>
+            <li><strong>regression / growth</strong> &mdash; fixed-rate latency per behaviour (match, forward, template, large body) over HTTP and HTTPS+HTTP/2, plus a check that latency and memory do not creep upward over a run.</li>
+            <li><strong>microbenchmarks</strong> &mdash; JMH measurement of matching time and allocation per request, including the candidate-index <a href="#chart_matching">scaling sweep</a>.</li>
+        </ul>
     </li>
+    <li><strong>Reproducible and core-pinned.</strong> Measurement runs on a dedicated CI machine with the server, upstream and load generator pinned to separate CPU cores so they do not steal cycles from each other &mdash; the single biggest factor in number quality. Every chart is regenerated from the pipeline's JSON output.</li>
+    <li><strong>Automated regression detection.</strong> Each run is stored and compared against a rolling baseline using a robust median + MAD test, so a real slowdown is flagged without false alarms from run-to-run noise.</li>
 </ul>
 
-<h2>Performance Tests</h2>
+<p><strong>Measurement environment for the figures on this page:</strong> a single MockServer instance (current snapshot build) pinned to <strong>six CPU cores</strong> on a dedicated CI host, running the low-pause <span class="inline_code">ZGC</span> garbage collector with an 8&nbsp;GB heap and <strong>full request logging enabled</strong> (the default &mdash; every request is recorded for later verification). The load generator runs on separate cores so it never steals cycles from the server. Real-world throughput and latency depend on your hardware, core count, payload size, expectation complexity and JVM/configuration tuning &mdash; more CPU cores and disabling request logging both raise peak throughput &mdash; so treat these as a solid reference and benchmark your own workload.</p>
 
-<p>MockServer has been performance tested using <a href="#apache_bench">Apache Benchmark</a> and <a href="#locust">Locust</a> with the following scenario:</p>
-<ul>
-    <li>four basic expectations, including method, path and headers</li>
-    <li>basic GET request matching third expectation (i.e. three matches are attempted for each request)</li>
-</ul>
+<h2>Detailed results</h2>
 
-<p><strong>These figures are historical and indicative.</strong> They were measured on an older Java 13 JVM on specific hardware, so they are not a guarantee of current performance. Real-world throughput and latency depend on your hardware, payload size, expectation complexity, and JVM/configuration tuning &mdash; treat the numbers below as a rough reference and benchmark your own workload rather than as a fixed Java 17 baseline.</p>
-
-<p>During the test MockServer was run on a Java 13 JVM, with the following command:</p>
-
-<pre class="prettyprint lang-bash code"><code class="code">java -Xmx500m -Dmockserver.logLevel=WARN -Dmockserver.disableLogging=true -jar ~/.m2/repository/org/mock-server/mockserver-netty/{{ site.mockserver_version }}/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080</code></pre>
-
-<p><strong>Note:</strong> The benchmark uses <span class="inline_code">-Dmockserver.disableLogging=true</span> to disable all logging and log event processing (not just system-out output), and <span class="inline_code">-Dmockserver.logLevel=WARN</span> as an additional safeguard. To suppress only system-out output while still recording log events for verification, use <span class="inline_code">-Dmockserver.disableSystemOut=true</span> instead. For sustained high-throughput operation, the most effective tuning is to reduce <span class="inline_code">maxLogEntries</span> &mdash; see the <a href="#troubleshooting_performance">troubleshooting section</a> below for guidance.</p>
-
-<p><strong>Note for long-running instances:</strong> the in-memory request/event log (bounded by <span class="inline_code">maxLogEntries</span>, default the minimum of free heap KB / 8 and 100,000 entries) grows as requests are received and is the dominant source of memory pressure over time. Clearing expectations alone does <strong>not</strong> free the log. To reclaim that memory on a running instance, clear the log explicitly with <span class="inline_code">PUT /mockserver/clear?type=LOG</span>, or clear everything (expectations, recorded requests and log) with <span class="inline_code">PUT /mockserver/clear?type=ALL</span> or <span class="inline_code">PUT /mockserver/reset</span>.</p>
-
-<p>The following graph shows how the p99 increases as the number of parallel clients increase.</p>
-
-<img class="ui_image" src="/images/p99vsparallelclients.png" alt="p99 as parallel clients increase">
-
-<a id="apache_bench" class="anchor" href="#apache_bench">&nbsp;</a>
-
-<h3>Apache Bench Performance Test Results</h3>
-
-<p><a target="_blank" href="https://httpd.apache.org/docs/2.4/programs/ab.html" rel="noopener noreferrer">Apache Benchmark</a> was executed as follows:</p>
-
-<pre class="prettyprint lang-bash code"><code class="code">ab -k -n 10000000 -c &lt;parallel clients&gt; http://127.0.0.1:1080/simple</code></pre>
-
-<p>The test results are:</p>
-
+<h3>Throughput vs latency</h3>
+<p>Offered request rate against achieved throughput and response-latency percentiles for a single instance matching a simple expectation:</p>
 <table class="results">
     <thead>
-    <tr>
-        <td>parallel clients</td>
-        <td>50%</td>
-        <td>66%</td>
-        <td>75%</td>
-        <td>80%</td>
-        <td>90%</td>
-        <td>95%</td>
-        <td>98%</td>
-        <td>99%</td>
-        <td>requests/s</td>
-        <td>mean</td>
-    </tr>
+    <tr><td>offered req/s</td><td>achieved req/s</td><td>p50</td><td>p95</td><td>p99</td><td>errors</td></tr>
     </thead>
     <tbody>
-    <tr>
-        <td>10</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-        <td>77,122</td>
-        <td>0.13</td>
-    </tr>
-    <tr>
-        <td>50</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>85,765</td>
-        <td>0.58</td>
-    </tr>
-    <tr>
-        <td>100</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>2</td>
-        <td>2</td>
-        <td>3</td>
-        <td>92,846</td>
-        <td>1.08</td>
-    </tr>
-    <tr>
-        <td>150</td>
-        <td>1</td>
-        <td>2</td>
-        <td>2</td>
-        <td>2</td>
-        <td>2</td>
-        <td>2</td>
-        <td>3</td>
-        <td>4</td>
-        <td>95,228</td>
-        <td>1.58</td>
-    </tr>
-    <tr>
-        <td>250</td>
-        <td>3</td>
-        <td>3</td>
-        <td>3</td>
-        <td>3</td>
-        <td>4</td>
-        <td>5</td>
-        <td>7</td>
-        <td>8</td>
-        <td>86,470</td>
-        <td>2.89</td>
-    </tr>
-    <tr>
-        <td>500</td>
-        <td>6</td>
-        <td>6</td>
-        <td>6</td>
-        <td>6</td>
-        <td>7</td>
-        <td>7</td>
-        <td>8</td>
-        <td>9</td>
-        <td>83,209</td>
-        <td>6.01</td>
-    </tr>
-    <tr>
-        <td>750</td>
-        <td>9</td>
-        <td>9</td>
-        <td>10</td>
-        <td>10</td>
-        <td>11</td>
-        <td>11</td>
-        <td>12</td>
-        <td>15</td>
-        <td>75,554</td>
-        <td>9.93</td>
-    </tr>
-    <tr>
-        <td>1000</td>
-        <td>11</td>
-        <td>12</td>
-        <td>13</td>
-        <td>13</td>
-        <td>14</td>
-        <td>16</td>
-        <td>17</td>
-        <td>21</td>
-        <td>75,423</td>
-        <td>13.26</td>
-    </tr>
-    <tr>
-        <td>2000</td>
-        <td>24</td>
-        <td>24</td>
-        <td>25</td>
-        <td>26</td>
-        <td>27</td>
-        <td>29</td>
-        <td>31</td>
-        <td>35</td>
-        <td>82,191</td>
-        <td>24.33</td>
-    </tr>
-    <tr>
-        <td>3000</td>
-        <td>37</td>
-        <td>39</td>
-        <td>40</td>
-        <td>40</td>
-        <td>43</td>
-        <td>46</td>
-        <td>51</td>
-        <td>58</td>
-        <td>78,171</td>
-        <td>38.38</td>
-        <td></td>
-    </tr>
-    <tr>
-        <td>4000</td>
-        <td>52</td>
-        <td>55</td>
-        <td>57</td>
-        <td>59</td>
-        <td>64</td>
-        <td>70</td>
-        <td>82</td>
-        <td>91</td>
-        <td>73,552</td>
-        <td>54.38</td>
-    </tr>
-    <tr>
-        <td>5000</td>
-        <td>65</td>
-        <td>67</td>
-        <td>70</td>
-        <td>71</td>
-        <td>75</td>
-        <td>79</td>
-        <td>90</td>
-        <td>102</td>
-        <td>74,065</td>
-        <td>67.51</td>
-    </tr>
-    <tr>
-        <td>6000</td>
-        <td>80</td>
-        <td>84</td>
-        <td>88</td>
-        <td>90</td>
-        <td>97</td>
-        <td>104</td>
-        <td>122</td>
-        <td>137</td>
-        <td>70,432</td>
-        <td>85.19</td>
-    </tr>
+    <tr><td>2,000</td><td>1,995</td><td>0.17</td><td>0.26</td><td>0.39</td><td>0%</td></tr>
+    <tr><td>4,000</td><td>3,991</td><td>0.18</td><td>0.29</td><td>0.40</td><td>0%</td></tr>
+    <tr><td>8,000</td><td>8,000</td><td>0.15</td><td>0.22</td><td>0.29</td><td>0%</td></tr>
+    <tr><td>16,000</td><td>16,000</td><td>0.16</td><td>0.28</td><td>0.50</td><td>0%</td></tr>
+    <tr><td>32,000</td><td>31,751</td><td>0.19</td><td>4.14</td><td>9.62</td><td>0%</td></tr>
+    <tr><td>48,000</td><td>36,324</td><td>23.12</td><td>125.14</td><td>195.66</td><td>0%</td></tr>
+    <tr><td>64,000</td><td>30,871</td><td>97.36</td><td>170.66</td><td>230.51</td><td>0%</td></tr>
+    <tr><td>80,000</td><td>33,041</td><td>112.65</td><td>181.17</td><td>262.94</td><td>0%</td></tr>
     </tbody>
 </table>
+<p>Latencies are in milliseconds. Achieved throughput tracks the offered rate up to about 32,000&nbsp;req/s; beyond that the six-core instance saturates near 36,000&nbsp;req/s and latency climbs predictably rather than collapsing. (More CPU cores raise the ceiling; this run pins the server to six.)</p>
 
-<a id="locust" class="anchor" href="#locust">&nbsp;</a>
-
-<h3>Locust Performance Test Results</h3>
-
-<p><a target="_blank" href="https://docs.locust.io/" rel="noopener noreferrer">Locust</a> was executed as follows:</p>
-
-<pre class="prettyprint lang-bash code"><code class="code">locust --loglevel=WARNING --headless --only-summary -u &lt;parallel clients&gt; -r 100 -t 180 --host=http://127.0.0.1:1080</code></pre>
-
-<p>The test results are:</p>
-
+<h3>Matcher scaling (time per request match)</h3>
+<p>Microbenchmark of a single request match against a growing set of literal expectations, worst case (no match, so every candidate is examined): MockServer's candidate index versus a naive linear scan.</p>
 <table class="results">
     <thead>
-    <tr>
-        <td>parallel clients</td>
-        <td>50%</td>
-        <td>66%</td>
-        <td>75%</td>
-        <td>80%</td>
-        <td>90%</td>
-        <td>95%</td>
-        <td>98%</td>
-        <td>99%</td>
-        <td>99.90%</td>
-        <td>99.99%</td>
-        <td>requests/s</td>
-        <td>mean</td>
-    </tr>
+    <tr><td>expectations</td><td>linear scan</td><td>candidate index (default)</td><td>speed-up</td></tr>
     </thead>
     <tbody>
-    <tr>
-        <td>10</td>
-        <td>0</td>
-        <td>0</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>2</td>
-        <td>5</td>
-        <td>5</td>
-        <td>11</td>
-        <td>0</td>
-    </tr>
-    <tr>
-        <td>50</td>
-        <td>0</td>
-        <td>0</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>2</td>
-        <td>3</td>
-        <td>5</td>
-        <td>50</td>
-        <td>0</td>
-    </tr>
-    <tr>
-        <td>100</td>
-        <td>0</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>2</td>
-        <td>2</td>
-        <td>3</td>
-        <td>4</td>
-        <td>8</td>
-        <td>100</td>
-        <td>0</td>
-    </tr>
-    <tr>
-        <td>150</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>1</td>
-        <td>2</td>
-        <td>3</td>
-        <td>3</td>
-        <td>4</td>
-        <td>5</td>
-        <td>6</td>
-        <td>149</td>
-        <td>0</td>
-    </tr>
-    <tr>
-        <td>250</td>
-        <td>2</td>
-        <td>3</td>
-        <td>3</td>
-        <td>4</td>
-        <td>5</td>
-        <td>6</td>
-        <td>7</td>
-        <td>8</td>
-        <td>15</td>
-        <td>46</td>
-        <td>245</td>
-        <td>2</td>
-    </tr>
-    <tr>
-        <td>500</td>
-        <td>2</td>
-        <td>2</td>
-        <td>3</td>
-        <td>3</td>
-        <td>4</td>
-        <td>5</td>
-        <td>6</td>
-        <td>7</td>
-        <td>9</td>
-        <td>46</td>
-        <td>479</td>
-        <td>2</td>
-    </tr>
-    <tr>
-        <td>750</td>
-        <td>3</td>
-        <td>4</td>
-        <td>5</td>
-        <td>6</td>
-        <td>8</td>
-        <td>10</td>
-        <td>12</td>
-        <td>14</td>
-        <td>29</td>
-        <td>34</td>
-        <td>699</td>
-        <td>3</td>
-    </tr>
-    <tr>
-        <td>1000</td>
-        <td>3</td>
-        <td>4</td>
-        <td>6</td>
-        <td>6</td>
-        <td>8</td>
-        <td>10</td>
-        <td>13</td>
-        <td>16</td>
-        <td>36</td>
-        <td>52</td>
-        <td>909</td>
-        <td>3</td>
-    </tr>
-    <tr>
-        <td>2000</td>
-        <td>4</td>
-        <td>7</td>
-        <td>10</td>
-        <td>12</td>
-        <td>22</td>
-        <td>34</td>
-        <td>49</td>
-        <td>59</td>
-        <td>87</td>
-        <td>110</td>
-        <td>1626.14</td>
-        <td>8</td>
-    </tr>
-    <tr>
-        <td>3000</td>
-        <td>51</td>
-        <td>78</td>
-        <td>99</td>
-        <td>110</td>
-        <td>160</td>
-        <td>180</td>
-        <td>220</td>
-        <td>240</td>
-        <td>290</td>
-        <td>310</td>
-        <td>2629.92</td>
-        <td>54</td>
-    </tr>
+    <tr><td>1</td><td>0.34 &micro;s</td><td>0.35 &micro;s</td><td>&mdash;</td></tr>
+    <tr><td>10</td><td>2.3 &micro;s</td><td>0.21 &micro;s</td><td>~11&times;</td></tr>
+    <tr><td>100</td><td>21 &micro;s</td><td>0.32 &micro;s</td><td>~67&times;</td></tr>
+    <tr><td>1,000</td><td>218 &micro;s</td><td>1.5 &micro;s</td><td>~147&times;</td></tr>
+    <tr><td>5,000</td><td>1,378 &micro;s</td><td>7.8 &micro;s</td><td>~177&times;</td></tr>
     </tbody>
 </table>
+<p>Times are microseconds per match. At one expectation the index adds negligible overhead; as expectations grow it keeps matching cheap where a linear scan grows roughly linearly with the number of expectations.</p>
 
-<p>The following <strong>locustfile.py</strong> was used</p>
-
-<pre class="prettyprint lang-python code"><code class="code">import locust.stats
-from locust import task, between
-locust.stats.CONSOLE_STATS_INTERVAL_SEC = 60
-from locust.contrib.fasthttp import FastHttpUser
-
-class UserBehavior(FastHttpUser):
-    wait_time = between(1, 1)
-
-    @task
-    def request(self):
-        self.client.get("/simple", verify=False)
-</code></pre>
+<h2>Tuning for your workload</h2>
+<p>The defaults are tuned for general use. For sustained high throughput, large payloads, or long-running instances, the most effective levers are memory/log sizing and a few scalability settings &mdash; covered in detail below. The single most common cause of an instance slowing down over time is the in-memory request log filling the heap; see <a href="#troubleshooting_performance">memory &amp; troubleshooting</a>.</p>
 
 {% include_subpage _includes/clustering.html %}
 
 {% include_subpage _includes/performance_configuration.html %}
+
+<h2>Historical benchmarks (Apache Bench &amp; Locust, Java 13)</h2>
+
+<p>The results below are from an earlier benchmarking exercise and are kept for reference. <strong>They are historical and indicative</strong> &mdash; measured on an older Java 13 JVM on specific hardware using a closed-model client-count load (which is subject to coordinated omission), so they are not directly comparable with the open-model figures above. They showed an average of 1.58&nbsp;ms and a p99 of 4&nbsp;ms for 150 parallel clients sending 95,228 requests per second.</p>
+
+<p>The scenario was four basic expectations (method, path and headers), with a GET request matching the third expectation. MockServer was run on a Java 13 JVM with:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code">java -Xmx500m -Dmockserver.logLevel=WARN -Dmockserver.disableLogging=true -jar ~/.m2/repository/org/mock-server/mockserver-netty/{{ site.mockserver_version }}/mockserver-netty-{{ site.mockserver_version }}-no-dependencies.jar -serverPort 1080</code></pre>
+
+<p><strong>Note:</strong> the benchmark used <span class="inline_code">-Dmockserver.disableLogging=true</span> to disable all logging and log event processing, with <span class="inline_code">-Dmockserver.logLevel=WARN</span> as a safeguard. To suppress only system-out while still recording log events for verification, use <span class="inline_code">-Dmockserver.disableSystemOut=true</span> instead.</p>
+
+<a id="apache_bench" class="anchor" href="#apache_bench">&nbsp;</a>
+<h3>Apache Bench results</h3>
+<p><a target="_blank" href="https://httpd.apache.org/docs/2.4/programs/ab.html" rel="noopener noreferrer">Apache Benchmark</a> was executed as:</p>
+<pre class="prettyprint lang-bash code"><code class="code">ab -k -n 10000000 -c &lt;parallel clients&gt; http://127.0.0.1:1080/simple</code></pre>
+<table class="results">
+    <thead>
+    <tr><td>parallel clients</td><td>50%</td><td>66%</td><td>75%</td><td>80%</td><td>90%</td><td>95%</td><td>98%</td><td>99%</td><td>requests/s</td><td>mean</td></tr>
+    </thead>
+    <tbody>
+    <tr><td>10</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>77,122</td><td>0.13</td></tr>
+    <tr><td>50</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>85,765</td><td>0.58</td></tr>
+    <tr><td>100</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>2</td><td>2</td><td>3</td><td>92,846</td><td>1.08</td></tr>
+    <tr><td>150</td><td>1</td><td>2</td><td>2</td><td>2</td><td>2</td><td>2</td><td>3</td><td>4</td><td>95,228</td><td>1.58</td></tr>
+    <tr><td>250</td><td>3</td><td>3</td><td>3</td><td>3</td><td>4</td><td>5</td><td>7</td><td>8</td><td>86,470</td><td>2.89</td></tr>
+    <tr><td>500</td><td>6</td><td>6</td><td>6</td><td>6</td><td>7</td><td>7</td><td>8</td><td>9</td><td>83,209</td><td>6.01</td></tr>
+    <tr><td>750</td><td>9</td><td>9</td><td>10</td><td>10</td><td>11</td><td>11</td><td>12</td><td>15</td><td>75,554</td><td>9.93</td></tr>
+    <tr><td>1000</td><td>11</td><td>12</td><td>13</td><td>13</td><td>14</td><td>16</td><td>17</td><td>21</td><td>75,423</td><td>13.26</td></tr>
+    <tr><td>2000</td><td>24</td><td>24</td><td>25</td><td>26</td><td>27</td><td>29</td><td>31</td><td>35</td><td>82,191</td><td>24.33</td></tr>
+    <tr><td>3000</td><td>37</td><td>39</td><td>40</td><td>40</td><td>43</td><td>46</td><td>51</td><td>58</td><td>78,171</td><td>38.38</td></tr>
+    <tr><td>4000</td><td>52</td><td>55</td><td>57</td><td>59</td><td>64</td><td>70</td><td>82</td><td>91</td><td>73,552</td><td>54.38</td></tr>
+    <tr><td>5000</td><td>65</td><td>67</td><td>70</td><td>71</td><td>75</td><td>79</td><td>90</td><td>102</td><td>74,065</td><td>67.51</td></tr>
+    <tr><td>6000</td><td>80</td><td>84</td><td>88</td><td>90</td><td>97</td><td>104</td><td>122</td><td>137</td><td>70,432</td><td>85.19</td></tr>
+    </tbody>
+</table>
+
+<a id="locust" class="anchor" href="#locust">&nbsp;</a>
+<h3>Locust results</h3>
+<p><a target="_blank" href="https://docs.locust.io/" rel="noopener noreferrer">Locust</a> was executed as:</p>
+<pre class="prettyprint lang-bash code"><code class="code">locust --loglevel=WARNING --headless --only-summary -u &lt;parallel clients&gt; -r 100 -t 180 --host=http://127.0.0.1:1080</code></pre>
+<table class="results">
+    <thead>
+    <tr><td>parallel clients</td><td>50%</td><td>66%</td><td>75%</td><td>80%</td><td>90%</td><td>95%</td><td>98%</td><td>99%</td><td>99.90%</td><td>99.99%</td><td>requests/s</td><td>mean</td></tr>
+    </thead>
+    <tbody>
+    <tr><td>10</td><td>0</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>2</td><td>5</td><td>5</td><td>11</td><td>0</td></tr>
+    <tr><td>50</td><td>0</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td><td>1</td><td>2</td><td>3</td><td>5</td><td>50</td><td>0</td></tr>
+    <tr><td>100</td><td>0</td><td>1</td><td>1</td><td>1</td><td>1</td><td>2</td><td>2</td><td>3</td><td>4</td><td>8</td><td>100</td><td>0</td></tr>
+    <tr><td>150</td><td>1</td><td>1</td><td>1</td><td>1</td><td>2</td><td>3</td><td>3</td><td>4</td><td>5</td><td>6</td><td>149</td><td>0</td></tr>
+    <tr><td>250</td><td>2</td><td>3</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td><td>15</td><td>46</td><td>245</td><td>2</td></tr>
+    <tr><td>500</td><td>2</td><td>2</td><td>3</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>9</td><td>46</td><td>479</td><td>2</td></tr>
+    <tr><td>750</td><td>3</td><td>4</td><td>5</td><td>6</td><td>8</td><td>10</td><td>12</td><td>14</td><td>29</td><td>34</td><td>699</td><td>3</td></tr>
+    <tr><td>1000</td><td>3</td><td>4</td><td>6</td><td>6</td><td>8</td><td>10</td><td>13</td><td>16</td><td>36</td><td>52</td><td>909</td><td>3</td></tr>
+    <tr><td>2000</td><td>4</td><td>7</td><td>10</td><td>12</td><td>22</td><td>34</td><td>49</td><td>59</td><td>87</td><td>110</td><td>1626.14</td><td>8</td></tr>
+    <tr><td>3000</td><td>51</td><td>78</td><td>99</td><td>110</td><td>160</td><td>180</td><td>220</td><td>240</td><td>290</td><td>310</td><td>2629.92</td><td>54</td></tr>
+    </tbody>
+</table>

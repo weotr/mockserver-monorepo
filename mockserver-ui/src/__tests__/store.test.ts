@@ -328,6 +328,34 @@ describe('DashboardStore', () => {
       useDashboardStore.getState().clearUI();
       expect(useDashboardStore.getState().view).toBe('get-started');
     });
+
+    it('clears in-memory and persisted search terms after server reset', () => {
+      globalThis.localStorage.setItem('mockserver-search', JSON.stringify({
+        logSearch: 'x', expectationSearch: 'y', receivedSearch: 'z',
+        proxiedSearch: 'w', trafficSearch: 'v',
+      }));
+      useDashboardStore.setState({
+        logSearch: 'x', expectationSearch: 'y', receivedSearch: 'z',
+        proxiedSearch: 'w', trafficSearch: 'v',
+      });
+
+      useDashboardStore.getState().clearUI();
+      const state = useDashboardStore.getState();
+
+      // In-memory search fields are reset.
+      expect(state.logSearch).toBe('');
+      expect(state.expectationSearch).toBe('');
+      expect(state.receivedSearch).toBe('');
+      expect(state.proxiedSearch).toBe('');
+      expect(state.trafficSearch).toBe('');
+
+      // Persisted search is overwritten with empty terms (no stale filters survive).
+      const persisted = JSON.parse(globalThis.localStorage.getItem('mockserver-search')!);
+      expect(persisted).toEqual({
+        logSearch: '', expectationSearch: '', receivedSearch: '',
+        proxiedSearch: '', trafficSearch: '',
+      });
+    });
   });
 
   describe('filter state', () => {

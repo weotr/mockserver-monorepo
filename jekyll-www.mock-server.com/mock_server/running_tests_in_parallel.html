@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-06-24T00:00:00+00:00
 ---
 
 <p>To ensure all tests can run in parallel with completely isolated independent data use a unique value for each test. The unique value for a test should be specified in each request matcher for all expectations for that test.  This ensures that expectations created by one test are not visible by other tests and therefore keeps test isolated without needing multiple separate instances of MockServer.</p>
@@ -16,6 +16,10 @@ sitemap:
 <p>For example, if each test generates a unique value (i.e. a UUID) for the sessionId cookie or a correlationId header then this header or cookie can be specified in each expectation's request matcher ensuring only requests with that unique value could be matched against expectations with that unique value.</p>
 
 <p><strong>Note:</strong> the drawback with this approach is that the logs will be more complex to understand because there will be a large number of expectation match failures, therefore it is recommended to either use a unique instance of MockServer per test or to run tests in series and clear all expectations prior to each test.</p>
+
+<p><strong>Cleaner isolation &mdash; separate instances:</strong> the simplest way to get complete isolation between parallel tests is to run a <strong>separate MockServer instance per test</strong> (a different port, or a separate container). Each test then owns its own expectations and event log, so there is no cross-test interference and no need to thread a unique value through every matcher. The unique-value technique above is the right choice only when sharing a single instance is unavoidable.</p>
+
+<p>For the full set of recommendations &mdash; including how the shared event log behaves under load and how to avoid intermittent failures &mdash; see <a href="/mock_server/verification.html#how_verification_works">Verify Requests &rarr; Best practices for parallel tests</a> and the <a href="/mock_server/verification.html#how_verification_works">Important notes for parallel testing</a> section.</p>
 
 <p><strong>Java</strong></p>
 
@@ -33,7 +37,7 @@ new MockServerClient("127.0.0.1", 1080)
     .respond(
         response()
             .withStatusCode(200)
-            .withBody("{ name: 'value' }")
+            .withBody("{ \"name\": \"value\" }")
     );</code></pre>
 
 <p><strong>JavaScript</strong></p>

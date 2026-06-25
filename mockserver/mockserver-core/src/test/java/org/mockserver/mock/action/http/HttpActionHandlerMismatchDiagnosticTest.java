@@ -10,6 +10,7 @@ import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.MatchDifference;
 import org.mockserver.mock.HttpState;
+import org.mockserver.mock.RequestMatchers;
 import org.mockserver.mock.crud.CrudDispatcher;
 import org.mockserver.model.*;
 import org.mockserver.responsewriter.ResponseWriter;
@@ -127,7 +128,7 @@ public class HttpActionHandlerMismatchDiagnosticTest {
         // set up closest match diff to simulate a method mismatch
         Map<MatchDifference.Field, List<String>> diff = new LinkedHashMap<>();
         diff.put(MatchDifference.Field.METHOD, List.of("expected POST but was GET"));
-        when(mockHttpStateHandler.findClosestMatchDiff(request)).thenReturn(diff);
+        when(mockHttpStateHandler.findClosestMatchHint(request)).thenReturn(new RequestMatchers.ClosestMatchHint(null, diff));
 
         // when
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
@@ -154,7 +155,7 @@ public class HttpActionHandlerMismatchDiagnosticTest {
         configuration.attachMismatchDiagnosticToResponse(true);
         HttpRequest request = request("some_path");
         when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(null);
-        when(mockHttpStateHandler.findClosestMatchDiff(request)).thenReturn(null);
+        when(mockHttpStateHandler.findClosestMatchHint(request)).thenReturn(null);
 
         // when
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
@@ -180,7 +181,7 @@ public class HttpActionHandlerMismatchDiagnosticTest {
         diff.put(MatchDifference.Field.METHOD, List.of("expected POST but was GET"));
         diff.put(MatchDifference.Field.PATH, List.of("expected /api/users but was /some_path"));
         diff.put(MatchDifference.Field.HEADERS, List.of("missing header Content-Type"));
-        when(mockHttpStateHandler.findClosestMatchDiff(request)).thenReturn(diff);
+        when(mockHttpStateHandler.findClosestMatchHint(request)).thenReturn(new RequestMatchers.ClosestMatchHint(null, diff));
 
         // when
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
@@ -197,19 +198,21 @@ public class HttpActionHandlerMismatchDiagnosticTest {
 
     @Test
     public void whenDisabled_explicitlyFalse_noDiagnostic() {
-        // given - explicitly disabled
+        // given - both diagnostics explicitly disabled (the compact hint defaults ON, so disable it too
+        // to isolate the verbose-diagnostic behaviour under test)
         configuration.attachMismatchDiagnosticToResponse(false);
+        configuration.closestMatchHintEnabled(false);
         HttpRequest request = request("some_path");
         when(mockHttpStateHandler.firstMatchingExpectation(request)).thenReturn(null);
 
         Map<MatchDifference.Field, List<String>> diff = new LinkedHashMap<>();
         diff.put(MatchDifference.Field.METHOD, List.of("expected POST but was GET"));
-        when(mockHttpStateHandler.findClosestMatchDiff(request)).thenReturn(diff);
+        lenient().when(mockHttpStateHandler.findClosestMatchHint(request)).thenReturn(new RequestMatchers.ClosestMatchHint(null, diff));
 
         // when
         actionHandler.processAction(request, mockResponseWriter, null, new HashSet<>(), false, true);
 
-        // then - no diagnostic even though diff is available
+        // then - no verbose diagnostic header or body even though a diff is available
         ArgumentCaptor<HttpResponse> responseCaptor = ArgumentCaptor.forClass(HttpResponse.class);
         verify(mockResponseWriter).writeResponse(eq(request), responseCaptor.capture(), eq(false));
         HttpResponse writtenResponse = responseCaptor.getValue();

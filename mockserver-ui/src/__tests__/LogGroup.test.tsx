@@ -36,9 +36,12 @@ describe('LogGroup', () => {
     expect(screen.getByText('request matched expectation')).toBeInTheDocument();
   });
 
-  it('does not show child entries by default', () => {
+  it('does not render child entries by default', () => {
+    // Collapsed groups unmount their children entirely (Collapse unmountOnExit)
+    // rather than keeping them in the DOM hidden — so a dashboard full of
+    // collapsed groups does not pay the DOM/heap cost of every nested entry.
     render(<LogGroup group={mockGroup} />);
-    expect(screen.queryByText('checking headers')).not.toBeVisible();
+    expect(screen.queryByText('checking headers')).not.toBeInTheDocument();
   });
 
   it('expands to show child entries when clicked', async () => {

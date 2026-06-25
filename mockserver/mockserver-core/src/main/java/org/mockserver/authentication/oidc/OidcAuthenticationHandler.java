@@ -6,8 +6,10 @@ import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.jwk.source.RemoteJWKSet;
 import com.nimbusds.jose.proc.SecurityContext;
+import com.nimbusds.jose.util.Resource;
 import com.nimbusds.jwt.JWTClaimsSet;
 import org.mockserver.authentication.AuthenticationException;
+import org.mockserver.authentication.BoundedResourceRetriever;
 import org.mockserver.authentication.AuthenticationHandler;
 import org.mockserver.authentication.AuthenticationResult;
 import org.mockserver.file.FilePath;
@@ -94,7 +96,11 @@ public class OidcAuthenticationHandler implements AuthenticationHandler {
         String discoveryUrl = issuer.endsWith("/")
             ? issuer + ".well-known/openid-configuration"
             : issuer + "/.well-known/openid-configuration";
-        JsonNode discovery = ObjectMapperFactory.createObjectMapper().readTree(URI.create(discoveryUrl).toURL());
+        // Fetch the discovery document through the bounded retriever (finite connect/read timeouts and
+        // a response size cap) rather than ObjectMapper.readTree(URL), whose underlying URL stream has
+        // no timeout or size limit. Parse the bounded string body.
+        Resource discoveryResource = BoundedResourceRetriever.create().retrieveResource(URI.create(discoveryUrl).toURL());
+        JsonNode discovery = ObjectMapperFactory.createObjectMapper().readTree(discoveryResource.getContent());
         JsonNode jwksUriNode = discovery.get("jwks_uri");
         if (jwksUriNode == null || !jwksUriNode.isTextual() || isBlank(jwksUriNode.asText())) {
             throw new IllegalArgumentException("OIDC discovery document at " + discoveryUrl + " did not contain a jwks_uri");
@@ -138,7 +144,7 @@ public class OidcAuthenticationHandler implements AuthenticationHandler {
 
     private static JWKSource<SecurityContext> jwkSource(String resolvedJwksUri) throws Exception {
         if (URLParser.isFullUrl(resolvedJwksUri)) {
-            return new RemoteJWKSet<>(URI.create(resolvedJwksUri).toURL());
+            return new RemoteJWKSet<>(URI.create(resolvedJwksUri).toURL(), BoundedResourceRetriever.create());
         }
         return new ImmutableJWKSet<>(JWKSet.load(new File(FilePath.absolutePathFromClassPathOrPath(resolvedJwksUri))));
     }

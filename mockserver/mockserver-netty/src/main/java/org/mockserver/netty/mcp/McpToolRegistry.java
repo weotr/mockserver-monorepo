@@ -102,6 +102,88 @@ public class McpToolRegistry {
         return tools;
     }
 
+    /**
+     * Names of the tools that MUTATE control-plane state (add/upsert expectations, clear,
+     * reset, register service chaos, stop the server, load/record fixtures into state).
+     * Every other registered tool only READS state (retrieve/list/status/verify/debug/
+     * explain/analyse) or runs a self-contained test against a separate target service
+     * without changing MockServer's own state, and so requires only the READ role.
+     * <p>
+     * This split mirrors the HTTP control plane's read/mutate classification
+     * ({@code HttpState.isControlPlaneRead}): an MCP {@code tools/call} arrives as a single
+     * JSON-RPC POST, so the HTTP verb cannot distinguish read from mutate per tool — the
+     * classification has to be per tool. Used to choose the role required when control-plane
+     * authorization ({@code controlPlaneAuthorizationEnabled}) is enforced for tool calls.
+     */
+    private static final java.util.Set<String> MUTATING_TOOLS = java.util.Set.of(
+        "create_expectation",
+        "create_forward_expectation",
+        "create_expectation_from_openapi",
+        "create_expectations_from_recorded_traffic",
+        "clear_expectations",
+        "reset",
+        "manage_service_chaos",
+        "stop_server",
+        "raw_expectation",
+        "load_expectations_from_file",
+        "record_llm_fixtures",
+        "mock_llm_completion",
+        "create_llm_conversation",
+        "mock_llm_failover",
+        "mock_adversarial_llm_response"
+    );
+
+    /**
+     * Whether the named tool mutates control-plane state (and so requires the MUTATE role
+     * when control-plane authorization is enforced). Unknown tool names are treated as
+     * mutating (fail-closed): a tool that is not explicitly classified as a read must not
+     * slip through with only the READ role. Implemented as a deny-list against the explicit
+     * {@link #READING_TOOLS} set so an unclassified (e.g. newly added) tool defaults to MUTATE.
+     */
+    public static boolean isMutatingTool(String toolName) {
+        return !READING_TOOLS.contains(toolName);
+    }
+
+    /** Package-private view of the explicitly read-classified tools, for the classification test. */
+    static java.util.Set<String> readingToolNames() {
+        return READING_TOOLS;
+    }
+
+    /** Package-private view of the explicitly mutate-classified tools, for the classification test. */
+    static java.util.Set<String> mutatingToolNames() {
+        return MUTATING_TOOLS;
+    }
+
+    /**
+     * Names of the tools that only READ state (or run a self-contained test against a
+     * separate target service without changing MockServer's own state). Every registered
+     * tool is in exactly one of {@link #MUTATING_TOOLS} or this set; the two are asserted
+     * disjoint-and-complete by {@code McpToolRegistryTest}.
+     */
+    private static final java.util.Set<String> READING_TOOLS = java.util.Set.of(
+        "verify_request",
+        "verify_request_sequence",
+        "verify_tool_call",
+        "verify_structured_output",
+        "verify_cost_budget",
+        "verify_traffic_against_openapi",
+        "retrieve_recorded_requests",
+        "retrieve_logs",
+        "retrieve_request_responses",
+        "get_status",
+        "debug_request_mismatch",
+        "explain_unmatched_requests",
+        "explain_agent_run",
+        "export_optimisation_report",
+        "detect_llm_drift",
+        "list_mock_tools",
+        "raw_retrieve",
+        "raw_verify",
+        "run_contract_test",
+        "run_resiliency_test",
+        "run_mcp_contract_test"
+    );
+
     public JsonNode callTool(String name, JsonNode params) {
         ToolDefinition tool = tools.get(name);
         if (tool == null) {

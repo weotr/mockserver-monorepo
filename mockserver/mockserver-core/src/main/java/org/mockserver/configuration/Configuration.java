@@ -41,6 +41,9 @@ public class Configuration {
     private Boolean detailedMatchFailures;
     private Boolean launchUIForLogLevelDebug;
     private Boolean metricsEnabled;
+    private Boolean dashboardAnalyticsEnabled;
+    private String dashboardAnalyticsEndpoint;
+    private String dashboardAnalyticsKey;
     private Long slowRequestThresholdMillis;
     private Boolean metricsRequestDurationRouteLabels;
     private Boolean chaosAutoHaltEnabled;
@@ -54,6 +57,7 @@ public class Configuration {
     private Long sloWindowRetentionMillis;
     private Integer sloWindowMaxSamples;
     private Boolean loadGenerationEnabled;
+    private Boolean loadGenerationSuppressEventLog;
     private Integer loadGenerationMaxVirtualUsers;
     private Integer loadGenerationMaxInFlightRequests;
     private Integer loadGenerationMaxRequestsPerSecond;
@@ -178,9 +182,10 @@ public class Configuration {
     // default response headers
     private String defaultResponseHeaders;
     // memoised parse of defaultResponseHeaders() so the pipe-split parse runs once per distinct
-    // resolved value rather than per HTTP request (DefaultResponseHeaders is constructed per request)
-    private volatile List<Header> parsedDefaultResponseHeaders;
-    private volatile String parsedDefaultResponseHeadersSource;
+    // resolved value rather than per HTTP request (DefaultResponseHeaders is constructed per request).
+    // source and parsed result are held in a single volatile holder so they are always read/written
+    // atomically together (no torn read of a result against a mismatched source).
+    private volatile java.util.Map.Entry<String, List<Header>> parsedDefaultResponseHeaders;
 
     // template restrictions
     private String javascriptDisallowedClasses;
@@ -235,6 +240,7 @@ public class Configuration {
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Boolean detailedVerificationFailures;
     private Boolean attachMismatchDiagnosticToResponse;
+    private Boolean closestMatchHintEnabled;
 
     // proxy
     // volatile: mutated at runtime via PUT /mockserver/mode (control-plane thread) and read on the
@@ -439,7 +445,7 @@ public class Configuration {
     }
 
     /**
-     * If true (the default) the ClientAndServer constructor will open the UI in the default browser when the log level is set to DEBUG.
+     * If true the ClientAndServer constructor will open the UI in the default browser when the log level is set to DEBUG. Default is false.
      *
      * @param launchUIForLogLevelDebug enabled ClientAndServer constructor launching UI when log level is DEBUG
      */
@@ -462,6 +468,58 @@ public class Configuration {
      */
     public Configuration metricsEnabled(Boolean metricsEnabled) {
         this.metricsEnabled = metricsEnabled;
+        return this;
+    }
+
+    public Boolean dashboardAnalyticsEnabled() {
+        if (dashboardAnalyticsEnabled == null) {
+            return ConfigurationProperties.dashboardAnalyticsEnabled();
+        }
+        return dashboardAnalyticsEnabled;
+    }
+
+    /**
+     * Master kill switch for browser dashboard usage analytics, default is true.
+     * Analytics remains inert until an endpoint and key are also supplied.
+     *
+     * @param dashboardAnalyticsEnabled enable dashboard analytics
+     */
+    public Configuration dashboardAnalyticsEnabled(Boolean dashboardAnalyticsEnabled) {
+        this.dashboardAnalyticsEnabled = dashboardAnalyticsEnabled;
+        return this;
+    }
+
+    public String dashboardAnalyticsEndpoint() {
+        if (dashboardAnalyticsEndpoint == null) {
+            return ConfigurationProperties.dashboardAnalyticsEndpoint();
+        }
+        return dashboardAnalyticsEndpoint;
+    }
+
+    /**
+     * Analytics endpoint (PostHog api_host) the browser dashboard sends usage analytics to, default is empty.
+     *
+     * @param dashboardAnalyticsEndpoint analytics endpoint host
+     */
+    public Configuration dashboardAnalyticsEndpoint(String dashboardAnalyticsEndpoint) {
+        this.dashboardAnalyticsEndpoint = dashboardAnalyticsEndpoint;
+        return this;
+    }
+
+    public String dashboardAnalyticsKey() {
+        if (dashboardAnalyticsKey == null) {
+            return ConfigurationProperties.dashboardAnalyticsKey();
+        }
+        return dashboardAnalyticsKey;
+    }
+
+    /**
+     * Write-only analytics project key the browser dashboard uses when sending usage analytics, default is empty.
+     *
+     * @param dashboardAnalyticsKey analytics project key
+     */
+    public Configuration dashboardAnalyticsKey(String dashboardAnalyticsKey) {
+        this.dashboardAnalyticsKey = dashboardAnalyticsKey;
         return this;
     }
 
@@ -846,6 +904,28 @@ public class Configuration {
      */
     public Configuration loadGenerationEnabled(Boolean loadGenerationEnabled) {
         this.loadGenerationEnabled = loadGenerationEnabled;
+        return this;
+    }
+
+    public Boolean loadGenerationSuppressEventLog() {
+        if (loadGenerationSuppressEventLog == null) {
+            return ConfigurationProperties.loadGenerationSuppressEventLog();
+        }
+        return loadGenerationSuppressEventLog;
+    }
+
+    /**
+     * Keep the server's own load-generation traffic out of the request event log. When
+     * {@code true} (the default) requests generated by an in-process load scenario are
+     * flagged with an in-process-only marker so they are skipped by the event log on the
+     * driver, leaving the bounded log free for the requests under test. The marker is never
+     * serialized to the wire, so it cannot reach an upstream target. Set to {@code false} to
+     * record load-generation traffic in the driver's event log as well.
+     *
+     * @param loadGenerationSuppressEventLog suppress load-generation traffic in the event log
+     */
+    public Configuration loadGenerationSuppressEventLog(Boolean loadGenerationSuppressEventLog) {
+        this.loadGenerationSuppressEventLog = loadGenerationSuppressEventLog;
         return this;
     }
 
@@ -2485,16 +2565,16 @@ public class Configuration {
      */
     public List<Header> parsedDefaultResponseHeaders() {
         String source = defaultResponseHeaders();
-        // equality on the source string is the cache validity check; the two volatiles are not read
-        // or written atomically, but the parse is a pure deterministic function of source, so a race
-        // can at worst cause a redundant recompute (never a wrong result) and is self-correcting
-        List<Header> cached = parsedDefaultResponseHeaders;
-        if (cached == null || !Objects.equals(source, parsedDefaultResponseHeadersSource)) {
-            cached = DefaultResponseHeaders.parse(source);
+        // source and result are read together from a single volatile holder, so the validity check
+        // can never see a result paired with a mismatched source. The parse is a pure deterministic
+        // function of source, so a concurrent miss can at worst cause a redundant recompute (never a
+        // wrong result) and is self-correcting.
+        java.util.Map.Entry<String, List<Header>> cached = parsedDefaultResponseHeaders;
+        if (cached == null || !Objects.equals(source, cached.getKey())) {
+            cached = new java.util.AbstractMap.SimpleImmutableEntry<>(source, DefaultResponseHeaders.parse(source));
             parsedDefaultResponseHeaders = cached;
-            parsedDefaultResponseHeadersSource = source;
         }
-        return cached;
+        return cached.getValue();
     }
 
     /**
@@ -2510,7 +2590,6 @@ public class Configuration {
         // invalidate the memoised parse; parsedDefaultResponseHeaders() will recompute lazily,
         // also picking up any change in the global property when defaultResponseHeaders is null
         this.parsedDefaultResponseHeaders = null;
-        this.parsedDefaultResponseHeadersSource = null;
         return this;
     }
 
@@ -3276,6 +3355,26 @@ public class Configuration {
      */
     public Configuration attachMismatchDiagnosticToResponse(Boolean attachMismatchDiagnosticToResponse) {
         this.attachMismatchDiagnosticToResponse = attachMismatchDiagnosticToResponse;
+        return this;
+    }
+
+    public Boolean closestMatchHintEnabled() {
+        if (closestMatchHintEnabled == null) {
+            return ConfigurationProperties.closestMatchHintEnabled();
+        }
+        return closestMatchHintEnabled;
+    }
+
+    /**
+     * If true (the default), when no expectation matches an incoming request the data-plane 404 response carries a
+     * single concise diagnostic header (x-mockserver-closest-match-hint) naming the closest expectation and the first
+     * field that differed. The hint is header-only and length-bounded — no expectation body is leaked. Set to false to
+     * suppress it.
+     *
+     * @param closestMatchHintEnabled enable the closest-match hint header on unmatched 404 responses
+     */
+    public Configuration closestMatchHintEnabled(Boolean closestMatchHintEnabled) {
+        this.closestMatchHintEnabled = closestMatchHintEnabled;
         return this;
     }
 

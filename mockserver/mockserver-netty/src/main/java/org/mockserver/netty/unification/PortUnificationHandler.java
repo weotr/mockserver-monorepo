@@ -164,18 +164,37 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
     }
 
     @Override
-    protected void decode(ChannelHandlerContext ctx, ByteBuf msg, List<Object> out) {
-        ctx.channel().attr(NETTY_SSL_CONTEXT_FACTORY).set(nettySslContextFactory);
+    public void channelActive(ChannelHandlerContext ctx) {
+        // Apply any configured connection delay here — before the first inbound bytes are read —
+        // rather than blocking inside decode() on the event loop (which would stall every other
+        // channel sharing this worker thread). We suppress auto-read, schedule the read to resume
+        // after the delay, and then let channelActive propagate. Because no bytes have been read yet
+        // there is no ReplayingDecoder cumulation to preserve; protocol detection simply begins once
+        // the delayed read delivers the first bytes. Connection delay simulates slow connection
+        // establishment, so deferring the first read reproduces it more faithfully than a sleep.
         Delay connectionDelay = configuration.connectionDelay();
         if (connectionDelay == null) {
-            long delayMillis = ConfigurationProperties.connectionDelayMillis();
-            if (delayMillis > 0) {
-                connectionDelay = Delay.milliseconds(delayMillis);
+            long configuredMillis = ConfigurationProperties.connectionDelayMillis();
+            if (configuredMillis > 0) {
+                connectionDelay = Delay.milliseconds(configuredMillis);
             }
         }
-        if (connectionDelay != null) {
-            connectionDelay.applyDelay();
+        long delayMillis = connectionDelay != null ? connectionDelay.sampleValueMillis() : 0;
+        if (delayMillis > 0) {
+            ctx.channel().config().setAutoRead(false);
+            ctx.executor().schedule(() -> {
+                if (ctx.channel().isActive()) {
+                    ctx.channel().config().setAutoRead(true);
+                    ctx.read();
+                }
+            }, delayMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
         }
+        ctx.fireChannelActive();
+    }
+
+    @Override
+    protected void decode(ChannelHandlerContext ctx, ByteBuf msg, List<Object> out) {
+        ctx.channel().attr(NETTY_SSL_CONTEXT_FACTORY).set(nettySslContextFactory);
         if (SocksDetector.isSocks4(msg, actualReadableBytes())) {
             logStage(ctx, "adding SOCKS4 decoders");
             enableSocks4(ctx, msg);
@@ -466,7 +485,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                             httpResponse
                         ).get(0)
                     )
-                    .addListener((ChannelFuture future) -> future.channel().disconnect().awaitUninterruptibly());
+                    .addListener((ChannelFuture future) -> future.channel().disconnect());
             } else {
                 addLastIfNotPresent(pipeline, new CallbackWebSocketServerHandler(httpState));
                 addLastIfNotPresent(pipeline, new DashboardWebSocketHandler(httpState, isSslEnabledUpstream(ctx.channel()), false));
@@ -510,7 +529,7 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
             setProxyingRequest(ctx, Boolean.TRUE);
             setRemoteAddress(ctx, new InetSocketAddress(hostParts[0], port));
         }
-        ctx.writeAndFlush(Unpooled.copiedBuffer((PROXIED_RESPONSE + message).getBytes(StandardCharsets.UTF_8))).awaitUninterruptibly();
+        ctx.writeAndFlush(Unpooled.copiedBuffer((PROXIED_RESPONSE + message).getBytes(StandardCharsets.UTF_8)));
     }
 
     private String readMessage(ByteBuf msg) {
@@ -624,6 +643,16 @@ public class PortUnificationHandler extends ReplayingDecoder<Void> {
                     );
                 }
             }
+            // The sslHandshakeException branch above covers SSLException-family faults (incl.
+            // NotSslRecordException, a subclass of SSLException) but NOT a plain DecoderException;
+            // the branch below catches that residual so a decoder fault is not silently dropped.
+        } else if (isSslOrDecoderFault(throwable)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("SSL or decoder fault caught by port unification handler -> closing pipeline " + ctx.channel())
+                    .setThrowable(throwable)
+            );
         }
         closeOnFlush(ctx.channel());
     }

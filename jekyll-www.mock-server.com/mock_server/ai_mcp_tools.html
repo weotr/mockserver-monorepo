@@ -4,7 +4,7 @@ description: Full reference for every MCP tool exposed by MockServer, including 
 shortTitle: MCP Tools Reference
 layout: page
 pageOrder: 2
-section: 'AI Integration'
+section: 'AI & MCP'
 subsection: true
 sitemap:
   priority: 0.8
@@ -48,11 +48,13 @@ sitemap:
         <tr><td><a href="#load_expectations_from_file"><code>load_expectations_from_file</code></a></td><td>Load expectations from a fixture file for replay</td><td>High</td></tr>
         <tr><td><a href="#mock_llm_completion"><code>mock_llm_completion</code></a></td><td>Create a single-turn LLM completion expectation for any supported provider</td><td>High</td></tr>
         <tr><td><a href="#create_llm_conversation"><code>create_llm_conversation</code></a></td><td>Create a multi-turn scripted LLM conversation with optional per-session isolation</td><td>High</td></tr>
+        <tr><td><a href="#mock_llm_failover"><code>mock_llm_failover</code></a></td><td>Create an LLM failover/retry scenario &mdash; first N requests fail, then succeed</td><td>High</td></tr>
         <tr><td><a href="#verify_tool_call"><code>verify_tool_call</code></a></td><td>Assert an agent called a named tool, from recorded LLM requests</td><td>High</td></tr>
         <tr><td><a href="#explain_agent_run"><code>explain_agent_run</code></a></td><td>Summarise a recorded agent run (turns, tool-call sequence)</td><td>High</td></tr>
         <tr><td><a href="#verify_structured_output"><code>verify_structured_output</code></a></td><td>Validate recorded LLM responses' JSON output against a JSON Schema</td><td>High</td></tr>
         <tr><td><a href="#verify_cost_budget"><code>verify_cost_budget</code></a></td><td>Assert the total estimated USD cost of recorded LLM responses is within a budget</td><td>High</td></tr>
         <tr><td><a href="#detect_llm_drift"><code>detect_llm_drift</code></a></td><td>Replay a cassette against the live provider and report structural drift</td><td>High</td></tr>
+        <tr><td><a href="#export_optimisation_report"><code>export_optimisation_report</code></a></td><td>Turn captured LLM traffic into a cost-optimisation brief (Markdown or JSON)</td><td>High</td></tr>
         <tr><td><a href="#mock_adversarial_llm_response"><code>mock_adversarial_llm_response</code></a></td><td>Mock a hostile/malformed LLM response to test agent resilience</td><td>High</td></tr>
         <tr><td><a href="#run_mcp_contract_test"><code>run_mcp_contract_test</code></a></td><td>Check a target MCP server conforms to the protocol over Streamable HTTP</td><td>High</td></tr>
         <tr><td><a href="#list_mock_tools"><code>list_mock_tools</code></a></td><td>Generate MCP tool definitions from the current active mock expectations</td><td>High</td></tr>
@@ -1021,6 +1023,8 @@ sitemap:
 
 <p>Both <code>provider</code> and <code>path</code> are required. All other parameters are optional.</p>
 
+<p>Completions support the seven chat providers below; the rerank-only <code>COHERE</code> and <code>VOYAGE</code> providers cannot produce a completion &mdash; see <a href="/mock_server/llm_response_mocking.html#rerank">Rerank</a> for mocking those endpoints.</p>
+
 <table>
     <thead>
         <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
@@ -1126,6 +1130,8 @@ sitemap:
 <p>Per-session isolation is optional. When <code>isolateBy</code> is set, each unique value of the specified header, query parameter, or cookie gets its own independent state chain, so concurrent test sessions do not interfere with each other.</p>
 
 <p><code>provider</code>, <code>path</code>, and <code>turns</code> are required. All other parameters are optional.</p>
+
+<p>Conversations support the seven chat providers; the rerank-only <code>COHERE</code> and <code>VOYAGE</code> providers cannot produce a completion &mdash; see <a href="/mock_server/llm_response_mocking.html#rerank">Rerank</a>.</p>
 
 <table>
     <thead>
@@ -1252,6 +1258,67 @@ sitemap:
 }</code></pre>
 
 <p>The <code>scenarioName</code> in the response is auto-generated and encodes the isolation key. The <code>states</code> array shows the scenario state progression: <code>Started</code> &rarr; <code>turn_1</code> &rarr; <code>__done</code>. Each concurrent session identified by a distinct <code>x-session-id</code> header value advances through its own copy of this state chain.</p>
+
+<a id="mock_llm_failover" class="anchor" href="#mock_llm_failover">&nbsp;</a>
+
+<h3>mock_llm_failover</h3>
+
+<p>Creates an LLM failover/retry scenario: the first N requests fail with the HTTP statuses you list, then every subsequent request succeeds with a single provider-correct LLM completion. Use it to test that retry/failover logic &mdash; LiteLLM, the Envoy AI Gateway, or an SDK's built-in retries &mdash; recovers correctly once the upstream stops erroring. The failures are scripted in order via a scenario state chain, so the scenario is deterministic and repeatable. See <a href="/mock_server/llm_response_mocking.html">LLM Response Mocking</a> for the response wire formats.</p>
+
+<p><code>provider</code>, <code>path</code>, and <code>failStatuses</code> are required. All other parameters describe the eventual success response and are optional.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>provider</code></td><td>string (enum)</td><td>Yes</td><td>LLM provider for the success response: <code>ANTHROPIC</code>, <code>OPENAI</code>, <code>OPENAI_RESPONSES</code>, <code>GEMINI</code>, <code>BEDROCK</code>, <code>AZURE_OPENAI</code>, or <code>OLLAMA</code> (the seven chat providers; the rerank-only <code>COHERE</code>/<code>VOYAGE</code> providers cannot produce a completion &mdash; see <a href="/mock_server/llm_response_mocking.html#rerank">Rerank</a>)</td></tr>
+        <tr><td><code>path</code></td><td>string</td><td>Yes</td><td>Request path to match (e.g. <code>/v1/chat/completions</code>)</td></tr>
+        <tr><td><code>failStatuses</code></td><td>array of integer</td><td>Yes</td><td>Ordered array of HTTP status codes, one per failure attempt (e.g. <code>[503, 503, 429]</code>). The first request returns the first status, the second the next, and so on; after the list is exhausted every further request succeeds. Each status must be 100&ndash;599.</td></tr>
+        <tr><td><code>model</code></td><td>string</td><td>No</td><td>Model name for the success response (e.g. <code>gpt-4o</code>, <code>claude-sonnet-4</code>)</td></tr>
+        <tr><td><code>text</code></td><td>string</td><td>No</td><td>Success response text content</td></tr>
+        <tr><td><code>toolCalls</code></td><td>array</td><td>No</td><td>Tool/function calls for the success response. Each entry requires <code>name</code> (string) and accepts optional <code>arguments</code> (string or object).</td></tr>
+        <tr><td><code>stopReason</code></td><td>string</td><td>No</td><td>Stop reason for the success response (e.g. <code>end_turn</code>, <code>stop</code>)</td></tr>
+        <tr><td><code>usage</code></td><td>object</td><td>No</td><td>Token usage for the success response. Accepts <code>inputTokens</code> (integer) and <code>outputTokens</code> (integer).</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request (two 503s then succeed):</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 32,
+  "method": "tools/call",
+  "params": {
+    "name": "mock_llm_failover",
+    "arguments": {
+      "provider": "OPENAI",
+      "path": "/v1/chat/completions",
+      "failStatuses": [503, 503],
+      "model": "gpt-4o",
+      "text": "Recovered after retry.",
+      "stopReason": "stop"
+    }
+  }
+}</code></pre>
+
+<p><strong>Example response:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 32,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"status\":\"created\",\"count\":3,\"failureAttempts\":2,\"provider\":\"OPENAI\",\"ids\":[\"exp-001\",\"exp-002\",\"exp-003\"]}"
+      }
+    ],
+    "isError": false
+  }
+}</code></pre>
+
+<p>The response reports <code>failureAttempts</code> (how many requests fail before recovery) and the <code>ids</code> of the expectations created for the scripted failure-then-success chain.</p>
 
 <a id="verify_tool_call" class="anchor" href="#verify_tool_call">&nbsp;</a>
 
@@ -1483,7 +1550,7 @@ sitemap:
     "content": [
       {
         "type": "text",
-        "text": "{\"status\":\"all_passed\",\"protocolVersion\":\"2025-03-26\",\"serverInfo\":{\"name\":\"MockServer\"},\"totalChecks\":5,\"passed\":5,\"failed\":0,\"results\":[{\"check\":\"initialize\",\"passed\":true,\"statusCode\":200,\"detail\":\"session established\"},{\"check\":\"notifications/initialized\",\"passed\":true,\"statusCode\":202},{\"check\":\"ping\",\"passed\":true,\"statusCode\":200},{\"check\":\"tools/list\",\"passed\":true,\"statusCode\":200,\"detail\":\"34 tools advertised\"},{\"check\":\"rejects unknown method\",\"passed\":true,\"statusCode\":200,\"detail\":\"responded with code -32601\"}]}"
+        "text": "{\"status\":\"all_passed\",\"protocolVersion\":\"2025-03-26\",\"serverInfo\":{\"name\":\"MockServer\"},\"totalChecks\":5,\"passed\":5,\"failed\":0,\"results\":[{\"check\":\"initialize\",\"passed\":true,\"statusCode\":200,\"detail\":\"session established\"},{\"check\":\"notifications/initialized\",\"passed\":true,\"statusCode\":202},{\"check\":\"ping\",\"passed\":true,\"statusCode\":200},{\"check\":\"tools/list\",\"passed\":true,\"statusCode\":200,\"detail\":\"36 tools advertised\"},{\"check\":\"rejects unknown method\",\"passed\":true,\"statusCode\":200,\"detail\":\"responded with code -32601\"}]}"
       }
     ],
     "isError": false
@@ -1535,6 +1602,41 @@ sitemap:
 }</code></pre>
 
 <p>The <span class="inline_code">count</span> field gives the total number of tool definitions generated. Use this tool to let an agent inspect what a MockServer instance is currently set up to mock &mdash; for example, before deciding whether to call <a href="#create_expectation"><code>create_expectation</code></a> or to invoke an already-mocked endpoint.</p>
+
+<a id="export_optimisation_report" class="anchor" href="#export_optimisation_report">&nbsp;</a>
+
+<h3>export_optimisation_report</h3>
+
+<p>Turns the LLM traffic captured through MockServer's forwarding proxy into a cost-optimisation export: either a copy-paste Markdown <em>optimisation brief</em> (paste it into any LLM to get cost-reduction advice) or the structured JSON report bundle. It surfaces deterministic optimisation signals &mdash; repeated system prompts, large static context resent every turn, deterministic tool calls, oversized tool results, output bloat, and duplicate retries &mdash; each with token and cost estimates. Export-only, deterministic, and read-only: MockServer never calls an LLM, and secrets are redacted. This is the same report described in full on the <a href="/mock_server/ai_optimisation.html">LLM Optimisation</a> page, which also exposes it as a REST endpoint and a dashboard view.</p>
+
+<table>
+    <thead>
+        <tr><th>Parameter</th><th>Type</th><th>Required</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr><td><code>format</code></td><td>string (enum)</td><td>No</td><td><code>markdown</code> for the copy-paste optimisation brief (default), or <code>json</code> for the structured report bundle.</td></tr>
+        <tr><td><code>session</code></td><td>string</td><td>No</td><td>Optional session/grouping key filter (e.g. <code>host:api.openai.com</code>); default is all captured LLM traffic.</td></tr>
+        <tr><td><code>host</code></td><td>string</td><td>No</td><td>Optional upstream host filter (e.g. <code>api.openai.com</code>).</td></tr>
+        <tr><td><code>provider</code></td><td>string</td><td>No</td><td>Optional LLM provider filter (e.g. <code>OPENAI</code>, <code>ANTHROPIC</code>).</td></tr>
+    </tbody>
+</table>
+
+<p><strong>Example request:</strong></p>
+
+<pre class="prettyprint code"><code class="code">{
+  "jsonrpc": "2.0",
+  "id": 51,
+  "method": "tools/call",
+  "params": {
+    "name": "export_optimisation_report",
+    "arguments": {
+      "format": "markdown",
+      "host": "api.openai.com"
+    }
+  }
+}</code></pre>
+
+<p>With <code>format: "markdown"</code> the result text carries a <code>brief</code> field (the Markdown document); with <code>format: "json"</code> it carries a structured <code>report</code> object. See <a href="/mock_server/ai_optimisation.html">LLM Optimisation</a> for the full signal catalogue and worked examples.</p>
 
 <a id="low_level_tools" class="anchor" href="#low_level_tools">&nbsp;</a>
 

@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)"
+      "Bash(*)",
+      "Bash(scripts/ci/bk-pipeline-status.sh:*)",
+      "Bash(./scripts/ci/bk-pipeline-status.sh:*)"
     ],
     "deny": [
       "Bash(git push --force*)",

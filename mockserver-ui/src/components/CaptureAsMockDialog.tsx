@@ -45,7 +45,7 @@ import { callMcpTool, buildBaseUrl } from '../lib/mcpClient';
 import { humanizeError, type HumanError } from '../lib/errorMessage';
 import CopyButton from './CopyButton';
 import HumanErrorAlert from './HumanErrorAlert';
-import JsonDiffViewer from './JsonDiffViewer';
+import JsonDiffViewer from './JsonDiffViewerLazy';
 
 // ---------------------------------------------------------------------------
 // Props

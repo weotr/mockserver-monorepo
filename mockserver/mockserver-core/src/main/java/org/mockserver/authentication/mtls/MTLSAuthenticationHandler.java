@@ -9,6 +9,7 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.serialization.ObjectMapperFactory;
 import org.slf4j.event.Level;
 
+import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 
 public class MTLSAuthenticationHandler implements AuthenticationHandler {
@@ -38,7 +39,17 @@ public class MTLSAuthenticationHandler implements AuthenticationHandler {
                             caCertificate.getSubjectX500Principal().getName()
                         );
                         try {
-                            clientCertificate.getCertificate().verify(caCertificate.getPublicKey());
+                            Certificate presentedCertificate = clientCertificate.getCertificate();
+                            // Expiry / not-yet-valid check: verify() only proves the signature chains to
+                            // the CA, NOT that the client certificate is currently within its validity
+                            // window. Without this an expired (or not-yet-valid) but correctly-signed
+                            // client cert would still authenticate. checkValidity() throws
+                            // CertificateExpiredException / CertificateNotYetValidException, caught below
+                            // as an authentication failure alongside any signature mismatch.
+                            if (presentedCertificate instanceof X509Certificate) {
+                                ((X509Certificate) presentedCertificate).checkValidity();
+                            }
+                            presentedCertificate.verify(caCertificate.getPublicKey());
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setLogLevel(Level.DEBUG)

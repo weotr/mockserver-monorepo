@@ -7,9 +7,15 @@
 	<meta name="google-site-verification" content="QIzvnb0rY1MnkLjIDI217X0RjxZCX2tWdUp1CvejoVw"/>
 	<meta name="msvalidate.01" content="9DBA7A5F05A6179123259382E10FB4A7"/>
 
+	<!-- Sanitised page title for <title>, social meta and structured data:
+	     pages may put a <br/> in page.title to wrap the visible <h1> heading
+	     onto two lines; strip it (and any other markup) here so it never leaks
+	     into the browser tab title, share cards, or JSON-LD. -->
+	{% assign clean_title = page.title | replace: '<br/>', ' ' | replace: '<br>', ' ' | replace: '<br />', ' ' | strip_html | strip_newlines %}
+
 	<!-- Title: append brand suffix on inner pages so SERP snippets show the brand -->
 	{% if page.title and page.url != "/" %}
-	<title>{{ page.title }} | {{ site.title }}</title>
+	<title>{{ clean_title }} | {{ site.title }}</title>
 	{% else %}
 	<title>{{ site.title }} — {{ site.tagline | default: site.short_description | default: site.description | strip_html | strip_newlines | truncate: 90 }}</title>
 	{% endif %}
@@ -25,7 +31,7 @@
 	<meta name="description" content="{{ page_description }}">
 	<meta name="keywords" content="{% if page.keywords %}{{ page.keywords }}, {% endif %}{{ site.keywords }}"/>
 	<meta name="author" content="{{ site.author.name.full }}" />
-	<meta name="title" content="{% if page.title and page.url != '/' %}{{ page.title }} | {{ site.title }}{% else %}{{ site.title }}{% endif %}">
+	<meta name="title" content="{% if page.title and page.url != '/' %}{{ clean_title }} | {{ site.title }}{% else %}{{ site.title }}{% endif %}">
 
 	<!-- AI crawling / training policy: explicitly open. Mirrors /robots.txt + /ai.txt + /llms.txt -->
 	<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1">
@@ -39,7 +45,7 @@
 	<meta property="og:type" content="{% if page.url == '/' %}website{% else %}article{% endif %}">
 	<meta property="og:site_name" content="{{ site.title }}">
 	<meta property="og:url" content="{{ page.url | replace:'index.html','' | prepend: site.baseurl | prepend: site.url }}">
-	<meta property="og:title" content="{% if page.title and page.url != '/' %}{{ page.title }} | {{ site.title }}{% else %}{{ site.title }}{% endif %}">
+	<meta property="og:title" content="{% if page.title and page.url != '/' %}{{ clean_title }} | {{ site.title }}{% else %}{{ site.title }}{% endif %}">
 	<meta property="og:description" content="{{ page_description }}">
 	<meta property="og:image" content="{{ site.url }}{{ site.social_card | default: '/apple-touch-icon.png' }}">
 	<meta property="og:image:width" content="1200">
@@ -53,7 +59,7 @@
 	<meta name="twitter:site" content="{{ site.twitter_handle }}">
 	<meta name="twitter:creator" content="{{ site.twitter_handle }}">
 	{% endif %}
-	<meta name="twitter:title" content="{% if page.title and page.url != '/' %}{{ page.title }} | {{ site.title }}{% else %}{{ site.title }}{% endif %}">
+	<meta name="twitter:title" content="{% if page.title and page.url != '/' %}{{ clean_title }} | {{ site.title }}{% else %}{{ site.title }}{% endif %}">
 	<meta name="twitter:description" content="{{ page_description }}">
 	<meta name="twitter:image" content="{{ site.url }}{{ site.social_card | default: '/apple-touch-icon.png' }}">
 	<meta name="twitter:image:alt" content="MockServer — mock HTTP APIs, record traffic, MCP for AI assistants">
@@ -168,7 +174,7 @@
 	{
 	  "@context": "https://schema.org",
 	  "@type": "TechArticle",
-	  "headline": {{ page.title | default: site.title | jsonify }},
+	  "headline": {{ clean_title | default: site.title | jsonify }},
 	  "description": {{ page_description | strip_html | strip_newlines | jsonify }},
 	  "url": "{{ page.url | replace:'index.html','' | prepend: site.baseurl | prepend: site.url }}",
 	  "image": "{{ site.url }}{{ site.social_card | default: '/apple-touch-icon.png' }}",
@@ -220,7 +226,7 @@
 	    {
 	      "@type": "ListItem",
 	      "position": 2,
-	      "name": {{ page.title | jsonify }},
+	      "name": {{ clean_title | jsonify }},
 	      "item": "{{ page.url | replace:'index.html','' | prepend: site.baseurl | prepend: site.url }}"
 	    }
 	  ]

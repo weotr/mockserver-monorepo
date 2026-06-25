@@ -84,6 +84,32 @@ public class RequestMatchersClosestMatchDiffTest {
     }
 
     @Test
+    public void shouldReturnNullHintWhenNoExpectations() {
+        RequestMatchers.ClosestMatchHint hint = requestMatchers.findClosestMatchHint(
+            new HttpRequest().withMethod("GET").withPath("somePath")
+        );
+        assertThat(hint, is(nullValue()));
+    }
+
+    @Test
+    public void shouldReturnHintWithExpectationIdAndDiff() {
+        // given
+        Expectation expectation = new Expectation(request().withMethod("GET").withPath("expectedPath"))
+            .thenRespond(response().withBody("someBody"));
+        requestMatchers.add(expectation, API);
+
+        // when
+        RequestMatchers.ClosestMatchHint hint = requestMatchers.findClosestMatchHint(
+            new HttpRequest().withMethod("POST").withPath("differentPath")
+        );
+
+        // then - hint carries the closest expectation id and its field diff
+        assertThat(hint, is(notNullValue()));
+        assertThat(hint.getExpectationId(), is(expectation.getId()));
+        assertThat(hint.getDifferences().containsKey(MatchDifference.Field.METHOD), is(true));
+    }
+
+    @Test
     public void shouldReturnNullWhenRequestMatchesExpectation() {
         // given
         requestMatchers.add(

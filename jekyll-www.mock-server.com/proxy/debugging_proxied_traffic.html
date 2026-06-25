@@ -3,7 +3,7 @@ title: Debugging Proxied Traffic
 description: Debug proxied traffic recorded by MockServer using the dashboard UI or the retrieve and download API, exporting requests as JSON, HAR, or cURL.
 layout: page
 pageOrder: 5
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.7
@@ -45,7 +45,7 @@ sitemap:
 		<tr><td><strong>LOG_ENTRIES</strong></td><td>REQUESTS, REQUEST_RESPONSES</td><td>Read the traffic in MockServer's human-readable log format.</td></tr>
 		<tr><td><strong>HAR</strong></td><td>REQUEST_RESPONSES</td><td>Open the recording in browser DevTools or any HTTP-analysis tool that reads <a href="http://www.softwareishard.com/blog/har-12-spec/" target="_blank" rel="noopener noreferrer">HAR 1.2</a> — a great way to share a capture.</td></tr>
 		<tr><td><strong>CURL</strong></td><td>REQUESTS, REQUEST_RESPONSES</td><td>Get one <code>curl</code> command per recorded request so you can replay an individual call by hand.</td></tr>
-		<tr><td><strong>JAVA</strong></td><td>REQUESTS</td><td>Render the requests as Java client code (handy for pasting into a test).</td></tr>
+		<tr><td><strong>JAVA</strong></td><td>RECORDED_EXPECTATIONS</td><td>Render recorded traffic as Java client code (handy for pasting into a test). For raw recorded requests use <strong>RECORDED_EXPECTATIONS</strong> rather than <strong>REQUESTS</strong> &mdash; with <strong>REQUESTS</strong> the Java format returns the requests as JSON, not Java code.</td></tr>
 	</tbody>
 </table>
 
@@ -83,4 +83,4 @@ sitemap:
 	<li><strong>Where is the time going?</strong> Use the per-request timing breakdown (connect, TTFB, total) and HAR timing export to identify whether latency is in the network, the upstream's processing, or the response transfer &mdash; see <a href="/proxy/network_latency_debugging.html">Network Latency Debugging</a>.</li>
 </ul>
 
-<p>For the complete list of <code>type</code> and <code>format</code> values and the full REST specification, see the <a href="/mock_server/configuration_properties.html">configuration</a> docs and the <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/control/put_retrieve" target="_blank" rel="noopener noreferrer">retrieve REST API</a>.</p>
+<p>For the complete list of <code>type</code> and <code>format</code> values and the full REST specification, see the <a href="https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi/{{ site.mockserver_api_version }}#/control/put_retrieve" target="_blank" rel="noopener noreferrer">retrieve REST API</a> (defined in <a href="https://github.com/mock-server/mockserver-monorepo/blob/master/mockserver/mockserver-core/src/main/resources/org/mockserver/openapi/mock-server-openapi-embedded-model.yaml" target="_blank" rel="noopener noreferrer">mock-server-openapi.yaml</a>).</p>

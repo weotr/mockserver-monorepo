@@ -2400,6 +2400,92 @@
           }
         },
         {
+          "name": "end-of-run summary report for a load scenario run",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/checkout/report",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "checkout",
+                "report"
+              ]
+            },
+            "description": "Returns an end-of-run summary report derived from the run's status snapshot \u2014 the live snapshot while running, or the retained terminal snapshot once finished. The default JSON form carries counts, latency percentiles, the threshold verdict and per-threshold results. With ?format=junit the same data is rendered as a JUnit-XML <testsuite> (one <testcase> per threshold, a <failure> per breach, plus a \"run completed\" testcase) so CI consumers render per-threshold pass/fail. 404 if the scenario never ran.\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html"
+          }
+        },
+        {
+          "name": "seed a load scenario from an OpenAPI specification",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/generateFromOpenAPI",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "generateFromOpenAPI"
+              ]
+            },
+            "description": "Generates an editable load scenario from an OpenAPI spec and loads (registers) it into the registry under \"name\" in the LOADED state \u2014 exactly like PUT /mockserver/loadScenario, it generates no traffic and is allowed even when loadGenerationEnabled is false. One step is produced per OpenAPI operation (in a stable path-then-method order), each with the operation's method and server-prefixed path, a representative request-body example, and a Content-Type header. The spec is accepted identically to PUT /mockserver/openapi/expectation \u2014 an inline JSON/YAML payload, a URL, or a file/classpath reference. Target precedence for where each request is sent (carried as the request's Host header and secure flag): an explicit \"target\" wins, else the spec's servers[0] URL, else the request is left path-only for the operator to edit. When no \"profile\" is supplied a conservative default is applied (one short constant-VU stage) so the scenario is immediately runnable yet safe \u2014 the operator edits it before scaling up. The generated scenario is returned so a client/UI can show and edit it before triggering a run.\n\nthe scenario name plus the OpenAPI spec (with optional target and profile)\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"petstore-load\",\n  \"specUrlOrPayload\": \"https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml\",\n  \"target\": {\n    \"host\": \"petstore.svc\",\n    \"port\": 8080,\n    \"scheme\": \"http\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "seed a load scenario from recorded proxy traffic",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mockserver/loadScenario/generateFromRecording",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "mockserver",
+                "loadScenario",
+                "generateFromRecording"
+              ]
+            },
+            "description": "Generates an editable load scenario from traffic previously recorded by MockServer in proxy/recording mode (the requests held by the event log) and loads (registers) it into the registry under \"name\" in the LOADED state \u2014 exactly like PUT /mockserver/loadScenario, it generates no traffic and is allowed even when loadGenerationEnabled is false. Two modes control how recorded requests become steps. VERBATIM (the default) emits one step per recorded request, in recorded order, preserving the concrete path, body and headers \u2014 with an optional \"maxSteps\" cap. TEMPLATIZED deduplicates recorded requests by (method, templatised-path) \u2014 id-shaped path segments such as /orders/123 collapse to /orders/{id} \u2014 keeping one representative example per unique route, ordered by descending hit frequency (most-hit routes first); each step's \"weight\" is set to its route's observed hit count and the scenario uses \"stepSelection\": \"WEIGHTED\" so replay reproduces the recorded traffic mix. An optional \"requestFilter\" (an HttpRequest matcher) selects which recorded requests to include; absent means all recorded requests. An optional \"target\" is applied to every step (overriding each recorded request's own Host/secure routing); absent leaves each recorded request's routing untouched. When no \"profile\" is supplied a conservative default is applied (one short constant-VU stage) so the scenario is immediately runnable yet safe \u2014 the operator edits it before scaling up. The generated scenario is returned so a client/UI can show and edit it before triggering a run.\n\nthe scenario name plus optional mode, requestFilter, maxSteps, target and profile\n\nFull API reference: https://www.mock-server.com/mock_server/mockserver_clients.html",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"replay-prod-traffic\",\n  \"mode\": \"TEMPLATIZED\",\n  \"target\": {\n    \"host\": \"staging.svc\",\n    \"port\": 8080,\n    \"scheme\": \"http\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
           "name": "trigger registered load scenario(s) to run",
           "request": {
             "method": "PUT",

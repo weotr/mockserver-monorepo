@@ -132,13 +132,36 @@ public class McpRequestProcessor {
     // ---- HTTP method dispatch (transport-neutral) ----
 
     /**
-     * Process an MCP POST request.
+     * Process an MCP POST request. The request is authenticated by the transport handler
+     * BEFORE this is called; the principal's verified scopes are passed in so per-tool
+     * control-plane authorization can be enforced for {@code tools/call} (a mutating tool
+     * requires the MUTATE role, a reading tool the READ role). Equivalent to
+     * {@link #handlePost(String, String, java.util.Set)} with {@code null} scopes, used by
+     * callers that do not (yet) carry an authenticated result.
      *
      * @param requestBody the raw JSON body
      * @param mcpSessionId the Mcp-Session-Id header value (may be null)
      * @return the result to write back
      */
     public McpResult handlePost(String requestBody, String mcpSessionId) {
+        return handlePost(requestBody, mcpSessionId, null);
+    }
+
+    /**
+     * Process an MCP POST request, enforcing per-tool control-plane authorization for
+     * {@code tools/call} using the authenticated principal's verified {@code scopes}.
+     * <p>
+     * Authorization is delegated to {@link HttpState#controlPlaneToolAuthorized} — the SAME
+     * authorizer/role model as the HTTP control plane — and is gated by
+     * {@code controlPlaneAuthorizationEnabled}: when that is off (the default), authorization
+     * always passes and behaviour is unchanged.
+     *
+     * @param requestBody the raw JSON body
+     * @param mcpSessionId the Mcp-Session-Id header value (may be null)
+     * @param scopes the authenticated principal's verified scopes (null when authorization is not enforced)
+     * @return the result to write back
+     */
+    public McpResult handlePost(String requestBody, String mcpSessionId, java.util.Set<String> scopes) {
         if (requestBody == null || requestBody.isEmpty()) {
             return jsonResponse(400,
                 JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Empty request body"), null);
@@ -148,9 +171,9 @@ public class McpRequestProcessor {
             JsonNode jsonNode = objectMapper.readTree(requestBody);
 
             if (jsonNode.isArray()) {
-                return handleBatchRequest(jsonNode, mcpSessionId);
+                return handleBatchRequest(jsonNode, mcpSessionId, scopes);
             } else if (jsonNode.isObject()) {
-                return handleSingleRequest(jsonNode, mcpSessionId);
+                return handleSingleRequest(jsonNode, mcpSessionId, scopes);
             } else {
                 return jsonResponse(400,
                     JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.PARSE_ERROR, "Invalid JSON-RPC message"), null);
@@ -213,7 +236,7 @@ public class McpRequestProcessor {
         return session != null && session.isInitialized();
     }
 
-    private McpResult handleBatchRequest(JsonNode batchNode, String mcpSessionId) {
+    private McpResult handleBatchRequest(JsonNode batchNode, String mcpSessionId, java.util.Set<String> scopes) {
         if (batchNode.size() == 0) {
             return jsonResponse(400,
                 JsonRpcMessage.JsonRpcResponse.error(null, JsonRpcMessage.INVALID_REQUEST, "Invalid Request: batch must not be empty"), null);
@@ -261,7 +284,7 @@ public class McpRequestProcessor {
                             "Missing or invalid Mcp-Session-Id header. Call 'initialize' first.")));
                     continue;
                 }
-                JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest);
+                JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest, scopes);
                 responses.add(objectMapper.valueToTree(response));
             }
         }
@@ -272,7 +295,7 @@ public class McpRequestProcessor {
         return rawJsonResponse(200, responses, null);
     }
 
-    private McpResult handleSingleRequest(JsonNode jsonNode, String mcpSessionId) {
+    private McpResult handleSingleRequest(JsonNode jsonNode, String mcpSessionId, java.util.Set<String> scopes) {
         JsonRpcMessage.JsonRpcRequest rpcRequest = parseJsonRpcRequest(jsonNode);
         if (rpcRequest == null) {
             return jsonResponse(400,
@@ -308,7 +331,7 @@ public class McpRequestProcessor {
                     "Missing or invalid Mcp-Session-Id header. Call 'initialize' first."), null);
         }
 
-        JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest);
+        JsonRpcMessage.JsonRpcResponse response = processRequest(rpcRequest, scopes);
         return jsonResponse(200, response, null);
     }
 
@@ -346,7 +369,7 @@ public class McpRequestProcessor {
         }
     }
 
-    private JsonRpcMessage.JsonRpcResponse processRequest(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+    private JsonRpcMessage.JsonRpcResponse processRequest(JsonRpcMessage.JsonRpcRequest rpcRequest, java.util.Set<String> scopes) {
         String method = rpcRequest.getMethod();
         if (method == null) {
             return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST, "Missing method");
@@ -358,7 +381,7 @@ public class McpRequestProcessor {
             case "tools/list":
                 return handleToolsList(rpcRequest);
             case "tools/call":
-                return handleToolsCall(rpcRequest);
+                return handleToolsCall(rpcRequest, scopes);
             case "resources/list":
                 return handleResourcesList(rpcRequest);
             case "resources/read":
@@ -428,7 +451,7 @@ public class McpRequestProcessor {
         return JsonRpcMessage.JsonRpcResponse.success(rpcRequest.getId(), result);
     }
 
-    private JsonRpcMessage.JsonRpcResponse handleToolsCall(JsonRpcMessage.JsonRpcRequest rpcRequest) {
+    private JsonRpcMessage.JsonRpcResponse handleToolsCall(JsonRpcMessage.JsonRpcRequest rpcRequest, java.util.Set<String> scopes) {
         JsonNode params = rpcRequest.getParams();
         if (params == null) {
             return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_PARAMS, "Missing params");
@@ -442,6 +465,17 @@ public class McpRequestProcessor {
         if (!toolRegistry.getTools().containsKey(toolName)) {
             return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.METHOD_NOT_FOUND,
                 "Unknown tool: " + toolName);
+        }
+
+        // Control-plane authorization: a mutating tool requires the MUTATE role, a reading
+        // tool the READ role. Delegates to the SAME authorizer/role model as the HTTP control
+        // plane and is a no-op (always allowed) when controlPlaneAuthorizationEnabled is off
+        // (the default), so default behaviour is unchanged. The per-tool read/mutate split is
+        // required because all tool calls arrive as a single tools/call POST.
+        boolean isRead = !McpToolRegistry.isMutatingTool(toolName);
+        if (!httpState.controlPlaneToolAuthorized(scopes, isRead, toolName)) {
+            return JsonRpcMessage.JsonRpcResponse.error(rpcRequest.getId(), JsonRpcMessage.INVALID_REQUEST,
+                "Forbidden for control plane");
         }
 
         JsonNode arguments = params.path("arguments");

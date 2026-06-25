@@ -3,7 +3,7 @@ title: Isolate Single Service
 description: Use MockServer as a reverse proxy to route one service to a local debug instance while forwarding all other requests to the real environment.
 layout: page
 pageOrder: 10
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.7
@@ -128,6 +128,8 @@ process.on('SIGTERM', function () {
 <pre class="prettyprint code"><code class="code">npm i
 node server.js</code></pre>
 
+<p>The example above isolates a service by writing an explicit <span class="inline_code">httpForward</span> expectation per route. When you instead want unmatched routes to fall through to the real upstream automatically — without defining a catch-all forward expectation — switch MockServer into one of the operating modes below: in <strong>SPY</strong> or <strong>CAPTURE</strong> mode any request that matches no expectation is forwarded to the real service and recorded, so you only need to write expectations for the calls you want to override locally.</p>
+
 <a id="mock_mode" class="anchor" href="#mock_mode">&nbsp;</a>
 
 <h2>Operating Mode (SIMULATE / SPY / CAPTURE)</h2>
@@ -165,7 +167,7 @@ node server.js</code></pre>
     </tbody>
 </table>
 
-<p><strong>SIMULATE</strong> is the default. <strong>SPY</strong> and <strong>CAPTURE</strong> both enable MockServer's proxy-on-no-match behaviour — unmatched requests are forwarded to the real upstream and the interaction is recorded. The practical difference is intent: SPY is used when you have expectations for some calls and want to pass the rest through; CAPTURE is used when you want to record all traffic first (typically with no expectations defined).</p>
+<p><strong>SIMULATE</strong> is the default. <strong>SPY</strong> and <strong>CAPTURE</strong> are <strong>behaviourally identical</strong> — both enable the same proxy-on-no-match behaviour (matched requests return their mock; unmatched requests are forwarded to the real upstream and recorded), so the distinction between them is one of intent only, not of runtime behaviour. (Internally they share the same flag, so the server reports either as <span class="inline_code">SPY</span>.) Use SPY when you have expectations for some calls and want to pass the rest through; use CAPTURE when you want to record all traffic first, typically with no expectations defined.</p>
 
 <p>Recorded interactions are retrieved via the existing retrieve endpoints — for example <span class="inline_code">PUT /mockserver/retrieve?type=RECORDED_EXPECTATIONS</span> returns the recorded traffic as expectations ready for replay. See <a href="/mock_server/debugging_issues.html#retrieving_recorded_expectations">Retrieving Recorded Expectations</a> for details.</p>
 

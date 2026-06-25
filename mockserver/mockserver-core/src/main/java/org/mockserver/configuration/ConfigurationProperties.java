@@ -58,6 +58,9 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_DETAILED_MATCH_FAILURES = "mockserver.detailedMatchFailures";
     private static final String MOCKSERVER_LAUNCH_UI_FOR_LOG_LEVEL_DEBUG = "mockserver.launchUIForLogLevelDebug";
     private static final String MOCKSERVER_METRICS_ENABLED = "mockserver.metricsEnabled";
+    private static final String MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED = "mockserver.dashboardAnalyticsEnabled";
+    private static final String MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT = "mockserver.dashboardAnalyticsEndpoint";
+    private static final String MOCKSERVER_DASHBOARD_ANALYTICS_KEY = "mockserver.dashboardAnalyticsKey";
     private static final String MOCKSERVER_SLOW_REQUEST_THRESHOLD_MILLIS = "mockserver.slowRequestThresholdMillis";
     private static final String MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS = "mockserver.metricsRequestDurationRouteLabels";
     private static final String MOCKSERVER_CHAOS_AUTO_HALT_ENABLED = "mockserver.chaosAutoHaltEnabled";
@@ -71,6 +74,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_SLO_WINDOW_RETENTION_MILLIS = "mockserver.sloWindowRetentionMillis";
     private static final String MOCKSERVER_SLO_WINDOW_MAX_SAMPLES = "mockserver.sloWindowMaxSamples";
     private static final String MOCKSERVER_LOAD_GENERATION_ENABLED = "mockserver.loadGenerationEnabled";
+    private static final String MOCKSERVER_LOAD_GENERATION_SUPPRESS_EVENT_LOG = "mockserver.loadGenerationSuppressEventLog";
     private static final String MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS = "mockserver.loadGenerationMaxVirtualUsers";
     private static final String MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS = "mockserver.loadGenerationMaxInFlightRequests";
     private static final String MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND = "mockserver.loadGenerationMaxRequestsPerSecond";
@@ -161,6 +165,8 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_LLM_SEMANTIC_MATCHING_ENABLED = "mockserver.llmSemanticMatchingEnabled";
     private static final String MOCKSERVER_LLM_INFER_USAGE_ENABLED = "mockserver.llmInferUsageEnabled";
     private static final String MOCKSERVER_LLM_METRICS_ENABLED = "mockserver.llmMetricsEnabled";
+    private static final String MOCKSERVER_PER_EXPECTATION_METRICS_ENABLED = "mockserver.perExpectationMetricsEnabled";
+    // legacy key kept for backward compatibility — the canonical key above adds the conventional "Enabled" suffix
     private static final String MOCKSERVER_PER_EXPECTATION_METRICS = "mockserver.perExpectationMetrics";
     private static final String MOCKSERVER_DEDUPLICATE_RECORDED_EXPECTATIONS = "mockserver.deduplicateRecordedExpectations";
     private static final String MOCKSERVER_TEMPLATIZE_RECORDED_VALUES = "mockserver.templatizeRecordedValues";
@@ -272,6 +278,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_MAXIMUM_NUMBER_OF_REQUESTS_TO_RETURN_IN_VERIFICATION_FAILURE = "mockserver.maximumNumberOfRequestToReturnInVerificationFailure";
     private static final String MOCKSERVER_DETAILED_VERIFICATION_FAILURES = "mockserver.detailedVerificationFailures";
     private static final String MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE = "mockserver.attachMismatchDiagnosticToResponse";
+    private static final String MOCKSERVER_CLOSEST_MATCH_HINT_ENABLED = "mockserver.closestMatchHintEnabled";
 
     // proxy
     private static final String MOCKSERVER_ATTEMPT_TO_PROXY_IF_NO_MATCHING_EXPECTATION = "mockserver.attemptToProxyIfNoMatchingExpectation";
@@ -511,10 +518,14 @@ public class ConfigurationProperties {
     public static Level logLevel() {
         String logLevel = readPropertyHierarchically(PROPERTIES, MOCKSERVER_LOG_LEVEL, "MOCKSERVER_LOG_LEVEL", DEFAULT_LOG_LEVEL).toUpperCase();
         if (isNotBlank(logLevel)) {
-            if (getSLF4JOrJavaLoggerToSLF4JLevelMapping().get(logLevel).equals("OFF")) {
+            String slf4jLevel = getSLF4JOrJavaLoggerToSLF4JLevelMapping().get(logLevel);
+            if (slf4jLevel == null) {
+                throw new IllegalArgumentException("log level \"" + logLevel + "\" is not legal it must be one of SL4J levels: \"TRACE\", \"DEBUG\", \"INFO\", \"WARN\", \"ERROR\", \"OFF\", or the Java Logger levels: \"FINEST\", \"FINE\", \"INFO\", \"WARNING\", \"SEVERE\", \"OFF\"");
+            }
+            if (slf4jLevel.equals("OFF")) {
                 return null;
             } else {
-                return Level.valueOf(getSLF4JOrJavaLoggerToSLF4JLevelMapping().get(logLevel));
+                return Level.valueOf(slf4jLevel);
             }
         } else {
             return Level.INFO;
@@ -524,10 +535,14 @@ public class ConfigurationProperties {
     public static String javaLoggerLogLevel() {
         String logLevel = readPropertyHierarchically(PROPERTIES, MOCKSERVER_LOG_LEVEL, "MOCKSERVER_LOG_LEVEL", DEFAULT_LOG_LEVEL).toUpperCase();
         if (isNotBlank(logLevel)) {
-            if (getSLF4JOrJavaLoggerToJavaLoggerLevelMapping().get(logLevel).equals("OFF")) {
+            String javaLoggerLevel = getSLF4JOrJavaLoggerToJavaLoggerLevelMapping().get(logLevel);
+            if (javaLoggerLevel == null) {
+                throw new IllegalArgumentException("log level \"" + logLevel + "\" is not legal it must be one of SL4J levels: \"TRACE\", \"DEBUG\", \"INFO\", \"WARN\", \"ERROR\", \"OFF\", or the Java Logger levels: \"FINEST\", \"FINE\", \"INFO\", \"WARNING\", \"SEVERE\", \"OFF\"");
+            }
+            if (javaLoggerLevel.equals("OFF")) {
                 return "OFF";
             } else {
-                return getSLF4JOrJavaLoggerToJavaLoggerLevelMapping().get(logLevel);
+                return javaLoggerLevel;
             }
         } else {
             return "INFO";
@@ -609,7 +624,7 @@ public class ConfigurationProperties {
     }
 
     /**
-     * If true (the default) the ClientAndServer constructor will open the UI in the default browser when the log level is set to DEBUG.
+     * If true the ClientAndServer constructor will open the UI in the default browser when the log level is set to DEBUG. Default is false.
      *
      * @param enable enabled ClientAndServer constructor launching UI when log level is DEBUG
      */
@@ -628,6 +643,48 @@ public class ConfigurationProperties {
      */
     public static void metricsEnabled(boolean enable) {
         setProperty(MOCKSERVER_METRICS_ENABLED, "" + enable);
+    }
+
+    public static boolean dashboardAnalyticsEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED, "MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED", "" + true));
+    }
+
+    /**
+     * Master kill switch for browser dashboard usage analytics, default is true.
+     * Analytics remains inert until an endpoint and key are also supplied.
+     *
+     * @param enable enable dashboard analytics
+     */
+    public static void dashboardAnalyticsEnabled(boolean enable) {
+        setProperty(MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED, "" + enable);
+    }
+
+    public static String dashboardAnalyticsEndpoint() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT, "MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT", "");
+    }
+
+    /**
+     * Analytics endpoint (PostHog api_host) the browser dashboard sends usage analytics to.
+     * Default is empty, which leaves dashboard analytics disabled.
+     *
+     * @param endpoint analytics endpoint host
+     */
+    public static void dashboardAnalyticsEndpoint(String endpoint) {
+        setProperty(MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT, endpoint);
+    }
+
+    public static String dashboardAnalyticsKey() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DASHBOARD_ANALYTICS_KEY, "MOCKSERVER_DASHBOARD_ANALYTICS_KEY", "");
+    }
+
+    /**
+     * Write-only analytics project key the browser dashboard uses when sending usage analytics.
+     * Default is empty, which leaves dashboard analytics disabled.
+     *
+     * @param key analytics project key
+     */
+    public static void dashboardAnalyticsKey(String key) {
+        setProperty(MOCKSERVER_DASHBOARD_ANALYTICS_KEY, key);
     }
 
     public static long slowRequestThresholdMillis() {
@@ -832,6 +889,24 @@ public class ConfigurationProperties {
      */
     public static void loadGenerationEnabled(boolean enable) {
         setProperty(MOCKSERVER_LOAD_GENERATION_ENABLED, "" + enable);
+    }
+
+    public static boolean loadGenerationSuppressEventLog() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_LOAD_GENERATION_SUPPRESS_EVENT_LOG, "MOCKSERVER_LOAD_GENERATION_SUPPRESS_EVENT_LOG", "" + true));
+    }
+
+    /**
+     * Keep the server's own load-generation traffic out of the request event log. When
+     * {@code true} (the default) requests generated by an in-process load scenario are
+     * flagged with an in-process-only marker so they are skipped by the event log on the
+     * driver, leaving the bounded log free for the requests under test. The marker is never
+     * serialized to the wire, so it cannot reach an upstream target. Set to {@code false} to
+     * record load-generation traffic in the driver's event log as well.
+     *
+     * @param suppress suppress load-generation traffic in the event log
+     */
+    public static void loadGenerationSuppressEventLog(boolean suppress) {
+        setProperty(MOCKSERVER_LOAD_GENERATION_SUPPRESS_EVENT_LOG, "" + suppress);
     }
 
     public static int loadGenerationMaxVirtualUsers() {
@@ -2447,9 +2522,28 @@ public class ConfigurationProperties {
      * Empty uses the OTLP exporter defaults ({@code http://localhost:4318}). A value
      * that already ends in {@code /v1/metrics} or {@code /v1/traces} is accepted and
      * normalised to the base.
+     * <p>
+     * When the MockServer-specific property/env ({@code mockserver.otelEndpoint} /
+     * {@code MOCKSERVER_OTEL_ENDPOINT}) is unset, the OpenTelemetry-standard
+     * {@code OTEL_EXPORTER_OTLP_ENDPOINT} environment variable is honoured as a
+     * fallback so existing OTel deployments work without extra configuration. The
+     * MockServer-specific value always takes precedence. A blank/whitespace-only
+     * {@code MOCKSERVER_OTEL_ENDPOINT} env var is treated as unset (per the
+     * {@code isNotBlank} env-var semantics in {@link #readPropertyHierarchically}),
+     * so the standard-env fallback still applies.
      */
     public static String otelEndpoint() {
-        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_OTEL_ENDPOINT, "MOCKSERVER_OTEL_ENDPOINT", "");
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_OTEL_ENDPOINT, "MOCKSERVER_OTEL_ENDPOINT", otelEndpointFallbackDefault(System.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")));
+    }
+
+    /**
+     * The default returned by {@link #otelEndpoint()} when neither the MockServer-specific
+     * property nor env var is set: the OpenTelemetry-standard {@code OTEL_EXPORTER_OTLP_ENDPOINT}
+     * value when present, otherwise empty. Package-private and parameterised so the fallback
+     * precedence can be unit-tested without mutating the process environment.
+     */
+    static String otelEndpointFallbackDefault(String standardEndpointEnvValue) {
+        return isNotBlank(standardEndpointEnvValue) ? standardEndpointEnvValue : "";
     }
 
     public static void otelEndpoint(String endpoint) {
@@ -2547,7 +2641,11 @@ public class ConfigurationProperties {
     }
 
     public static boolean perExpectationMetricsEnabled() {
-        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PER_EXPECTATION_METRICS, "MOCKSERVER_PER_EXPECTATION_METRICS", "" + false));
+        // Read the legacy "mockserver.perExpectationMetrics" key first (default false), then the
+        // canonical "mockserver.perExpectationMetricsEnabled" key, using the legacy value as its
+        // default so the canonical key wins when set and the legacy key still works when it is not.
+        String legacy = readPropertyHierarchically(PROPERTIES, MOCKSERVER_PER_EXPECTATION_METRICS, "MOCKSERVER_PER_EXPECTATION_METRICS", "" + false);
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PER_EXPECTATION_METRICS_ENABLED, "MOCKSERVER_PER_EXPECTATION_METRICS_ENABLED", legacy));
     }
 
     /**
@@ -2564,7 +2662,7 @@ public class ConfigurationProperties {
      * @param enabled enable per-expectation metrics
      */
     public static void perExpectationMetricsEnabled(boolean enabled) {
-        setProperty(MOCKSERVER_PER_EXPECTATION_METRICS, "" + enabled);
+        setProperty(MOCKSERVER_PER_EXPECTATION_METRICS_ENABLED, "" + enabled);
     }
 
     public static boolean deduplicateRecordedExpectations() {
@@ -3499,6 +3597,22 @@ public class ConfigurationProperties {
      */
     public static void attachMismatchDiagnosticToResponse(boolean enable) {
         setProperty(MOCKSERVER_ATTACH_MISMATCH_DIAGNOSTIC_TO_RESPONSE, "" + enable);
+    }
+
+    public static boolean closestMatchHintEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLOSEST_MATCH_HINT_ENABLED, "MOCKSERVER_CLOSEST_MATCH_HINT_ENABLED", "" + true));
+    }
+
+    /**
+     * If true (the default), when no expectation matches an incoming request the data-plane 404 response carries a
+     * single concise diagnostic header (x-mockserver-closest-match-hint) naming the closest expectation and the first
+     * field that differed. The hint is header-only and length-bounded — no expectation body is leaked. Set to false to
+     * suppress it (for example if a test asserts unmatched 404 responses byte-for-byte).
+     *
+     * @param enable enable the closest-match hint header on unmatched 404 responses
+     */
+    public static void closestMatchHintEnabled(boolean enable) {
+        setProperty(MOCKSERVER_CLOSEST_MATCH_HINT_ENABLED, "" + enable);
     }
 
     // proxy

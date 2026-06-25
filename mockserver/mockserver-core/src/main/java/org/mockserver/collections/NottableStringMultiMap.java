@@ -192,7 +192,7 @@ public class NottableStringMultiMap extends ObjectWithReflectiveEqualsHashCodeTo
     // The backingMap is immutable after construction, so the derived entryList is computed once and reused.
     // This matters because a memoized request-side map (see #multiMap) has its entryList read once per
     // candidate expectation during a request's scan.
-    private List<ImmutableEntry> entryList;
+    private volatile List<ImmutableEntry> entryList;
 
     private List<ImmutableEntry> entryList() {
         if (entryList == null) {

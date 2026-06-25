@@ -23,6 +23,7 @@ import org.slf4j.event.Level;
 import static com.google.common.net.HttpHeaders.HOST;
 import static org.mockserver.closurecallback.websocketclient.WebSocketClient.CLIENT_REGISTRATION_ID_HEADER;
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
 import static org.mockserver.netty.unification.PortUnificationHandler.isHttp2Enabled;
 import static org.mockserver.netty.unification.PortUnificationHandler.isSslEnabledUpstream;
 
@@ -153,6 +154,13 @@ public class CallbackWebSocketServerHandler extends ChannelInboundHandlerAdapter
                 new LogEntry()
                     .setLogLevel(Level.ERROR)
                     .setMessageFormat("web socket server caught exception")
+                    .setThrowable(cause)
+            );
+        } else if (isSslOrDecoderFault(cause)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("web socket server caught SSL or decoder fault")
                     .setThrowable(cause)
             );
         }

@@ -343,6 +343,35 @@ class ExampleTestClass {
     }
 
 }</code></pre></div>
+<button id="button_test_extension_reset_before_each" class="accordion">reset MockServer before each test (<code>resetBeforeEach</code>)</button>
+<div class="panel">
+<p>By default a shared MockServer instance accumulates expectations across all tests in the class. Add <code>resetBeforeEach = true</code> to <span class="annotation">@MockServerSettings</span> to have MockServer automatically reset (clear all expectations, recorded requests, and logs) before each test method runs — without you having to call <code>client.reset()</code> yourself.</p>
+<pre class="prettyprint lang-java code"><code class="code">@MockServerSettings(ports = {1080}, resetBeforeEach = true)
+class IsolatedTestClass {
+    private final MockServerClient client;
+
+    public IsolatedTestClass(MockServerClient client) {
+        this.client = client;
+    }
+
+    @Test
+    void firstTest() {
+        // MockServer is clean — no expectations from any earlier test
+        client.when(request().withPath("/hello"))
+              .respond(response().withBody("world"));
+        // ...
+    }
+
+    @Test
+    void secondTest() {
+        // MockServer is clean again — expectations from firstTest are gone
+        client.when(request().withPath("/goodbye"))
+              .respond(response().withBody("farewell"));
+        // ...
+    }
+}</code></pre>
+<p>The reset fires in <code>BeforeEachCallback</code>, which runs before any <span class="annotation">@BeforeEach</span> methods in the test class. When combined with <code>perTestSuite = true</code> the same shared server is reset before each test across all test classes in the suite.</p>
+</div>
 
 <a id="spring_test_exec_listener" class="anchor" href="#spring_test_exec_listener">&nbsp;</a>
 

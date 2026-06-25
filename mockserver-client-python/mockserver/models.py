@@ -2114,20 +2114,101 @@ class LoadStage:
 
 
 @dataclass
+class LoadShape:
+    """A declarative named load shape that expands into ordinary stages.
+
+    Use a shape **or** an explicit ``stages`` list on a :class:`LoadProfile`, not
+    both. Only the parameters the shape ``type`` needs are read:
+
+    * ``SPIKE`` — ramp ``baseline``→``peak`` over ``ramp_up_millis``, hold for
+      ``hold_millis``, ramp back down over ``ramp_down_millis`` and optionally
+      hold the baseline again for ``recovery_hold_millis``.
+    * ``STAIRS`` — a flight of pure-hold steps from ``start``, each ``step``
+      higher, ``steps`` of them, each held for ``step_duration_millis``.
+    * ``RAMP_HOLD`` — ramp 0→``target`` over ``ramp_millis`` then hold for
+      ``hold_millis``.
+
+    ``metric`` selects what the shape drives: ``VU`` (concurrent virtual users,
+    closed model) or ``RATE`` (arrival rate, open model).
+    """
+
+    type: str = "RAMP_HOLD"
+    metric: str | None = None
+    curve: str | None = None
+    baseline: float | None = None
+    peak: float | None = None
+    ramp_up_millis: int | None = None
+    hold_millis: int | None = None
+    ramp_down_millis: int | None = None
+    recovery_hold_millis: int | None = None
+    start: float | None = None
+    step: float | None = None
+    steps: int | None = None
+    step_duration_millis: int | None = None
+    target: float | None = None
+    ramp_millis: int | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "type": self.type,
+            "metric": self.metric,
+            "curve": self.curve,
+            "baseline": self.baseline,
+            "peak": self.peak,
+            "rampUpMillis": self.ramp_up_millis,
+            "holdMillis": self.hold_millis,
+            "rampDownMillis": self.ramp_down_millis,
+            "recoveryHoldMillis": self.recovery_hold_millis,
+            "start": self.start,
+            "step": self.step,
+            "steps": self.steps,
+            "stepDurationMillis": self.step_duration_millis,
+            "target": self.target,
+            "rampMillis": self.ramp_millis,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadShape:
+        if data is None:
+            return None
+        return cls(
+            type=data.get("type", "RAMP_HOLD"),
+            metric=data.get("metric"),
+            curve=data.get("curve"),
+            baseline=data.get("baseline"),
+            peak=data.get("peak"),
+            ramp_up_millis=data.get("rampUpMillis"),
+            hold_millis=data.get("holdMillis"),
+            ramp_down_millis=data.get("rampDownMillis"),
+            recovery_hold_millis=data.get("recoveryHoldMillis"),
+            start=data.get("start"),
+            step=data.get("step"),
+            steps=data.get("steps"),
+            step_duration_millis=data.get("stepDurationMillis"),
+            target=data.get("target"),
+            ramp_millis=data.get("rampMillis"),
+        )
+
+
+@dataclass
 class LoadProfile:
     """The shape of load injected by a :class:`LoadScenario`.
 
-    A profile is an ordered list of :class:`LoadStage` objects run in sequence;
-    each stage holds or ramps a setpoint (virtual users, an arrival rate, or a
-    pause) for its duration. The total run length is the sum of stage durations.
+    A profile is EITHER an ordered list of :class:`LoadStage` objects run in
+    sequence, OR a single named :class:`LoadShape` (which expands into stages).
+    Set one, not both; if both are set the explicit ``stages`` win. Each stage
+    holds or ramps a setpoint (virtual users, an arrival rate, or a pause) for
+    its duration; the total run length is the sum of stage durations.
     """
 
     stages: list[LoadStage] = field(default_factory=list)
+    shape: LoadShape | None = None
 
     def to_dict(self) -> dict:
-        return {
-            "stages": [s.to_dict() for s in self.stages],
-        }
+        return _strip_none({
+            "stages": [s.to_dict() for s in self.stages] if self.stages else None,
+            "shape": self.shape.to_dict() if self.shape else None,
+        })
 
     @classmethod
     def from_dict(cls, data: dict) -> LoadProfile:
@@ -2136,6 +2217,45 @@ class LoadProfile:
         stages = data.get("stages") or []
         return cls(
             stages=[LoadStage.from_dict(s) for s in stages],
+            shape=LoadShape.from_dict(data.get("shape")),
+        )
+
+
+@dataclass
+class LoadCapture:
+    """A cross-step capture / correlation rule for a :class:`LoadStep`.
+
+    Extracts a value from a step's response and binds it to ``name``, visible to
+    SUBSEQUENT steps in the same iteration via ``$iteration.captured.<name>``
+    (Velocity) / ``{{iteration.captured.<name>}}`` (Mustache). ``source`` is one
+    of ``BODY_JSONPATH`` (a JSONPath over the body), ``HEADER`` (a header value),
+    or ``BODY_REGEX`` (a regex over the body string, capture group 1).
+    ``expression`` drives the extraction; on no match it falls back to
+    ``default_value`` (when set) and never fails the run.
+    """
+
+    name: str = ""
+    source: str = "BODY_JSONPATH"
+    expression: str = ""
+    default_value: str | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "name": self.name,
+            "source": self.source,
+            "expression": self.expression,
+            "defaultValue": self.default_value,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadCapture:
+        if data is None:
+            return None
+        return cls(
+            name=data.get("name", ""),
+            source=data.get("source", "BODY_JSONPATH"),
+            expression=data.get("expression", ""),
+            default_value=data.get("defaultValue"),
         )
 
 
@@ -2145,13 +2265,18 @@ class LoadStep:
 
     ``think_time`` is inter-step pacing (a :class:`Delay`) applied after the
     request before the next step. ``request`` reuses :class:`HttpRequest`; its
-    template placeholders are rendered per iteration.
+    template placeholders are rendered per iteration. ``captures`` bind values
+    from this step's response for later steps in the same iteration (see
+    :class:`LoadCapture`). ``weight`` is the relative selection weight used only
+    when the scenario's ``step_selection`` is ``WEIGHTED``.
     """
 
     request: HttpRequest | None = None
     think_time: Delay | None = None
     name: str | None = None
     labels: dict | None = None
+    captures: list[LoadCapture] | None = None
+    weight: float | None = None
 
     def to_dict(self) -> dict:
         return _strip_none({
@@ -2159,17 +2284,125 @@ class LoadStep:
             "thinkTime": self.think_time.to_dict() if self.think_time else None,
             "name": self.name,
             "labels": self.labels,
+            "captures": [c.to_dict() for c in self.captures] if self.captures else None,
+            "weight": self.weight,
         })
 
     @classmethod
     def from_dict(cls, data: dict) -> LoadStep:
         if data is None:
             return None
+        captures = data.get("captures")
         return cls(
             request=HttpRequest.from_dict(data.get("request")),
             think_time=Delay.from_dict(data.get("thinkTime")),
             name=data.get("name"),
             labels=data.get("labels"),
+            captures=[LoadCapture.from_dict(c) for c in captures] if captures is not None else None,
+            weight=data.get("weight"),
+        )
+
+
+@dataclass
+class LoadThreshold:
+    """An in-run pass/fail threshold for a :class:`LoadScenario`.
+
+    A per-run ``metric`` (``LATENCY_P50``/``LATENCY_P95``/``LATENCY_P99``/
+    ``LATENCY_P999`` in milliseconds, ``ERROR_RATE`` as a 0.0-1.0 fraction, or
+    ``THROUGHPUT_RPS`` in requests/second) compared via ``comparator``
+    (``LESS_THAN``/``LESS_THAN_OR_EQUAL``/``GREATER_THAN``/
+    ``GREATER_THAN_OR_EQUAL``) against ``threshold``. All thresholds must hold
+    for the run verdict to be ``PASS``.
+    """
+
+    metric: str = "LATENCY_P95"
+    comparator: str = "LESS_THAN"
+    threshold: float = 0.0
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "metric": self.metric,
+            "comparator": self.comparator,
+            "threshold": self.threshold,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadThreshold:
+        if data is None:
+            return None
+        return cls(
+            metric=data.get("metric", "LATENCY_P95"),
+            comparator=data.get("comparator", "LESS_THAN"),
+            threshold=data.get("threshold", 0.0),
+        )
+
+
+@dataclass
+class LoadPacing:
+    """Adaptive iteration pacing (think-time) for a :class:`LoadScenario`.
+
+    A target per-virtual-user iteration cycle time, applied only to the
+    closed-model VU loop (open-model RATE iterations ignore it). ``mode`` is one
+    of ``NONE`` (no pacing), ``CONSTANT_PACING`` (``value`` is the target cycle
+    in milliseconds), or ``CONSTANT_THROUGHPUT`` (``value`` is the target
+    iterations/second per VU). ``value`` must be > 0 when ``mode`` is not
+    ``NONE``.
+    """
+
+    mode: str = "NONE"
+    value: float = 0.0
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "mode": self.mode,
+            "value": self.value,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadPacing:
+        if data is None:
+            return None
+        return cls(
+            mode=data.get("mode", "NONE"),
+            value=data.get("value", 0.0),
+        )
+
+
+@dataclass
+class LoadFeeder:
+    """Parameterized test data (a data feeder) for a :class:`LoadScenario`.
+
+    One row is selected per iteration and exposed to that iteration's templated
+    request as ``$iteration.data.<column>`` (Velocity) /
+    ``{{iteration.data.<column>}}`` (Mustache). Supply EITHER ``rows`` (an inline
+    list of column→value maps, the primary form) OR ``data`` + ``format`` (raw
+    inline ``CSV``/``JSON`` parsed server-side); when both are given ``rows``
+    wins. ``strategy`` chooses how a row is picked each iteration: ``CIRCULAR``
+    (default), ``RANDOM`` or ``SEQUENTIAL``.
+    """
+
+    rows: list[dict] | None = None
+    data: str | None = None
+    format: str | None = None
+    strategy: str | None = None
+
+    def to_dict(self) -> dict:
+        return _strip_none({
+            "rows": self.rows,
+            "data": self.data,
+            "format": self.format,
+            "strategy": self.strategy,
+        })
+
+    @classmethod
+    def from_dict(cls, data: dict) -> LoadFeeder:
+        if data is None:
+            return None
+        return cls(
+            rows=data.get("rows"),
+            data=data.get("data"),
+            format=data.get("format"),
+            strategy=data.get("strategy"),
         )
 
 
@@ -2195,6 +2428,12 @@ class LoadScenario:
     max_requests: int | None = None
     start_delay_millis: int | None = None
     labels: dict | None = None
+    thresholds: list[LoadThreshold] | None = None
+    abort_on_fail: bool | None = None
+    abort_grace_millis: int | None = None
+    pacing: LoadPacing | None = None
+    feeder: LoadFeeder | None = None
+    step_selection: str | None = None
 
     def to_dict(self) -> dict:
         return _strip_none({
@@ -2205,6 +2444,12 @@ class LoadScenario:
             "maxRequests": self.max_requests,
             "startDelayMillis": self.start_delay_millis,
             "labels": self.labels,
+            "thresholds": [t.to_dict() for t in self.thresholds] if self.thresholds else None,
+            "abortOnFail": self.abort_on_fail,
+            "abortGraceMillis": self.abort_grace_millis,
+            "pacing": self.pacing.to_dict() if self.pacing else None,
+            "feeder": self.feeder.to_dict() if self.feeder else None,
+            "stepSelection": self.step_selection,
         })
 
     @classmethod
@@ -2212,6 +2457,7 @@ class LoadScenario:
         if data is None:
             return None
         steps = data.get("steps")
+        thresholds = data.get("thresholds")
         return cls(
             name=data.get("name"),
             profile=LoadProfile.from_dict(data.get("profile")),
@@ -2220,6 +2466,12 @@ class LoadScenario:
             max_requests=data.get("maxRequests"),
             start_delay_millis=data.get("startDelayMillis"),
             labels=data.get("labels"),
+            thresholds=[LoadThreshold.from_dict(t) for t in thresholds] if thresholds is not None else None,
+            abort_on_fail=data.get("abortOnFail"),
+            abort_grace_millis=data.get("abortGraceMillis"),
+            pacing=LoadPacing.from_dict(data.get("pacing")),
+            feeder=LoadFeeder.from_dict(data.get("feeder")),
+            step_selection=data.get("stepSelection"),
         )
 
 

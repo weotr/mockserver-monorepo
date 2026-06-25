@@ -93,6 +93,61 @@ mockServerClient("localhost", 1080)
 
 For the full documentation see [MockServer - Creating Expectations](https://mock-server.com/mock_server/creating_expectations.html).
 
+### Fluent `when().respond()` API
+
+The same expectation can also be built with a chainable API that mirrors the Java
+client's `when(...)` / `ForwardChainExpectation`:
+
+```js
+mockServerClient("localhost", 1080)
+    .when({ path: '/somePath' })
+    .respond({ statusCode: 200, body: 'some_response_body' });
+```
+
+To set the number of matches, time-to-live, priority or expectation id, use the
+chainable `.withTimes()` / `.withTimeToLive()` / `.withPriority()` / `.withId()`
+builders before the terminal action — this is the **recommended** style because it
+is unambiguous and order-independent:
+
+```js
+mockServerClient("localhost", 1080)
+    .when({ path: '/somePath' })
+    .withTimes(2)
+    .withTimeToLive({ unlimited: false, timeToLive: 60, timeUnit: 'SECONDS' })
+    .withPriority(10)
+    .withId('my-id')
+    .forward({ host: 'localhost', port: 8081 });
+```
+
+> **⚠️ Positional argument order differs from the procedural methods.** `when(...)`
+> takes its optional arguments as `when(request, times, timeToLive, priority)` to
+> match the **Java** client. This is **not** the order used by the Node procedural
+> methods (`mockSimpleResponse`, `respondWith*`, etc.), which take
+> `(…, times, priority, timeToLive, id)`. In particular `when(req, 2, 5)` sets
+> `timeToLive = 5` (which expects an object, so it is ignored) and leaves the
+> priority unset — it does **not** set the priority to `5`. To avoid this footgun,
+> prefer the `.withTimes()` / `.withTimeToLive()` / `.withPriority()` builders shown
+> above rather than positional arguments.
+
+If you do pass them positionally, the order is `(request, times, timeToLive, priority)`:
+
+```js
+mockServerClient("localhost", 1080)
+    .when({ path: '/somePath' }, 2, { unlimited: false, timeToLive: 60, timeUnit: 'SECONDS' }, 10)
+    .respond({ statusCode: 201 });
+```
+
+The chain returned by `when(...)` exposes the builders `withTimes`, `withTimeToLive`,
+`withPriority`, `withId` and the terminal actions `respond` (httpResponse, a template,
+or a class-callback), `forward` (httpForward, a template, a class-callback, or an
+override-forwarded-request), `error` (httpError), `callback` (a local JS response
+callback over the callback WebSocket) and `forwardCallback` (a local JS forward
+callback). The action is auto-detected from the object shape: a plain object with a
+string `template`/`templateType` becomes a template action, one with a `callbackClass`
+becomes a server-side class-callback, otherwise it is the natural response/forward
+action. Each terminal method returns the same promise as the procedural builders, so
+it can be awaited or used with `.then(...)`.
+
 ### Advanced Response Builders
 
 For non-HTTP and streaming protocols there are dedicated builders that take a path (or full request matcher)

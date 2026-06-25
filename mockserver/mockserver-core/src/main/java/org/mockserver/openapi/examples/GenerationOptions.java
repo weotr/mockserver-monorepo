@@ -33,19 +33,26 @@ public class GenerationOptions {
     /**
      * Reserved key under which a caller may embed these options inside the
      * {@code operationsAndResponses} map of an OpenAPI import request. The value is a map with
-     * optional {@code "seed"} (number) and {@code "fieldOverrides"} (object) entries. The key is
-     * deliberately namespaced so it can never collide with a real {@code operationId}.
+     * optional {@code "seed"} (number), {@code "fieldOverrides"} (object) and {@code "realisticValues"}
+     * (boolean) entries. The key is deliberately namespaced so it can never collide with a real
+     * {@code operationId}.
      */
     public static final String OPERATIONS_KEY = "__generationOptions__";
 
     private final Long seed;
     private final Map<String, Object> fieldOverrides;
+    private final Boolean realisticValues;
 
     public GenerationOptions(Long seed, Map<String, Object> fieldOverrides) {
+        this(seed, fieldOverrides, null);
+    }
+
+    public GenerationOptions(Long seed, Map<String, Object> fieldOverrides, Boolean realisticValues) {
         this.seed = seed;
         this.fieldOverrides = fieldOverrides == null || fieldOverrides.isEmpty()
             ? Collections.emptyMap()
             : Collections.unmodifiableMap(new LinkedHashMap<>(fieldOverrides));
+        this.realisticValues = realisticValues;
     }
 
     /**
@@ -53,6 +60,17 @@ public class GenerationOptions {
      */
     public Long getSeed() {
         return seed;
+    }
+
+    /**
+     * @return an explicit per-run choice of whether to generate realistic (Datafaker) example values,
+     *         or {@code null} to defer to the global {@code generateRealisticExampleValues} configuration
+     *         default. Threading this decision through the options (rather than reading the global deep in
+     *         generation) lets callers — and tests — drive realistic generation without mutating shared
+     *         process-wide state.
+     */
+    public Boolean getRealisticValues() {
+        return realisticValues;
     }
 
     public Map<String, Object> getFieldOverrides() {
@@ -105,9 +123,18 @@ public class GenerationOptions {
         if (overridesValue instanceof Map) {
             fieldOverrides = (Map<String, Object>) overridesValue;
         }
-        if (seed == null && (fieldOverrides == null || fieldOverrides.isEmpty())) {
+        // Optional explicit realistic-value choice for this run; null leaves the decision to the
+        // global generateRealisticExampleValues configuration default.
+        Boolean realisticValues = null;
+        Object realisticValue = options.get("realisticValues");
+        if (realisticValue instanceof Boolean bool) {
+            realisticValues = bool;
+        } else if (realisticValue instanceof String string && !string.isBlank()) {
+            realisticValues = Boolean.parseBoolean(string.trim());
+        }
+        if (seed == null && (fieldOverrides == null || fieldOverrides.isEmpty()) && realisticValues == null) {
             return null;
         }
-        return new GenerationOptions(seed, fieldOverrides);
+        return new GenerationOptions(seed, fieldOverrides, realisticValues);
     }
 }

@@ -16,7 +16,21 @@
     "estimatedCostUsd": 0.1573,
     "costIsEstimated": false,
     "totalLatencyMs": 14230,
-    "toolCallCount": 4
+    "toolCallCount": 4,
+    "cacheHitRatio": 0.62,
+    "oneShotRate": 0.83,
+    "retryCallCount": 1
+  },
+  "verdict": {
+    "grade": "C",
+    "rationale": "Grade C — an estimated 18% of spend ($1.42) is recoverable across 3 findings (1 high, 2 medium).",
+    "totalEstimatedSavingUsd": 1.42,
+    "totalWastedInputTokens": 27000,
+    "savingFractionOfSpend": 0.18,
+    "costIsEstimated": false,
+    "highCount": 1,
+    "mediumCount": 2,
+    "lowCount": 0
   },
   "calls": [
     {
@@ -145,7 +159,15 @@
       "affectedCalls": [0, 1, 2, 3, 4, 5],
       "estimatedWastedInputTokens": 27000,
       "estimatedSavingUsd": 0.0675,
-      "recommendation": "Enable provider prompt caching, or move the static context into a retrieval tool so it is not resent every turn."
+      "recommendation": "Enable provider prompt caching, or move the static context into a retrieval tool so it is not resent every turn.",
+      "urgency": 1.0,
+      "fix": {
+        "summary": "Enable prompt caching",
+        "action": "Add cache_control to the static system block so the prefix is cached instead of resent every turn.",
+        "configSnippet": "{\n  \"type\": \"text\",\n  \"text\": \"<system prompt>\",\n  \"cache_control\": { \"type\": \"ephemeral\" }\n}",
+        "exampleExpectation": null,
+        "docsUrl": "https://www.mock-server.com/mock_server/ai_optimisation.html"
+      }
     },
     {
       "id": "DETERMINISTIC_TOOL_CALL",

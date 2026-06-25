@@ -1,7 +1,9 @@
 package org.mockserver.serialization.model;
 
+import org.mockserver.load.LoadFeeder;
 import org.mockserver.load.LoadScenario;
 import org.mockserver.load.LoadStep;
+import org.mockserver.load.LoadThreshold;
 import org.mockserver.model.HttpTemplate;
 import org.mockserver.model.ObjectWithReflectiveEqualsHashCodeToString;
 
@@ -22,6 +24,12 @@ public class LoadScenarioDTO extends ObjectWithReflectiveEqualsHashCodeToString 
     private Integer maxRequests;
     private Long startDelayMillis;
     private Map<String, String> labels;
+    private List<LoadThresholdDTO> thresholds;
+    private Boolean abortOnFail;
+    private Long abortGraceMillis;
+    private LoadPacingDTO pacing;
+    private LoadFeeder feeder;
+    private LoadScenario.StepSelection stepSelection;
 
     public LoadScenarioDTO(LoadScenario scenario) {
         if (scenario != null) {
@@ -42,6 +50,31 @@ public class LoadScenarioDTO extends ObjectWithReflectiveEqualsHashCodeToString 
             if (scenario.getLabels() != null && !scenario.getLabels().isEmpty()) {
                 labels = new LinkedHashMap<>(scenario.getLabels());
             }
+            if (scenario.getThresholds() != null && !scenario.getThresholds().isEmpty()) {
+                thresholds = new ArrayList<>();
+                for (LoadThreshold threshold : scenario.getThresholds()) {
+                    thresholds.add(new LoadThresholdDTO(threshold));
+                }
+            }
+            if (scenario.isAbortOnFail()) {
+                abortOnFail = true;
+            }
+            if (scenario.getAbortGraceMillis() > 0) {
+                abortGraceMillis = scenario.getAbortGraceMillis();
+            }
+            if (scenario.getPacing() != null && scenario.getPacing().getMode() != null
+                && scenario.getPacing().getMode() != org.mockserver.load.LoadPacing.Mode.NONE) {
+                pacing = new LoadPacingDTO(scenario.getPacing());
+            }
+            // The feeder is a simple POJO (rows / data+format / strategy) with no DTO indirection,
+            // mirroring how LoadCapture is embedded directly. Echoing the model object preserves the
+            // raw data/format source of truth, so a data-driven feeder round-trips without re-parsing.
+            feeder = scenario.getFeeder();
+            // Emit only when non-default so existing SEQUENTIAL scenarios serialize unchanged.
+            if (scenario.getStepSelection() != null
+                && scenario.getStepSelection() != LoadScenario.StepSelection.SEQUENTIAL) {
+                stepSelection = scenario.getStepSelection();
+            }
         }
     }
 
@@ -61,9 +94,21 @@ public class LoadScenarioDTO extends ObjectWithReflectiveEqualsHashCodeToString 
             .withProfile(profile != null ? profile.buildObject() : null)
             .withTemplateType(templateType != null ? templateType : HttpTemplate.TemplateType.VELOCITY)
             .withMaxRequests(maxRequests)
-            .withStartDelayMillis(startDelayMillis != null ? startDelayMillis : 0L);
+            .withStartDelayMillis(startDelayMillis != null ? startDelayMillis : 0L)
+            .withAbortOnFail(abortOnFail != null && abortOnFail)
+            .withAbortGraceMillis(abortGraceMillis != null ? abortGraceMillis : 0L)
+            .withPacing(pacing != null ? pacing.buildObject() : null)
+            .withFeeder(feeder)
+            .withStepSelection(stepSelection);
         if (labels != null && !labels.isEmpty()) {
             scenario.withLabels(labels);
+        }
+        if (thresholds != null && !thresholds.isEmpty()) {
+            List<LoadThreshold> builtThresholds = new ArrayList<>();
+            for (LoadThresholdDTO threshold : thresholds) {
+                builtThresholds.add(threshold.buildObject());
+            }
+            scenario.withThresholds(builtThresholds);
         }
         return scenario;
     }
@@ -128,6 +173,60 @@ public class LoadScenarioDTO extends ObjectWithReflectiveEqualsHashCodeToString 
 
     public LoadScenarioDTO setLabels(Map<String, String> labels) {
         this.labels = labels;
+        return this;
+    }
+
+    public List<LoadThresholdDTO> getThresholds() {
+        return thresholds;
+    }
+
+    public LoadScenarioDTO setThresholds(List<LoadThresholdDTO> thresholds) {
+        this.thresholds = thresholds;
+        return this;
+    }
+
+    public Boolean getAbortOnFail() {
+        return abortOnFail;
+    }
+
+    public LoadScenarioDTO setAbortOnFail(Boolean abortOnFail) {
+        this.abortOnFail = abortOnFail;
+        return this;
+    }
+
+    public Long getAbortGraceMillis() {
+        return abortGraceMillis;
+    }
+
+    public LoadScenarioDTO setAbortGraceMillis(Long abortGraceMillis) {
+        this.abortGraceMillis = abortGraceMillis;
+        return this;
+    }
+
+    public LoadPacingDTO getPacing() {
+        return pacing;
+    }
+
+    public LoadScenarioDTO setPacing(LoadPacingDTO pacing) {
+        this.pacing = pacing;
+        return this;
+    }
+
+    public LoadFeeder getFeeder() {
+        return feeder;
+    }
+
+    public LoadScenarioDTO setFeeder(LoadFeeder feeder) {
+        this.feeder = feeder;
+        return this;
+    }
+
+    public LoadScenario.StepSelection getStepSelection() {
+        return stepSelection;
+    }
+
+    public LoadScenarioDTO setStepSelection(LoadScenario.StepSelection stepSelection) {
+        this.stepSelection = stepSelection;
         return this;
     }
 }

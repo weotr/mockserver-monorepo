@@ -13,20 +13,90 @@ export interface ExperimentStageDTO {
   profiles: Record<string, HttpChaosProfileDTO>;
 }
 
+/** The top-level SLO verdict result (AND of all per-objective results). */
+export type SloResult = 'PASS' | 'FAIL' | 'INCONCLUSIVE';
+
+/** The service-level indicator computed over the window. */
+export type SloSli = 'LATENCY_P50' | 'LATENCY_P95' | 'LATENCY_P99' | 'ERROR_RATE';
+
+/** Comparator applied between the observed indicator and its threshold. */
+export type SloComparator =
+  | 'LESS_THAN'
+  | 'LESS_THAN_OR_EQUAL'
+  | 'GREATER_THAN'
+  | 'GREATER_THAN_OR_EQUAL';
+
+/**
+ * The evaluated outcome of a single SLO objective: the observed indicator value
+ * over the window and whether it satisfied the threshold. `observedValue` is null
+ * (and `result` INCONCLUSIVE) when the indicator could not be computed — e.g.
+ * error rate over zero requests.
+ */
+export interface SloObjectiveResultDTO {
+  sli: SloSli;
+  comparator: SloComparator;
+  threshold: number;
+  observedValue: number | null;
+  result: SloResult;
+  detail?: string | null;
+}
+
+/**
+ * Terminal SLO verdict over the experiment window, emitted on termination when
+ * the experiment carried `sloCriteria`. The top-level `result` is the AND of the
+ * per-objective results.
+ */
+export interface SloVerdictDTO {
+  name?: string | null;
+  result: SloResult;
+  windowFromEpochMillis: number;
+  windowToEpochMillis: number;
+  sampleCount: number;
+  objectiveResults: SloObjectiveResultDTO[];
+}
+
+/** A single SLO objective within an experiment's `sloCriteria`. */
+export interface SloObjectiveDTO {
+  sli: SloSli;
+  comparator: SloComparator;
+  threshold: number;
+}
+
+/** The SLO criteria attached to an experiment definition (verify-on-terminate). */
+export interface SloCriteriaDTO {
+  name?: string | null;
+  objectives?: SloObjectiveDTO[];
+  minimumSampleCount?: number | null;
+  upstreamHosts?: string[];
+}
+
 /** The experiment definition sent to PUT /mockserver/chaosExperiment. */
 export interface ExperimentDefinitionDTO {
   name: string;
   loop?: boolean;
   stages: ExperimentStageDTO[];
+  sloCriteria?: SloCriteriaDTO;
 }
 
 /**
  * Status snapshot returned by GET /mockserver/chaosExperiment.
  * When no experiment has ever run, status is "none".
+ *
+ * `halted_by_slo_breach` is a terminal status emitted when an experiment with
+ * `sloCriteria` is auto-halted because a live SLO objective was breached; the
+ * accompanying `experimentVerdict` is then FAIL.
  */
 export interface ExperimentStatusDTO {
   name: string | null;
-  status: 'none' | 'running' | 'completed' | 'stopped' | 'halted_by_auto_halt' | 'starting';
+  status:
+    | 'none'
+    | 'running'
+    | 'completed'
+    | 'stopped'
+    | 'halted_by_auto_halt'
+    | 'halted_by_slo_breach'
+    | 'scheduled'
+    | 'starting';
   currentStageIndex: number;
   totalStages: number;
   stageElapsedMillis: number;
@@ -34,6 +104,11 @@ export interface ExperimentStatusDTO {
   loopIteration: number;
   totalElapsedMillis: number;
   experiment?: ExperimentDefinitionDTO;
+  /**
+   * Terminal SLO verdict over the experiment window; present only when the
+   * experiment carried `sloCriteria` and a verdict has been produced.
+   */
+  experimentVerdict?: SloVerdictDTO;
 }
 
 function endpoint(params: ConnectionParams): string {

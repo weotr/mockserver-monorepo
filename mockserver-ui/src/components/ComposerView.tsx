@@ -87,9 +87,10 @@ import {
 import McpToolsPanel from './McpToolsPanel';
 import ScenarioPanel from './ScenarioPanel';
 import ImportForm from './ImportForm';
-import JsonEditor from './JsonEditor';
+import JsonEditor from './JsonEditorLazy';
 import SnippetPalette from './SnippetPalette';
 import type { TemplateEngine as SnippetEngine } from '../lib/templateSnippets';
+import { trackFeature } from '../lib/analytics';
 
 // ---------------------------------------------------------------------------
 // Response action types
@@ -3743,6 +3744,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       setRegisteredLabel(null);
       try {
         await registerExpectation(connectionParams, m, action);
+        trackFeature('expectation_created');
         const label = m.dns ? m.dns.dnsName : `${m.method || 'ANY'} ${m.path}`;
         setSnackMessage(`Registered ${label}`);
         // Surface a persistent next-step banner (the snackbar auto-hides).

@@ -2157,4 +2157,89 @@ public class McpToolRegistryTest {
         assertThat(result.path("total").asInt(), is(0));
         assertThat(result.path("logEntries").isArray(), is(true));
     }
+
+    // ---- per-tool read/mutate classification (control-plane authorization) ----
+
+    @Test
+    public void shouldClassifyStateMutatingToolsAsMutating() {
+        for (String tool : Arrays.asList(
+            "create_expectation",
+            "create_forward_expectation",
+            "create_expectation_from_openapi",
+            "create_expectations_from_recorded_traffic",
+            "clear_expectations",
+            "reset",
+            "manage_service_chaos",
+            "stop_server",
+            "raw_expectation",
+            "load_expectations_from_file",
+            "record_llm_fixtures",
+            "mock_llm_completion",
+            "create_llm_conversation",
+            "mock_llm_failover",
+            "mock_adversarial_llm_response")) {
+            assertThat("expected '" + tool + "' to be classified as mutating",
+                McpToolRegistry.isMutatingTool(tool), is(true));
+        }
+    }
+
+    @Test
+    public void shouldClassifyReadOnlyToolsAsNonMutating() {
+        for (String tool : Arrays.asList(
+            "verify_request",
+            "verify_request_sequence",
+            "verify_tool_call",
+            "verify_structured_output",
+            "verify_cost_budget",
+            "verify_traffic_against_openapi",
+            "retrieve_recorded_requests",
+            "retrieve_logs",
+            "retrieve_request_responses",
+            "get_status",
+            "debug_request_mismatch",
+            "explain_unmatched_requests",
+            "explain_agent_run",
+            "export_optimisation_report",
+            "detect_llm_drift",
+            "list_mock_tools",
+            "raw_retrieve",
+            "raw_verify",
+            "run_contract_test",
+            "run_resiliency_test",
+            "run_mcp_contract_test")) {
+            assertThat("expected '" + tool + "' to be classified as read-only",
+                McpToolRegistry.isMutatingTool(tool), is(false));
+        }
+    }
+
+    @Test
+    public void shouldClassifyEveryRegisteredToolAsEitherReadOrMutate() {
+        java.util.Set<String> reading = McpToolRegistry.readingToolNames();
+        java.util.Set<String> mutating = McpToolRegistry.mutatingToolNames();
+
+        // disjoint: no tool is classified as both read and mutate (which would otherwise be
+        // silently resolved to read by the deny-list, weakening the protection)
+        assertThat("read and mutate classifications must be disjoint",
+            java.util.Collections.disjoint(reading, mutating), is(true));
+
+        // complete: every registered tool is explicitly classified in exactly one set, so a
+        // newly added tool cannot be silently left unclassified
+        java.util.Set<String> classified = new java.util.HashSet<>(reading);
+        classified.addAll(mutating);
+        assertThat("every registered tool must be explicitly classified read or mutate",
+            classified, is(new java.util.HashSet<>(toolRegistry.getTools().keySet())));
+
+        // and the runtime decision agrees with the explicit sets
+        for (String tool : mutating) {
+            assertThat(tool + " must be mutating", McpToolRegistry.isMutatingTool(tool), is(true));
+        }
+        for (String tool : reading) {
+            assertThat(tool + " must be read-only", McpToolRegistry.isMutatingTool(tool), is(false));
+        }
+    }
+
+    @Test
+    public void shouldTreatUnknownToolAsMutatingFailClosed() {
+        assertThat(McpToolRegistry.isMutatingTool("some_unregistered_tool"), is(true));
+    }
 }

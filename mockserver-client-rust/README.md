@@ -259,7 +259,7 @@ println!("Launcher at: {}", launcher_path.display());
 
 ```rust
 let mut handle = launcher::start_with_version(
-    "7.1.0", 1080, &launcher::EnsureOptions::default()
+    "7.2.0", 1080, &launcher::EnsureOptions::default()
 )?;
 ```
 

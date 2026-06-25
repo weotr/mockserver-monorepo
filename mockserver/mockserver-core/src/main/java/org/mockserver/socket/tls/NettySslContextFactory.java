@@ -69,7 +69,6 @@ public class NettySslContextFactory {
         this.mockServerLogger = mockServerLogger;
         this.forServer = true;
         keyAndCertificateFactory = createKeyAndCertificateFactory(configuration, mockServerLogger);
-        System.setProperty("https.protocols", configuration.tlsProtocols());
         warnIfInsecureTlsProfileConfigured();
         nettySslContextFactoryCustomizer.accept(this);
         if (configuration.proactivelyInitialiseTLS()) {
@@ -82,7 +81,6 @@ public class NettySslContextFactory {
         this.mockServerLogger = mockServerLogger;
         this.forServer = forServer;
         keyAndCertificateFactory = createKeyAndCertificateFactory(configuration, mockServerLogger, forServer);
-        System.setProperty("https.protocols", configuration.tlsProtocols());
         warnIfInsecureTlsProfileConfigured();
         nettySslContextFactoryCustomizer.accept(this);
         if (configuration.proactivelyInitialiseTLS()) {

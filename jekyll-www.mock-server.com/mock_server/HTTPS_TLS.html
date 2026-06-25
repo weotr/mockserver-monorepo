@@ -538,7 +538,8 @@ MockServerClient client = new MockServerClient("localhost", 1080)
 <pre class="prettyprint lang-xml code"><code class="code">&lt;dependency&gt;
     &lt;groupId&gt;org.bouncycastle&lt;/groupId&gt;
     &lt;artifactId&gt;bc-fips&lt;/artifactId&gt;
-    &lt;version&gt;1.0.2.5&lt;/version&gt;
+    &lt;!-- use the latest FIPS-certified bc-fips release --&gt;
+    &lt;version&gt;...&lt;/version&gt;
 &lt;/dependency&gt;</code></pre>
 
 <p>MockServer will use whichever provider it finds on the classpath. If both are present, the standard (non-FIPS) provider is used. If neither is available, MockServer falls back to the JVM's default cryptographic provider.</p>
@@ -573,7 +574,7 @@ apk add --no-cache ca-certificates java-cacerts</code></pre>
 
 <p>If you see "Connection reset" or "Broken pipe" errors during TLS connections, common causes include:</p>
 <ul>
-    <li><strong>Expired test certificates:</strong> MockServer's dynamically generated certificates have a limited validity period. If you are using custom CA certificates for testing, ensure they have not expired.</li>
+    <li><strong>Expired test certificates:</strong> MockServer's dynamically generated CA and leaf certificates are valid for 10 years from the time MockServer first starts, so they do not expire mid-project. If you supply your own custom CA certificates for testing, ensure they have not expired.</li>
     <li><strong>Protocol mismatch:</strong> Ensure the client and MockServer agree on a TLS protocol version. MockServer supports TLSv1, TLSv1.1, and TLSv1.2 by default (see <a href="/mock_server/configuration_properties.html#button_configuration_tls_protocols">tlsProtocols</a>). To restrict to modern protocols only, set <span class="inline_code">tlsAllowInsecureProtocols</span> to <span class="inline_code">false</span>, which strips TLSv1 and TLSv1.1 from the effective list. Use the <span class="inline_code">tlsProtocols</span> configuration property to adjust supported protocols.</li>
     <li><strong>Corporate TLS inspection proxies:</strong> If your network uses a TLS inspection proxy, you may need to add the proxy's CA certificate to the JVM trust store, or configure the <span class="inline_code">JAVA_OPTS</span> with <span class="inline_code">-Djavax.net.ssl.trustStore</span> pointing to a trust store that includes both the proxy CA and MockServer CA certificates.</li>
 </ul>

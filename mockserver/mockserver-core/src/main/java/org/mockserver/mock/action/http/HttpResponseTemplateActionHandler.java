@@ -20,9 +20,9 @@ public class HttpResponseTemplateActionHandler {
 
     private final MockServerLogger mockServerLogger;
     private final Configuration configuration;
-    private VelocityTemplateEngine velocityTemplateEngine;
-    private JavaScriptTemplateEngine javascriptTemplateEngine;
-    private MustacheTemplateEngine mustacheTemplateEngine;
+    private volatile VelocityTemplateEngine velocityTemplateEngine;
+    private volatile JavaScriptTemplateEngine javascriptTemplateEngine;
+    private volatile MustacheTemplateEngine mustacheTemplateEngine;
 
     public HttpResponseTemplateActionHandler(MockServerLogger mockServerLogger, Configuration configuration) {
         this.mockServerLogger = mockServerLogger;
@@ -57,24 +57,42 @@ public class HttpResponseTemplateActionHandler {
     }
 
     private VelocityTemplateEngine getVelocityTemplateEngine() {
-        if (velocityTemplateEngine == null) {
-            velocityTemplateEngine = new VelocityTemplateEngine(mockServerLogger, configuration);
+        VelocityTemplateEngine engine = velocityTemplateEngine;
+        if (engine == null) {
+            synchronized (this) {
+                engine = velocityTemplateEngine;
+                if (engine == null) {
+                    engine = velocityTemplateEngine = new VelocityTemplateEngine(mockServerLogger, configuration);
+                }
+            }
         }
-        return velocityTemplateEngine;
+        return engine;
     }
 
     private JavaScriptTemplateEngine getJavaScriptTemplateEngine() {
-        if (javascriptTemplateEngine == null) {
-            javascriptTemplateEngine = new JavaScriptTemplateEngine(mockServerLogger, configuration);
+        JavaScriptTemplateEngine engine = javascriptTemplateEngine;
+        if (engine == null) {
+            synchronized (this) {
+                engine = javascriptTemplateEngine;
+                if (engine == null) {
+                    engine = javascriptTemplateEngine = new JavaScriptTemplateEngine(mockServerLogger, configuration);
+                }
+            }
         }
-        return javascriptTemplateEngine;
+        return engine;
     }
 
     private MustacheTemplateEngine getMustacheTemplateEngine() {
-        if (mustacheTemplateEngine == null) {
-            mustacheTemplateEngine = new MustacheTemplateEngine(mockServerLogger, configuration);
+        MustacheTemplateEngine engine = mustacheTemplateEngine;
+        if (engine == null) {
+            synchronized (this) {
+                engine = mustacheTemplateEngine;
+                if (engine == null) {
+                    engine = mustacheTemplateEngine = new MustacheTemplateEngine(mockServerLogger, configuration);
+                }
+            }
         }
-        return mustacheTemplateEngine;
+        return engine;
     }
 
 }

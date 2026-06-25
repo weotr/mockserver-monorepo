@@ -6,7 +6,7 @@ import Typography from '@mui/material/Typography';
 import Alert from '@mui/material/Alert';
 import AlertTitle from '@mui/material/AlertTitle';
 import Snackbar from '@mui/material/Snackbar';
-import { useDashboardStore } from './store';
+import { useDashboardStore, coerceView, ALL_VIEWS } from './store';
 import { buildTheme } from './theme';
 import { useConnectionParams } from './hooks/useConnectionParams';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -24,6 +24,7 @@ import SessionInspector from './components/SessionInspector';
 import LibraryView from './components/LibraryView';
 import ServiceChaosPanel from './components/ServiceChaosPanel';
 import DriftPanel from './components/DriftPanel';
+import SloPanel from './components/SloPanel';
 import VerificationView from './components/VerificationView';
 import AsyncApiPanel from './components/AsyncApiPanel';
 import GrpcServicesPanel from './components/GrpcServicesPanel';
@@ -35,6 +36,9 @@ import DebugMismatchDialog from './components/DebugMismatchDialog';
 import GenerateStubDialog from './components/GenerateStubDialog';
 import ConfirmDialog from './components/ConfirmDialog';
 import ErrorBoundary from './components/ErrorBoundary';
+import AnalyticsBanner from './components/AnalyticsBanner';
+import { getConfiguration } from './lib/configuration';
+import { initAnalytics, trackView } from './lib/analytics';
 import type { RequestFilter } from './types';
 
 // Lazy-loaded so the @mui/x-charts bundle only loads when the Metrics tab is
@@ -112,6 +116,63 @@ export default function App() {
   useEffect(() => {
     connect({});
   }, [connect]);
+
+  // Keep the active view in sync with the URL hash so browser back/forward and
+  // manually-edited deep links (e.g. `#/contract`) navigate the dashboard. The
+  // store's own setView writes the hash; here we react to externally-driven hash
+  // changes. Invalid hashes are ignored (coerceView returns null).
+  const setView = useDashboardStore((s) => s.setView);
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = coerceView(globalThis.location?.hash?.replace(/^#\/?/, '') ?? '');
+      if (next && next !== useDashboardStore.getState().view) {
+        setView(next);
+      }
+    };
+    globalThis.addEventListener?.('hashchange', onHashChange);
+    return () => globalThis.removeEventListener?.('hashchange', onHashChange);
+  }, [setView]);
+
+  // Fetch the server configuration once at startup and hand it to the analytics
+  // module, which runs all privacy gates and (only if every gate passes) lazily
+  // loads posthog-js and emits `app_open`. We pass the valid-view whitelist
+  // (ALL_VIEWS) so trackView can drop any non-view value, and the current view
+  // so the analytics module emits the initial `view_change` exactly once when
+  // activation completes (activation is async — the `[view]` effect below has
+  // already fired-and-dropped by then). initAnalytics is idempotent (one-shot
+  // decision), so a duplicate call under StrictMode remount is a no-op. Failure
+  // to fetch config simply means analytics stays off — never surfaced.
+  useEffect(() => {
+    const controller = new AbortController();
+    void getConfiguration(params, controller.signal)
+      .then((config) => {
+        if (!controller.signal.aborted) {
+          initAnalytics(config, {
+            validViews: ALL_VIEWS,
+            initialView: useDashboardStore.getState().view,
+          });
+        }
+      })
+      .catch(() => {
+        /* config endpoint unavailable — analytics stays off */
+      });
+    return () => controller.abort();
+  }, [params]);
+
+  // Report subsequent navigations to analytics. The store stays pure —
+  // navigation is tracked here, at the single place that observes the selected
+  // `view`. The INITIAL view is emitted by the analytics module at activation
+  // time (see above), so this effect skips its first run to avoid double-counting
+  // the starting tab; it then emits every real view change. trackView is a no-op
+  // unless analytics is active.
+  const initialViewTracked = useRef(false);
+  useEffect(() => {
+    if (!initialViewTracked.current) {
+      initialViewTracked.current = true;
+      return;
+    }
+    trackView(view);
+  }, [view]);
 
   const handleFilterChange = useCallback(
     (filter: RequestFilter) => {
@@ -196,6 +257,7 @@ export default function App() {
               reconnect. Displayed data may be stale until the connection is restored.
             </Alert>
           )}
+          <AnalyticsBanner />
           {(view === 'dashboard' || view === 'traffic' || view === 'sessions') && (
             <FilterPanel onFilterChange={handleFilterChange} />
           )}
@@ -240,6 +302,7 @@ export default function App() {
             )}
             {view === 'drift' && <DriftPanel connectionParams={params} />}
             {view === 'verification' && <VerificationView connectionParams={params} />}
+            {view === 'slo' && <SloPanel connectionParams={params} />}
             {view === 'async' && <AsyncApiPanel connectionParams={params} />}
             {view === 'grpc' && <GrpcServicesPanel connectionParams={params} />}
             {view === 'breakpoints' && <BreakpointsPanel connectionParams={params} />}

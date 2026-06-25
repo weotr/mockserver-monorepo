@@ -43,13 +43,20 @@ intellijPlatform {
     pluginConfiguration {
         ideaVersion {
             sinceBuild = providers.gradleProperty("sinceBuild")
-            // Open-ended compatibility: an empty untilBuild omits the `until-build`
-            // upper bound from plugin.xml, so the plugin stays available in current
-            // and future IDE builds (e.g. 261+) instead of being capped. The plugin
-            // uses only stable, public platform APIs, so we don't pin an upper bound
-            // pre-emptively — the Plugin Verifier (verifyPlugin) is the backstop that
-            // catches any real incompatibility before release.
-            untilBuild = provider { "" }
+            // Open-ended compatibility: a null untilBuild omits the `until-build`
+            // upper bound from plugin.xml entirely, so the plugin stays available in
+            // current and future IDE builds (e.g. 261+) instead of being capped. The
+            // plugin uses only stable, public platform APIs, so we don't pin an upper
+            // bound pre-emptively — the Plugin Verifier (verifyPlugin) is the backstop
+            // that catches any real incompatibility before release.
+            //
+            // NOTE: this MUST be null, not an empty string. An empty string makes the
+            // plugin emit `until-build=""`, which JetBrains Marketplace rejects at
+            // upload ("does not match the multi-part build number format"); a null
+            // provider omits the attribute, which is what open-ended compatibility
+            // requires. verifyPlugin/buildPlugin do NOT catch the empty-attribute
+            // case — it only fails at the Marketplace publish step.
+            untilBuild = provider { null }
         }
     }
     signing {

@@ -25,6 +25,25 @@ import java.util.Map;
  */
 public class LoadScenario extends ObjectWithJsonToString {
 
+    /**
+     * How each iteration selects which steps to run from {@link #getSteps()}.
+     */
+    public enum StepSelection {
+        /**
+         * Default: every iteration runs ALL steps in declared order (a multi-step user journey).
+         * Per-step {@link LoadStep#getWeight() weights} are ignored.
+         */
+        SEQUENTIAL,
+        /**
+         * Each iteration runs exactly ONE step, chosen at random with probability proportional to the
+         * steps' {@link LoadStep#getWeight() weights} (mixed-workload modelling, e.g. 70% browse /
+         * 20% search / 10% checkout). Because a WEIGHTED iteration runs a single step, cross-step
+         * captures have no later step to consume them and so are meaningful only under SEQUENTIAL;
+         * feeder data and pacing apply to both modes.
+         */
+        WEIGHTED
+    }
+
     private String name;
     private List<LoadStep> steps = new ArrayList<>();
     private LoadProfile profile;
@@ -47,6 +66,50 @@ public class LoadScenario extends ObjectWithJsonToString {
      * are merged on top of these for a given step, with step keys winning on conflict.
      */
     private Map<String, String> labels;
+    /**
+     * In-run pass/fail thresholds (nullable/empty = none). Evaluated on every control tick from this
+     * run's per-run latency histogram and counters; the run carries a {@code PASS} verdict iff ALL
+     * thresholds hold, {@code FAIL} otherwise (and a null verdict until the first request completes,
+     * or always-null when there are no thresholds). See {@link LoadThreshold}.
+     */
+    private List<LoadThreshold> thresholds;
+    /**
+     * When true, a {@code FAIL} verdict aborts the run early — the run transitions to the terminal
+     * {@code STOPPED} state and is marked aborted-by-threshold. Default {@code false} (the run always
+     * finishes its stages and carries a final verdict). See {@link #abortGraceMillis}.
+     */
+    private boolean abortOnFail;
+    /**
+     * Suppress {@code abortOnFail} for the first {@code N} milliseconds of the run, so noisy
+     * startup samples cannot trigger a premature abort (analogous to k6's {@code delayAbortEval}).
+     * Thresholds are still evaluated and a verdict still reported during the grace window — only the
+     * abort action is deferred until {@code elapsedMillis >= abortGraceMillis}. Default {@code 0}.
+     */
+    private long abortGraceMillis;
+    /**
+     * Adaptive iteration pacing (think-time): a target per-VU iteration cycle time. Nullable (or
+     * {@link LoadPacing.Mode#NONE}) means no pacing — the closed-model VU loop reschedules each next
+     * iteration immediately. When set, a closed-model VU starts an iteration at most once per target
+     * cycle (waiting out any remainder, starting immediately on overrun). Applies only to the
+     * closed-model VU loop; open-model RATE iterations ignore it. See {@link LoadPacing}.
+     */
+    private LoadPacing pacing;
+    /**
+     * Parameterized test data ("data feeder"): an inline dataset from which the orchestrator selects
+     * one row per iteration and exposes it to that iteration's templated request fields (path, body and
+     * headers) as {@code $iteration.data.<column>} / {@code {{iteration.data.<column>}}}. Nullable
+     * (default) means no feeder — {@code $iteration.data} resolves to an empty map and behaviour is
+     * unchanged. With {@link LoadFeeder.Strategy#SEQUENTIAL SEQUENTIAL} selection the run completes once
+     * the dataset is exhausted (each row used exactly once). See {@link LoadFeeder}.
+     */
+    private LoadFeeder feeder;
+    /**
+     * Per-iteration step selection mode (nullable = {@link StepSelection#SEQUENTIAL SEQUENTIAL}). Under
+     * SEQUENTIAL (the default and the original behaviour) every iteration runs all steps in order; under
+     * {@link StepSelection#WEIGHTED WEIGHTED} each iteration runs a single step chosen by
+     * {@link LoadStep#getWeight() weight}. See {@link StepSelection}.
+     */
+    private StepSelection stepSelection;
 
     public static LoadScenario loadScenario() {
         return new LoadScenario();
@@ -136,6 +199,87 @@ public class LoadScenario extends ObjectWithJsonToString {
             this.labels = new LinkedHashMap<>();
         }
         this.labels.put(name, value);
+        return this;
+    }
+
+    /**
+     * In-run pass/fail thresholds (may be null/empty). See {@link #thresholds}.
+     */
+    public List<LoadThreshold> getThresholds() {
+        return thresholds;
+    }
+
+    public LoadScenario withThresholds(LoadThreshold... thresholds) {
+        if (this.thresholds == null) {
+            this.thresholds = new ArrayList<>();
+        }
+        Collections.addAll(this.thresholds, thresholds);
+        return this;
+    }
+
+    public LoadScenario withThresholds(List<LoadThreshold> thresholds) {
+        this.thresholds = thresholds;
+        return this;
+    }
+
+    /**
+     * Whether a {@code FAIL} verdict aborts the run early (default {@code false}). See {@link #abortOnFail}.
+     */
+    public boolean isAbortOnFail() {
+        return abortOnFail;
+    }
+
+    public LoadScenario withAbortOnFail(boolean abortOnFail) {
+        this.abortOnFail = abortOnFail;
+        return this;
+    }
+
+    /**
+     * The abort grace window in milliseconds (default {@code 0}). See {@link #abortGraceMillis}.
+     */
+    public long getAbortGraceMillis() {
+        return abortGraceMillis;
+    }
+
+    public LoadScenario withAbortGraceMillis(long abortGraceMillis) {
+        this.abortGraceMillis = abortGraceMillis;
+        return this;
+    }
+
+    /**
+     * Adaptive iteration pacing (may be null = no pacing). See {@link #pacing}.
+     */
+    public LoadPacing getPacing() {
+        return pacing;
+    }
+
+    public LoadScenario withPacing(LoadPacing pacing) {
+        this.pacing = pacing;
+        return this;
+    }
+
+    /**
+     * The data feeder (may be null = no feeder). See {@link #feeder}.
+     */
+    public LoadFeeder getFeeder() {
+        return feeder;
+    }
+
+    public LoadScenario withFeeder(LoadFeeder feeder) {
+        this.feeder = feeder;
+        return this;
+    }
+
+    /**
+     * The per-iteration step selection mode (may be null = {@link StepSelection#SEQUENTIAL}). See
+     * {@link #stepSelection}.
+     */
+    public StepSelection getStepSelection() {
+        return stepSelection;
+    }
+
+    public LoadScenario withStepSelection(StepSelection stepSelection) {
+        this.stepSelection = stepSelection;
         return this;
     }
 }

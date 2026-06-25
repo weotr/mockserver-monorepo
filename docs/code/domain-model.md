@@ -815,6 +815,8 @@ MockServer fully supports OpenAPI 3.1 specifications. The swagger-parser library
 
 By default `ExampleBuilder` produces generic placeholder values (`"string"`, `0`, `true`). When the `generateRealisticExampleValues` configuration property is set to `true`, `ExampleBuilder` constructs a `SampleDataGenerator` instance and delegates format-aware value generation to it. `SampleDataGenerator` (`mockserver-core/.../openapi/examples/SampleDataGenerator.java`) uses [Datafaker](https://www.datafaker.net/) with a fixed seed (`42L`) so every run produces the same output — generated examples are deterministic and safe to commit as fixtures.
 
+The decision is carried per generation run by `GenerationOptions` (`getRealisticValues()`): an explicit value wins, and only when it is absent (`null`) does `ExampleBuilder` fall back to reading the global `generateRealisticExampleValues` property. An OpenAPI import can therefore request realistic generation for a single import — without changing global configuration — via a `"realisticValues": true` entry in the reserved `__generationOptions__` map (alongside the existing `seed` and `fieldOverrides` options). Reading the global only as a fallback (rather than deep inside generation) also keeps generation free of shared-state reads, so callers and tests drive it deterministically.
+
 Coverage by schema format:
 
 | Format | Generated value |

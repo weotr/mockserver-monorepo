@@ -137,7 +137,13 @@ COPY --from=graaljs /graaljs/*.jar /libs/
 # don't run MockServer as root
 USER nonroot
 
-ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-cp", "/mockserver-netty-jar-with-dependencies.jar:/libs/*", "-Dmockserver.propertyFile=/config/mockserver.properties", "org.mockserver.cli.Main"]
+# -XX:MaxRAMPercentage=75.0 caps the JVM heap at 75% of the container memory limit so the
+# in-memory request/expectation rings size off a bounded heap. It only applies when the user has
+# NOT set an explicit heap, so it is a safe default. To change the cap, set an explicit -Xmx (via
+# JAVA_TOOL_OPTIONS or -Xmx) — that disables MaxRAMPercentage. Setting a different MaxRAMPercentage
+# via JAVA_TOOL_OPTIONS does NOT take effect: JAVA_TOOL_OPTIONS is prepended before these args, so
+# this entrypoint flag is applied last and wins.
+ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-XX:MaxRAMPercentage=75.0", "-cp", "/mockserver-netty-jar-with-dependencies.jar:/libs/*", "-Dmockserver.propertyFile=/config/mockserver.properties", "org.mockserver.cli.Main"]
 
 ENV SERVER_PORT 1080
 

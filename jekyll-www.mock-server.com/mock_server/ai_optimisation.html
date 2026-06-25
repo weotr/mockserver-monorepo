@@ -4,7 +4,7 @@ shortTitle: LLM Cost Optimisation
 description: Proxy your AI agent's LLM calls through MockServer, then export a one-click optimisation brief (Markdown) or JSON bundle to find ways to cut inference cost — tighter prompts, prompt caching, fewer tool round-trips, and direct HTTP/MCP endpoints.
 layout: page
 pageOrder: 10
-section: 'AI Integration'
+section: 'AI & MCP'
 subsection: true
 sitemap:
   priority: 0.8
@@ -22,11 +22,13 @@ keywords: llm cost optimisation, ai cost reduction, prompt caching, token reduct
 </p>
 
 <p>
-    MockServer analyses the captured traffic offline, computing six deterministic
-    optimisation signals (repeated system prompts, oversized tool results, deterministic
-    tool calls, and more) along with token counts and estimated USD costs from provider
-    pricing tables. <strong>MockServer never calls an LLM itself</strong> — every number
-    in the report is deterministic and computed locally.
+    MockServer analyses the captured traffic offline, computing nine deterministic
+    optimisation signals (repeated system prompts, low cache-hit rates, oversized tool
+    results, unused tool schema, and more) along with token counts and estimated USD costs
+    from provider pricing tables. <strong>MockServer never calls an LLM itself</strong> —
+    every number in the report is deterministic and computed locally. An in-product
+    <strong>verdict</strong> (A–F grade and a "$X recoverable" headline) summarises the
+    findings at a glance.
 </p>
 
 <h2>How It Works</h2>
@@ -34,7 +36,8 @@ keywords: llm cost optimisation, ai cost reduction, prompt caching, token reduct
 <ol>
     <li><a href="#proxy-setup">Start MockServer as a proxy and capture LLM traffic</a> — including <a href="#opencode-real-traffic">real traffic from a headless OpenCode run</a></li>
     <li><a href="#export-brief">Export the optimisation brief</a> — via the dashboard, MCP tool, or REST endpoint</li>
-    <li><a href="#signals">Act on the detected opportunities</a> — six signal types, each mapped to a concrete lever</li>
+    <li><a href="#verdict">Read the verdict</a> — instant A–F grade and "$X recoverable" headline, no LLM required</li>
+    <li><a href="#signals">Act on the detected opportunities</a> — nine signal types, each mapped to a concrete lever</li>
 </ol>
 
 ```mermaid
@@ -150,21 +153,17 @@ opencode run "summarise the README and suggest one improvement"</code></pre>
 
 <pre class="prettyprint code"><code class="code">http://localhost:1080/mockserver/dashboard</code></pre>
 
-<!-- SCREENSHOT PLACEHOLDER (add before release):
-     The MockServer dashboard "LLM Optimise" screen showing the session picker,
-     hero cards (total cost / tokens / calls / avg latency), the
-     "Detected Opportunities" panel, the per-call table, and the
-     "Copy optimisation brief" / "Download bundle" buttons.
-     Suggested: <p><img src="/mock_server/images/optimise_screen.png"
-       alt="MockServer dashboard LLM Optimise screen" class="screenshot"/></p> -->
+<img class="ui_image" src="/images/MockServerOptimise.png" alt="MockServer dashboard LLM Optimise screen — verdict, hero cards, and detected opportunities">
 
 <p>The LLM Optimise screen shows:</p>
 <ul>
     <li>A session picker — pick a single upstream host, or <strong>All captured LLM traffic</strong> (the default)</li>
-    <li>Hero cards — total estimated cost, input/output tokens, call count, average latency</li>
-    <li>A <strong>Detected Opportunities</strong> panel listing each signal with severity chip and estimated saving</li>
+    <li>A <strong>verdict banner</strong> — grade letter (A–F, colour-coded) with the "$X recoverable (Y% of spend)" headline and a one-line rationale</li>
+    <li>Hero cards — total estimated cost, input/output tokens, call count, average latency, <strong>cache-hit rate</strong>, and <strong>one-shot rate</strong></li>
+    <li>A <strong>Detected Opportunities</strong> panel listing each signal with severity chip, estimated saving, and structured fix guidance</li>
     <li>A per-call table</li>
-    <li><strong>Copy optimisation brief</strong> — copies the Markdown brief to the clipboard</li>
+    <li><strong>Copy verdict</strong> — copies a compact plain-text grade + fix summaries to the clipboard (built from the loaded JSON, no extra fetch)</li>
+    <li><strong>Copy optimisation brief</strong> — copies the full Markdown brief to the clipboard</li>
     <li><strong>Download bundle</strong> — saves the structured JSON report</li>
 </ul>
 
@@ -275,7 +274,7 @@ curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown
         </tr>
         <tr>
             <td><code class="code inline">provider</code></td>
-            <td><code class="code inline">OPENAI</code> | <code class="code inline">ANTHROPIC</code> | <code class="code inline">GEMINI</code> | <code class="code inline">BEDROCK</code> | <code class="code inline">AZURE_OPENAI</code> | <code class="code inline">OLLAMA</code></td>
+            <td><code class="code inline">OPENAI</code> | <code class="code inline">OPENAI_RESPONSES</code> | <code class="code inline">ANTHROPIC</code> | <code class="code inline">GEMINI</code> | <code class="code inline">BEDROCK</code> | <code class="code inline">AZURE_OPENAI</code> | <code class="code inline">OLLAMA</code></td>
             <td>all providers</td>
             <td>Filter to one LLM provider. Provider is auto-detected from request paths.</td>
         </tr>
@@ -293,22 +292,80 @@ curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown
 
 <ol>
     <li><strong>Framing preamble</strong> — tells the LLM it is a cost-optimisation expert and what to do</li>
-    <li><strong>Run summary</strong> — provider(s), model(s), call count, token totals, estimated cost, latency, tool-call count</li>
+    <li><strong>Verdict</strong> — A–F grade, rationale, estimated recoverable spend and token count, cache-hit rate, one-shot rate</li>
+    <li><strong>Run summary</strong> — provider(s), model(s), call count, token totals, estimated cost, latency, tool-call count, cache-hit rate, one-shot rate</li>
     <li><strong>Per-call table</strong> — one row per call: model, input/output tokens, cost, latency, tools, finish reason. For proxied/forwarded traffic the per-call <code class="code inline">latencyMs</code> is the measured upstream round-trip time (full-stream duration for streaming responses). It is <code class="code inline">0</code> only when the upstream time could not be captured for that call.</li>
-    <li><strong>Detected opportunities</strong> — each detected signal as a section with title, detail, affected call indices, estimated saving, and recommendation</li>
+    <li><strong>Detected opportunities</strong> — each detected signal as a section with title, detail, affected call indices, estimated saving, recommendation, and fix guidance (action, config snippet or example expectation, and a docs link where available)</li>
     <li><strong>Conversations and tool definitions (appendix)</strong> — redacted messages and tool schemas so the LLM has the raw material to propose concrete edits</li>
 </ol>
 
 <p>Once you have the brief, paste it into any LLM. No additional context is needed.</p>
 
-<a id="signals" class="anchor" href="#signals">&nbsp;</a>
+<a id="verdict" class="anchor" href="#verdict">&nbsp;</a>
 
-<h2>3. The Six Optimisation Signals</h2>
+<h2>3. The Verdict</h2>
 
 <p>
-    MockServer analyses the captured calls and emits up to six deterministic signals,
-    sorted by severity (HIGH first). Each signal names the problem, quantifies it in tokens
-    and estimated USD, and recommends a concrete lever.
+    Every report includes a deterministic <strong>verdict</strong> — an A–F grade and a
+    "$X recoverable" headline — computed from the detected signals without any LLM call.
+    The grade is your quick answer to "how much is there to fix here?"
+</p>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Grade</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td><strong>A</strong></td><td>&lt;10% of spend is recoverable — well optimised</td></tr>
+        <tr><td><strong>B</strong></td><td>10–25% recoverable — or the grade would be A but at least one HIGH-severity finding exists (the floor is B even when the dollar saving is near zero)</td></tr>
+        <tr><td><strong>C</strong></td><td>25–40% recoverable</td></tr>
+        <tr><td><strong>D</strong></td><td>40–55% recoverable</td></tr>
+        <tr><td><strong>F</strong></td><td>&gt;55% recoverable — significant inefficiency detected</td></tr>
+    </tbody>
+</table>
+
+<p>
+    The <strong>"recoverable" figure</strong> is an estimate of how much spend could be saved
+    by acting on the detected signals. It is calculated using <em>per-call MAX attribution</em>:
+    each call's contribution is the maximum saving across all signals that affect it (not a sum),
+    so the total can never exceed the actual session spend. Treat it as a directional estimate,
+    not an invoice.
+</p>
+
+<p>
+    The rationale line explains the grade in plain English, for example:
+    <em>"Grade C — an estimated 18% of spend ($1.42) is recoverable across 3 findings (1 high, 2 medium)."</em>
+</p>
+
+<h3>Session KPIs</h3>
+
+<p>Two new headline metrics appear in the hero cards and run summary:</p>
+
+<ul>
+    <li>
+        <strong>Cache hit rate</strong> — the fraction of input tokens served from cache
+        (<code class="code inline">cachedInputTokens / inputTokens</code>). A rate below 50% on a
+        session with repeated prompts suggests caching is not enabled.
+    </li>
+    <li>
+        <strong>One-shot rate</strong> — the fraction of calls that were <em>not</em> retries. A
+        windowed retry detector (window of 3) identifies calls that duplicate a recent request; a low
+        one-shot rate points to retry loops or duplicate request patterns worth de-duplicating.
+    </li>
+</ul>
+
+<a id="signals" class="anchor" href="#signals">&nbsp;</a>
+
+<h2>4. The Nine Optimisation Signals</h2>
+
+<p>
+    MockServer analyses the captured calls and emits up to nine deterministic signals,
+    sorted by urgency (a combination of severity and how many calls are affected). Each signal
+    names the problem, quantifies it in tokens and estimated USD, and provides structured
+    fix guidance — including a copy-paste config snippet or example expectation where relevant.
 </p>
 
 <table class="table">
@@ -317,45 +374,89 @@ curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown
             <th>Signal</th>
             <th>Severity</th>
             <th>What it detects</th>
-            <th>Recommended lever</th>
+            <th>How to fix it</th>
         </tr>
     </thead>
     <tbody>
         <tr>
-            <td><code class="code inline">REPEATED_SYSTEM_PROMPT</code></td>
+            <td><a id="prompt-caching" class="anchor" href="#prompt-caching">&nbsp;</a><code class="code inline">REPEATED_SYSTEM_PROMPT</code></td>
             <td>HIGH / MEDIUM</td>
             <td>The same system prompt (identified by a fingerprint) is resent on two or more calls, re-paying for the same input tokens each turn. HIGH when the prompt is large (&ge;1,000 tokens) and repeated three or more times.</td>
-            <td>Enable <a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" rel="noopener noreferrer" target="_blank">provider prompt caching</a>, or move the static context into a retrieval tool so it is only fetched when needed.</td>
+            <td>Enable <a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching" rel="noopener noreferrer" target="_blank">provider prompt caching</a>, or move the static context into a retrieval tool so it is only fetched when needed. For Anthropic, the fix includes a ready-to-paste <code class="code inline">cache_control</code> snippet.</td>
         </tr>
         <tr>
-            <td><code class="code inline">LARGE_STATIC_CONTEXT_RESENT</code></td>
+            <td><a id="repeated-context" class="anchor" href="#repeated-context">&nbsp;</a><code class="code inline">LARGE_STATIC_CONTEXT_RESENT</code></td>
             <td>HIGH</td>
             <td>A large context block (&ge;2,000 tokens) is resent across two or more calls instead of being cached or retrieved on demand.</td>
             <td>Move the large static context into a retrieval tool or enable prompt caching so it is sent once, not every turn.</td>
         </tr>
         <tr>
-            <td><code class="code inline">DETERMINISTIC_TOOL_CALL</code></td>
+            <td><a id="deterministic-tools" class="anchor" href="#deterministic-tools">&nbsp;</a><code class="code inline">DETERMINISTIC_TOOL_CALL</code></td>
             <td>MEDIUM</td>
             <td>The same tool is called with the same arguments on two or more separate calls, making the LLM an unnecessary intermediary for a deterministic lookup.</td>
-            <td>Replace the LLM-mediated step with a direct HTTP or MCP endpoint call and feed the result back deterministically.</td>
+            <td>Replace the LLM-mediated step with a direct HTTP or MCP endpoint call and feed the result back deterministically. An example MockServer expectation is included in the fix guidance.</td>
         </tr>
         <tr>
-            <td><code class="code inline">OVERSIZED_TOOL_RESULT</code></td>
+            <td><a id="oversized-tool-results" class="anchor" href="#oversized-tool-results">&nbsp;</a><code class="code inline">OVERSIZED_TOOL_RESULT</code></td>
             <td>MEDIUM</td>
             <td>A tool returned &ge;1,000 tokens, which are then re-sent as input on every subsequent turn, inflating cost.</td>
             <td>Trim or summarise the tool output before returning it to the model so only the relevant fields are sent.</td>
         </tr>
         <tr>
-            <td><code class="code inline">OUTPUT_TOKEN_BLOAT</code></td>
+            <td><a id="output-bloat" class="anchor" href="#output-bloat">&nbsp;</a><code class="code inline">OUTPUT_TOKEN_BLOAT</code></td>
             <td>LOW</td>
             <td>One or more calls produced far more output than the median (either &ge;1,500 tokens absolute, or &ge;3&times; the median output for the session).</td>
-            <td>Constrain output with <code class="code inline">max_tokens</code> or a stricter <code class="code inline">response_format</code> / JSON schema so the model returns only what is needed.</td>
+            <td>Constrain output with <code class="code inline">max_tokens</code> or a stricter <code class="code inline">response_format</code> / JSON schema so the model returns only what is needed. A ready-to-paste config snippet is included.</td>
         </tr>
         <tr>
-            <td><code class="code inline">DUPLICATE_CONSECUTIVE_CALL</code></td>
+            <td><a id="duplicate-calls" class="anchor" href="#duplicate-calls">&nbsp;</a><code class="code inline">DUPLICATE_CONSECUTIVE_CALL</code></td>
             <td>MEDIUM</td>
             <td>Consecutive calls with a near-identical request shape (same path, model, message count, system prompt fingerprint, and input token count) suggest retries that re-pay for the same work.</td>
             <td>De-duplicate or cache identical requests, and only retry on genuine transient errors with backoff.</td>
+        </tr>
+        <tr>
+            <td><a id="low-cache-hit" class="anchor" href="#low-cache-hit">&nbsp;</a><code class="code inline">LOW_CACHE_HIT_RATE</code></td>
+            <td>HIGH / MEDIUM</td>
+            <td>
+                The session has a repeated cacheable prompt prefix (same system-prompt fingerprint on two or more calls)
+                but the cache-hit rate is below 50%. Fires only when there are tokens not yet being cached.
+                HIGH when the un-cached token count is &ge;2,000 and the cache-hit rate is below 20%;
+                MEDIUM otherwise.
+            </td>
+            <td>
+                Enable prompt caching for the static prefix. For <strong>Anthropic</strong>, the fix provides a
+                ready-to-paste <code class="code inline">cache_control:{type:ephemeral}</code> snippet for the
+                system block. For <strong>OpenAI and Gemini</strong>, automatic prefix caching applies — keep the
+                static prefix byte-identical and place it first; do not interleave volatile content before it.
+            </td>
+        </tr>
+        <tr>
+            <td><a id="model-overspend" class="anchor" href="#model-overspend">&nbsp;</a><code class="code inline">MODEL_OVERSPEND</code></td>
+            <td>LOW</td>
+            <td>
+                Two or more calls produced short outputs (&lt;256 tokens) with no tool calls and no reasoning
+                tokens — "trivial" work — on a model whose blended rate is more than 30% above the provider's
+                cheapest available model.
+            </td>
+            <td>
+                Switch those calls to the cheaper model. The fix names the specific model and saving percentage,
+                for example: <em>"these 5 calls on <code>claude-opus-4-6</code> produced &lt;256-token outputs
+                with no tools or reasoning — a smaller model such as <code>claude-haiku-4</code> would likely
+                suffice at ~70% lower cost."</em>
+            </td>
+        </tr>
+        <tr>
+            <td><a id="unused-tools" class="anchor" href="#unused-tools">&nbsp;</a><code class="code inline">UNUSED_TOOL_SCHEMA</code></td>
+            <td>MEDIUM / LOW</td>
+            <td>
+                Tool definitions are sent in the <code class="code inline">tools</code> array on two or more calls
+                but never invoked anywhere in the session. The unused schema tokens are paid for as input on each
+                call. MEDIUM when the total wasted tokens across the session is &ge;1,000; LOW otherwise.
+            </td>
+            <td>
+                Remove the unused tool definitions from <code class="code inline">tools</code>. The fix lists up to
+                five unused tool names and the approximate token saving per call.
+            </td>
         </tr>
     </tbody>
 </table>

@@ -2368,47 +2368,54 @@ module MockServer
     end
   end
 
-  # The traffic-shaping profile of a load scenario: an ordered list of {LoadStage}
-  # objects run in sequence, each holding or ramping a setpoint (virtual users, an
-  # arrival rate, or a pause) for its duration. The total run length is the sum of
-  # the stage durations.
-  class LoadProfile
-    attr_accessor :stages
+  # A declarative named load shape that expands into ordinary {LoadStage} stages.
+  # Set this as a {LoadProfile}'s +shape+ instead of an explicit +stages+ list;
+  # only the parameters its +type+ needs are read. +type+ is one of +SPIKE+,
+  # +STAIRS+ or +RAMP_HOLD+; +metric+ (+VU+ or +RATE+) selects what the shape
+  # drives.
+  class LoadShape
+    attr_accessor :type, :metric, :curve, :baseline, :peak, :ramp_up_millis,
+                  :hold_millis, :ramp_down_millis, :recovery_hold_millis,
+                  :start, :step, :steps, :step_duration_millis, :target, :ramp_millis
 
-    def initialize(stages: [])
-      @stages = stages || []
-    end
-
-    def to_h
-      { 'stages' => @stages.map(&:to_h) }
-    end
-
-    def self.from_hash(data)
-      return nil if data.nil?
-
-      stages_data = data['stages'] || []
-      new(stages: stages_data.map { |s| LoadStage.from_hash(s) })
-    end
-  end
-
-  # A single step within a load scenario. Each step fires +request+ (an HttpRequest)
-  # against the target, optionally pausing for +think_time+ (a Delay) afterwards.
-  class LoadStep
-    attr_accessor :name, :labels, :think_time, :request
-
-    def initialize(request:, name: nil, labels: nil, think_time: nil)
-      @request = request
-      @name = name
-      @labels = labels
-      @think_time = think_time
+    def initialize(type:, metric: nil, curve: nil, baseline: nil, peak: nil,
+                   ramp_up_millis: nil, hold_millis: nil, ramp_down_millis: nil,
+                   recovery_hold_millis: nil, start: nil, step: nil, steps: nil,
+                   step_duration_millis: nil, target: nil, ramp_millis: nil)
+      @type = type
+      @metric = metric
+      @curve = curve
+      @baseline = baseline
+      @peak = peak
+      @ramp_up_millis = ramp_up_millis
+      @hold_millis = hold_millis
+      @ramp_down_millis = ramp_down_millis
+      @recovery_hold_millis = recovery_hold_millis
+      @start = start
+      @step = step
+      @steps = steps
+      @step_duration_millis = step_duration_millis
+      @target = target
+      @ramp_millis = ramp_millis
     end
 
     def to_h
       MockServer.strip_none({
-        'name'      => @name,
-        'labels'    => @labels,
-        'thinkTime' => @think_time&.to_h,
-        'request'   => @request&.to_h
+        'type'               => @type,
+        'metric'             => @metric,
+        'curve'              => @curve,
+        'baseline'           => @baseline,
+        'peak'               => @peak,
+        'rampUpMillis'       => @ramp_up_millis,
+        'holdMillis'         => @hold_millis,
+        'rampDownMillis'     => @ramp_down_millis,
+        'recoveryHoldMillis' => @recovery_hold_millis,
+        'start'              => @start,
+        'step'               => @step,
+        'steps'              => @steps,
+        'stepDurationMillis' => @step_duration_millis,
+        'target'             => @target,
+        'rampMillis'         => @ramp_millis
       })
     end
 
@@ -2416,10 +2423,231 @@ module MockServer
       return nil if data.nil?
 
       new(
+        type:                 data['type'],
+        metric:               data['metric'],
+        curve:                data['curve'],
+        baseline:             data['baseline'],
+        peak:                 data['peak'],
+        ramp_up_millis:       data['rampUpMillis'],
+        hold_millis:          data['holdMillis'],
+        ramp_down_millis:     data['rampDownMillis'],
+        recovery_hold_millis: data['recoveryHoldMillis'],
+        start:                data['start'],
+        step:                 data['step'],
+        steps:                data['steps'],
+        step_duration_millis: data['stepDurationMillis'],
+        target:               data['target'],
+        ramp_millis:          data['rampMillis']
+      )
+    end
+  end
+
+  # The traffic-shaping profile of a load scenario: EITHER an ordered list of
+  # {LoadStage} objects run in sequence, each holding or ramping a setpoint
+  # (virtual users, an arrival rate, or a pause) for its duration, OR a single
+  # named {LoadShape} that expands into stages. Set one, not both; if both are
+  # set the explicit stages win. The total run length is the sum of the stage
+  # durations.
+  class LoadProfile
+    attr_accessor :stages, :shape
+
+    def initialize(stages: nil, shape: nil)
+      @stages = stages
+      @shape = shape
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'stages' => @stages.nil? ? nil : @stages.map(&:to_h),
+        'shape'  => @shape&.to_h
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      stages_data = data['stages']
+      new(
+        stages: stages_data ? stages_data.map { |s| LoadStage.from_hash(s) } : nil,
+        shape:  LoadShape.from_hash(data['shape'])
+      )
+    end
+  end
+
+  # A declarative cross-step capture / correlation rule: extracts a value from a
+  # step's response and binds it to +name+, which a later step in the same
+  # iteration can reference from its templated request fields. +source+ is one of
+  # +BODY_JSONPATH+, +HEADER+ or +BODY_REGEX+; +expression+ drives the extraction;
+  # +default_value+ is an optional fallback when extraction yields nothing.
+  class LoadCapture
+    attr_accessor :name, :source, :expression, :default_value
+
+    def initialize(name:, source:, expression:, default_value: nil)
+      @name = name
+      @source = source
+      @expression = expression
+      @default_value = default_value
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'name'         => @name,
+        'source'       => @source,
+        'expression'   => @expression,
+        'defaultValue' => @default_value
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        name:          data['name'],
+        source:        data['source'],
+        expression:    data['expression'],
+        default_value: data['defaultValue']
+      )
+    end
+  end
+
+  # An in-run pass/fail threshold for a load scenario: a per-run +metric+ compared
+  # with +comparator+ against +threshold+. All thresholds must hold for the run
+  # verdict to be +PASS+; any breach makes it +FAIL+. +metric+ is one of
+  # +LATENCY_P50+/+LATENCY_P95+/+LATENCY_P99+/+LATENCY_P999+/+ERROR_RATE+/
+  # +THROUGHPUT_RPS+; +comparator+ is one of +LESS_THAN+/+LESS_THAN_OR_EQUAL+/
+  # +GREATER_THAN+/+GREATER_THAN_OR_EQUAL+.
+  class LoadThreshold
+    attr_accessor :metric, :comparator, :threshold
+
+    def initialize(metric:, comparator:, threshold:)
+      @metric = metric
+      @comparator = comparator
+      @threshold = threshold
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'metric'     => @metric,
+        'comparator' => @comparator,
+        'threshold'  => @threshold
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        metric:     data['metric'],
+        comparator: data['comparator'],
+        threshold:  data['threshold']
+      )
+    end
+  end
+
+  # Adaptive iteration pacing (think-time) for a load scenario: a target
+  # per-virtual-user iteration cycle time. +mode+ is one of +NONE+,
+  # +CONSTANT_PACING+ (+value+ is the target cycle in milliseconds) or
+  # +CONSTANT_THROUGHPUT+ (+value+ is the target iterations/second per VU).
+  class LoadPacing
+    attr_accessor :mode, :value
+
+    def initialize(mode:, value: nil)
+      @mode = mode
+      @value = value
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'mode'  => @mode,
+        'value' => @value
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        mode:  data['mode'],
+        value: data['value']
+      )
+    end
+  end
+
+  # Parameterized test data (a data feeder) for a load scenario: an inline dataset
+  # from which one row is selected per iteration and exposed to the templated
+  # request. Supply EITHER +rows+ (inline list of column-name to value maps, the
+  # primary form) OR +data+ + +format+ (raw CSV/JSON parsed server-side).
+  # +strategy+ (+CIRCULAR+, +RANDOM+ or +SEQUENTIAL+) chooses how a row is picked.
+  class LoadFeeder
+    attr_accessor :rows, :data, :format, :strategy
+
+    def initialize(rows: nil, data: nil, format: nil, strategy: nil)
+      @rows = rows
+      @data = data
+      @format = format
+      @strategy = strategy
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'rows'     => @rows,
+        'data'     => @data,
+        'format'   => @format,
+        'strategy' => @strategy
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      new(
+        rows:     data['rows'],
+        data:     data['data'],
+        format:   data['format'],
+        strategy: data['strategy']
+      )
+    end
+  end
+
+  # A single step within a load scenario. Each step fires +request+ (an HttpRequest)
+  # against the target, optionally pausing for +think_time+ (a Delay) afterwards.
+  # +captures+ binds values from this step's response for later steps in the same
+  # iteration; +weight+ is the relative selection weight when the scenario's
+  # +step_selection+ is +WEIGHTED+.
+  class LoadStep
+    attr_accessor :name, :labels, :think_time, :request, :captures, :weight
+
+    def initialize(request:, name: nil, labels: nil, think_time: nil, captures: nil, weight: nil)
+      @request = request
+      @name = name
+      @labels = labels
+      @think_time = think_time
+      @captures = captures
+      @weight = weight
+    end
+
+    def to_h
+      MockServer.strip_none({
+        'name'      => @name,
+        'labels'    => @labels,
+        'thinkTime' => @think_time&.to_h,
+        'request'   => @request&.to_h,
+        'captures'  => @captures.nil? ? nil : @captures.map(&:to_h),
+        'weight'    => @weight
+      })
+    end
+
+    def self.from_hash(data)
+      return nil if data.nil?
+
+      captures_data = data['captures']
+      new(
         name:       data['name'],
         labels:     data['labels'],
         think_time: Delay.from_hash(data['thinkTime']),
-        request:    HttpRequest.from_hash(data['request'])
+        request:    HttpRequest.from_hash(data['request']),
+        captures:   captures_data ? captures_data.map { |c| LoadCapture.from_hash(c) } : nil,
+        weight:     data['weight']
       )
     end
   end
@@ -2427,11 +2655,18 @@ module MockServer
   # A load-injection scenario: a named set of +steps+ driven by a traffic +profile+.
   # +template_type+ selects the templating engine (+VELOCITY+ or +MUSTACHE+) used to
   # render step requests; +max_requests+ caps the total requests issued.
+  # +thresholds+ are in-run pass/fail checks; +abort_on_fail+/+abort_grace_millis+
+  # control early-abort behaviour; +pacing+ shapes inter-iteration timing; +feeder+
+  # supplies per-iteration data; +step_selection+ (+SEQUENTIAL+ or +WEIGHTED+)
+  # controls how each iteration selects steps.
   class LoadScenario
-    attr_accessor :name, :template_type, :labels, :max_requests, :start_delay_millis, :profile, :steps
+    attr_accessor :name, :template_type, :labels, :max_requests, :start_delay_millis,
+                  :profile, :steps, :thresholds, :abort_on_fail, :abort_grace_millis,
+                  :pacing, :feeder, :step_selection
 
     def initialize(name:, profile:, steps:, template_type: nil, labels: nil, max_requests: nil,
-                   start_delay_millis: nil)
+                   start_delay_millis: nil, thresholds: nil, abort_on_fail: nil,
+                   abort_grace_millis: nil, pacing: nil, feeder: nil, step_selection: nil)
       @name = name
       @profile = profile
       @steps = steps
@@ -2439,6 +2674,12 @@ module MockServer
       @labels = labels
       @max_requests = max_requests
       @start_delay_millis = start_delay_millis
+      @thresholds = thresholds
+      @abort_on_fail = abort_on_fail
+      @abort_grace_millis = abort_grace_millis
+      @pacing = pacing
+      @feeder = feeder
+      @step_selection = step_selection
     end
 
     def to_h
@@ -2448,6 +2689,12 @@ module MockServer
         'labels'           => @labels,
         'maxRequests'      => @max_requests,
         'startDelayMillis' => @start_delay_millis,
+        'thresholds'       => @thresholds.nil? ? nil : @thresholds.map(&:to_h),
+        'abortOnFail'      => @abort_on_fail,
+        'abortGraceMillis' => @abort_grace_millis,
+        'pacing'           => @pacing&.to_h,
+        'feeder'           => @feeder&.to_h,
+        'stepSelection'    => @step_selection,
         'profile'          => @profile&.to_h,
         'steps'            => @steps&.map(&:to_h)
       })
@@ -2457,12 +2704,19 @@ module MockServer
       return nil if data.nil?
 
       steps_data = data['steps']
+      thresholds_data = data['thresholds']
       new(
         name:               data['name'],
         template_type:      data['templateType'],
         labels:             data['labels'],
         max_requests:       data['maxRequests'],
         start_delay_millis: data['startDelayMillis'],
+        thresholds:         thresholds_data ? thresholds_data.map { |t| LoadThreshold.from_hash(t) } : nil,
+        abort_on_fail:      data['abortOnFail'],
+        abort_grace_millis: data['abortGraceMillis'],
+        pacing:             LoadPacing.from_hash(data['pacing']),
+        feeder:             LoadFeeder.from_hash(data['feeder']),
+        step_selection:     data['stepSelection'],
         profile:            LoadProfile.from_hash(data['profile']),
         steps:              steps_data ? steps_data.map { |s| LoadStep.from_hash(s) } : nil
       )

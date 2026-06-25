@@ -35,9 +35,9 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
 
     private static final Map<String, Body.Type> fieldNameToType = new HashMap<>();
     private static final Base64.Decoder BASE64_DECODER = Base64.getDecoder();
-    private static ObjectWriter objectWriter;
-    private static ObjectMapper objectMapper;
-    private static ObjectWriter jsonBodyObjectWriter;
+    private static final ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+    private static final ObjectWriter objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
+    private static final ObjectWriter jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
 
     static {
         fieldNameToType.put("base64Bytes".toLowerCase(), Body.Type.BINARY);
@@ -132,9 +132,6 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             jsonRpcMethod = String.valueOf(jsonRpcMap.get("method"));
                         }
                         if (jsonRpcMap.containsKey("paramsSchema")) {
-                            if (jsonBodyObjectWriter == null) {
-                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                            }
                             jsonRpcParamsSchema = jsonBodyObjectWriter.writeValueAsString(jsonRpcMap.get("paramsSchema"));
                         }
                     }
@@ -149,9 +146,6 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             graphQLOperationName = String.valueOf(graphQLMap.get("operationName"));
                         }
                         if (graphQLMap.containsKey("variablesSchema")) {
-                            if (jsonBodyObjectWriter == null) {
-                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                            }
                             graphQLVariablesSchema = jsonBodyObjectWriter.writeValueAsString(graphQLMap.get("variablesSchema"));
                         }
                         if (graphQLMap.containsKey("selectionSetMatchType")) {
@@ -170,9 +164,6 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                             if (schemaValue instanceof String) {
                                 graphQLSchema = String.valueOf(schemaValue);
                             } else if (schemaValue != null) {
-                                if (jsonBodyObjectWriter == null) {
-                                    jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                                }
                                 graphQLSchema = jsonBodyObjectWriter.writeValueAsString(schemaValue);
                             }
                         }
@@ -184,9 +175,6 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         }
                         if (Map.class.isAssignableFrom(entry.getValue().getClass()) ||
                             containsIgnoreCase(key, "json", "jsonSchema") && !String.class.isAssignableFrom(entry.getValue().getClass())) {
-                            if (jsonBodyObjectWriter == null) {
-                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                            }
                             valueJsonValue = jsonBodyObjectWriter.writeValueAsString(entry.getValue());
                         } else {
                             valueJsonValue = String.valueOf(entry.getValue());
@@ -346,9 +334,6 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         if (entry.getValue() instanceof String) {
                             paramsSchemaFieldValue = String.valueOf(entry.getValue());
                         } else if (entry.getValue() instanceof Map) {
-                            if (jsonBodyObjectWriter == null) {
-                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                            }
                             paramsSchemaFieldValue = jsonBodyObjectWriter.writeValueAsString(entry.getValue());
                         }
                     }
@@ -362,9 +347,6 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         if (entry.getValue() instanceof String) {
                             variablesSchemaFieldValue = String.valueOf(entry.getValue());
                         } else if (entry.getValue() instanceof Map) {
-                            if (jsonBodyObjectWriter == null) {
-                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                            }
                             variablesSchemaFieldValue = jsonBodyObjectWriter.writeValueAsString(entry.getValue());
                         }
                     }
@@ -383,48 +365,21 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         if (entry.getValue() instanceof String) {
                             schemaFieldValue = String.valueOf(entry.getValue());
                         } else if (entry.getValue() != null) {
-                            if (jsonBodyObjectWriter == null) {
-                                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                            }
                             schemaFieldValue = jsonBodyObjectWriter.writeValueAsString(entry.getValue());
                         }
                     }
                     if (key.equalsIgnoreCase("parameters")) {
-                        if (objectMapper == null) {
-                            objectMapper = ObjectMapperFactory.createObjectMapper();
-                        }
-                        if (objectWriter == null) {
-                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
-                        }
                         parameters = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
                     }
                     if (key.equalsIgnoreCase("fields") && !(entry.getValue() instanceof List)) {
-                        if (objectMapper == null) {
-                            objectMapper = ObjectMapperFactory.createObjectMapper();
-                        }
-                        if (objectWriter == null) {
-                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
-                        }
                         type = Body.Type.MULTIPART;
                         multipartFields = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
                     }
                     if (key.equalsIgnoreCase("filenames")) {
-                        if (objectMapper == null) {
-                            objectMapper = ObjectMapperFactory.createObjectMapper();
-                        }
-                        if (objectWriter == null) {
-                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
-                        }
                         type = Body.Type.MULTIPART;
                         multipartFilenames = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
                     }
                     if (key.equalsIgnoreCase("partContentTypes")) {
-                        if (objectMapper == null) {
-                            objectMapper = ObjectMapperFactory.createObjectMapper();
-                        }
-                        if (objectWriter == null) {
-                            objectWriter = objectMapper.writerWithDefaultPrettyPrinter();
-                        }
                         type = Body.Type.MULTIPART;
                         multipartPartContentTypes = objectMapper.readValue(objectWriter.writeValueAsString(entry.getValue()), Parameters.class);
                     }
@@ -531,15 +486,9 @@ public class BodyDTODeserializer extends StdDeserializer<BodyDTO> {
                         break;
                 }
             } else if (body.size() > 0) {
-                if (jsonBodyObjectWriter == null) {
-                    jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-                }
                 result = new JsonBodyDTO(new JsonBody(jsonBodyObjectWriter.writeValueAsString(body), JsonBody.DEFAULT_MATCH_TYPE), null);
             }
         } else if (currentToken == JsonToken.START_ARRAY) {
-            if (jsonBodyObjectWriter == null) {
-                jsonBodyObjectWriter = buildObjectMapperWithoutRemovingEmptyValues().writerWithDefaultPrettyPrinter();
-            }
             result = new JsonBodyDTO(new JsonBody(jsonBodyObjectWriter.writeValueAsString(ctxt.readValue(jsonParser, List.class)), JsonBody.DEFAULT_MATCH_TYPE), null);
         } else if (currentToken == JsonToken.VALUE_STRING) {
             result = new StringBodyDTO(new StringBody(jsonParser.getText()));

@@ -96,6 +96,32 @@ public class ConfigurationDTOTest {
     }
 
     @Test
+    public void shouldRoundTripDashboardAnalyticsThroughJson() {
+        Configuration original = configuration()
+            .dashboardAnalyticsEnabled(false)
+            .dashboardAnalyticsEndpoint("https://analytics.example.com")
+            .dashboardAnalyticsKey("phc_test_key");
+
+        ConfigurationDTO dto = new ConfigurationDTO(original);
+        assertThat(dto.getDashboardAnalyticsEnabled(), is(false));
+        assertThat(dto.getDashboardAnalyticsEndpoint(), is("https://analytics.example.com"));
+        assertThat(dto.getDashboardAnalyticsKey(), is("phc_test_key"));
+
+        String json = new org.mockserver.serialization.ConfigurationSerializer(new org.mockserver.logging.MockServerLogger())
+            .serialize(original);
+        assertThat(json, containsString("dashboardAnalyticsEnabled"));
+        assertThat(json, containsString("dashboardAnalyticsEndpoint"));
+        assertThat(json, containsString("dashboardAnalyticsKey"));
+
+        Configuration rebuilt = new org.mockserver.serialization.ConfigurationSerializer(new org.mockserver.logging.MockServerLogger())
+            .deserialize(json);
+
+        assertThat(rebuilt.dashboardAnalyticsEnabled(), is(false));
+        assertThat(rebuilt.dashboardAnalyticsEndpoint(), is("https://analytics.example.com"));
+        assertThat(rebuilt.dashboardAnalyticsKey(), is("phc_test_key"));
+    }
+
+    @Test
     public void shouldRoundTripLoadGenerationMetricLabelsThroughJson() {
         // a List<String> property must survive a full serialize -> JSON -> deserialize cycle as a JSON array
         Configuration original = configuration()
@@ -327,23 +353,18 @@ public class ConfigurationDTOTest {
      *       JSON-serializable config.</li>
      *   <li>{@code rebuildTLSContext}, {@code rebuildServerTLSContext} — internal volatile primitive
      *       flags driving TLS re-initialisation, not user configuration.</li>
-     *   <li>{@code proxyRemoteHost}, {@code proxyRemotePort} — runtime record-and-forward target set
-     *       via the retrieve {@code ?forwardUnmatchedTo=} convenience, not part of the config DTO.</li>
-     *   <li>{@code proxyPassMappings} — {@code List<ProxyPassMapping>} aggregate not carried by the DTO.</li>
-     *   <li>{@code controlPlaneScopeMapping} — {@code Map<String, ControlPlaneRole>} aggregate not
-     *       carried by the DTO.</li>
      * </ul>
-     * If you add one of these to the DTO, remove it from this set so the guard starts enforcing it.
+     * Note: {@code proxyRemoteHost}, {@code proxyRemotePort}, {@code proxyPassMappings} and
+     * {@code controlPlaneScopeMapping} ARE carried by the DTO and are enforced by this guard (they
+     * get a distinctive value via {@link #distinctiveValueFor}). They are deliberately NOT excluded.
+     * If you add a new property to the DTO, do not add it here; if you intentionally leave one out of
+     * the serialized config DTO, add it here with a documented reason so the guard stops enforcing it.
      */
     private static final Set<String> DTO_EXCLUDED_PROPERTIES = new HashSet<>(Arrays.asList(
         "logEventListener",
         "binaryProxyListener",
         "rebuildTLSContext",
-        "rebuildServerTLSContext",
-        "proxyRemoteHost",
-        "proxyRemotePort",
-        "proxyPassMappings",
-        "controlPlaneScopeMapping"
+        "rebuildServerTLSContext"
     ));
 
     @Test
@@ -530,6 +551,18 @@ public class ConfigurationDTOTest {
                 return 4243;            // validated 0..100000
             case "driftAlertSeverityThreshold":
                 return "WARNING";       // a valid severity name
+            case "proxyPassMappings":
+                // typed List<ProxyPassMapping> — the generic List<String> branch would not be a valid
+                // argument to the typed setter, so build a real non-empty list of distinct mappings
+                return new ArrayList<>(Arrays.asList(
+                    org.mockserver.model.ProxyPassMapping.proxyPass("/api", "https://api.example.com"),
+                    org.mockserver.model.ProxyPassMapping.proxyPass("/cdn", "http://cdn.example.com:8080")));
+            case "controlPlaneScopeMapping":
+                // typed Map<String, ControlPlaneRole> — build a real non-empty map of distinct roles
+                return new java.util.LinkedHashMap<>(ImmutableMap.of(
+                    "platform-admins", org.mockserver.authentication.authorization.ControlPlaneRole.ADMIN,
+                    "qa-team", org.mockserver.authentication.authorization.ControlPlaneRole.MUTATE,
+                    "viewers", org.mockserver.authentication.authorization.ControlPlaneRole.READ));
             // file-path properties whose setter calls fileExists(...) — must point at a real file
             case "controlPlaneTLSMutualAuthenticationCAChain":
             case "controlPlanePrivateKeyPath":

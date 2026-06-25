@@ -2,6 +2,7 @@
 
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use reqwest::blocking::Client;
+use serde::Serialize;
 use serde_json::Value;
 
 /// Characters percent-encoded when interpolating a scenario name into a path
@@ -1332,6 +1333,78 @@ impl MockServerClient {
     pub fn run_load_scenario(&self, scenario: &LoadScenario) -> Result<Value> {
         self.load_scenario(scenario)?;
         self.start_load_scenarios(&[scenario.name.as_str()])
+    }
+
+    /// Fetch the end-of-run summary report for a load scenario run.
+    ///
+    /// Sends a `GET /mockserver/loadScenario/{name}/report`. When `format` is
+    /// `Some("junit")` a `?format=junit` query is appended and the server returns
+    /// a JUnit-XML `<testsuite>` document; omit `format` (`None`) for the JSON
+    /// report. The raw response body is returned as a string so either form (JSON
+    /// or XML) passes through verbatim. Returns [`Error::NotFound`] when the
+    /// scenario never ran.
+    pub fn get_load_scenario_report(
+        &self,
+        name: impl AsRef<str>,
+        format: Option<&str>,
+    ) -> Result<String> {
+        let mut path = format!("/mockserver/loadScenario/{}/report", name.as_ref());
+        if let Some(format) = format {
+            path.push_str("?format=");
+            path.push_str(format);
+        }
+        let resp = self.http.get(self.url(&path)).send()?;
+        let status = resp.status().as_u16();
+        match status {
+            200 | 201 => Ok(resp.text()?),
+            400 => Err(Error::InvalidRequest(resp.text()?)),
+            403 => Err(Error::FeatureDisabled(resp.text()?)),
+            404 => Err(Error::NotFound(resp.text()?)),
+            _ => Err(Error::UnexpectedStatus {
+                status,
+                body: resp.text().unwrap_or_default(),
+            }),
+        }
+    }
+
+    /// Generate (and register) an editable load scenario from an OpenAPI spec.
+    ///
+    /// Sends a `PUT /mockserver/loadScenario/generateFromOpenAPI`. The `body`
+    /// carries the generated scenario `name`, the `specUrlOrPayload`, and an
+    /// optional `target` and `profile`. Like [`load_scenario`](Self::load_scenario)
+    /// this only registers (LOADED) the scenario — it generates no traffic and is
+    /// allowed even when load generation is disabled. Returns the raw JSON
+    /// (`{"status":"loaded","name":..,"state":..,"scenario":..}`).
+    pub fn generate_load_scenario_from_openapi<T: Serialize + ?Sized>(
+        &self,
+        body: &T,
+    ) -> Result<Value> {
+        let resp = self
+            .http
+            .put(self.url("/mockserver/loadScenario/generateFromOpenAPI"))
+            .json(body)
+            .send()?;
+        self.load_scenario_json(resp)
+    }
+
+    /// Generate (and register) an editable load scenario from recorded proxy
+    /// traffic.
+    ///
+    /// Sends a `PUT /mockserver/loadScenario/generateFromRecording`. The `body`
+    /// carries the generated scenario `name` and the recording selection/options.
+    /// Like [`load_scenario`](Self::load_scenario) this only registers (LOADED)
+    /// the scenario — it generates no traffic. Returns the raw JSON
+    /// (`{"status":"loaded","name":..,"state":..,"scenario":..}`).
+    pub fn generate_load_scenario_from_recording<T: Serialize + ?Sized>(
+        &self,
+        body: &T,
+    ) -> Result<Value> {
+        let resp = self
+            .http
+            .put(self.url("/mockserver/loadScenario/generateFromRecording"))
+            .json(body)
+            .send()?;
+        self.load_scenario_json(resp)
     }
 
     // ------------------------------------------------------------------

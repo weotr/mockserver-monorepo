@@ -138,4 +138,56 @@ public class LlmPricingTest {
     public void shouldReturnNullForNullProvider() {
         assertThat(LlmPricing.estimateCostUsd(null, "claude-sonnet-4", 100, 100), is(nullValue()));
     }
+
+    // --- blendedPerMillion ---
+
+    @Test
+    public void blendedPerMillionSumsInputAndOutputRates() {
+        // gpt-4o: 2.5 + 10.0 = 12.5
+        assertThat(LlmPricing.blendedPerMillion(Provider.OPENAI, "gpt-4o"), is(closeTo(12.5, EPS)));
+        // claude-sonnet-4: 3.0 + 15.0 = 18.0
+        assertThat(LlmPricing.blendedPerMillion(Provider.ANTHROPIC, "claude-sonnet-4"), is(closeTo(18.0, EPS)));
+    }
+
+    @Test
+    public void blendedPerMillionNullForUnknownModel() {
+        assertThat(LlmPricing.blendedPerMillion(Provider.OPENAI, "some-future-model"), is(nullValue()));
+        assertThat(LlmPricing.blendedPerMillion(null, "gpt-4o"), is(nullValue()));
+    }
+
+    // --- cheapestModel ---
+
+    @Test
+    public void cheapestModelForOpenAiIsTheLowestBlendedEntry() {
+        // gpt-4.1-nano (0.1 + 0.4 = 0.5) is the cheapest OpenAI entry.
+        LlmPricing.ModelOption cheapest = LlmPricing.cheapestModel(Provider.OPENAI);
+        assertThat(cheapest, is(notNullValue()));
+        assertThat(cheapest.getLabel(), is("gpt-4.1-nano"));
+        assertThat(cheapest.getBlendedPerMillion(), is(closeTo(0.5, EPS)));
+    }
+
+    @Test
+    public void cheapestModelForAnthropic() {
+        // claude-haiku-4 (0.8 + 4.0 = 4.8) is the cheapest Anthropic entry.
+        LlmPricing.ModelOption cheapest = LlmPricing.cheapestModel(Provider.ANTHROPIC);
+        assertThat(cheapest, is(notNullValue()));
+        assertThat(cheapest.getLabel(), is("claude-haiku-4"));
+        assertThat(cheapest.getBlendedPerMillion(), is(closeTo(4.8, EPS)));
+    }
+
+    @Test
+    public void cheapestModelForGemini() {
+        // gemini-2.0-flash-lite (0.075 + 0.3 = 0.375) is the cheapest Gemini entry.
+        LlmPricing.ModelOption cheapest = LlmPricing.cheapestModel(Provider.GEMINI);
+        assertThat(cheapest, is(notNullValue()));
+        assertThat(cheapest.getLabel(), is("gemini-2.0-flash-lite"));
+        assertThat(cheapest.getBlendedPerMillion(), is(closeTo(0.375, EPS)));
+    }
+
+    @Test
+    public void cheapestModelNullForOllamaAndUnknownAndNull() {
+        assertThat(LlmPricing.cheapestModel(Provider.OLLAMA), is(nullValue()));
+        assertThat(LlmPricing.cheapestModel(Provider.AZURE_OPENAI), is(nullValue()));
+        assertThat(LlmPricing.cheapestModel(null), is(nullValue()));
+    }
 }

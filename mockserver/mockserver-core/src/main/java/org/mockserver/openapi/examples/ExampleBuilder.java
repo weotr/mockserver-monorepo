@@ -69,8 +69,14 @@ public class ExampleBuilder {
      * two-arg overload (fixed seed 42, no overrides).
      */
     public static Example fromSchema(Schema<?> property, Map<String, Schema> definitions, GenerationOptions generationOptions) {
+        // An explicit per-run choice on the options wins; otherwise defer to the global configuration
+        // default. Reading the global only as a fallback (rather than unconditionally here) lets callers
+        // and tests drive realistic generation deterministically without mutating shared process state.
+        boolean realisticValues = (generationOptions != null && generationOptions.getRealisticValues() != null)
+            ? generationOptions.getRealisticValues()
+            : ConfigurationProperties.generateRealisticExampleValues();
         SampleDataGenerator generator = null;
-        if (ConfigurationProperties.generateRealisticExampleValues()) {
+        if (realisticValues) {
             generator = (generationOptions != null && generationOptions.getSeed() != null)
                 ? new SampleDataGenerator(generationOptions.getSeed())
                 : new SampleDataGenerator();

@@ -901,7 +901,8 @@ public class HttpResponse extends Action<HttpResponse> implements HttpMessage<Ht
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(super.hashCode(), statusCode, statusCodeRange, reasonPhrase, body, generateFromSchema, headers, trailers, cookies, connectionOptions, recoverAfter, streamId);
+            int computed = Objects.hash(super.hashCode(), statusCode, statusCodeRange, reasonPhrase, body, generateFromSchema, headers, trailers, cookies, connectionOptions, recoverAfter, streamId);
+            hashCode = computed != 0 ? computed : 1;
         }
         return hashCode;
     }

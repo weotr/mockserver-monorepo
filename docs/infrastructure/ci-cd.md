@@ -403,6 +403,20 @@ Pipelines are managed via Terraform in `terraform/buildkite-pipelines/`. The Ter
 
 The Buildkite API token is stored in AWS Secrets Manager (`mockserver-build/buildkite-api-token`) and is used by the Terraform Buildkite provider for pipeline management.
 
+### Checking build status from the command line
+
+Use `scripts/ci/bk-pipeline-status.sh` to query (or watch) a pipeline build instead of hand-writing `bk`/`curl` calls each time. It wraps the **reliable** `bk build list` / `bk job log` commands — preferred over `bk auth token` + `curl` to the REST API and over the Secrets Manager tokens, because only the locally-authenticated `bk` CLI dependably has both build-state and `read_build_logs` scope, and it needs no AWS SSO session.
+
+```bash
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -c <commitSha>          # one-shot status
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -c <commitSha> --watch  # poll until terminal
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b <number> --logs      # tail the failing job log
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b <number> \
+  --grep 'BUILD FAILURE|<<< (FAILURE|ERROR)|npm error'                       # find the failure in the whole log
+```
+
+It prints `build#<n> <commit> build=<state> <job>=<state> exit=<code>` and exits `0` (passed) / `2` (failed) / `3` (timeout). For continuous watching, drive it with the agent Monitor tool in `--watch` mode (see the `build-monitor` skill).
+
 ## GitHub Actions
 
 Two workflows run on GitHub Actions, both triggered automatically on push and pull requests.

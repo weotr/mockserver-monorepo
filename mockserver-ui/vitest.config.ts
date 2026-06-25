@@ -3,6 +3,11 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // Mirror the production `__APP_VERSION__` define so analytics code under test
+  // compiles and reports a stable version string.
+  define: {
+    __APP_VERSION__: JSON.stringify('test'),
+  },
   test: {
     environment: 'jsdom',
     globals: true,

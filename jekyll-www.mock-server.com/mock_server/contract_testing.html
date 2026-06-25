@@ -1,0 +1,432 @@
+---
+title: Contract Testing
+description: Run OpenAPI contract tests against a live service and use the Pact import, export, and verify endpoints to validate consumer-driven contracts with MockServer.
+shortTitle: Contract Testing
+layout: page
+pageOrder: 4.5
+section: 'Verify & Test'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-23T00:00:00+00:00
+keywords: contract testing, consumer-driven contracts, Pact, OpenAPI contract test, API contract, provider verification, Pact v3
+---
+
+<p>MockServer supports two complementary approaches to contract testing:</p>
+<ul>
+  <li><strong><a href="#openapi_contract_test">OpenAPI contract testing</a></strong> — send example requests derived from an OpenAPI spec to a live service and validate each response against the spec.</li>
+  <li><strong><a href="#pact_contract_testing">Pact consumer-driven contract testing</a></strong> — import a Pact v3 contract to create stub expectations, export active expectations as a Pact contract, and verify that existing expectations satisfy a contract.</li>
+</ul>
+
+<p>For Pact import, export and verify details see also <a href="/mock_server/pact_export.html">Pact Import / Export / Verify</a>.</p>
+
+<a id="openapi_contract_test" class="anchor" href="#openapi_contract_test">&nbsp;</a>
+
+<h2>OpenAPI Contract Testing</h2>
+
+<p>Send a <span class="inline_code">PUT</span> request to <span class="inline_code">/mockserver/contractTest</span> to run a contract test suite against a live service. MockServer builds one representative example request per operation in your OpenAPI spec, sends each request to the target service, and validates every response against the spec's defined response schemas. The result is a structured pass/fail report.</p>
+
+<p>This is useful for quickly verifying that a running service conforms to its published API contract — without writing per-operation test code.</p>
+
+<h3>Request body fields</h3>
+
+<table class="table-standard">
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Required</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">spec</span></td>
+      <td>Yes</td>
+      <td>A URL, file path, or inline JSON/YAML OpenAPI v3 spec. Also accepted as <span class="inline_code">specUrlOrPayload</span>. When a file path is given, it is resolved on the <strong>MockServer server's filesystem</strong>, not the client machine.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">baseUrl</span></td>
+      <td>Yes</td>
+      <td>The base URL of the service under test, e.g. <span class="inline_code">http://localhost:8080</span>. The same SSRF policy enforced on proxy/forward paths applies here.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">operationId</span></td>
+      <td>No</td>
+      <td>Restrict the test run to a single operation by its <span class="inline_code">operationId</span>. Omit to test all operations in the spec.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>How example requests are built</h3>
+
+<p>For each operation, MockServer resolves path parameters, query parameters, required headers, and a request body from the spec's <span class="inline_code">example</span> / <span class="inline_code">examples</span> values and schema defaults. When no example is present, values are generated from the schema type. Path parameters without an example are substituted with the literal string <span class="inline_code">example</span>.</p>
+
+<h3>Response validation</h3>
+
+<p>Each response is validated against the operation's declared responses in the spec. An operation passes if the response status code and body match a declared response schema. Validation errors are returned verbatim in the report.</p>
+
+<h3>Response codes</h3>
+
+<table class="table-standard">
+  <thead>
+    <tr>
+      <th>HTTP status</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">200 OK</span></td>
+      <td>The test run completed. Check <span class="inline_code">allPassed</span> in the response body.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">400 Bad Request</span></td>
+      <td>Missing or invalid <span class="inline_code">spec</span> or <span class="inline_code">baseUrl</span>, or the spec could not be parsed.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">403 Forbidden</span></td>
+      <td>The <span class="inline_code">baseUrl</span> host was blocked by the SSRF policy.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">501 Not Implemented</span></td>
+      <td>No HTTP client has been wired into this MockServer instance (embedded use only).</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Report format</h3>
+
+<p>The response body is a JSON report:</p>
+
+<pre class="prettyprint code"><code class="code">{
+  "baseUrl" : "http://localhost:8080",
+  "totalOperations" : 3,
+  "passed" : 2,
+  "failed" : 1,
+  "allPassed" : false,
+  "results" : [ {
+    "operationId" : "getUsers",
+    "method" : "GET",
+    "path" : "/api/users",
+    "statusCodeReceived" : 200,
+    "passed" : true,
+    "validationErrors" : [ ]
+  }, {
+    "operationId" : "createUser",
+    "method" : "POST",
+    "path" : "/api/users",
+    "statusCodeReceived" : 422,
+    "passed" : false,
+    "validationErrors" : [
+      "Response status 422 is not declared for operation createUser"
+    ]
+  } ]
+}</code></pre>
+
+<p><strong>Note on error field names:</strong> the REST JSON report returns a single combined <span class="inline_code">validationErrors</span> array per result, whereas the typed Java client splits the same errors into <span class="inline_code">requestErrors()</span> and <span class="inline_code">responseErrors()</span> on <span class="inline_code">ContractResult</span> (request-side errors first, then response-side).</p>
+
+<button id="button_contract_test_openapi" class="accordion">run OpenAPI contract tests against a live service</button>
+<div class="panel">
+  <button class="accordion inner">REST API</button>
+  <div class="panel">
+    <p>Test all operations in a spec hosted at a URL:</p>
+    <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/contractTest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "spec": "https://petstore3.swagger.io/api/v3/openapi.json",
+    "baseUrl": "https://petstore3.swagger.io"
+  }'</code></pre>
+    <p>Test a single operation using an inline spec:</p>
+    <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/contractTest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "spec": {
+      "openapi": "3.0.0",
+      "info": {"title": "Users API", "version": "1.0.0"},
+      "paths": {
+        "/api/users": {
+          "get": {
+            "operationId": "getUsers",
+            "responses": {
+              "200": {
+                "description": "list of users",
+                "content": {
+                  "application/json": {
+                    "schema": {"type": "array", "items": {"type": "object"}}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "baseUrl": "http://localhost:8080",
+    "operationId": "getUsers"
+  }'</code></pre>
+  </div>
+  <button class="accordion inner">Java</button>
+  <div class="panel">
+    <p>Use the typed <code>contractTest</code> helper on <code>MockServerClient</code> — it builds the request, parses the response, and returns a structured <code>ContractReport</code>:</p>
+    <pre class="prettyprint lang-java code"><code class="code">MockServerClient client = new MockServerClient("localhost", 1080);
+
+// Run contract test against a live service
+MockServerClient.ContractReport report = client.contractTest(
+    "https://petstore3.swagger.io/api/v3/openapi.json",
+    "https://petstore3.swagger.io"
+);
+
+System.out.println("All passed: " + report.allPassed());
+System.out.println("Passed: " + report.passed() + " / " + report.total());
+for (MockServerClient.ContractResult result : report.results()) {
+    System.out.printf("  %s %s — %s%n",
+        result.method(), result.path(),
+        result.passed() ? "PASS" : "FAIL");
+    result.requestErrors().forEach(e -> System.out.println("    request: " + e));
+    result.responseErrors().forEach(e -> System.out.println("    response: " + e));
+}
+
+// Optionally filter to a single operation by operationId
+MockServerClient.ContractReport singleOp = client.contractTest(
+    "https://petstore3.swagger.io/api/v3/openapi.json",
+    "https://petstore3.swagger.io",
+    "getUsers"
+);</code></pre>
+    <p>To validate recorded traffic against a spec instead of driving live requests, use <code>trafficValidate</code>:</p>
+    <pre class="prettyprint lang-java code"><code class="code">// Validate traffic already recorded by MockServer against an OpenAPI spec
+MockServerClient.ContractReport trafficReport = client.trafficValidate(
+    "https://petstore3.swagger.io/api/v3/openapi.json"
+);
+System.out.println("Traffic valid: " + trafficReport.allPassed());</code></pre>
+  </div>
+  <button class="accordion inner">JavaScript</button>
+  <div class="panel">
+    <pre class="prettyprint code"><code class="code">const mockServerClient = require('mockserver-client').mockServerClient;
+
+mockServerClient('localhost', 1080)
+    .sendRequest({
+        method: 'PUT',
+        path: '/mockserver/contractTest',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({
+            spec: 'https://petstore3.swagger.io/api/v3/openapi.json',
+            baseUrl: 'https://petstore3.swagger.io'
+        })
+    })
+    .then(response => {
+        const report = JSON.parse(response.body);
+        console.log('All passed:', report.allPassed);
+        report.results.forEach(r => {
+            console.log(r.method, r.path, r.passed ? 'PASS' : 'FAIL');
+            if (r.validationErrors.length > 0) {
+                r.validationErrors.forEach(e => console.log('  ', e));
+            }
+        });
+    });</code></pre>
+  </div>
+</div>
+
+<a id="pact_contract_testing" class="anchor" href="#pact_contract_testing">&nbsp;</a>
+
+<h2>Pact Consumer-Driven Contract Testing</h2>
+
+<p>MockServer supports the complete <a target="_blank" href="https://docs.pact.io/" rel="noopener noreferrer"><strong>Pact v3</strong></a> contract-testing loop. The three endpoints work together:</p>
+
+<table class="table-standard">
+  <thead>
+    <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">/mockserver/pact/import</span></td>
+      <td><span class="inline_code">PUT</span></td>
+      <td>Import a Pact v3 contract and create one expectation per interaction.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">/mockserver/pact</span></td>
+      <td><span class="inline_code">PUT</span></td>
+      <td>Export active expectations as a Pact v3 consumer contract.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">/mockserver/pact/verify</span></td>
+      <td><span class="inline_code">PUT</span></td>
+      <td>Verify that active expectations satisfy every interaction in a Pact contract.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Response codes — /pact/import</h3>
+
+<table class="table-standard">
+  <thead>
+    <tr>
+      <th>HTTP status</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">201 Created</span></td>
+      <td>Import succeeded. The response body is a JSON array of the generated expectations.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">400 Bad Request</span></td>
+      <td>The request body was empty, not valid JSON, or could not be parsed as a Pact contract. Inspect the plain-text response body for the error message.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Response codes — /pact/verify</h3>
+
+<table class="table-standard">
+  <thead>
+    <tr>
+      <th>HTTP status</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">202 Accepted</span></td>
+      <td>All interactions verified successfully. The response body is a JSON object with <span class="inline_code">"verified": true</span> and a per-interaction breakdown.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">406 Not Acceptable</span></td>
+      <td>One or more interactions failed verification. The response body is a JSON object with <span class="inline_code">"verified": false</span> and per-interaction failure reasons.</td>
+    </tr>
+    <tr>
+      <td><span class="inline_code">400 Bad Request</span></td>
+      <td>The request body was empty, not valid JSON, or the contract could not be parsed. Inspect the JSON <span class="inline_code">error</span> field in the response body for details.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Full documentation of these endpoints — including matching-rule translation, provider state handling, export filtering, and full result schemas — is on the <a href="/mock_server/pact_export.html">Pact Import / Export / Verify</a> page.</p>
+
+<a id="pact_workflow" class="anchor" href="#pact_workflow">&nbsp;</a>
+
+<h3>Consumer-driven contract workflow</h3>
+
+<p>A typical team workflow using MockServer with Pact:</p>
+
+<ol>
+  <li><strong>Consumer team</strong> — create expectations in MockServer for each API call the consumer makes, then run the consumer test suite against MockServer. Tests pass because MockServer returns the expected responses.</li>
+  <li><strong>Export the contract</strong> — call <span class="inline_code">PUT /mockserver/pact?consumer=my-app&amp;provider=users-service</span> to get a Pact v3 JSON document from the active expectations.</li>
+  <li><strong>Publish the contract</strong> — push the exported JSON to a Pact Broker or PactFlow instance so the provider team can verify against it.</li>
+  <li><strong>Provider team</strong> — either:
+    <ul>
+      <li>Import the contract (<span class="inline_code">PUT /mockserver/pact/import</span>) to stub the provider and run provider tests against it, or</li>
+      <li>Verify the contract (<span class="inline_code">PUT /mockserver/pact/verify</span>) to assert that the provider's existing expectations satisfy every interaction.</li>
+    </ul>
+  </li>
+</ol>
+
+<button id="button_pact_full_workflow" class="accordion">end-to-end Pact workflow example</button>
+<div class="panel">
+  <button class="accordion inner">Java</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on <code>MockServerClient</code> — <code>pactImport</code>, <code>pactExport</code>, and <code>pactVerify</code> — instead of constructing raw PUT requests:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-java code"><code class="code">MockServerClient client = new MockServerClient("localhost", 1080);
+
+// Create an expectation
+client.when(
+    request().withMethod("GET").withPath("/api/users")
+).respond(
+    response()
+        .withStatusCode(200)
+        .withHeader("content-type", "application/json")
+        .withBody("{\"users\":[{\"id\":1,\"name\":\"Alice\"}]}")
+);
+
+// Export active expectations as a Pact v3 contract
+String pactJson = client.pactExport("frontend", "users-service");
+// pactJson is a Pact v3 JSON string — save it or send it to a Pact Broker</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-java code"><code class="code">// Verify that the provider's active expectations satisfy every Pact interaction
+String verificationReport = client.pactVerify(pactJson);
+// 202 = all interactions verified; 406 = one or more failed
+System.out.println(verificationReport);</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-java code"><code class="code">// Import a Pact contract; returns a JSON array of the generated expectations
+String expectations = client.pactImport(pactJson);
+System.out.println("Created expectations: " + expectations);</code></pre>
+  </div>
+  <button class="accordion inner">REST API</button>
+  <div class="panel">
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint code"><code class="code"># Create an expectation
+curl -X PUT "http://localhost:1080/mockserver/expectation" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "get-users",
+    "httpRequest": {"method": "GET", "path": "/api/users"},
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {"content-type": ["application/json"]},
+      "body": {"users": [{"id": 1, "name": "Alice"}]}
+    }
+  }'
+
+# Export the Pact contract
+curl -X PUT "http://localhost:1080/mockserver/pact?consumer=frontend&amp;provider=users-service" \
+  -o contract.json</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact/verify" \
+  -H "Content-Type: application/json" \
+  -d @contract.json</code></pre>
+    <p>A <span class="inline_code">202 Accepted</span> response means all interactions verified. A <span class="inline_code">406 Not Acceptable</span> response means one or more failed — check the JSON body for per-interaction reasons.</p>
+    <p><strong>Alternative — Provider: import and stub from the contract</strong></p>
+    <pre class="prettyprint code"><code class="code">curl -X PUT "http://localhost:1080/mockserver/pact/import" \
+  -H "Content-Type: application/json" \
+  -d @contract.json</code></pre>
+  </div>
+</div>
+
+<a id="traffic_validate" class="anchor" href="#traffic_validate">&nbsp;</a>
+
+<h2>Validate recorded traffic against a spec</h2>
+
+<p>Send a <span class="inline_code">PUT</span> request to <span class="inline_code">/mockserver/trafficValidate</span> to validate the request/response traffic MockServer has already recorded against an OpenAPI spec. Unlike <span class="inline_code">/contractTest</span> — which actively drives a live service — this endpoint validates the traffic that has flowed through MockServer (for example while it was acting as a proxy or serving mocks), so you can confirm that real exchanges conform to the contract without re-issuing any requests.</p>
+
+<p>For every recorded request/response pair, MockServer locates the matching spec operation, validates the request against the operation's parameters and request body schema, and validates the response against the operation's declared response schemas. The result is a structured pass/fail report.</p>
+
+<h3>Request body fields</h3>
+
+<table class="table-standard">
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Required</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="inline_code">spec</span></td>
+      <td>Yes</td>
+      <td>A URL, file path, or inline JSON/YAML OpenAPI v3 spec. Also accepted as <span class="inline_code">specUrlOrPayload</span>. When a spec URL is fetched, the same SSRF policy enforced on proxy/forward paths applies to the spec host. When a file path is given, it is resolved on the <strong>MockServer server's filesystem</strong>, not the client machine.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Report shape</h3>
+
+<p>The report mirrors the <span class="inline_code">/contractTest</span> report: top-level <span class="inline_code">totalRequests</span>, <span class="inline_code">passed</span>, <span class="inline_code">failed</span>, and <span class="inline_code">allPassed</span> counts, plus a <span class="inline_code">results</span> array with one entry per recorded request. Each result carries the <span class="inline_code">method</span>, <span class="inline_code">path</span>, the matched spec <span class="inline_code">matchedOperation</span> (or <span class="inline_code">null</span> when no operation matched), a <span class="inline_code">passed</span> flag, and any <span class="inline_code">requestErrors</span> and <span class="inline_code">responseErrors</span>.</p>
+
+<div class="inset_text">
+  <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/trafficValidate" \
+  -H "content-type: application/json" \
+  -d '{ "spec": "https://example.com/openapi.json" }'</code></pre>
+</div>
+
+<a id="traffic_validate_note" class="anchor" href="#traffic_validate_note">&nbsp;</a>
+
+<h3>OpenAPI traffic validation (request-time)</h3>
+
+<p>MockServer can also validate incoming requests against an OpenAPI spec at the point a request arrives, by using an <a href="/mock_server/using_openapi.html"><strong>OpenAPI request matcher</strong></a> in an expectation. This is distinct from the <span class="inline_code">/contractTest</span> and <span class="inline_code">/trafficValidate</span> endpoints — it validates live traffic in-band rather than running a batch test. See <a href="/mock_server/using_openapi.html">OpenAPI &amp; WSDL</a> for details.</p>

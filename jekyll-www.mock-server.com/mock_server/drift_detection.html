@@ -13,19 +13,33 @@ sitemap:
 keywords: mock drift detection, stub validation, proxy mode, schema drift, contract testing, response comparison, api evolution, baseline compare
 ---
 
-<h2>What is mock drift?</h2>
+<p><strong>On this page:</strong></p>
+<ul>
+  <li><a href="#what-is-drift">What is mock drift?</a></li>
+  <li><a href="#how-it-works">How it works</a></li>
+  <li><a href="#what-is-detected">What is detected</a></li>
+  <li><a href="#retrieving">Retrieving drift records</a></li>
+  <li><a href="#clearing">Clearing drift records</a></li>
+  <li><a href="#storage">Storage</a></li>
+  <li><a href="#semantic-drift">Semantic drift analysis (LLM-powered)</a></li>
+  <li><a href="#performance-drift">Performance drift detection</a></li>
+  <li><a href="#baseline-compare">Baseline Traffic Comparison</a></li>
+  <li><a href="#llm-drift">Not the same as LLM cassette drift</a></li>
+</ul>
+
+<h2 id="what-is-drift">What is mock drift?</h2>
 
 <p>Mock drift occurs when a real upstream service evolves (adding fields, changing response codes, modifying headers) but the mock stubs used in your tests remain unchanged. This leads to tests that pass against stale stubs but fail against the real service.</p>
 
 <p>MockServer's drift detection automatically compares forwarded (real) upstream responses against your stub expectations and flags structural differences, giving you early warning that your mocks need updating.</p>
 
-<h2>How it works</h2>
+<h2 id="how-it-works">How it works</h2>
 
 <p>When MockServer forwards a request to an upstream service (in proxy mode) and there are also response-type stub expectations matching the same request pattern, MockServer compares the real response against each matching stub and records any structural drifts. The analysis runs asynchronously and never slows down the response path.</p>
 
 <p><strong>Structural</strong> drift detection (status, schema and header differences) is automatic and requires no configuration — simply have both forwarding expectations and response-type stub expectations for the same request patterns. The two enrichments described later on this page are opt-in: <a href="#semantic-drift">semantic drift analysis</a> (LLM-powered severity classification) and <a href="#performance-drift">performance drift detection</a> each need to be turned on with a configuration property.</p>
 
-<h2>What is detected</h2>
+<h2 id="what-is-detected">What is detected</h2>
 
 <table class="table table-striped">
   <thead>
@@ -45,15 +59,15 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>Non-semantic headers (<code>date</code>, <code>x-request-id</code>, <code>content-length</code>, <code>transfer-encoding</code>, <code>connection</code>, <code>keep-alive</code>, <code>server</code>) are automatically excluded from comparison.</p>
 
-<h2>Retrieving drift records</h2>
+<h2 id="retrieving">Retrieving drift records</h2>
 
 <p>Use the <code>GET /mockserver/drift</code> endpoint to retrieve detected drifts:</p>
 
-<pre><code>curl http://localhost:1080/mockserver/drift</code></pre>
+<pre class="prettyprint code"><code class="code">curl http://localhost:1080/mockserver/drift</code></pre>
 
 <p>Response:</p>
 
-<pre><code>{
+<pre class="prettyprint code"><code class="code">{
   "count": 2,
   "drifts": [
     {
@@ -79,23 +93,23 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>Filter by expectation ID:</p>
 
-<pre><code>curl "http://localhost:1080/mockserver/drift?expectationId=abc-123"</code></pre>
+<pre class="prettyprint code"><code class="code">curl "http://localhost:1080/mockserver/drift?expectationId=abc-123"</code></pre>
 
 <p>Limit the number of results (default 50, max 500):</p>
 
-<pre><code>curl "http://localhost:1080/mockserver/drift?limit=10"</code></pre>
+<pre class="prettyprint code"><code class="code">curl "http://localhost:1080/mockserver/drift?limit=10"</code></pre>
 
 <p>The <code>limit</code> parameter applies only to unfiltered queries (most-recent-first). When you filter by <code>expectationId</code>, <strong>all</strong> matching records are returned and <code>limit</code> is ignored.</p>
 
-<h2>Clearing drift records</h2>
+<h2 id="clearing">Clearing drift records</h2>
 
 <p>To clear all recorded drifts:</p>
 
-<pre><code>curl -X PUT http://localhost:1080/mockserver/drift/clear</code></pre>
+<pre class="prettyprint code"><code class="code">curl -X PUT http://localhost:1080/mockserver/drift/clear</code></pre>
 
 <p>Drift records are also cleared automatically when MockServer is reset via <code>PUT /mockserver/reset</code>.</p>
 
-<h2>Storage</h2>
+<h2 id="storage">Storage</h2>
 
 <p>Drift records are stored in an in-memory LRU (least recently used) buffer with a maximum capacity of 1000 entries. When the buffer is full, the oldest records are evicted to make room for new ones.</p>
 
@@ -105,7 +119,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>Enable it with:</p>
 
-<pre><code>-Dmockserver.driftSemanticAnalysisEnabled=true</code></pre>
+<pre class="prettyprint code"><code class="code">-Dmockserver.driftSemanticAnalysisEnabled=true</code></pre>
 
 <p>When enabled, MockServer sends the drift details along with truncated stub and real response bodies to your configured LLM. The LLM classifies each drift and provides a one-sentence explanation. These are added to the drift records as <code>semanticSeverity</code> and <code>semanticExplanation</code> fields.</p>
 
@@ -113,7 +127,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <h3>Example response with semantic fields</h3>
 
-<pre><code>{
+<pre class="prettyprint code"><code class="code">{
   "count": 1,
   "drifts": [
     {
@@ -135,7 +149,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>Enable it by setting a threshold in milliseconds:</p>
 
-<pre><code>-Dmockserver.driftResponseTimeThresholdMs=500</code></pre>
+<pre class="prettyprint code"><code class="code">-Dmockserver.driftResponseTimeThresholdMs=500</code></pre>
 
 <p>When the p95 response time for any expectation exceeds 500ms, a <code>PERFORMANCE</code> drift record is emitted. MockServer uses a sliding window of the last 100 response time observations per expectation to calculate percentiles.</p>
 
@@ -149,7 +163,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <h3>Request body</h3>
 
-<pre><code>{
+<pre class="prettyprint code"><code class="code">{
   "baseline": [ &lt;expectations&gt; ],
   "current":  [ &lt;expectations&gt; ]
 }</code></pre>
@@ -158,7 +172,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <h3>Response body</h3>
 
-<pre><code>{
+<pre class="prettyprint code"><code class="code">{
   "hasDrift": false,
   "added":   [],
   "removed": [],
@@ -201,7 +215,7 @@ keywords: mock drift detection, stub validation, proxy mode, schema drift, contr
 
 <p>A typical CI workflow: commit a baseline expectations file alongside your tests. In CI, start MockServer, run your test suite (which populates expectations via recording or explicit setup), then call <code>PUT /mockserver/baseline/compare</code> with the committed baseline as <code>baseline</code> and no <code>current</code> (so MockServer uses its live expectations). If <code>hasDrift</code> is <code>true</code>, fail the build.</p>
 
-<pre><code>curl -s -X PUT "http://localhost:1080/mockserver/baseline/compare" \
+<pre class="prettyprint code"><code class="code">curl -s -X PUT "http://localhost:1080/mockserver/baseline/compare" \
   -H "Content-Type: application/json" \
   -d "{\"baseline\": $(cat baseline-expectations.json)}" \
   | python3 -c "import sys,json; r=json.load(sys.stdin); sys.exit(1 if r['hasDrift'] else 0)"</code></pre>

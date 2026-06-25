@@ -59,6 +59,13 @@ public class KafkaMessageSubscriber implements MessageSubscriber {
     private final ExecutorService pollExecutor;
 
     /**
+     * Set to {@code true} if the poll loop terminates because of an unexpected error
+     * (i.e. not a normal {@code close()}). Lets callers detect a dead subscriber via
+     * {@link #isHealthy()}.
+     */
+    private volatile boolean failed = false;
+
+    /**
      * Create a subscriber connected to the given Kafka bootstrap servers
      * using plaintext (no security). Backward-compatible entry point.
      *
@@ -195,6 +202,16 @@ public class KafkaMessageSubscriber implements MessageSubscriber {
     }
 
     /**
+     * Returns {@code false} if the background poll loop has terminated because of an
+     * unexpected error (the subscriber is dead and will record no further messages).
+     * Returns {@code true} otherwise, including before the loop has started and after a
+     * normal {@link #close()}.
+     */
+    public boolean isHealthy() {
+        return !failed;
+    }
+
+    /**
      * Start the poll loop exactly once using {@link AtomicBoolean#compareAndSet}.
      */
     private void ensurePollLoopRunning() {
@@ -241,7 +258,11 @@ public class KafkaMessageSubscriber implements MessageSubscriber {
             }
         } catch (Exception e) {
             if (running.get()) {
-                LOG.error("Kafka poll loop terminated unexpectedly: {}", e.getMessage(), e);
+                // The loop is terminating on an error while still nominally running, leaving
+                // the subscriber permanently dead — flag it so callers can detect this.
+                failed = true;
+                LOG.error("Kafka poll loop terminated unexpectedly; subscriber is no longer healthy: {}",
+                    e.getMessage(), e);
             }
         } finally {
             // Close the consumer on the poll thread — the only safe place to do so

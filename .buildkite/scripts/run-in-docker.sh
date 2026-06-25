@@ -49,9 +49,17 @@ Options:
   --cap-add CAP            With --harden, add a Linux capability back
   -h, --help               Show this help
 
+Environment:
+  LOCAL_DOCKER_CA_BUNDLE   Local dev only: path to a host PEM bundle (system roots +
+                           corporate root). When set, it is mounted read-only and every
+                           common toolchain (pip/npm/cargo/composer/gem/go/git/dotnet) is
+                           pointed at it so in-container dependency downloads work behind a
+                           TLS-inspection proxy. Unset in CI, so CI behaviour is unchanged.
+
 Examples:
   .buildkite/scripts/run-in-docker.sh -i node:22 -w /build/mockserver-ui -- npm ci && npm test
   .buildkite/scripts/run-in-docker.sh -i python:3.12 -s -- bash -c 'cd mockserver-client-python && pytest'
+  LOCAL_DOCKER_CA_BUNDLE=~/ca-bundle.pem .buildkite/scripts/steps/php-unit-test.sh
 EOF
   exit 0
 }
@@ -179,6 +187,35 @@ for cache_type in "${CACHE_TYPES[@]+"${CACHE_TYPES[@]}"}"; do
     *)       echo "[run-in-docker] WARNING: unknown cache type '${cache_type}' -- ignored" >&2 ;;
   esac
 done
+
+# ---------------------------------------------------------------------------
+# Local-only TLS CA injection (opt-in via LOCAL_DOCKER_CA_BUNDLE)
+# ---------------------------------------------------------------------------
+# On a developer machine behind a TLS-inspection proxy (e.g. a corporate MITM
+# proxy), in-container dependency downloads (pip / npm / cargo / composer / gem
+# / go / nuget) fail TLS verification because the container does not trust the
+# proxy's root CA. Point LOCAL_DOCKER_CA_BUNDLE at a host PEM bundle that
+# contains the system roots PLUS the corporate root, and this block mounts it
+# read-only and points every common toolchain at it. This is purely a local
+# convenience so that every non-Java language can be verified through its
+# pinned Docker image without installing the toolchain on the host. CI never
+# sets this variable, so CI behaviour is completely unchanged.
+if [[ -n "${LOCAL_DOCKER_CA_BUNDLE:-}" ]]; then
+  if [[ -f "$LOCAL_DOCKER_CA_BUNDLE" ]]; then
+    CA_IN_CONTAINER="/etc/ssl/local-ca-bundle.pem"
+    DOCKER_ARGS+=(-v "${LOCAL_DOCKER_CA_BUNDLE}:${CA_IN_CONTAINER}:ro")
+    DOCKER_ARGS+=(-e "SSL_CERT_FILE=${CA_IN_CONTAINER}")        # OpenSSL: ruby, go, python ssl, curl, dotnet
+    DOCKER_ARGS+=(-e "CURL_CA_BUNDLE=${CA_IN_CONTAINER}")       # curl / composer
+    DOCKER_ARGS+=(-e "GIT_SSL_CAINFO=${CA_IN_CONTAINER}")       # git clone over https
+    DOCKER_ARGS+=(-e "PIP_CERT=${CA_IN_CONTAINER}")             # pip
+    DOCKER_ARGS+=(-e "REQUESTS_CA_BUNDLE=${CA_IN_CONTAINER}")   # python requests
+    DOCKER_ARGS+=(-e "NODE_EXTRA_CA_CERTS=${CA_IN_CONTAINER}")  # node / npm
+    DOCKER_ARGS+=(-e "CARGO_HTTP_CAINFO=${CA_IN_CONTAINER}")    # cargo
+    DOCKER_ARGS+=(-e "BUNDLE_SSL_CA_CERT=${CA_IN_CONTAINER}")   # bundler / rubygems
+  else
+    echo "[run-in-docker] WARNING: LOCAL_DOCKER_CA_BUNDLE='${LOCAL_DOCKER_CA_BUNDLE}' not found -- skipping CA injection" >&2
+  fi
+fi
 
 quote_arg() {
   if [[ "$1" =~ [[:space:]\&\|\;\$\(\)\{\}\<\>\`\\] ]]; then

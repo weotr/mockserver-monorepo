@@ -8,7 +8,7 @@ subsection: true
 sitemap:
   priority: 0.7
   changefreq: 'monthly'
-  lastmod: 2019-11-10T08:00:00+01:00
+  lastmod: 2026-06-24T00:00:00+00:00
 ---
 
 <p>To ensure expectations are available as soon as MockServer is started it is possible to use an expectation initializer, there are four options:</p>
@@ -22,7 +22,9 @@ sitemap:
 
 <p><strong>Note:</strong> all four options require the class or file to be available to the MockServer, i.e. in the local classpath or filesystem.  To remotely initialise the MockServer a client is required to connect to the MockServer after it has started and submit one or more expectations.</p>
 
-<a id="expectation_initializer_class" class="anchor" href="#expectation_initializer_class">&nbsp</a>
+<p><strong>Tip:</strong> a <a href="#expectation_initializer_json_schema">published JSON Schema</a> gives JSON initializer files autocompletion and validation in IDEs such as VS Code and IntelliJ &mdash; so you can author expectation files with editor support and catch mistakes before MockServer loads them.</p>
+
+<a id="expectation_initializer_class" class="anchor" href="#expectation_initializer_class">&nbsp;</a>
 
 <h2>Expectation Initializer Class</h2>
 

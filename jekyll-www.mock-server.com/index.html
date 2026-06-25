@@ -7,13 +7,13 @@ layout: default
 <div class="header">
 	<h1>MockServer</h1>
 
-	<h2 itemprop="headline">Mock any HTTP/1.1, HTTP/2, HTTP/3, HTTPS or gRPC service. Record and replay traffic, inject chaos, and debug live — with a built-in MCP server for AI assistants.</h2>
+	<h2 itemprop="headline">Stop testing against fragile, unavailable dependencies. Mock, record and proxy any API so your tests are fast, isolated and deterministic.</h2>
+
+	<p style="color:#888; margin-top:0.5em; font-weight:300;">HTTP/1.1, HTTP/2, HTTP/3, HTTPS &amp; gRPC &mdash; with a built-in MCP server so AI assistants can drive it too.</p>
 </div>
 
 <a target="_blank" rel="noopener noreferrer" href="https://github.com/mock-server/mockserver-monorepo"><img style="position: absolute; top: 0; right: 0; border: 0;" width="149" height="149" src="images/forkme_right_red.png" alt="Fork MockServer on GitHub"></a>
 
-
-<a id="what-is-mockserver" class="anchor" href="#what-is-mockserver">&nbsp;</a>
 
 <div class="build_tag">
 	<a target="_blank" rel="noopener noreferrer" href="https://github.com/orgs/mock-server/projects/1"><img width="47px" src="images/GitHub_Logo.png" alt="MockServer GitHub Project"></a>&nbsp;
@@ -27,9 +27,20 @@ layout: default
 
 <p>MockServer is a single, self-hosted tool that mocks and proxies the services your application depends on, so you can develop and test against realistic, controllable behaviour instead of fragile real dependencies. It is free and open-source, runs anywhere, and needs no SaaS account.</p>
 
-<p>To get started see the guide for <a href="/mock_server/getting_started.html">mocking</a>, <a href="/proxy/getting_started.html">proxying</a>, <a href="/mock_server/ai_mcp_setup.html">connecting an AI assistant via MCP</a>, or the <a target="_blank" rel="noopener noreferrer" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples">code examples</a>. The fastest way to try it:</p>
+<p><strong>Why use MockServer?</strong></p>
 
-<pre class="prettyprint code"><code class="code">docker run -d --rm -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> mockserver/mockserver</code></pre>
+<ul>
+	<li><strong>Isolate the system-under-test</strong> &mdash; replace real dependencies so tests fail only on genuine bugs, not on network flakes or redeployed services.</li>
+	<li><strong>Build against APIs that don't exist yet</strong> &mdash; mock a service from its contract so teams can work in parallel before it is ready.</li>
+	<li><strong>Test resilience with chaos</strong> &mdash; inject latency, errors, dropped connections and malformed responses to prove your system survives failure.</li>
+	<li><strong>Record and debug live traffic</strong> &mdash; proxy real requests, replay them, and pause traffic at interactive breakpoints to inspect and modify it.</li>
+</ul>
+
+<p>To get started see the guide for <a href="/mock_server/getting_started.html">mocking</a>, <a href="/proxy/getting_started.html">proxying</a>, <a href="/mock_server/ai_mcp_setup.html">connecting an AI assistant via MCP</a>, or the <a target="_blank" rel="noopener noreferrer" href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples">code examples</a>. The fastest way to try it &mdash; run MockServer with a single command:</p>
+
+<div style="border-left:4px solid #a72f2a; background-color:#fafafa; padding:0.5em 1em; margin:1em 0;">
+	<pre class="prettyprint code"><code class="code">docker run -d --rm -p <span class="numeric_literal">1080</span>:<span class="numeric_literal">1080</span> mockserver/mockserver</code></pre>
+</div>
 
 <a id="first_mock" class="anchor" href="#first_mock">&nbsp;</a>
 
@@ -64,9 +75,15 @@ curl http://localhost:1080/hello
     </thead>
     <tbody>
         <tr><td>Write unit tests for a REST service</td><td><a href="/mock_server/getting_started.html">Getting Started</a></td></tr>
+        <tr><td>Write Java / JUnit tests with Testcontainers</td><td><a href="/mock_server/mockserver_testcontainers.html">MockServer &amp; Testcontainers</a></td></tr>
+        <tr><td>Record and replay real traffic</td><td><a href="/proxy/record_and_replay.html">Record and Replay</a></td></tr>
+        <tr><td>Generate mocks from an OpenAPI / Swagger spec</td><td><a href="/mock_server/using_openapi.html">Using OpenAPI</a></td></tr>
+        <tr><td>Mock a GraphQL API</td><td><a href="/mock_server/graphql_mocking.html">GraphQL Mocking</a></td></tr>
+        <tr><td>Serve HTTPS / TLS transparently</td><td><a href="/mock_server/HTTPS_TLS.html">HTTPS &amp; TLS</a></td></tr>
         <tr><td>Test an AI application that calls an LLM</td><td><a href="/mock_server/llm_response_mocking.html">LLM Response Mocking</a></td></tr>
         <tr><td>Cut my LLM / inference bill</td><td><a href="/mock_server/ai_optimisation.html">LLM Cost Optimisation</a></td></tr>
         <tr><td>Inject chaos / test resilience</td><td><a href="/mock_server/chaos_testing.html">Chaos Testing</a></td></tr>
+        <tr><td>Run a load / performance test against an API</td><td><a href="/mock_server/load_injection.html">Load Injection</a></td></tr>
         <tr><td>Assert which requests my code sent</td><td><a href="/mock_server/verification.html">Verification</a></td></tr>
         <tr><td>Mock a gRPC service</td><td><a href="/mock_server/grpc_mocking.html">gRPC Mocking</a></td></tr>
         <tr><td>Debug live traffic with breakpoints</td><td><a href="/mock_server/interactive_breakpoints.html">Interactive Breakpoints</a> &amp; <a href="/proxy/getting_started.html">Proxying</a></td></tr>
@@ -75,9 +92,26 @@ curl http://localhost:1080/hello
     </tbody>
 </table>
 
-<a id="what_is_mockserver" class="anchor" href="#what_is_mockserver">&nbsp;</a>
+<a id="what-is-mockserver" class="anchor" href="#what-is-mockserver">&nbsp;</a>
 
 <h2>What is MockServer</h2>
+
+<p>One tool plays three roles for any HTTP, HTTPS or gRPC service you depend on:</p>
+
+<div style="display:flex; flex-wrap:wrap; gap:1em; margin:1em 0;">
+	<div style="flex:1; min-width:220px; border:1px solid #eee; border-top:3px solid #a72f2a; border-radius:6px; padding:1em;">
+		<h3 style="margin-top:0;"><a href="/mock_server/getting_started.html">Mock</a></h3>
+		<p style="margin-bottom:0;">Return realistic, controllable responses for any request so your tests stay fast, isolated and deterministic.</p>
+	</div>
+	<div style="flex:1; min-width:220px; border:1px solid #eee; border-top:3px solid #a72f2a; border-radius:6px; padding:1em;">
+		<h3 style="margin-top:0;"><a href="/proxy/getting_started.html">Proxy</a></h3>
+		<p style="margin-bottom:0;">Sit in front of a real backend to record and replay traffic, inject chaos, or pause requests at breakpoints.</p>
+	</div>
+	<div style="flex:1; min-width:220px; border:1px solid #eee; border-top:3px solid #a72f2a; border-radius:6px; padding:1em;">
+		<h3 style="margin-top:0;"><a href="/mock_server/verification.html">Verify</a></h3>
+		<p style="margin-bottom:0;">Assert exactly which requests your system-under-test sent, as part of a test, on mocked or proxied traffic.</p>
+	</div>
+</div>
 
 <p>For any system you integrate with via HTTP or HTTPS MockServer can be used as:</p>
 
@@ -95,6 +129,7 @@ curl http://localhost:1080/hello
 	<li><strong><a href="/proxy/record_and_replay.html">record and replay</a></strong> real traffic to reproduce how a system behaves</li>
 	<li><strong><a href="/mock_server/interactive_breakpoints.html">pause and modify requests or responses using breakpoints</a></strong> intercept a matched or proxied request in the dashboard to inspect and modify it (or its response) live, then continue, step, or fail it</li>
 	<li><strong><a href="/mock_server/chaos_testing.html">inject chaos and faults</a></strong> introduce chaos as latency, errors, dropped connections &amp; malformed responses &mdash; HTTP, gRPC and TCP fault injection, plus <a href="/mock_server/chaos_testing_kubernetes.html">Kubernetes</a> and <a href="/mock_server/service_mesh.html">service-mesh</a> chaos</li>
+	<li><strong><a href="/mock_server/load_injection.html">drive load and performance tests</a></strong> with built-in, declarative <a href="/mock_server/load_injection.html">Load Scenarios</a> &mdash; ramp virtual users or arrival rate, vary data across iterations, and assert SLO verdicts over the generated traffic, with no external load tool required</li>
 	<li><strong><a href="/mock_server/response_templates.html">template dynamic responses</a></strong> with Velocity, Mustache or JavaScript so a mock can react to the incoming request</li>
 	<li><strong><a href="/mock_server/wasm_rules.html">custom matching and response logic via WASM</a></strong> in any language that compiles to WebAssembly</li>
 	<li><strong><a href="/mock_server/drift_detection.html">detect mock drift</a></strong> be warned when a mock no longer matches the real API</li>

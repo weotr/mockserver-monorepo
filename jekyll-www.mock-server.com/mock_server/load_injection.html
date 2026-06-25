@@ -3,13 +3,13 @@ title: Load Injection (Load Scenarios)
 shortTitle: Load Injection
 description: Drive API traffic from MockServer using declarative load scenarios — ramp virtual users, vary data across iterations with templates, and assert SLO verdicts over the generated traffic.
 layout: page
-pageOrder: 2.5
+pageOrder: 1
 section: 'Performance Testing'
 subsection: true
 sitemap:
   priority: 0.8
   changefreq: 'monthly'
-  lastmod: 2026-06-21T00:00:00+00:00
+  lastmod: 2026-06-24T00:00:00+00:00
 ---
 
 <p>MockServer can drive outbound API traffic on demand using <strong>Load Scenarios</strong> — a declarative, bounded load generator built into the server. A load scenario is an ordered list of templated request <em>steps</em> driven through a sequence of <em>stages</em> (a <em>load profile</em>), with per-iteration variable data. Each stage either holds or ramps the number of concurrent <strong>virtual users</strong> (<code class="inline code">VU</code>, closed model), holds or ramps an <strong>arrival rate</strong> in iterations per second (<code class="inline code">RATE</code>, open model), or <strong>pauses</strong>. Results feed both the metrics histograms and the SLO sample store so a load run can be asserted with <a href="/mock_server/chaos_testing.html#slo_resilience_verdicts"><code class="inline code">PUT /mockserver/verifySLO</code></a>.</p>
@@ -17,6 +17,68 @@ sitemap:
 <p>This makes MockServer useful for <strong>resilience verification</strong>: inject a chaos fault (see <a href="/mock_server/chaos_testing.html">Chaos Testing</a>), apply load, then assert that your SLOs held — all from a single control plane, with no external load tool required.</p>
 
 <p><strong>Registry model: load, then trigger.</strong> Scenarios are organised as a <strong>registry of named scenarios</strong>. You first <strong>load</strong> (register) a scenario by name with <code class="inline code">PUT /mockserver/loadScenario</code> — this does <em>not</em> run it — then <strong>trigger</strong> one or many by name with <code class="inline code">PUT /mockserver/loadScenario/start</code> to run them <strong>concurrently</strong>, each with its own optional <strong>start delay</strong>. Loading is always allowed; <strong>triggering a run is off by default</strong>: <code class="inline code">start</code> returns <code class="inline code">403 Forbidden</code> until <code class="inline code">loadGenerationEnabled=true</code>. Hard caps on concurrent scenarios, virtual users, in-flight requests, RPS, duration, and step count prevent the feature from self-DoS-ing the server. Scenarios can be <strong>preloaded at startup</strong> from a JSON file via <code class="inline code">mockserver.loadScenarioInitializationJsonPath</code>.</p>
+
+<a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
+
+<h2>On this page</h2>
+
+<p>Drive a load run from the <strong>REST control plane</strong> or the <strong>dashboard</strong>, model the scenario with <strong>stages and templated steps</strong>, then <strong>assert SLOs and read the metrics</strong> exposed over Prometheus and OpenTelemetry:</p>
+
+<table class="comparison_table">
+	<thead>
+		<tr>
+			<th>Run a load test</th>
+			<th>Model the scenario</th>
+			<th>Verify &amp; observe</th>
+			<th>Operate &amp; tune</th>
+		</tr>
+	</thead>
+	<tbody>
+		<tr>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#quickstart">Quickstart</a></li>
+					<li><a href="#control_plane_api">Control-Plane API</a></li>
+					<li><a href="#generate_from_openapi">Generate from OpenAPI</a></li>
+					<li><a href="#generate_from_recording">Generate from Recording</a></li>
+					<li><a href="#dashboard_ui">Dashboard UI (run &amp; edit)</a></li>
+					<li><a href="#examples">Examples (all clients)</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#load_scenario_model">Load Scenario Model</a></li>
+					<li><a href="#steps">Steps</a></li>
+					<li><a href="#load_profile">Load Profile (VU / RATE / PAUSE)</a></li>
+					<li><a href="#named_shapes">Named Load Shapes</a></li>
+					<li><a href="#adaptive_pacing">Adaptive Pacing</a></li>
+					<li><a href="#iteration_variables">Per-Iteration Template Variables</a></li>
+					<li><a href="#data_feeders">Data Feeders</a></li>
+					<li><a href="#cross_step_capture">Cross-Step Capture</a></li>
+					<li><a href="#weighted_step_selection">Weighted Step Selection</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#thresholds">In-Run Thresholds &amp; Verdicts</a></li>
+					<li><a href="#summary_report">Summary Report (JSON / JUnit)</a></li>
+					<li><a href="#corrected_latency">Corrected Latency &amp; Percentiles</a></li>
+					<li><a href="#slo_integration">Asserting SLOs over results</a></li>
+					<li><a href="#observability">Observability &amp; Metrics</a></li>
+					<li><a href="#observability_exposure">Prometheus &amp; OTEL exposure</a></li>
+					<li><a href="#promql">Example PromQL</a></li>
+				</ul>
+			</td>
+			<td style="vertical-align: top;">
+				<ul>
+					<li><a href="#safety_caps">Safety Caps</a></li>
+					<li><a href="#configuration">Configuration</a></li>
+					<li><a href="#related">Related Pages</a></li>
+				</ul>
+			</td>
+		</tr>
+	</tbody>
+</table>
 
 <a id="quickstart" class="anchor" href="#quickstart">&nbsp;</a>
 
@@ -32,7 +94,6 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
     "name": "checkout-load",
-    "templateType": "VELOCITY",
     "startDelayMillis": 0,
     "profile": {
       "stages": [
@@ -88,12 +149,27 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
         <tr>
             <td><code class="inline code">GET</code></td>
             <td><code class="inline code">/mockserver/loadScenario</code></td>
-            <td>List <strong>all</strong> registered scenarios: <code class="inline code">{ scenarios: [ { name, state, startDelayMillis, definition, &hellip;live status fields } ] }</code>. <code class="inline code">state</code> ∈ <code class="inline code">LOADED</code> / <code class="inline code">PENDING</code> / <code class="inline code">RUNNING</code> / <code class="inline code">COMPLETED</code> / <code class="inline code">STOPPED</code>. Live fields (when active/run): <code class="inline code">stageIndex</code>, <code class="inline code">stageType</code>, <code class="inline code">currentTarget</code>, <code class="inline code">currentVus</code>, <code class="inline code">requestsSent</code>, <code class="inline code">succeeded</code>, <code class="inline code">failed</code>, <code class="inline code">p50/p95/p99Millis</code>, <code class="inline code">runId</code>, <code class="inline code">startedAt</code>, <code class="inline code">endedAt</code>.</td>
+            <td>List <strong>all</strong> registered scenarios: <code class="inline code">{ scenarios: [ { name, state, startDelayMillis, definition, &hellip;live status fields } ] }</code>. <code class="inline code">state</code> ∈ <code class="inline code">LOADED</code> / <code class="inline code">PENDING</code> / <code class="inline code">RUNNING</code> / <code class="inline code">COMPLETED</code> / <code class="inline code">STOPPED</code>. Live fields (when active/run): <code class="inline code">stageIndex</code>, <code class="inline code">stageType</code>, <code class="inline code">currentTarget</code>, <code class="inline code">currentVus</code>, <code class="inline code">requestsSent</code>, <code class="inline code">succeeded</code>, <code class="inline code">failed</code>, <code class="inline code">p50Millis</code>, <code class="inline code">p95Millis</code>, <code class="inline code">p99Millis</code>, <code class="inline code">p999Millis</code>, <code class="inline code">droppedIterations</code>, <code class="inline code">verdict</code>, <code class="inline code">abortedByThreshold</code>, <code class="inline code">thresholdResults</code>, <code class="inline code">runId</code>, <code class="inline code">startedAt</code>, <code class="inline code">endedAt</code>.</td>
         </tr>
         <tr>
             <td><code class="inline code">GET</code></td>
             <td><code class="inline code">/mockserver/loadScenario/{name}</code></td>
             <td>Return one registered scenario (definition + state + status). <code class="inline code">404</code> if not registered.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">GET</code></td>
+            <td><code class="inline code">/mockserver/loadScenario/{name}/report</code></td>
+            <td><strong>Summary report</strong> for the run (live snapshot when running; retained terminal snapshot after <code class="inline code">COMPLETED</code>/<code class="inline code">STOPPED</code>). <code class="inline code">404</code> if the scenario never ran. JSON by default; <code class="inline code">?format=junit</code> returns a JUnit-XML <code class="inline code">&lt;testsuite&gt;</code> for CI. See <a href="#summary_report">Summary Report</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">PUT</code></td>
+            <td><code class="inline code">/mockserver/loadScenario/generateFromOpenAPI</code></td>
+            <td><strong>Generate a scenario from an OpenAPI spec</strong> and register it in the <code class="inline code">LOADED</code> state. Does not run; allowed even when <code class="inline code">loadGenerationEnabled=false</code>. Body: <code class="inline code">{ name, specUrlOrPayload, target?, profile? }</code>. Returns the generated scenario for editing. See <a href="#generate_from_openapi">Generate from OpenAPI</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">PUT</code></td>
+            <td><code class="inline code">/mockserver/loadScenario/generateFromRecording</code></td>
+            <td><strong>Generate a scenario from recorded proxy traffic</strong> and register it in the <code class="inline code">LOADED</code> state. Does not run. Body: <code class="inline code">{ name, mode?, requestFilter?, maxSteps?, target?, profile? }</code>. <code class="inline code">mode</code> ∈ <code class="inline code">VERBATIM</code> (default) / <code class="inline code">TEMPLATIZED</code> (a weighted route mix — weight == hit count, <code class="inline code">stepSelection: WEIGHTED</code>). Returns the generated scenario for editing. See <a href="#generate_from_recording">Generate from Recording</a>.</td>
         </tr>
         <tr>
             <td><code class="inline code">PUT</code></td>
@@ -122,6 +198,23 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
 
 <pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
   -d '{ "names": ["checkout-load", "background-poller"] }'</code></pre>
+
+<a id="dashboard_ui" class="anchor" href="#dashboard_ui">&nbsp;</a>
+
+<h2>Dashboard UI — Run &amp; Edit Load Tests</h2>
+
+<p>Everything the REST API does is also available from the <strong>Performance</strong> view in the <a href="/mock_server/mockserver_ui.html#ui_performance_section">MockServer dashboard</a> — build, run, and monitor load scenarios without writing any JSON. Open the dashboard at <code class="inline code">http://localhost:1080/mockserver/dashboard</code> and click <strong>Performance</strong> in the navigation bar. (Load generation must be enabled first — <code class="inline code">loadGenerationEnabled=true</code> — or the view shows the configuration flag needed to unlock it.)</p>
+
+<img class="ui_image" src="/images/MockServerPerformance.png" alt="MockServer dashboard Performance view — running and editing load scenarios">
+
+<p>The view has two tabs over a shared registry of scenarios:</p>
+
+<ul>
+    <li><strong>RUN &amp; MONITOR</strong> — the <em>running</em> view. Each registered scenario is a row with its live state (<code class="inline code">RUNNING</code> / <code class="inline code">LOADED</code> / <code class="inline code">STOPPED</code>), requests sent, error rate, and active VUs, plus per-scenario <strong>Start</strong> / <strong>Stop</strong> / <strong>edit</strong> / <strong>remove</strong> controls. Below it, <strong>Running now</strong> shows each active scenario's current stage, elapsed time, and hero tiles for <strong>Active VUs</strong>, <strong>Requests sent</strong>, <strong>Succeeded</strong> / <strong>Failed</strong>, <strong>Error rate</strong>, and <strong>p95</strong> latency. A combined <strong>Live throughput &amp; latency</strong> chart plots RPS, active VUs, in-flight, and p50/p95/p99 over the lifetime of the run — total and per scenario — drawn from the <code class="inline code">mock_server_load_*</code> metrics (requires <code class="inline code">metricsEnabled=true</code>).</li>
+    <li><strong>CREATE / EDIT</strong> — the <em>editing</em> view. A form-based builder assembles a scenario: choose the <strong>template type</strong>, add custom <strong>labels</strong> and an optional <strong>max requests</strong> cap, append an ordered list of <strong>stages</strong> (<code class="inline code">VU</code> / <code class="inline code">RATE</code> / <code class="inline code">PAUSE</code>, each with hold-or-ramp values, a ramp <strong>curve</strong>, and a duration), and define one or more <strong>steps</strong> (method, path, target host/port/scheme, optional templated body and headers, and a think-time delay). <strong>Load</strong> registers the scenario without running it; <strong>Load &amp; Run</strong> registers and starts it immediately. Selecting a registered scenario's edit icon loads its definition back into this form for tweaking and re-running.</li>
+</ul>
+
+<p>See the <a href="/mock_server/mockserver_ui.html#ui_performance_section">dashboard Performance reference</a> for a field-by-field walkthrough.</p>
 
 <a id="load_scenario_model" class="anchor" href="#load_scenario_model">&nbsp;</a>
 
@@ -167,7 +260,7 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
             <td><code class="inline code">templateType</code></td>
             <td>string</td>
             <td>No</td>
-            <td>Template engine for rendering step fields: <code class="inline code">VELOCITY</code> (default) or <code class="inline code">MUSTACHE</code>. <code class="inline code">JAVASCRIPT</code> is <strong>not</strong> supported for load steps and is rejected with a <code class="inline code">400</code>.</td>
+            <td><strong>Scenario-wide</strong> template engine used to re-render every step's templated fields — request <code class="inline code">path</code>, <code class="inline code">body</code> and header values — once <em>per iteration</em>, so each virtual-user request can carry varying data (feeder columns, captured values, the iteration index). It applies to <strong>all</strong> steps in the scenario; it is not set per step, because every step shares the same per-iteration context (the same feeder row and captured variables), so one engine keeps the placeholder syntax uniform across the whole journey. <strong>Optional</strong> — omit it to use the default <code class="inline code">VELOCITY</code> (e.g. <code class="inline code">$iteration.index</code>); set <code class="inline code">MUSTACHE</code> to use <code class="inline code">&#123;&#123;iteration.index&#125;&#125;</code> syntax instead. <code class="inline code">JAVASCRIPT</code> is <strong>not</strong> supported for load steps and is rejected with a <code class="inline code">400</code>. Fields that contain no template placeholder are sent unchanged.</td>
         </tr>
         <tr>
             <td><code class="inline code">maxRequests</code></td>
@@ -180,6 +273,42 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
             <td>object</td>
             <td>No</td>
             <td>Scenario-level custom metric labels (string key/value pairs). Keys must be listed in <code class="inline code">mockserver.loadGenerationMetricLabels</code> to appear in Prometheus; all keys appear in OpenTelemetry automatically. See <a href="#observability">Observability &amp; Metrics</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">thresholds</code></td>
+            <td>array</td>
+            <td>No</td>
+            <td>In-run pass/fail thresholds. Each entry specifies a <code class="inline code">metric</code>, <code class="inline code">comparator</code>, and <code class="inline code">threshold</code> value. The run carries a <code class="inline code">PASS</code> verdict when all hold; <code class="inline code">FAIL</code> when any breach. See <a href="#thresholds">In-Run Thresholds</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">abortOnFail</code></td>
+            <td>boolean</td>
+            <td>No</td>
+            <td>When <code class="inline code">true</code>, a <code class="inline code">FAIL</code> verdict aborts the run early (terminal <code class="inline code">STOPPED</code> state, <code class="inline code">abortedByThreshold</code> set). Default <code class="inline code">false</code> — the run always finishes its stages and carries a final verdict.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">abortGraceMillis</code></td>
+            <td>integer</td>
+            <td>No</td>
+            <td>Suppress the abort action for the first N milliseconds of the run so noisy startup samples cannot trigger a premature abort. Thresholds are still evaluated and a verdict still reported during the grace window — only the abort is deferred.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">pacing</code></td>
+            <td>object</td>
+            <td>No</td>
+            <td>Adaptive pacing for the closed-model VU loop — a target per-VU iteration cycle time. <code class="inline code">mode</code> ∈ <code class="inline code">NONE</code> (default, immediate reschedule) / <code class="inline code">CONSTANT_PACING</code> (<code class="inline code">value</code> = cycle in ms) / <code class="inline code">CONSTANT_THROUGHPUT</code> (<code class="inline code">value</code> = iterations/second per VU). See <a href="#adaptive_pacing">Adaptive Pacing</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">feeder</code></td>
+            <td>object</td>
+            <td>No</td>
+            <td>Parameterized test data: one row selected per iteration, exposed as <code class="inline code">$iteration.data.&lt;column&gt;</code> (Velocity) / <code class="inline code">&#123;&#123;iteration.data.&lt;column&gt;&#125;&#125;</code> (Mustache). Supply inline <code class="inline code">rows</code> or <code class="inline code">data</code>+<code class="inline code">format</code> (CSV/JSON). <code class="inline code">strategy</code> ∈ <code class="inline code">CIRCULAR</code> (default) / <code class="inline code">RANDOM</code> / <code class="inline code">SEQUENTIAL</code>. See <a href="#data_feeders">Data Feeders</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">stepSelection</code></td>
+            <td>string</td>
+            <td>No</td>
+            <td>How each iteration selects which steps to run: <code class="inline code">SEQUENTIAL</code> (default) fires all steps in declared order; <code class="inline code">WEIGHTED</code> fires exactly one step per iteration chosen at random proportional to each step's <code class="inline code">weight</code>. See <a href="#weighted_step_selection">Weighted Step Selection</a>.</td>
         </tr>
     </tbody>
 </table>
@@ -219,6 +348,16 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
             <td>object</td>
             <td>Optional step-level custom metric labels (string key/value pairs). Override the scenario-level <code class="inline code">labels</code> for this step. Same Prometheus allowlist requirement applies.</td>
         </tr>
+        <tr>
+            <td><code class="inline code">captures</code></td>
+            <td>array</td>
+            <td>Optional list of capture rules that extract a value from this step's response and bind it to a named variable for use in later steps' templates. Each entry has a <code class="inline code">name</code>, a <code class="inline code">source</code> (<code class="inline code">BODY_JSONPATH</code> / <code class="inline code">HEADER</code> / <code class="inline code">BODY_REGEX</code>), an <code class="inline code">expression</code>, and an optional <code class="inline code">defaultValue</code>. See <a href="#cross_step_capture">Cross-Step Capture</a>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">weight</code></td>
+            <td>number</td>
+            <td>Relative selection weight used only when the scenario's <code class="inline code">stepSelection</code> is <code class="inline code">WEIGHTED</code>. Absent = <code class="inline code">1.0</code>; must be <code class="inline code">&gt; 0</code> when <code class="inline code">WEIGHTED</code>. Ignored under <code class="inline code">SEQUENTIAL</code> (default). See <a href="#weighted_step_selection">Weighted Step Selection</a>.</td>
+        </tr>
     </tbody>
 </table>
 
@@ -226,7 +365,7 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
 
 <h3>Load Profile</h3>
 
-<p>The profile is an ordered list of <code class="inline code">stages</code> (maximum 20) run one after another. The total run length is the sum of the stage durations. Each stage is one of three types:</p>
+<p>The profile is an ordered list of <code class="inline code">stages</code> (maximum 20 by default; raise via <code class="inline code">loadGenerationMaxStages</code>) run one after another. The total run length is the sum of the stage durations. Each stage is one of three types:</p>
 
 <ul>
     <li><strong><code class="inline code">VU</code> (closed model)</strong> — hold or ramp the number of concurrent <em>virtual users</em>. Each VU loops the steps back-to-back; throughput is whatever the target can sustain. Answers "how does my service behave with N concurrent clients?"</li>
@@ -259,7 +398,7 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
         <tr>
             <td><code class="inline code">durationMillis</code></td>
             <td>integer</td>
-            <td>How long this stage runs (milliseconds, &gt; 0). The total across all stages must not exceed 3 600 000 ms (1 hour).</td>
+            <td>How long this stage runs (milliseconds, &gt; 0). The total across all stages must not exceed 3 600 000 ms (1 hour) by default; raise via <code class="inline code">loadGenerationMaxDurationMillis</code>.</td>
         </tr>
         <tr>
             <td><code class="inline code">curve</code></td>
@@ -293,6 +432,118 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
         </tr>
     </tbody>
 </table>
+
+<a id="named_shapes" class="anchor" href="#named_shapes">&nbsp;</a>
+
+<h3>Named Load Shapes</h3>
+
+<p>Instead of spelling out every stage, you can describe a common traffic pattern with a single declarative <strong>shape</strong> under <code class="inline code">profile.shape</code>. A shape expands into ordinary stages so all caps and the orchestrator run unchanged. Use <em>either</em> a <code class="inline code">stages</code> list <em>or</em> a <code class="inline code">shape</code> — if both are present the explicit stages win.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Shape <code class="inline code">type</code></th>
+            <th>What it models</th>
+            <th>Key parameters</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">SPIKE</code></td>
+            <td>Ramp up to a peak, hold it, ramp back down — with an optional recovery hold at baseline. Good for testing your service's response to a sudden burst.</td>
+            <td><code class="inline code">baseline</code>, <code class="inline code">peak</code>, <code class="inline code">rampUpMillis</code>, <code class="inline code">holdMillis</code>, <code class="inline code">rampDownMillis</code>, optional <code class="inline code">recoveryHoldMillis</code>, optional <code class="inline code">curve</code></td>
+        </tr>
+        <tr>
+            <td><code class="inline code">STAIRS</code></td>
+            <td>A flight of discrete hold steps, each one <code class="inline code">step</code> higher than the previous. Good for finding the point where your service starts to degrade.</td>
+            <td><code class="inline code">start</code>, <code class="inline code">step</code>, <code class="inline code">steps</code>, <code class="inline code">stepDurationMillis</code></td>
+        </tr>
+        <tr>
+            <td><code class="inline code">RAMP_HOLD</code></td>
+            <td>Ramp from 0 to a target then hold it. The simplest ramp-and-soak pattern.</td>
+            <td><code class="inline code">target</code>, <code class="inline code">rampMillis</code>, <code class="inline code">holdMillis</code>, optional <code class="inline code">curve</code></td>
+        </tr>
+    </tbody>
+</table>
+
+<p>The <code class="inline code">metric</code> field controls what the shape drives: <code class="inline code">VU</code> (concurrent virtual users, closed model) or <code class="inline code">RATE</code> (arrival rate in iterations/second, open model).</p>
+
+<pre class="prettyprint code"><code class="code"># A SPIKE shape — no need to write five explicit stages
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "spike-test",
+    "profile": {
+      "shape": {
+        "type": "SPIKE",
+        "metric": "RATE",
+        "baseline": 10,
+        "peak": 200,
+        "rampUpMillis": 15000,
+        "holdMillis": 30000,
+        "rampDownMillis": 15000,
+        "recoveryHoldMillis": 30000
+      }
+    },
+    "steps": [
+      {
+        "request": { "method": "GET", "path": "/api/health",
+                     "socketAddress": { "host": "target.svc", "port": 8080, "scheme": "HTTP" } }
+      }
+    ]
+  }'</code></pre>
+
+<a id="adaptive_pacing" class="anchor" href="#adaptive_pacing">&nbsp;</a>
+
+<h3>Adaptive Pacing</h3>
+
+<p>By default, a closed-model VU starts its next iteration immediately after finishing the previous one. <strong>Adaptive pacing</strong> introduces a target cycle time so a fast service does not spin faster than you intend. Set it via the scenario-level <code class="inline code">pacing</code> object.</p>
+
+<p>This is the load-test equivalent of Locust's <code class="inline code">constant_pacing</code> / <code class="inline code">constant_throughput</code> task and Gatling's <code class="inline code">pace</code>.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th><code class="inline code">mode</code></th>
+            <th><code class="inline code">value</code> means</th>
+            <th>When to use</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">NONE</code> (default)</td>
+            <td>—</td>
+            <td>No pacing — the next iteration starts immediately.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">CONSTANT_PACING</code></td>
+            <td>Target cycle in <strong>milliseconds</strong></td>
+            <td>You want each VU to loop at most once every N ms, regardless of response time.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">CONSTANT_THROUGHPUT</code></td>
+            <td>Target iterations/second <strong>per VU</strong></td>
+            <td>You want each VU to complete N iterations per second. The cycle is derived as 1000/N ms.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Pacing measures the full iteration elapsed time (including any per-step <code class="inline code">thinkTime</code> waits) and delays only the <em>start of the next iteration</em>. On overrun (the iteration took longer than the cycle) the next iteration starts immediately — pacing never makes a slow VU go faster. Pacing applies only to the closed-model VU loop; open-model <code class="inline code">RATE</code> iterations ignore it.</p>
+
+<pre class="prettyprint code"><code class="code"># Each VU loops at most once per 500 ms (2 iterations/second/VU max)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "paced-load",
+    "pacing": { "mode": "CONSTANT_PACING", "value": 500 },
+    "profile": { "stages": [ { "type": "VU", "vus": 10, "durationMillis": 60000 } ] },
+    "steps": [
+      {
+        "request": { "method": "GET", "path": "/api/products",
+                     "socketAddress": { "host": "target.svc", "port": 8080, "scheme": "HTTP" } }
+      }
+    ]
+  }'</code></pre>
 
 <a id="iteration_variables" class="anchor" href="#iteration_variables">&nbsp;</a>
 
@@ -340,105 +591,554 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
             <td><code class="inline code">$iteration.count</code></td>
             <td><code class="inline code">{{iteration.count}}</code></td>
         </tr>
+        <tr>
+            <td><code class="inline code">data</code></td>
+            <td>The data-feeder row for this iteration (a map of column → value; empty when no feeder is set)</td>
+            <td><code class="inline code">$iteration.data.column</code></td>
+            <td><code class="inline code">{{iteration.data.column}}</code></td>
+        </tr>
+        <tr>
+            <td><code class="inline code">captured</code></td>
+            <td>Variables captured from earlier steps in the same iteration (a map of name → value; see <a href="#cross_step_capture">Cross-Step Capture</a>)</td>
+            <td><code class="inline code">$iteration.captured.token</code></td>
+            <td><code class="inline code">{{iteration.captured.token}}</code></td>
+        </tr>
     </tbody>
 </table>
 
-<p><strong>What fields are rendered.</strong> In v1, only the request <code class="inline code">path</code> and <code class="inline code">body</code> fields are rendered through the template engine. These are the most commonly templated fields — use them to vary the URL path or the request payload across iterations.</p>
+<p><strong>What fields are rendered.</strong> The request <code class="inline code">path</code>, <code class="inline code">body</code>, and <strong>header values</strong> are rendered through the template engine. Use these to vary the URL path, request payload, or headers across iterations.</p>
+
+<a id="data_feeders" class="anchor" href="#data_feeders">&nbsp;</a>
+
+<h2>Data Feeders</h2>
+
+<p>A scenario can drive its templates from a <strong>parameterized dataset</strong>: one row is selected per iteration and exposed as <code class="inline code">$iteration.data.&lt;column&gt;</code> (Velocity) or <code class="inline code">&#123;&#123;iteration.data.&lt;column&gt;&#125;&#125;</code> (Mustache). This is the load-test equivalent of Gatling feeders, k6 <code class="inline code">SharedArray</code>, and JMeter CSV Data Set Config.</p>
+
+<p>Set the feeder via the scenario-level <code class="inline code">feeder</code> object. The dataset is always <strong>inline</strong> — supply either:</p>
+
+<ul>
+    <li><code class="inline code">rows</code> — a JSON array of column-to-value objects (the primary form)</li>
+    <li><code class="inline code">data</code> + <code class="inline code">format</code> — a raw string (<code class="inline code">CSV</code> or <code class="inline code">JSON</code>) parsed server-side at scenario load time</li>
+</ul>
+
+<p>When both are given, <code class="inline code">rows</code> wins. The <code class="inline code">strategy</code> controls how rows are selected per iteration:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th><code class="inline code">strategy</code></th>
+            <th>Row chosen per iteration</th>
+            <th>Exhaustion behaviour</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">CIRCULAR</code> (default)</td>
+            <td>Round-robin by global iteration index</td>
+            <td>Never exhausts — cycles the dataset indefinitely under sustained load</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">RANDOM</code></td>
+            <td>A uniformly random row each iteration</td>
+            <td>Never exhausts</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">SEQUENTIAL</code></td>
+            <td>Each row exactly once, in order</td>
+            <td>The <strong>run completes</strong> once the last row is consumed — a data-driven "replay exactly this dataset" mode, no <code class="inline code">maxRequests</code> needed</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre class="prettyprint code"><code class="code"># Inline rows — CIRCULAR: each iteration picks the next user in round-robin
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "user-browse",
+    "templateType": "MUSTACHE",
+    "feeder": {
+      "strategy": "CIRCULAR",
+      "rows": [
+        { "userId": "alice", "accountId": "A1" },
+        { "userId": "bob",   "accountId": "A2" },
+        { "userId": "carol", "accountId": "A3" }
+      ]
+    },
+    "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+    "steps": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/accounts/{{iteration.data.accountId}}",
+          "headers": { "X-User": ["{{iteration.data.userId}}"],
+                       "Host": ["api.svc:8080"] },
+          "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
+        }
+      }
+    ]
+  }'
+
+# Equivalent with raw CSV — parse happens once at scenario load time
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "user-browse-csv",
+    "templateType": "MUSTACHE",
+    "feeder": {
+      "format": "CSV",
+      "strategy": "CIRCULAR",
+      "data": "userId,accountId\nalice,A1\nbob,A2\ncarol,A3"
+    },
+    "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+    "steps": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/accounts/{{iteration.data.accountId}}",
+          "headers": { "Host": ["api.svc:8080"] },
+          "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
+        }
+      }
+    ]
+  }'</code></pre>
+
+<a id="cross_step_capture" class="anchor" href="#cross_step_capture">&nbsp;</a>
+
+<h2>Cross-Step Capture</h2>
+
+<p>A later step often needs a value extracted from an earlier step's response — the classic case is a <strong>login step that returns a token</strong> which subsequent steps must send as a bearer credential. Each <code class="inline code">LoadStep</code> can declare <code class="inline code">captures</code>: rules that extract a named value from that step's response and make it available to later steps in the <em>same iteration</em> via <code class="inline code">$iteration.captured.&lt;name&gt;</code> (Velocity) or <code class="inline code">&#123;&#123;iteration.captured.&lt;name&gt;&#125;&#125;</code> (Mustache).</p>
+
+<p><strong>Scope:</strong> captured variables are per-iteration and never shared across virtual users. Each simulated user gets its own isolated set of captured values for each pass through the steps. A value captured in step 1 is visible only to steps 2 through N of the same iteration.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Capture <code class="inline code">source</code></th>
+            <th><code class="inline code">expression</code> is</th>
+            <th>Extracts</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">BODY_JSONPATH</code></td>
+            <td>A JSONPath expression</td>
+            <td>The JSONPath result over the response body. Single-element lists are unwrapped to their scalar value.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">HEADER</code></td>
+            <td>A header name</td>
+            <td>The first value of that response header.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">BODY_REGEX</code></td>
+            <td>A regex</td>
+            <td>Capture group 1 of the first match over the response body string.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Capture is <strong>best-effort and never fails the run</strong>: on no match (or any extraction error) the variable falls back to <code class="inline code">defaultValue</code> when set, otherwise it is left unset.</p>
+
+<pre class="prettyprint code"><code class="code"># Login → capture token → use in subsequent step
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "login-then-browse",
+    "templateType": "MUSTACHE",
+    "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+    "steps": [
+      {
+        "name": "login",
+        "request": {
+          "method": "POST",
+          "path": "/auth/login",
+          "headers": {
+            "Host": ["api.svc:8080"],
+            "Content-Type": ["application/json"]
+          },
+          "body": { "username": "user{{iteration.vuId}}", "password": "secret" },
+          "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
+        },
+        "captures": [
+          { "name": "token", "source": "BODY_JSONPATH", "expression": "$.accessToken" }
+        ]
+      },
+      {
+        "name": "fetch-account",
+        "request": {
+          "method": "GET",
+          "path": "/account",
+          "headers": {
+            "Host": ["api.svc:8080"],
+            "Authorization": ["Bearer {{iteration.captured.token}}"]
+          },
+          "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
+        }
+      }
+    ]
+  }'</code></pre>
+
+<p>Step 1 logs in and captures the response body's <code class="inline code">$.accessToken</code> into <code class="inline code">token</code>. Step 2 — in the same iteration — sends it as <code class="inline code">Authorization: Bearer &lt;token&gt;</code>. With 5 VUs, each VU's iterations each capture and replay their own token independently.</p>
+
+<a id="weighted_step_selection" class="anchor" href="#weighted_step_selection">&nbsp;</a>
+
+<h2>Weighted Step Selection</h2>
+
+<p>By default every iteration runs <strong>all steps in declared order</strong> (<code class="inline code">stepSelection: SEQUENTIAL</code>) — a multi-step user journey. With <code class="inline code">stepSelection: WEIGHTED</code>, each iteration runs exactly <strong>one step</strong>, chosen at random with probability proportional to each step's <code class="inline code">weight</code>. This models a <strong>mixed workload</strong> in a single scenario: 70% browse / 20% search / 10% checkout, for example.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th><code class="inline code">stepSelection</code></th>
+            <th>Steps run per iteration</th>
+            <th>Feeder &amp; pacing</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">SEQUENTIAL</code> (default)</td>
+            <td>All steps, in declared order</td>
+            <td>One feeder row per iteration; pacing targets the full iteration cycle.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">WEIGHTED</code></td>
+            <td>Exactly one step, chosen by weight (absent = 1.0; must be &gt; 0)</td>
+            <td>One feeder row per iteration; pacing targets the single-step iteration cycle.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Note:</strong> cross-step capture is meaningful only under <code class="inline code">SEQUENTIAL</code> — a <code class="inline code">WEIGHTED</code> iteration runs a single step so there is no later step to consume a captured variable. Capture rules on a weighted step do no harm; they simply have nothing to feed into.</p>
+
+<pre class="prettyprint code"><code class="code"># Mixed workload: 70% browse, 20% search, 10% checkout
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "mixed-shop-workload",
+    "stepSelection": "WEIGHTED",
+    "profile": { "stages": [ { "type": "VU", "vus": 20, "durationMillis": 60000 } ] },
+    "steps": [
+      {
+        "name": "browse",
+        "weight": 7,
+        "request": { "method": "GET", "path": "/products",
+                     "socketAddress": { "host": "shop.svc", "port": 8080, "scheme": "HTTP" } }
+      },
+      {
+        "name": "search",
+        "weight": 2,
+        "request": { "method": "GET", "path": "/search?q=shoes",
+                     "socketAddress": { "host": "shop.svc", "port": 8080, "scheme": "HTTP" } }
+      },
+      {
+        "name": "checkout",
+        "weight": 1,
+        "request": { "method": "POST", "path": "/checkout",
+                     "socketAddress": { "host": "shop.svc", "port": 8080, "scheme": "HTTP" } }
+      }
+    ]
+  }'</code></pre>
 
 <a id="examples" class="anchor" href="#examples">&nbsp;</a>
 
 <h2>Examples</h2>
 
-<h3>VU ramp then hold — templated path</h3>
+<p>Each example below shows the same scenario across every MockServer client and the plain REST API. Expand a language to see how to build the load scenario, register it, start it, read its live status, and stop it.</p>
 
-<p>Ramp from 1 to 10 VUs over 30 seconds, then hold 10 VUs for a minute. Each iteration fetches a different order ID derived from the global iteration index:</p>
+{% include_subpage _includes/load_scenario_code_examples.html %}
 
-<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+<a id="thresholds" class="anchor" href="#thresholds">&nbsp;</a>
+
+<h2>In-Run Thresholds &amp; Verdicts</h2>
+
+<p>A scenario can carry <strong>thresholds</strong> that are evaluated <em>while the run executes</em> and yield a <code class="inline code">PASS</code>/<code class="inline code">FAIL</code> verdict — independent of, and complementary to, post-run <code class="inline code">verifySLO</code>. Use them to fail a CI load test the moment a metric breaches its budget.</p>
+
+<p>Each threshold is a <code class="inline code">{ metric, comparator, threshold }</code> triple:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Values</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">metric</code></td>
+            <td><code class="inline code">LATENCY_P50</code>, <code class="inline code">LATENCY_P95</code>, <code class="inline code">LATENCY_P99</code>, <code class="inline code">LATENCY_P999</code>, <code class="inline code">ERROR_RATE</code>, <code class="inline code">THROUGHPUT_RPS</code></td>
+            <td>The metric to check. Latency percentiles are in milliseconds; <code class="inline code">ERROR_RATE</code> is a 0–1 fraction; <code class="inline code">THROUGHPUT_RPS</code> is requests/second.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">comparator</code></td>
+            <td><code class="inline code">LESS_THAN</code>, <code class="inline code">LESS_THAN_OR_EQUAL</code>, <code class="inline code">GREATER_THAN</code>, <code class="inline code">GREATER_THAN_OR_EQUAL</code></td>
+            <td>The comparison direction.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">threshold</code></td>
+            <td>number</td>
+            <td>The value to compare against.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Verdict logic:</strong> the run carries a <code class="inline code">PASS</code> verdict when all thresholds hold; <code class="inline code">FAIL</code> when any breach. The verdict starts <code class="inline code">null</code> until at least one request has completed (no run is failed on zero samples). Thresholds are computed from <em>this run's own</em> HDR histogram and counters — not the global SLO sample store — so they reflect only this run's traffic.</p>
+
+<p><strong>Abort on fail:</strong> set <code class="inline code">abortOnFail: true</code> to stop the run early on the first <code class="inline code">FAIL</code> verdict. <code class="inline code">abortGraceMillis</code> suppresses the abort for the first N milliseconds so noisy startup samples cannot trigger a premature abort (thresholds are still evaluated and a verdict still reported during the grace window).</p>
+
+<p><strong>CI integration:</strong> poll <code class="inline code">GET /mockserver/loadScenario/&lt;name&gt;</code> until <code class="inline code">state</code> is terminal, then check <code class="inline code">verdict</code>: map <code class="inline code">FAIL</code> to a non-zero exit code. Or fetch the JUnit report (<code class="inline code">?format=junit</code>) and let your CI system parse it.</p>
+
+<pre class="prettyprint code"><code class="code"># Scenario with thresholds — will FAIL the run if p99 exceeds 200ms or error rate exceeds 1%
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "checkout-load",
-    "templateType": "VELOCITY",
-    "maxRequests": 5000,
-    "profile": {
-      "stages": [
-        { "type": "VU", "startVus": 1, "endVus": 10, "durationMillis": 30000, "curve": "LINEAR" },
-        { "type": "VU", "vus": 10, "durationMillis": 60000 }
-      ]
-    },
+    "name": "checkout-gated",
+    "thresholds": [
+      { "metric": "LATENCY_P99", "comparator": "LESS_THAN", "threshold": 200 },
+      { "metric": "ERROR_RATE",  "comparator": "LESS_THAN_OR_EQUAL", "threshold": 0.01 }
+    ],
+    "abortOnFail": true,
+    "abortGraceMillis": 5000,
+    "profile": { "stages": [ { "type": "VU", "vus": 10, "durationMillis": 60000 } ] },
     "steps": [
       {
-        "request": {
-          "method": "GET",
-          "path": "/api/orders/$iteration.index",
-          "headers": { "Host": ["orders.svc:8080"] },
-          "socketAddress": { "host": "orders.svc", "port": 8080, "scheme": "HTTP" }
-        },
-        "thinkTime": { "timeUnit": "MILLISECONDS", "value": 20 }
+        "request": { "method": "POST", "path": "/checkout",
+                     "socketAddress": { "host": "shop.svc", "port": 8080, "scheme": "HTTP" } }
       }
     ]
-  }'</code></pre>
+  }'
 
-<h3>Arrival-rate soak with a pause (open model)</h3>
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
+  -d '{ "name": "checkout-gated" }'
 
-<p>Hold 2 VUs to warm up, pause to let the target settle, then ramp the request rate from 10 to 200 iterations/second and hold it — the open model that exposes queue build-up and tail latency:</p>
+# Poll until terminal, then check the verdict
+until [ "$(curl -s http://localhost:1080/mockserver/loadScenario/checkout-gated \
+             | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('state',''))")" \
+        != "RUNNING" ]; do sleep 2; done
 
-<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+VERDICT=$(curl -s http://localhost:1080/mockserver/loadScenario/checkout-gated \
+  | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('verdict','PASS'))")
+echo "Verdict: $VERDICT"
+[ "$VERDICT" = "FAIL" ] && exit 1 || exit 0</code></pre>
+
+<a id="summary_report" class="anchor" href="#summary_report">&nbsp;</a>
+
+<h2>Summary Report</h2>
+
+<p><code class="inline code">GET /mockserver/loadScenario/{name}/report</code> returns an end-of-run summary derived from the run's status snapshot — the live snapshot while the run is active, or the <strong>retained terminal snapshot</strong> after <code class="inline code">COMPLETED</code>/<code class="inline code">STOPPED</code> (so you can fetch the report after the run finishes). Returns <code class="inline code">404</code> if the scenario never ran.</p>
+
+<p>Two formats of the same data:</p>
+
+<ul>
+    <li><strong>JSON</strong> (default, <code class="inline code">application/json</code>) — a structured object with <code class="inline code">scenario</code>, <code class="inline code">runId</code>, <code class="inline code">state</code>, <code class="inline code">verdict</code>, timing (<code class="inline code">startedAtEpochMillis</code>, <code class="inline code">endedAtEpochMillis</code>, <code class="inline code">durationMillis</code>), counts (<code class="inline code">requestsSent</code>, <code class="inline code">succeeded</code>, <code class="inline code">failed</code>, <code class="inline code">droppedIterations</code>, <code class="inline code">errorRate</code>), latency percentiles (<code class="inline code">p50</code>, <code class="inline code">p95</code>, <code class="inline code">p99</code>, <code class="inline code">p999</code> in milliseconds), and per-threshold results.</li>
+    <li><strong>JUnit XML</strong> (<code class="inline code">?format=junit</code>, <code class="inline code">application/xml</code>) — a <code class="inline code">&lt;testsuite&gt;</code> with one <code class="inline code">&lt;testcase&gt;</code> per threshold (a breach adds a <code class="inline code">&lt;failure&gt;</code>), plus a <code class="inline code">&lt;testcase name="run completed"&gt;</code> that fails when the run was aborted by a threshold, carries a <code class="inline code">FAIL</code> verdict, or stopped with request failures. Percentiles are emitted as <code class="inline code">&lt;properties&gt;</code> for CI tools that render them.</li>
+</ul>
+
+<p>Drop the JUnit report into your CI pipeline as a test-report artifact so a breached threshold automatically fails the build:</p>
+
+<pre class="prettyprint code"><code class="code"># JSON report
+curl http://localhost:1080/mockserver/loadScenario/checkout-load/report
+
+# JUnit XML — attach to CI as a test artifact
+curl 'http://localhost:1080/mockserver/loadScenario/checkout-load/report?format=junit' \
+  -o load-report.xml</code></pre>
+
+<a id="corrected_latency" class="anchor" href="#corrected_latency">&nbsp;</a>
+
+<h2>Corrected Latency &amp; Percentiles</h2>
+
+<p>MockServer measures latency using <strong>coordinated-omission correction</strong>: the clock starts from the moment an iteration was <em>scheduled to begin</em> (its due time), not from when the request was actually dispatched. This means any time spent waiting for an in-flight permit or an RPS token is counted as latency — just as a real client waiting in a queue would experience it.</p>
+
+<p>Why this matters: without correction, a load tool that queues slow iterations reports artificially low latency because it only measures the time from dispatch to response. Under an open-model <code class="inline code">RATE</code> stage, this can hide queue build-up entirely. With coordinated-omission correction, tail latency numbers are trustworthy.</p>
+
+<p>The scenario status (<code class="inline code">GET /mockserver/loadScenario/{name}</code>) includes these percentiles from a <strong>per-run HDR histogram</strong>:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">p50Millis</code></td>
+            <td>Median latency in milliseconds (exact, from the HDR histogram)</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">p95Millis</code></td>
+            <td>95th-percentile latency</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">p99Millis</code></td>
+            <td>99th-percentile latency</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">p999Millis</code></td>
+            <td>99.9th-percentile latency</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">droppedIterations</code></td>
+            <td>Iterations that were due but never dispatched because a safety cap was hit (in-flight limit or RPS token bucket). A non-zero value means the scenario could not sustain the requested load.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>These percentiles are populated <strong>even when Prometheus metrics are disabled</strong> — the HDR histogram is always maintained per-run. Any additional percentile can be queried via PromQL against the coordinated-omission-corrected <code class="inline code">mock_server_load_request_duration_seconds</code> histogram.</p>
+
+<a id="generate_from_openapi" class="anchor" href="#generate_from_openapi">&nbsp;</a>
+
+<h2>Generate a Scenario from an OpenAPI Spec</h2>
+
+<p><code class="inline code">PUT /mockserver/loadScenario/generateFromOpenAPI</code> turns an OpenAPI specification into an editable, immediately-runnable scenario and registers it in the <code class="inline code">LOADED</code> state. It generates <strong>no traffic</strong> and is allowed even when <code class="inline code">loadGenerationEnabled=false</code>. The generated scenario is returned so you can review and edit it before triggering a run.</p>
+
+<p>One <code class="inline code">LoadStep</code> is created per operation (method + path), with a representative request-body example and a <code class="inline code">Content-Type</code> header for operations that declare a body. The same OpenAPI parser and example engine used by <code class="inline code">PUT /mockserver/openapi/expectation</code> is reused, so the generated steps line up with your mocked expectations.</p>
+
+<h3>Request body</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Required</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">name</code></td>
+            <td>Yes</td>
+            <td>Registry name for the generated scenario.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">specUrlOrPayload</code></td>
+            <td>Yes</td>
+            <td>Accepted identically to <code class="inline code">PUT /mockserver/openapi/expectation</code>: an inline JSON/YAML payload, a URL, or a file/classpath reference.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">target</code></td>
+            <td>No</td>
+            <td>Override the target host for every generated step (<code class="inline code">{ host, port, scheme }</code>). When absent, the spec's <code class="inline code">servers[0]</code> URL is used; if the spec has no servers either, the step is left path-only for you to fill in.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">profile</code></td>
+            <td>No</td>
+            <td>A load profile. When absent a conservative default is applied (5 VUs for 30 s) so the scenario runs out of the box. Edit the returned profile before scaling up.</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre class="prettyprint code"><code class="code"># Generate a load scenario from a public OpenAPI spec
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/generateFromOpenAPI \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "rate-soak",
-    "profile": {
-      "stages": [
-        { "type": "VU", "vus": 2, "durationMillis": 10000 },
-        { "type": "PAUSE", "durationMillis": 5000 },
-        { "type": "RATE", "startRate": 10, "endRate": 200, "durationMillis": 30000, "curve": "EXPONENTIAL", "maxVus": 40 },
-        { "type": "RATE", "rate": 200, "durationMillis": 60000 }
-      ]
-    },
-    "steps": [
-      {
-        "request": {
-          "method": "GET",
-          "path": "/health",
-          "socketAddress": { "host": "target.svc", "port": 8080, "scheme": "HTTP" }
-        }
-      }
-    ]
-  }'</code></pre>
+    "name": "petstore-load",
+    "specUrlOrPayload": "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+    "target": { "host": "petstore.svc", "port": 8080, "scheme": "http" },
+    "profile": { "stages": [ { "type": "VU", "vus": 10, "durationMillis": 60000 } ] }
+  }'
+# -> { "status": "loaded", "name": "petstore-load", "state": "LOADED", "scenario": { ...edit me... } }
 
-<h3>Multi-step scenario with per-VU data variation</h3>
+# Then trigger it (requires loadGenerationEnabled=true)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
+  -d '{ "name": "petstore-load" }'</code></pre>
 
-<p>A two-step user journey: create a basket, then add an item. The basket ID is derived from the VU, and the product ID from the iteration within that VU:</p>
+<p>A missing <code class="inline code">name</code>/<code class="inline code">specUrlOrPayload</code>, an unparseable spec, a spec with no operations, or a generated scenario that fails validation returns <code class="inline code">400</code> with a JSON error.</p>
 
-<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+<a id="generate_from_recording" class="anchor" href="#generate_from_recording">&nbsp;</a>
+
+<h2>Generate a Scenario from Recorded Traffic</h2>
+
+<p><code class="inline code">PUT /mockserver/loadScenario/generateFromRecording</code> turns traffic <strong>previously recorded by MockServer in proxy/recording mode</strong> into an editable, immediately-runnable scenario and registers it in the <code class="inline code">LOADED</code> state. This is the <strong>record-to-load</strong> flow: capture real traffic through the proxy, then replay its shape as a load test. Like the OpenAPI seeder, it generates no traffic and is allowed even when <code class="inline code">loadGenerationEnabled=false</code>.</p>
+
+<h3>Modes</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th><code class="inline code">mode</code></th>
+            <th>Steps produced</th>
+            <th>When to use</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">VERBATIM</code> (default)</td>
+            <td>One step per recorded request, in recorded order, preserving concrete paths, bodies, and headers. Optional <code class="inline code">maxSteps</code> keeps only the first N.</td>
+            <td>Exact replay of a captured session — regression testing with real traffic.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">TEMPLATIZED</code></td>
+            <td>Requests are deduplicated by (method, templatized-path) — <code class="inline code">/orders/123</code> collapses to <code class="inline code">/orders/{id}</code> — keeping one representative per unique route, ordered by hit frequency (most-hit first). One step per unique route, each with its <code class="inline code">weight</code> set to that route's observed hit count and the scenario marked <code class="inline code">stepSelection: WEIGHTED</code>, so each iteration picks a route in proportion to its recorded frequency — reproducing the recorded traffic mix.</td>
+            <td>Traffic-shape load test — model the mix of endpoints without replaying every individual request verbatim.</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Request body</h3>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Field</th>
+            <th>Required</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">name</code></td>
+            <td>Yes</td>
+            <td>Registry name for the generated scenario.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mode</code></td>
+            <td>No</td>
+            <td><code class="inline code">VERBATIM</code> (default) or <code class="inline code">TEMPLATIZED</code>.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">requestFilter</code></td>
+            <td>No</td>
+            <td>A standard <code class="inline code">HttpRequest</code> matcher. When present, only recorded requests it matches are included. When absent, all recorded requests are used.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">maxSteps</code></td>
+            <td>No</td>
+            <td>For <code class="inline code">VERBATIM</code> mode: keep only the first N recorded requests. <code class="inline code">TEMPLATIZED</code> is naturally bounded by the number of unique routes.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">target</code></td>
+            <td>No</td>
+            <td>Override the target host for every generated step. When absent, each recorded request's own routing is left untouched.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">profile</code></td>
+            <td>No</td>
+            <td>A load profile. When absent the same conservative default as the OpenAPI seeder is applied (5 VUs for 30 s).</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre class="prettyprint code"><code class="code"># First, record real traffic through the MockServer proxy...
+# (see Proxy Configuration for setup)
+
+# Then generate a load scenario from the recorded traffic
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/generateFromRecording \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "basket-journey",
-    "templateType": "VELOCITY",
-    "profile": {
-      "stages": [
-        { "type": "VU", "vus": 5, "durationMillis": 60000 }
-      ]
-    },
-    "steps": [
-      {
-        "request": {
-          "method": "POST",
-          "path": "/baskets",
-          "body": { "type": "STRING", "string": "{\"customerId\": $iteration.vuId}" },
-          "socketAddress": { "host": "shop.svc", "port": 8080, "scheme": "HTTP" }
-        },
-        "thinkTime": { "timeUnit": "MILLISECONDS", "value": 50 }
-      },
-      {
-        "request": {
-          "method": "POST",
-          "path": "/baskets/$iteration.vuId/items",
-          "body": { "type": "STRING", "string": "{\"productId\": $iteration.vuIteration}" },
-          "socketAddress": { "host": "shop.svc", "port": 8080, "scheme": "HTTP" }
-        }
-      }
-    ]
-  }'</code></pre>
+    "name": "replay-prod-traffic",
+    "mode": "TEMPLATIZED",
+    "requestFilter": { "path": "/api/.*" },
+    "maxSteps": 50,
+    "target": { "host": "staging.svc", "port": 8080, "scheme": "http" }
+  }'
+# -> { "status": "loaded", "name": "replay-prod-traffic", "state": "LOADED", "scenario": { ...edit me... } }
+
+# Then trigger it
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
+  -d '{ "name": "replay-prod-traffic" }'</code></pre>
+
+<p>A missing <code class="inline code">name</code>, no recorded requests to convert (none recorded or none matching the filter), an invalid <code class="inline code">mode</code>, or a generated scenario that fails validation returns <code class="inline code">400</code>. The <code class="inline code">TEMPLATIZED</code> seeder produces a <strong>weighted mix</strong>: each route's <code class="inline code">weight</code> is its observed hit count and the scenario is marked <a href="#weighted_step_selection"><code class="inline code">stepSelection: WEIGHTED</code></a>, so each iteration fires a route in proportion to its recorded frequency. Edit the weights (or switch to <code class="inline code">SEQUENTIAL</code>) on the returned scenario for different behaviour.</p>
 
 <a id="safety_caps" class="anchor" href="#safety_caps">&nbsp;</a>
 
@@ -569,7 +1269,48 @@ curl -s -w "\n%{http_code}" -X PUT http://localhost:1080/mockserver/verifySLO \
 
 <h2>Observability &amp; Metrics</h2>
 
-<p>Every completed load-scenario dispatch is recorded into a dedicated <code class="inline code">mock_server_load_*</code> Prometheus metric family and mirrored over OpenTelemetry (OTLP). This lets you chart the injector's latency, throughput, and error rate alongside your system-under-test in Grafana, Datadog, or any OTEL-compatible backend — without a separate load tool.</p>
+<p>Every completed load-scenario dispatch is recorded into a dedicated <code class="inline code">mock_server_load_*</code> metric family that MockServer exposes through <strong>both</strong> of its observability channels — a <strong>Prometheus</strong> scrape endpoint and <strong>OpenTelemetry (OTLP)</strong> push. The same metrics drive the dashboard's live <a href="#dashboard_ui">throughput &amp; latency chart</a>. This lets you chart the injector's latency, throughput, and error rate alongside your system-under-test in Grafana, Datadog, or any OTEL-compatible backend — without a separate load tool.</p>
+
+<a id="observability_exposure" class="anchor" href="#observability_exposure">&nbsp;</a>
+
+<h3>How the metrics are exposed</h3>
+
+<p>The <code class="inline code">mock_server_load_*</code> family rides the same metrics pipeline as the rest of MockServer — there is no separate setup for load metrics. Turn on whichever channel(s) your backend consumes:</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Channel</th>
+            <th>How to enable</th>
+            <th>How to consume</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><strong>Prometheus</strong> (pull / scrape)</td>
+            <td>Set <code class="inline code">metricsEnabled=true</code> (<code class="inline code">MOCKSERVER_METRICS_ENABLED=true</code>).</td>
+            <td>Scrape <code class="inline code">GET /mockserver/metrics</code> — Prometheus text exposition format on the serve port (e.g. <code class="inline code">http://localhost:1080/mockserver/metrics</code>). Returns <code class="inline code">404</code> when metrics are disabled. Point a Prometheus <code class="inline code">scrape_config</code> at it, or <code class="inline code">curl</code> it directly.</td>
+        </tr>
+        <tr>
+            <td><strong>OpenTelemetry</strong> (push / OTLP)</td>
+            <td>Set <code class="inline code">otelEndpoint</code> to your collector's base URL (e.g. <code class="inline code">http://collector:4318</code>) and <code class="inline code">otelMetricsEnabled=true</code>. Metrics are pushed every <code class="inline code">otelMetricsExportIntervalSeconds</code> (default 60).</td>
+            <td>Your OTLP-compatible backend (Grafana, Datadog, Honeycomb, an OpenTelemetry Collector, …) receives the same series as OTLP metrics. All custom <code class="inline code">labels</code> are forwarded as OTEL attributes automatically.</td>
+        </tr>
+    </tbody>
+</table>
+
+<pre class="prettyprint code"><code class="code"># Run with load generation AND both metrics channels enabled
+docker run -p 1080:1080 \
+  -e MOCKSERVER_LOAD_GENERATION_ENABLED=true \
+  -e MOCKSERVER_METRICS_ENABLED=true \
+  -e MOCKSERVER_OTEL_ENDPOINT=http://collector:4318 \
+  -e MOCKSERVER_OTEL_METRICS_ENABLED=true \
+  mockserver/mockserver
+
+# Scrape the Prometheus endpoint and filter to the load family
+curl -s http://localhost:1080/mockserver/metrics | grep '^mock_server_load_'</code></pre>
+
+<p>See <a href="/mock_server/observability.html">Observability</a> for the full Prometheus and OpenTelemetry configuration reference (the <code class="inline code">mock_server_load_*</code> family feeds into the same pipeline).</p>
 
 <p>All per-request metrics carry six fixed labels so you can slice and dice without extra queries:</p>
 
@@ -701,6 +1442,8 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 
 <p>When your system under test propagates W3C Trace Context, the load-scenario latency histogram (<code class="inline code">mock_server_load_request_duration_seconds</code>) attaches the upstream <code class="inline code">trace_id</code> from the response's <code class="inline code">traceparent</code> header as a Prometheus exemplar. In Grafana, this lets you click a latency spike and jump directly to the trace that caused it.</p>
 
+<a id="promql" class="anchor" href="#promql">&nbsp;</a>
+
 <h3>Example PromQL</h3>
 
 <pre class="prettyprint code"><code class="code"># p95 request latency for a specific run
@@ -716,7 +1459,9 @@ sum by (kind) (rate(mock_server_load_errors_total[1m]))
 # Is the scenario being throttled?
 rate(mock_server_load_throttled_total[1m])</code></pre>
 
-<p>Metrics require <code class="inline code">metricsEnabled=true</code>. See <a href="/mock_server/observability.html">Observability</a> for the full Prometheus and OTEL configuration reference.</p>
+<p>Note: Prometheus renders counters with a <code class="inline code">_total</code> suffix, so the counters listed without the suffix in the metric catalogue above (e.g. <code class="inline code">mock_server_load_errors</code>) are queried as <code class="inline code">mock_server_load_errors_total</code>.</p>
+
+<p>The Prometheus endpoint requires <code class="inline code">metricsEnabled=true</code>; OTLP export additionally requires <code class="inline code">otelEndpoint</code> and <code class="inline code">otelMetricsEnabled=true</code> — see <a href="#observability_exposure">How the metrics are exposed</a> above.</p>
 
 <a id="configuration" class="anchor" href="#configuration">&nbsp;</a>
 
@@ -736,7 +1481,7 @@ rate(mock_server_load_throttled_total[1m])</code></pre>
             <td><code class="inline code">mockserver.loadGenerationEnabled</code></td>
             <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_ENABLED</code></td>
             <td><code class="inline code">false</code></td>
-            <td>Master switch. Must be <code class="inline code">true</code> for <code class="inline code">PUT /mockserver/loadScenario</code> to succeed. Set at startup to avoid a restart.</td>
+            <td>Master switch. Must be <code class="inline code">true</code> to TRIGGER a run (<code class="inline code">PUT /mockserver/loadScenario/start</code>); loading/registering a scenario (<code class="inline code">PUT /mockserver/loadScenario</code>) is always allowed. Set at startup to avoid a restart.</td>
         </tr>
         <tr>
             <td><code class="inline code">mockserver.loadGenerationMaxVirtualUsers</code></td>
@@ -757,6 +1502,18 @@ rate(mock_server_load_throttled_total[1m])</code></pre>
             <td>Maximum dispatches per second (token bucket). Dispatches that would exceed this are counted in <code class="inline code">mock_server_load_throttled</code> with reason <code class="inline code">rate_limit</code>.</td>
         </tr>
         <tr>
+            <td><code class="inline code">mockserver.loadGenerationMaxRate</code></td>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_RATE</code></td>
+            <td>5000</td>
+            <td>Maximum arrival rate (iterations per second) a <code class="inline code">RATE</code> stage may request. Stages asking for a higher rate are rejected at PUT.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.loadGenerationMaxStages</code></td>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_STAGES</code></td>
+            <td>20</td>
+            <td>Maximum number of stages a single load profile may define. Profiles with more stages are rejected at PUT.</td>
+        </tr>
+        <tr>
             <td><code class="inline code">mockserver.loadGenerationMaxDurationMillis</code></td>
             <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS</code></td>
             <td>3 600 000 (1 hour)</td>
@@ -769,10 +1526,22 @@ rate(mock_server_load_throttled_total[1m])</code></pre>
             <td>Maximum number of steps per scenario. Scenarios with more steps are rejected at PUT.</td>
         </tr>
         <tr>
+            <td><code class="inline code">mockserver.loadGenerationMaxConcurrentScenarios</code></td>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_CONCURRENT_SCENARIOS</code></td>
+            <td>10</td>
+            <td>Maximum number of scenarios allowed active (<code class="inline code">PENDING</code> + <code class="inline code">RUNNING</code>) at once. A trigger that would exceed this is rejected with <code class="inline code">400</code>.</td>
+        </tr>
+        <tr>
             <td><code class="inline code">mockserver.loadGenerationMetricLabels</code></td>
             <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_METRIC_LABELS</code></td>
             <td><code class="inline code">""</code></td>
             <td>Comma-separated list of custom label keys to register in Prometheus (e.g. <code class="inline code">env,region,team</code>). Must be set before the first scenario runs. OpenTelemetry always receives all custom labels regardless of this setting.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">mockserver.loadScenarioInitializationJsonPath</code></td>
+            <td><code class="inline code">MOCKSERVER_LOAD_SCENARIO_INITIALIZATION_JSON_PATH</code></td>
+            <td><code class="inline code">""</code></td>
+            <td>Path to a JSON file containing an array of <code class="inline code">LoadScenario</code> definitions to preload into the registry in the <code class="inline code">LOADED</code> state at startup (mirroring <code class="inline code">initializationJsonPath</code> for expectations). Invalid definitions log a warning and are skipped.</td>
         </tr>
     </tbody>
 </table>
@@ -782,9 +1551,14 @@ rate(mock_server_load_throttled_total[1m])</code></pre>
 <h2>Related Pages</h2>
 
 <ul>
+    <li><a href="/mock_server/mockserver_ui.html#ui_performance_section">Dashboard — Performance view</a> &mdash; build, run, and monitor load scenarios from the UI (see <a href="#dashboard_ui">Dashboard UI</a> above)</li>
     <li><a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> &mdash; inject faults alongside load to verify resilience under stress</li>
-    <li><a href="/mock_server/chaos_testing.html#slo_resilience_verdicts">SLO Resilience Verdicts</a> &mdash; assert that latency and error-rate objectives held during the load run</li>
-    <li><a href="/mock_server/response_templates.html">Response Templates</a> &mdash; the Velocity / Mustache template engines used for <code class="inline code">path</code> and <code class="inline code">body</code> rendering in steps</li>
+    <li><a href="/mock_server/chaos_testing.html#slo_resilience_verdicts">SLO Resilience Verdicts</a> &mdash; assert that latency and error-rate objectives held during the load run (post-run, via <code class="inline code">verifySLO</code>)</li>
+    <li><a href="#thresholds">In-Run Thresholds &amp; Verdicts</a> &mdash; fail the run the moment a metric breaches its budget (this page)</li>
+    <li><a href="#summary_report">Summary Report</a> &mdash; JSON and JUnit-XML CI artifacts from a completed run (this page)</li>
+    <li><a href="/mock_server/response_templates.html">Response Templates</a> &mdash; the Velocity / Mustache template engines used for <code class="inline code">path</code>, <code class="inline code">body</code>, and header rendering in steps</li>
+    <li><a href="/proxy/record_and_replay.html">Record &amp; Replay</a> &mdash; configure MockServer as a proxy to record real traffic for use with <a href="#generate_from_recording">generateFromRecording</a></li>
+    <li><a href="/mock_server/using_openapi.html">OpenAPI</a> &mdash; import an OpenAPI spec; the same spec can seed a load scenario via <a href="#generate_from_openapi">generateFromOpenAPI</a></li>
     <li><a href="/mock_server/observability.html">Observability</a> &mdash; Prometheus and OpenTelemetry configuration; the <code class="inline code">mock_server_load_*</code> family feeds into the same pipeline</li>
     <li><a href="#observability">Observability &amp; Metrics</a> &mdash; load-specific metrics, custom labels, exemplars, and PromQL examples (this page)</li>
 </ul>

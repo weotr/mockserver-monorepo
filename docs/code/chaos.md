@@ -10,6 +10,15 @@ Safety limits prevent abuse (max 50 stages, max 24 h per stage, one active
 experiment at a time). The C1 auto-halt circuit-breaker (`ChaosAutoHaltMonitor`)
 stops a running experiment if it detects a fault cascade.
 
+An experiment may carry an optional `sloCriteria` (an `SloCriteria`, the same
+model the `verifySLO` endpoint uses). When present, the orchestrator (a) asserts
+the SLO over the experiment's own time window when the experiment terminates,
+attaching a terminal `experimentVerdict` (`PASS` / `FAIL` / `INCONCLUSIVE`,
+STRICT semantics), and (b) auto-halts the experiment with status
+`halted_by_slo_breach` (verdict `FAIL`) if an objective is breached mid-run.
+When `sloCriteria` is absent the experiment behaves exactly as before — no
+verdict, no SLO probe, byte-for-byte-identical status JSON.
+
 ## How an Experiment Runs
 
 ```mermaid
@@ -22,12 +31,18 @@ flowchart TD
 
     SCHED --> ADVANCE["advanceStage()\non scheduler thread"]
     ADVANCE --> AUTOHALT{"ServiceChaosRegistry\nempty? (auto-halt\nor manual reset)"}
-    AUTOHALT -->|Yes| HALT["status = halted_by_auto_halt\ndetach from current"]
-    AUTOHALT -->|No| NEXT{"Next stage\nexists?"}
+    AUTOHALT -->|Yes| HALT["status = halted_by_auto_halt\nfinalizeVerdict(autoHalted=true)\ndetach from current"]
+    AUTOHALT -->|No| SLO{"sloCriteria set AND\nlive SLO breached?"}
+    SLO -->|Yes| SLOHALT["status = halted_by_slo_breach\nverdict = FAIL\nregistry.reset(); detach"]
+    SLO -->|No| NEXT{"Next stage\nexists?"}
     NEXT -->|Yes| APPLY_NEXT["registry.reset()\napply next stage profiles\nschedule next advance"]
-    NEXT -->|No loop| COMPLETE["registry.reset()\nstatus = completed"]
+    NEXT -->|No loop| COMPLETE["registry.reset()\nstatus = completed\nfinalizeVerdict(autoHalted=false)"]
     NEXT -->|loop=true| LOOP["loopIteration++\napply stage 0\nschedule next advance"]
 ```
+
+When `sloCriteria` is present a self-rearming 1 s SLO probe also runs between
+stage boundaries (see [SLO Assertion & Verdict](#slo-assertion--verdict)), so a
+breach is detected without waiting for the next stage advance.
 
 ## Control-Plane Endpoints
 
@@ -113,6 +128,7 @@ live in `mockserver-ui/src/lib/chaosExperiment.ts`.
 | `loop` | No | If `true`, restarts from stage 0 after the last stage completes (default `false`) |
 | `startDelayMillis` | No | Fixed delay before stage 0 is applied; `0` (default) = start immediately. Max 604 800 000 ms (7 days) |
 | `cronSchedule` | No | Standard 5-field cron expression (`minute hour day-of-month month day-of-week`) for the start time; omitted/blank = no cron |
+| `sloCriteria` | No | An `SloCriteria` block (same shape as the `verifySLO` body) asserted over the experiment window. Omitted = no verdict, no SLO probe (see [SLO Assertion & Verdict](#slo-assertion--verdict)) |
 | `stage.durationMillis` | Yes | Duration > 0 and ≤ 86 400 000 ms (24 h) |
 | `stage.profiles` | Yes | Map of host → `HttpChaosProfile` with at least one entry |
 
@@ -166,9 +182,14 @@ PUT /mockserver/chaosExperiment
   "stageRemainingMillis": 48000,
   "loopIteration": 0,
   "totalElapsedMillis": 42000,
-  "experiment": { ... }
+  "experiment": { ... },
+  "experimentVerdict": { "result": "FAIL", "windowFromEpochMillis": 1700000000000, "objectiveResults": [ ... ] }
 }
 ```
+
+`experimentVerdict` is present only for an experiment with `sloCriteria` and only
+once a verdict has been produced (terminal transition, or an SLO-breach halt). It
+is omitted entirely otherwise.
 
 | `status` value | Meaning |
 |---------------|---------|
@@ -177,11 +198,73 @@ PUT /mockserver/chaosExperiment
 | `running` | A stage is active |
 | `completed` | All stages ran and `loop=false` |
 | `stopped` | Stopped via `DELETE /mockserver/chaosExperiment` or replaced by a new `PUT` |
-| `halted_by_auto_halt` | Stopped by the C1 circuit-breaker (see below) |
+| `halted_by_auto_halt` | Stopped by the C1 raw-volume circuit-breaker (see below) |
+| `halted_by_slo_breach` | Stopped because the experiment's `sloCriteria` was breached mid-run (see [SLO Assertion & Verdict](#slo-assertion--verdict)) |
 
-After an experiment terminates (any terminal status), `lastTerminatedStatus` is
-retained so that a subsequent `GET` can report the outcome even after `current`
-is nulled. The field is cleared only by `HttpState.reset()`.
+After an experiment terminates (any terminal status), `lastTerminatedStatus` and
+`lastTerminatedVerdict` are retained so that a subsequent `GET` can report the
+outcome (and verdict) even after `current` is nulled. Both are cleared only by
+`HttpState.reset()`.
+
+## SLO Assertion & Verdict
+
+An experiment definition may carry an optional `sloCriteria` field — an
+`SloCriteria` (the same model `PUT /mockserver/verifySLO` accepts: a window, a
+list of objectives, an optional `minimumSampleCount` and `upstreamHosts`). The
+SLO it submits is **scoped to the experiment**: the orchestrator ignores the
+window carried in the criteria and substitutes an EXPLICIT window
+`[experiment.startedAtMillis, terminationOrNowEpochMillis]`, so the verdict is
+strictly about what happened while the experiment ran. Evaluation reuses
+`SloEvaluator` / `SloSampleStore` unchanged (forward-path samples are recorded on
+the normal proxy path when `sloTrackingEnabled`). When `sloCriteria` is absent,
+none of this runs and the status JSON is byte-for-byte identical to before.
+
+### Terminal verdict (STRICT semantics)
+
+When an experiment **with** `sloCriteria` terminates (completes, is stopped, is
+auto-halted, or is SLO-halted) `finalizeVerdict(...)` evaluates the SLO over the
+experiment window and attaches `experimentVerdict`:
+
+| Verdict | When |
+|---------|------|
+| `PASS` | Every objective held within threshold across the **entire** experiment window |
+| `FAIL` | Any objective breached at any point in the window, **or** the experiment was auto-halted / SLO-halted (forced FAIL regardless of samples) |
+| `INCONCLUSIVE` | Fewer in-window samples than the criteria's `minimumSampleCount` |
+
+The auto-halt → FAIL coupling is deliberate: an experiment whose steady-state
+guardrail tripped did not hold its SLO, so its verdict is FAIL even if the
+samples in the window would otherwise read PASS. `minimumSampleCount` is
+propagated to the scoped criteria **unconditionally**, so an explicit `null`
+(guard disabled) is preserved rather than re-defaulted to the model default of 1.
+
+### Live SLO-breach halt (A2)
+
+In addition to the C1 raw-volume circuit-breaker, an experiment with
+`sloCriteria` is auto-halted the moment an objective is **actually** breached
+over its live window. `checkSloBreachAndHalt(...)`:
+
+1. evaluates the SLO over `[start, now]`;
+2. on a `FAIL` verdict, atomically claims the experiment via
+   `current.compareAndSet(experiment, null)` **before** mutating any shared state
+   (so a stale probe that loses the CAS performs no global mutation — it can
+   never clear a registry that now belongs to a different experiment);
+3. sets status `halted_by_slo_breach`, attaches the FAIL verdict, and calls
+   `ServiceChaosRegistry.reset()`.
+
+This check runs from two places: at every stage boundary inside `advanceStage`,
+and from a **self-rearming SLO probe**. The probe is a one-shot scheduled
+`SLO_PROBE_INTERVAL_MILLIS` (1 s) ahead that re-arms itself only while the
+experiment is still `current` and `running`; it is scheduled **only when
+`sloCriteria` is present** and cancelled (`cancelProbe`) on every terminal path
+(`stopInternal`, auto-halt, completion, SLO-halt), so it can never outlive its
+experiment. Tests drive it deterministically via the package-private
+`checkSloNow()` hook rather than relying on the 1 s wall-clock timer.
+
+The raw-volume C1 halt and the SLO-breach halt are independent: a latency-only
+experiment never trips C1 (no destructive faults) but can still SLO-halt on a
+latency-percentile breach; an error-storm experiment can trip C1 first. Either
+terminal path yields `experimentVerdict = FAIL` for an experiment with
+`sloCriteria`.
 
 ## Safety Limits
 
@@ -413,9 +496,10 @@ making manual service-chaos changes.
 
 | Class | Module | Path |
 |-------|--------|------|
-| `ChaosExperimentOrchestrator` | mockserver-core | `org.mockserver.mock.action.http.ChaosExperimentOrchestrator` |
+| `ChaosExperimentOrchestrator` | mockserver-core | `org.mockserver.mock.action.http.ChaosExperimentOrchestrator` (carries `sloCriteria` / `experimentVerdict`, the SLO probe and `checkSloBreachAndHalt`) |
 | `CronSchedule` | mockserver-core | `org.mockserver.mock.action.http.CronSchedule` (minimal 5-field cron evaluator for deferred starts) |
 | `ChaosAutoHaltMonitor` | mockserver-core | `org.mockserver.mock.action.http.ChaosAutoHaltMonitor` |
 | `ServiceChaosRegistry` | mockserver-core | `org.mockserver.mock.action.http.ServiceChaosRegistry` |
 | `HttpChaosProfile` | mockserver-core | `org.mockserver.model.HttpChaosProfile` |
+| `SloEvaluator` / `SloCriteria` / `SloVerdict` | mockserver-core | `org.mockserver.slo.*` (reused for the experiment verdict; see [SLO Verdicts](slo-verdicts.md) if present) |
 | `HttpState` | mockserver-core | `org.mockserver.mock.HttpState` (endpoints wired here) |

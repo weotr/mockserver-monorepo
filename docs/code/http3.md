@@ -198,7 +198,10 @@ private key and certificate chain used by the HTTPS server. This is obtained via
 the `privateKeyPath`, `x509CertificatePath`, and other TLS configuration properties.
 
 If no configuration is provided (legacy/echo mode), the server falls back to
-generating a self-signed EC certificate at startup using BouncyCastle.
+generating a self-signed EC certificate at startup using BouncyCastle. The
+self-signed certificate is valid for **10 years** from startup
+(`KeyAndCertificateFactory.CERTIFICATE_VALIDITY_YEARS`), consistent with the
+validity used for the main MockServer CA and leaf certificates.
 
 ### Metrics
 

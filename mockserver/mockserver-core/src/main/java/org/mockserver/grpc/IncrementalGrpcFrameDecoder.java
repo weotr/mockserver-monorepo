@@ -149,7 +149,12 @@ public class IncrementalGrpcFrameDecoder {
                 java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
                 byte[] buf = new byte[4096];
                 int len;
+                long total = 0;
                 while ((len = gis.read(buf)) != -1) {
+                    total += len;
+                    if (total > MAX_MESSAGE_SIZE) {
+                        throw new GrpcException("decompressed gRPC message size exceeds maximum allowed " + MAX_MESSAGE_SIZE);
+                    }
                     bos.write(buf, 0, len);
                 }
                 return bos.toByteArray();

@@ -69,7 +69,11 @@ public class HttpRequestDTOSerializer extends StdSerializer<HttpRequestDTO> {
             jgen.writeObjectField("remoteAddress", httpRequest.getRemoteAddress());
         }
         if (httpRequest.getBody() != null) {
-            jgen.writeObjectField("body", httpRequest.getBody());
+            // use defaultSerializeField (not jgen.writeObjectField) so the active SerializerProvider - and its
+            // per-call "emitRawBytes" attribute set on the recorded-request retrieval path (#2374) - is propagated
+            // to the nested body serializer; jgen.writeObjectField resolves the serializer via the generator's codec
+            // and would drop the attribute
+            provider.defaultSerializeField("body", httpRequest.getBody(), jgen);
         }
         if (httpRequest.getOriginalBody() != null && httpRequest.getOriginalBody().length > 0) {
             jgen.writeBinaryField("originalBody", httpRequest.getOriginalBody());

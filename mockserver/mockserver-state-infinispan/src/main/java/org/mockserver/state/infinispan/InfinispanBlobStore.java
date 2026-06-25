@@ -10,10 +10,12 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
- * {@link BlobStore} backed by an Infinispan LOCAL cache. Blobs are stored
- * as serialized {@link Blob} instances keyed by their path-like key.
+ * {@link BlobStore} backed by an Infinispan cache. Blobs are stored as
+ * serialized {@link Blob} instances keyed by their path-like key.
  * <p>
- * Phase 2b: single-node only, no clustering.
+ * The backing cache mirrors the configured {@link InfinispanStateBackend}
+ * mode: in LOCAL mode it is a heap-only single-node cache, and in CLUSTERED
+ * mode it is a {@code REPL_SYNC} cache replicated across all cluster members.
  */
 public class InfinispanBlobStore implements BlobStore {
 

@@ -675,6 +675,13 @@ public class HttpState {
         return requestMatchers.findClosestMatchDiff(request);
     }
 
+    public RequestMatchers.ClosestMatchHint findClosestMatchHint(HttpRequest request) {
+        if (requestMatchers.isEmpty()) {
+            return null;
+        }
+        return requestMatchers.findClosestMatchHint(request);
+    }
+
     private static final int DEBUG_MISMATCH_MAX_EXPECTATIONS = 100;
 
     public HttpResponse debugMismatch(HttpRequest request) {
@@ -1097,7 +1104,7 @@ public class HttpState {
                                         requestDefinition,
                                         requests -> {
                                             response.withBody(
-                                                getRequestDefinitionSerializer().serialize(true, requests),
+                                                getRequestDefinitionSerializer().serializeRecordedRequests(true, requests),
                                                 MediaType.JSON_UTF_8
                                             );
                                             mockServerLogger.logEvent(logEntry);
@@ -2109,6 +2116,14 @@ public class HttpState {
                     canHandle.complete(true);
                 }
 
+            } else if (request.matches("PUT", PATH_PREFIX + "/trafficValidate", "/trafficValidate")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    handleTrafficValidate(request, responseWriter, canHandle);
+                } else {
+                    canHandle.complete(true);
+                }
+
             } else if (request.matches("PUT", PATH_PREFIX + "/pact/import", "/pact/import")) {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
@@ -2255,6 +2270,20 @@ public class HttpState {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioStop(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/loadScenario/generateFromOpenAPI", "/loadScenario/generateFromOpenAPI")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioGenerateFromOpenAPI(request)), true);
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/loadScenario/generateFromRecording", "/loadScenario/generateFromRecording")) {
+
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioGenerateFromRecording(request)), true);
                 }
                 canHandle.complete(true);
 
@@ -2737,6 +2766,12 @@ public class HttpState {
             if (request.matches("GET", PATH_PREFIX + "/loadScenario", "/loadScenario")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioGet()), true);
+                }
+                return true;
+            }
+            if (loadScenarioReportName(request) != null) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleLoadScenarioReport(loadScenarioReportName(request), request.getFirstQueryStringParameter("format"))), true);
                 }
                 return true;
             }
@@ -3511,6 +3546,232 @@ public class HttpState {
     }
 
     /**
+     * Handle {@code PUT /mockserver/loadScenario/generateFromOpenAPI}: seed an editable
+     * {@link org.mockserver.load.LoadScenario} from an OpenAPI spec and <em>load</em> (register) it in
+     * the {@code LOADED} state — exactly like {@code PUT /mockserver/loadScenario}, this generates no
+     * traffic and is allowed even when {@code loadGenerationEnabled} is false. The generated scenario is
+     * returned in the response so a client/UI can show and edit it before triggering a run.
+     *
+     * <p>Body (JSON): {@code { "name": "...", "specUrlOrPayload": <inline spec|url|file>,
+     * "target": { "host":..., "port":..., "scheme":... } (optional),
+     * "profile": <LoadProfile> (optional) }}. One step is generated per OpenAPI operation. Returns
+     * {@code 200 { status:"loaded", name, state:"LOADED", scenario:<generated LoadScenario> }} on
+     * success, or {@code 400 { error }} when the spec is missing/unparseable or the generated scenario
+     * fails validation.
+     */
+    private HttpResponse handleLoadScenarioGenerateFromOpenAPI(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return loadScenarioError(objectMapper, "request body is required with a name and OpenAPI specUrlOrPayload");
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(body);
+            String name = root.path("name").isMissingNode() ? null : root.path("name").asText(null);
+            if (isBlank(name)) {
+                return loadScenarioError(objectMapper, "'name' is required");
+            }
+            String specUrlOrPayload = readOpenApiSpec(root);
+            if (isBlank(specUrlOrPayload)) {
+                return loadScenarioError(objectMapper, "'specUrlOrPayload' is required (inline OpenAPI spec, URL or file)");
+            }
+            org.mockserver.load.LoadScenarioFromOpenAPI.Target target = readGenerateTarget(root);
+            org.mockserver.load.LoadProfile profile = null;
+            if (root.has("profile") && !root.get("profile").isNull()) {
+                // Deserialize via the DTO so the profile parses identically to PUT /loadScenario.
+                org.mockserver.serialization.model.LoadProfileDTO profileDTO =
+                    objectMapper.treeToValue(root.get("profile"), org.mockserver.serialization.model.LoadProfileDTO.class);
+                profile = profileDTO != null ? profileDTO.buildObject() : null;
+            }
+
+            org.mockserver.load.LoadScenario scenario;
+            try {
+                scenario = org.mockserver.load.LoadScenarioFromOpenAPI.generate(name, specUrlOrPayload, target, profile, mockServerLogger);
+            } catch (IllegalArgumentException e) {
+                return loadScenarioError(objectMapper, "failed to generate load scenario from OpenAPI: " + e.getMessage());
+            }
+
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.setConfiguration(configuration);
+            String error = orchestrator.validate(scenario);
+            if (error != null) {
+                return loadScenarioError(objectMapper, error);
+            }
+            // Round-trip through the serializer so the registry stores the exact author shape, matching
+            // PUT /loadScenario.
+            String serializedScenario = getLoadScenarioSerializer().serialize(scenario);
+            com.fasterxml.jackson.databind.JsonNode definition = objectMapper.readTree(serializedScenario);
+            loadScenarioRegistry.load(scenario.getName(), definition);
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("generated and loaded load scenario:{}from OpenAPI with {}steps")
+                        .setArguments(scenario.getName(), scenario.getSteps().size())
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "loaded");
+            result.put("name", scenario.getName());
+            result.put("state", loadScenarioStateFor(scenario.getName()).name());
+            result.set("scenario", definition);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return loadScenarioError(objectMapper, "invalid generate-from-OpenAPI request: " + e.getMessage());
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to process generate-from-OpenAPI request: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Reads the OpenAPI spec from a generate-from-OpenAPI request body, accepting it identically to the
+     * {@code PUT /mockserver/openapi/expectation} surface: a {@code specUrlOrPayload} field holding an
+     * inline JSON/YAML string, a URL or a file/classpath reference. When the field is an embedded JSON
+     * object (an inline spec sent as JSON rather than a string) it is re-serialised to a payload string.
+     */
+    private String readOpenApiSpec(com.fasterxml.jackson.databind.JsonNode root) throws Exception {
+        com.fasterxml.jackson.databind.JsonNode specNode = root.get("specUrlOrPayload");
+        if (specNode == null || specNode.isNull()) {
+            return null;
+        }
+        if (specNode.isObject()) {
+            return ObjectMapperFactory.createObjectMapper().writeValueAsString(specNode);
+        }
+        return specNode.asText(null);
+    }
+
+    /** Reads the optional {@code target} object ({@code host}/{@code port}/{@code scheme}) from a generate request. */
+    private org.mockserver.load.LoadScenarioFromOpenAPI.Target readGenerateTarget(com.fasterxml.jackson.databind.JsonNode root) {
+        com.fasterxml.jackson.databind.JsonNode targetNode = root.get("target");
+        if (targetNode == null || targetNode.isNull() || !targetNode.isObject()) {
+            return null;
+        }
+        String host = targetNode.hasNonNull("host") ? targetNode.get("host").asText() : null;
+        Integer port = targetNode.hasNonNull("port") ? targetNode.get("port").asInt() : null;
+        String scheme = targetNode.hasNonNull("scheme") ? targetNode.get("scheme").asText() : null;
+        return new org.mockserver.load.LoadScenarioFromOpenAPI.Target(host, port, scheme);
+    }
+
+    /**
+     * Handle {@code PUT /mockserver/loadScenario/generateFromRecording}: seed an editable
+     * {@link org.mockserver.load.LoadScenario} from traffic previously recorded by the proxy (the
+     * {@code RECEIVED_REQUEST} entries held by the event log) and <em>load</em> (register) it in the
+     * {@code LOADED} state — exactly like {@code PUT /mockserver/loadScenario}, this generates no traffic
+     * and is allowed even when {@code loadGenerationEnabled} is false. The generated scenario is returned
+     * so a client/UI can show and edit it before triggering a run.
+     *
+     * <p>Body (JSON): {@code { "name": "...", "mode": "VERBATIM"|"TEMPLATIZED" (default VERBATIM),
+     * "requestFilter": <HttpRequest matcher> (optional — selects which recorded requests to include),
+     * "maxSteps": <int> (optional, VERBATIM only), "target": { "host":..., "port":..., "scheme":... }
+     * (optional, applied to every step), "profile": <LoadProfile> (optional) }}. Returns
+     * {@code 200 { status:"loaded", name, state:"LOADED", scenario:<generated LoadScenario> }} on
+     * success, or {@code 400 { error }} when the name is missing or there are no recorded requests to
+     * convert.
+     */
+    private HttpResponse handleLoadScenarioGenerateFromRecording(HttpRequest request) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            String body = request.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                return loadScenarioError(objectMapper, "request body is required with a name");
+            }
+            com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(body);
+            String name = root.path("name").isMissingNode() ? null : root.path("name").asText(null);
+            if (isBlank(name)) {
+                return loadScenarioError(objectMapper, "'name' is required");
+            }
+
+            org.mockserver.load.LoadScenarioFromRecording.Mode mode = org.mockserver.load.LoadScenarioFromRecording.Mode.VERBATIM;
+            if (root.hasNonNull("mode")) {
+                String modeText = root.get("mode").asText();
+                try {
+                    mode = org.mockserver.load.LoadScenarioFromRecording.Mode.valueOf(modeText.trim().toUpperCase());
+                } catch (IllegalArgumentException e) {
+                    return loadScenarioError(objectMapper, "invalid 'mode' (expected VERBATIM or TEMPLATIZED): " + modeText);
+                }
+            }
+            Integer maxSteps = root.hasNonNull("maxSteps") ? root.get("maxSteps").asInt() : null;
+            org.mockserver.load.LoadScenarioFromRecording.Target target = readRecordingTarget(root);
+            org.mockserver.load.LoadProfile profile = null;
+            if (root.has("profile") && !root.get("profile").isNull()) {
+                org.mockserver.serialization.model.LoadProfileDTO profileDTO =
+                    objectMapper.treeToValue(root.get("profile"), org.mockserver.serialization.model.LoadProfileDTO.class);
+                profile = profileDTO != null ? profileDTO.buildObject() : null;
+            }
+
+            // Optional requestFilter narrows which recorded requests are converted; absent = all recorded.
+            org.mockserver.model.RequestDefinition requestFilter = null;
+            if (root.has("requestFilter") && !root.get("requestFilter").isNull()) {
+                requestFilter = getHttpRequestSerializer().deserialize(objectMapper.writeValueAsString(root.get("requestFilter")));
+            }
+
+            // Pull the recorded (RECEIVED_REQUEST) requests from the event log, reusing the same
+            // retrieval the recorded-requests control plane uses. retrieveRequests resolves on the event
+            // log's disruptor thread, so block on the future to obtain the list synchronously here.
+            java.util.concurrent.CompletableFuture<java.util.List<org.mockserver.model.RequestDefinition>> recordedFuture =
+                new java.util.concurrent.CompletableFuture<>();
+            mockServerLog.retrieveRequests(requestFilter, recordedFuture::complete);
+            java.util.List<org.mockserver.model.RequestDefinition> recordedRequests =
+                recordedFuture.get(configuration.maxFutureTimeoutInMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+
+            org.mockserver.load.LoadScenario scenario;
+            try {
+                scenario = org.mockserver.load.LoadScenarioFromRecording.generate(name, recordedRequests, mode, maxSteps, target, profile);
+            } catch (IllegalArgumentException e) {
+                return loadScenarioError(objectMapper, "failed to generate load scenario from recording: " + e.getMessage());
+            }
+
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator orchestrator =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance();
+            orchestrator.setConfiguration(configuration);
+            String error = orchestrator.validate(scenario);
+            if (error != null) {
+                return loadScenarioError(objectMapper, error);
+            }
+            String serializedScenario = getLoadScenarioSerializer().serialize(scenario);
+            com.fasterxml.jackson.databind.JsonNode definition = objectMapper.readTree(serializedScenario);
+            loadScenarioRegistry.load(scenario.getName(), definition);
+            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.INFO)
+                        .setHttpRequest(request)
+                        .setMessageFormat("generated and loaded load scenario:{}from recorded traffic with {}steps")
+                        .setArguments(scenario.getName(), scenario.getSteps().size())
+                );
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("status", "loaded");
+            result.put("name", scenario.getName());
+            result.put("state", loadScenarioStateFor(scenario.getName()).name());
+            result.set("scenario", definition);
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (IllegalArgumentException e) {
+            return loadScenarioError(objectMapper, "invalid generate-from-recording request: " + e.getMessage());
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to process generate-from-recording request: " + e.getMessage());
+        }
+    }
+
+    /** Reads the optional {@code target} object ({@code host}/{@code port}/{@code scheme}) from a generate-from-recording request. */
+    private org.mockserver.load.LoadScenarioFromRecording.Target readRecordingTarget(com.fasterxml.jackson.databind.JsonNode root) {
+        com.fasterxml.jackson.databind.JsonNode targetNode = root.get("target");
+        if (targetNode == null || targetNode.isNull() || !targetNode.isObject()) {
+            return null;
+        }
+        String host = targetNode.hasNonNull("host") ? targetNode.get("host").asText() : null;
+        Integer port = targetNode.hasNonNull("port") ? targetNode.get("port").asInt() : null;
+        String scheme = targetNode.hasNonNull("scheme") ? targetNode.get("scheme").asText() : null;
+        return new org.mockserver.load.LoadScenarioFromRecording.Target(host, port, scheme);
+    }
+
+    /**
      * Handle {@code GET /mockserver/loadScenario}: list ALL registered scenarios, each with its
      * lifecycle {@code state}, {@code startDelayMillis}, full {@code definition} and — when active or
      * recently run — the live status fields.
@@ -3545,6 +3806,33 @@ public class HttpState {
                     loadScenarioNode(objectMapper, name)), MediaType.JSON_UTF_8);
         } catch (Exception e) {
             return loadScenarioError(objectMapper, "failed to get load scenario: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle {@code GET /mockserver/loadScenario/{name}/report}: an end-of-run summary report derived
+     * from the run's status snapshot (live snapshot for a running run, retained terminal snapshot for a
+     * finished one). Returns JSON by default; {@code ?format=junit} returns a JUnit-XML {@code testsuite}
+     * with {@code application/xml}. {@code 404} when the scenario is unknown / never ran. Read-only.
+     */
+    private HttpResponse handleLoadScenarioReport(String name, String format) {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.LoadScenarioOrchestrator.LoadScenarioStatus status =
+                org.mockserver.mock.action.http.LoadScenarioOrchestrator.getInstance().statusFor(name);
+            if (status == null) {
+                return response().withStatusCode(NOT_FOUND.code())
+                    .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+                        objectMapper.createObjectNode().put("error", "no load scenario run for '" + name + "'")), MediaType.JSON_UTF_8);
+            }
+            if (format != null && format.equalsIgnoreCase("junit")) {
+                return response().withStatusCode(OK.code())
+                    .withBody(org.mockserver.load.LoadScenarioReport.toJUnitXml(status), MediaType.create("application", "xml"));
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(org.mockserver.load.LoadScenarioReport.toJson(status), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return loadScenarioError(objectMapper, "failed to build load scenario report: " + e.getMessage());
         }
     }
 
@@ -3755,6 +4043,29 @@ public class HttpState {
             node.put("p50Millis", status.p50Millis);
             node.put("p95Millis", status.p95Millis);
             node.put("p99Millis", status.p99Millis);
+            node.put("p999Millis", status.p999Millis);
+            node.put("droppedIterations", status.droppedIterations);
+            if (status.verdict != null) {
+                node.put("verdict", status.verdict);
+            }
+            if (status.abortedByThreshold) {
+                node.put("abortedByThreshold", true);
+            }
+            if (status.thresholdResults != null && !status.thresholdResults.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ArrayNode thresholdResultsNode = node.putArray("thresholdResults");
+                for (org.mockserver.mock.action.http.LoadScenarioOrchestrator.ThresholdResult result : status.thresholdResults) {
+                    com.fasterxml.jackson.databind.node.ObjectNode resultNode = thresholdResultsNode.addObject();
+                    if (result.metric != null) {
+                        resultNode.put("metric", result.metric);
+                    }
+                    if (result.comparator != null) {
+                        resultNode.put("comparator", result.comparator);
+                    }
+                    resultNode.put("threshold", result.threshold);
+                    resultNode.put("observed", result.observed);
+                    resultNode.put("satisfied", result.satisfied);
+                }
+            }
             node.put("runId", status.runId);
             node.put("startedAt", status.startedAtEpochMillis);
             if (status.endedAtEpochMillis != null) {
@@ -3804,6 +4115,43 @@ public class HttpState {
             decoded = java.net.URLDecoder.decode(rest, java.nio.charset.StandardCharsets.UTF_8);
         } catch (Exception e) {
             decoded = rest;
+        }
+        if ("start".equals(decoded) || "stop".equals(decoded)) {
+            return null;
+        }
+        return decoded;
+    }
+
+    /**
+     * If {@code request} is a {@code GET} on {@code /mockserver/loadScenario/{name}/report} (with or
+     * without the prefix) where {name} is a single non-reserved segment, returns the decoded {name};
+     * otherwise {@code null}. {@code start}/{@code stop} are reserved and never matched as a name.
+     */
+    private String loadScenarioReportName(HttpRequest request) {
+        if (!request.getMethod().getValue().equals("GET")) {
+            return null;
+        }
+        String prefix = "/loadScenario/";
+        String suffix = "/report";
+        String path = request.getPath().getValue();
+        String rest = null;
+        if (path.startsWith(PATH_PREFIX + prefix)) {
+            rest = path.substring((PATH_PREFIX + prefix).length());
+        } else if (path.startsWith(prefix)) {
+            rest = path.substring(prefix.length());
+        }
+        if (rest == null || !rest.endsWith(suffix)) {
+            return null;
+        }
+        String namePart = rest.substring(0, rest.length() - suffix.length());
+        if (namePart.isEmpty() || namePart.contains("/")) {
+            return null;
+        }
+        String decoded;
+        try {
+            decoded = java.net.URLDecoder.decode(namePart, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            decoded = namePart;
         }
         if ("start".equals(decoded) || "stop".equals(decoded)) {
             return null;
@@ -5093,6 +5441,47 @@ public class HttpState {
         return false;
     }
 
+    /**
+     * Coarse role-based authorization for a control-plane operation that arrives outside the
+     * HTTP method/path classification used by {@link #controlPlaneAuthorized} — notably an MCP
+     * tool call, which is dispatched as a single JSON-RPC POST so the per-tool read/mutate
+     * split cannot be derived from the HTTP verb. The caller supplies the verified principal's
+     * scopes (from {@link org.mockserver.authentication.AuthenticationResult#getScopes()}) and a
+     * read/mutate classification it computed for the specific operation; this method reuses the
+     * SAME {@link org.mockserver.authentication.authorization.ControlPlaneAuthorizer} and role
+     * model as the HTTP control plane — it does NOT introduce a new role model.
+     * <p>
+     * Gated by {@code controlPlaneAuthorizationEnabled}: when authorization is disabled (the
+     * default) this always returns true, so behaviour is unchanged. When enabled it is
+     * fail-closed exactly like {@link #controlPlaneAuthorized}: a principal with no mapped role
+     * is denied every mutation (and every read unless it has a READ-or-higher role).
+     *
+     * @param verifiedScopes the authenticated principal's verified scopes (may be null/empty)
+     * @param isRead         true if the operation only reads control-plane state, false if it mutates
+     * @param operation      a short label for the operation (e.g. the MCP tool name) used only in the
+     *                       server-side denial log; may be null
+     * @return true to allow the operation; false to deny it with a 403-equivalent
+     */
+    public boolean controlPlaneToolAuthorized(java.util.Set<String> verifiedScopes, boolean isRead, String operation) {
+        if (!configuration.controlPlaneAuthorizationEnabled()) {
+            return true;
+        }
+        org.mockserver.authentication.authorization.ControlPlaneAuthorizer authorizer = controlPlaneAuthorizer();
+        java.util.Set<String> scopes = verifiedScopes != null ? verifiedScopes : java.util.Set.of();
+        boolean authorized = authorizer.isAuthorized(scopes, isRead);
+        if (!authorized && mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+            // Mirror controlPlaneAuthorized's server-side-only denial log: the granted-vs-required
+            // role detail is logged but never disclosed to the client (authorization policy is not leaked).
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.INFO)
+                    .setMessageFormat("control plane tool call forbidden:{}")
+                    .setArguments("principal granted roles " + authorizer.grantedRoles(scopes) + " do not satisfy required role " + authorizer.requiredRole(isRead) + " for tool " + operation)
+            );
+        }
+        return authorized;
+    }
+
     private static final java.util.Set<String> CONTROL_PLANE_READ_PUTS = new java.util.HashSet<>(java.util.Arrays.asList(
         "retrieve", "verify", "verifySequence", "verifySLO", "diff", "explainUnmatched", "debugMismatch", "files/retrieve", "files/list"
     ));
@@ -5398,6 +5787,9 @@ public class HttpState {
         if (expectationFileWatcher != null) {
             expectationFileWatcher.stop();
         }
+        if (memoryMonitoring != null) {
+            memoryMonitoring.stop();
+        }
         // Stop any active AsyncAPI broker connections (Kafka consumers, MQTT clients)
         // so they are not leaked on shutdown; no-op when the async module is absent
         // or nothing is loaded.
@@ -5631,6 +6023,181 @@ public class HttpState {
      */
     void handleContractTestForTest(HttpRequest controlPlaneRequest, ResponseWriter responseWriter, CompletableFuture<Boolean> canHandle) {
         handleContractTest(controlPlaneRequest, responseWriter, canHandle);
+    }
+
+    /**
+     * Validate the recorded request/response traffic against a provided OpenAPI specification.
+     *
+     * <p>The control-plane request body is a JSON document with a {@code "spec"} field — a URL, file
+     * path, or inline OpenAPI document. Each recorded request/response pair held in the event log is
+     * located against the spec ({@link OpenApiTrafficValidator}), its request validated by the OpenAPI
+     * request validator and its response by the OpenAPI response validator, and a structured report is
+     * returned mirroring the {@code /contractTest} report shape (per-pair results, pass/fail counts,
+     * {@code allPassed}).
+     *
+     * <p>When {@code spec} is a URL its host is checked against the same SSRF policy enforced by the
+     * forward/replay/contract-test paths before the parser is allowed to fetch it.
+     */
+    private void handleTrafficValidate(HttpRequest controlPlaneRequest, ResponseWriter responseWriter, CompletableFuture<Boolean> canHandle) {
+        try {
+            String body = controlPlaneRequest.getBodyAsJsonOrXmlString();
+            if (isBlank(body)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body is required — must be a JSON document with a \\\"spec\\\" (URL, file path, or inline OpenAPI spec)\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(body);
+            String spec = textOrNull(rootNode, "spec");
+            if (isBlank(spec)) {
+                spec = textOrNull(rootNode, "specUrlOrPayload");
+            }
+            if (isBlank(spec)) {
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(BAD_REQUEST.code())
+                    .withBody("{\"error\":\"request body must contain a \\\"spec\\\" — a URL, file path, or inline OpenAPI spec\"}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+                return;
+            }
+
+            // SSRF protection: when the spec is fetched from an http(s) URL, validate its host against
+            // the same policy enforced by the forward/replay/contract-test paths before the OpenAPI
+            // parser is allowed to dereference it.
+            if (org.mockserver.openapi.OpenAPIParser.isSpecUrl(spec)) {
+                String specHost = null;
+                try {
+                    java.net.URI specUri = new java.net.URI(spec.trim());
+                    String scheme = specUri.getScheme();
+                    if (scheme != null && (scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                        specHost = specUri.getHost();
+                    }
+                } catch (java.net.URISyntaxException ignore) {
+                    // not a parseable URI — treat as a file path / inline payload, no host to validate
+                }
+                if (isNotBlank(specHost)) {
+                    try {
+                        InetAddressValidator.validateForwardTarget(configuration, specHost);
+                    } catch (IllegalArgumentException blocked) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.WARN)
+                                .setMessageFormat("traffic validation spec fetch blocked by SSRF policy:{}")
+                                .setArguments(blocked.getMessage())
+                        );
+                        responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                            .withStatusCode(FORBIDDEN.code())
+                            .withBody("{\"error\":" + jsonEncodeString("traffic validation spec fetch blocked by SSRF policy: " + blocked.getMessage()) + "}", MediaType.JSON_UTF_8)), true);
+                        canHandle.complete(true);
+                        return;
+                    }
+                }
+            }
+
+            final String specRef = spec;
+            // Retrieve the recorded request/response pairs (async, via the event log) and then run the
+            // OpenAPI traffic validation off the calling (event-loop) thread: buildOpenAPI may fetch a
+            // remote spec URL (blocking I/O) and must not run on the worker event loop.
+            mockServerLog.retrieveRequestResponses(null, pairs -> {
+              try {
+                scheduler.getExecutorService().submit(() -> {
+                try {
+                    List<org.apache.commons.lang3.tuple.Pair<HttpRequest, HttpResponse>> requestResponsePairs = new java.util.ArrayList<>();
+                    for (LogEventRequestAndResponse pair : pairs) {
+                        if (pair.getHttpRequest() != null && pair.getHttpResponse() != null) {
+                            requestResponsePairs.add(org.apache.commons.lang3.tuple.Pair.of(pair.getHttpRequest(), pair.getHttpResponse()));
+                        }
+                    }
+
+                    List<org.mockserver.openapi.OpenApiTrafficValidator.TrafficValidationResult> results =
+                        new org.mockserver.openapi.OpenApiTrafficValidator(mockServerLogger)
+                            .validate(specRef, requestResponsePairs);
+
+                    int passed = 0;
+                    for (org.mockserver.openapi.OpenApiTrafficValidator.TrafficValidationResult result : results) {
+                        if (result.isPassed()) {
+                            passed++;
+                        }
+                    }
+                    com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+                    com.fasterxml.jackson.databind.node.ObjectNode reportNode = objectMapper.createObjectNode();
+                    reportNode.put("totalRequests", results.size());
+                    reportNode.put("passed", passed);
+                    reportNode.put("failed", results.size() - passed);
+                    reportNode.put("allPassed", passed == results.size());
+                    com.fasterxml.jackson.databind.node.ArrayNode resultsNode = reportNode.putArray("results");
+                    for (org.mockserver.openapi.OpenApiTrafficValidator.TrafficValidationResult result : results) {
+                        com.fasterxml.jackson.databind.node.ObjectNode resultNode = resultsNode.addObject();
+                        resultNode.put("method", result.getRequestMethod());
+                        resultNode.put("path", result.getRequestPath());
+                        resultNode.put("matchedOperation", result.getMatchedOperation());
+                        resultNode.put("passed", result.isPassed());
+                        com.fasterxml.jackson.databind.node.ArrayNode requestErrorsNode = resultNode.putArray("requestErrors");
+                        if (result.getRequestErrors() != null) {
+                            for (String error : result.getRequestErrors()) {
+                                requestErrorsNode.add(error);
+                            }
+                        }
+                        com.fasterxml.jackson.databind.node.ArrayNode responseErrorsNode = resultNode.putArray("responseErrors");
+                        if (result.getResponseErrors() != null) {
+                            for (String error : result.getResponseErrors()) {
+                                responseErrorsNode.add(error);
+                            }
+                        }
+                    }
+
+                    responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                        .withStatusCode(OK.code())
+                        .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(reportNode), MediaType.JSON_UTF_8)), true);
+                } catch (Exception e) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(Level.ERROR)
+                            .setHttpRequest(controlPlaneRequest)
+                            .setMessageFormat("exception handling traffic validation request:{}error:{}")
+                            .setArguments(controlPlaneRequest, e.getMessage())
+                            .setThrowable(e)
+                    );
+                    responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                        .withStatusCode(BAD_REQUEST.code())
+                        .withBody("{\"error\":" + jsonEncodeString(e.getMessage() != null ? e.getMessage() : "unknown error") + "}", MediaType.JSON_UTF_8)), true);
+                } finally {
+                    canHandle.complete(true);
+                }
+                });
+              } catch (Exception submitFailure) {
+                // The offload itself failed (e.g. RejectedExecutionException during shutdown). This
+                // runs on the disruptor consumer thread, outside the outer try/catch, so complete
+                // canHandle here to avoid leaving the control-plane request hanging.
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setHttpRequest(controlPlaneRequest)
+                        .setMessageFormat("exception offloading traffic validation request:{}error:{}")
+                        .setArguments(controlPlaneRequest, submitFailure.getMessage())
+                        .setThrowable(submitFailure)
+                );
+                responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                    .withStatusCode(SERVICE_UNAVAILABLE.code())
+                    .withBody("{\"error\":" + jsonEncodeString("unable to schedule traffic validation: " + (submitFailure.getMessage() != null ? submitFailure.getMessage() : submitFailure.getClass().getSimpleName())) + "}", MediaType.JSON_UTF_8)), true);
+                canHandle.complete(true);
+              }
+            });
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setHttpRequest(controlPlaneRequest)
+                    .setMessageFormat("exception handling traffic validation request:{}error:{}")
+                    .setArguments(controlPlaneRequest, e.getMessage())
+                    .setThrowable(e)
+            );
+            responseWriter.writeResponse(controlPlaneRequest, withDashboardCORS(controlPlaneRequest, response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":" + jsonEncodeString(e.getMessage() != null ? e.getMessage() : "unknown error") + "}", MediaType.JSON_UTF_8)), true);
+            canHandle.complete(true);
+        }
     }
 
     /**

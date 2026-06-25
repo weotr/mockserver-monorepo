@@ -268,7 +268,7 @@ string launcherPath = MockServerBinaryLauncher.EnsureBinary();
 ### Specify a version
 
 ```csharp
-using var launcher = MockServerBinaryLauncher.Start(port: 1080, version: "7.1.0");
+using var launcher = MockServerBinaryLauncher.Start(port: 1080, version: "7.2.0");
 ```
 
 ### API reference

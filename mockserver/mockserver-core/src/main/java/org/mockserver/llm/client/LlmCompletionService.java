@@ -11,8 +11,10 @@ import org.mockserver.model.NormalizationOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Orchestrates an outbound completion against a real LLM backend: looks up the
@@ -38,13 +40,23 @@ public class LlmCompletionService {
     private static final Logger LOGGER = LoggerFactory.getLogger(LlmCompletionService.class);
 
     // Bound the within-run reproducibility cache so a long-lived instance with
-    // many distinct prompts cannot grow without limit. When exceeded the cache is
-    // cleared wholesale (simplest correct policy; reproducibility is best-effort).
+    // many distinct prompts cannot grow without limit. An access-ordered
+    // LinkedHashMap with a removeEldestEntry cap gives bounded LRU eviction of a
+    // single oldest entry (reproducibility is best-effort), wrapped in a
+    // synchronized map so concurrent get/put are atomic — the previous
+    // size()-then-clear() was a non-atomic check-then-act that could drop entries
+    // under concurrency.
     private static final int MAX_CACHE_ENTRIES = 10_000;
 
     private final LlmTransport transport;
     private final LlmClientRegistry registry;
-    private final ConcurrentHashMap<String, Completion> cache = new ConcurrentHashMap<>();
+    private final Map<String, Completion> cache = Collections.synchronizedMap(
+        new LinkedHashMap<String, Completion>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, Completion> eldest) {
+                return size() > MAX_CACHE_ENTRIES;
+            }
+        });
 
     public LlmCompletionService(LlmTransport transport) {
         this(transport, LlmClientRegistry.getInstance());
@@ -104,9 +116,8 @@ public class LlmCompletionService {
     }
 
     private void cacheCompletion(String cacheKey, Completion completion) {
-        if (cache.size() >= MAX_CACHE_ENTRIES) {
-            cache.clear();
-        }
+        // Bounded LRU eviction is handled atomically by the synchronized
+        // access-ordered LinkedHashMap (removeEldestEntry above).
         cache.put(cacheKey, completion);
     }
 

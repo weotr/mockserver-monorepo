@@ -20,6 +20,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean detailedMatchFailures;
     private Boolean launchUIForLogLevelDebug;
     private Boolean metricsEnabled;
+    private Boolean dashboardAnalyticsEnabled;
+    private String dashboardAnalyticsEndpoint;
+    private String dashboardAnalyticsKey;
     private Boolean chaosAutoHaltEnabled;
     private Long chaosAutoHaltErrorThreshold;
     private Long chaosAutoHaltWindowMillis;
@@ -94,6 +97,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Boolean attachMismatchDiagnosticToResponse;
+    private Boolean closestMatchHintEnabled;
 
     private Boolean attemptToProxyIfNoMatchingExpectation;
     private String forwardHttpProxy;
@@ -105,6 +109,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String proxyAuthenticationUsername;
     private String proxyAuthenticationPassword;
     private String noProxyHosts;
+    private String proxyRemoteHost;
+    private Integer proxyRemotePort;
+    private java.util.List<org.mockserver.model.ProxyPassMapping> proxyPassMappings;
 
     private String livenessHttpGetPath;
 
@@ -150,6 +157,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Long sloWindowRetentionMillis;
     private Integer sloWindowMaxSamples;
     private Boolean loadGenerationEnabled;
+    private Boolean loadGenerationSuppressEventLog;
     private Integer loadGenerationMaxVirtualUsers;
     private Integer loadGenerationMaxInFlightRequests;
     private Integer loadGenerationMaxRequestsPerSecond;
@@ -242,6 +250,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Set<String> controlPlaneOidcRequiredScopes;
     private String controlPlaneOidcScopeClaim;
     private Boolean controlPlaneAuthorizationEnabled;
+    private Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping;
     private Boolean transparentProxyEnabled;
     private Boolean transparentProxyTproxy;
     private Boolean transparentProxyEbpf;
@@ -265,6 +274,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.detailedMatchFailures = configuration.detailedMatchFailures();
             this.launchUIForLogLevelDebug = configuration.launchUIForLogLevelDebug();
             this.metricsEnabled = configuration.metricsEnabled();
+            this.dashboardAnalyticsEnabled = configuration.dashboardAnalyticsEnabled();
+            this.dashboardAnalyticsEndpoint = configuration.dashboardAnalyticsEndpoint();
+            this.dashboardAnalyticsKey = configuration.dashboardAnalyticsKey();
             this.chaosAutoHaltEnabled = configuration.chaosAutoHaltEnabled();
             this.chaosAutoHaltErrorThreshold = configuration.chaosAutoHaltErrorThreshold();
             this.chaosAutoHaltWindowMillis = configuration.chaosAutoHaltWindowMillis();
@@ -341,6 +353,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
             this.maximumNumberOfRequestToReturnInVerificationFailure = configuration.maximumNumberOfRequestToReturnInVerificationFailure();
             this.attachMismatchDiagnosticToResponse = configuration.attachMismatchDiagnosticToResponse();
+            this.closestMatchHintEnabled = configuration.closestMatchHintEnabled();
 
             this.attemptToProxyIfNoMatchingExpectation = configuration.attemptToProxyIfNoMatchingExpectation();
             InetSocketAddress httpProxy = configuration.forwardHttpProxy();
@@ -361,6 +374,10 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.proxyAuthenticationUsername = configuration.proxyAuthenticationUsername();
             this.proxyAuthenticationPassword = configuration.proxyAuthenticationPassword();
             this.noProxyHosts = configuration.noProxyHosts();
+            this.proxyRemoteHost = configuration.proxyRemoteHost();
+            this.proxyRemotePort = configuration.proxyRemotePort();
+            java.util.List<org.mockserver.model.ProxyPassMapping> proxyPassMappings = configuration.proxyPassMappings();
+            this.proxyPassMappings = proxyPassMappings != null && !proxyPassMappings.isEmpty() ? proxyPassMappings : null;
 
             this.livenessHttpGetPath = configuration.livenessHttpGetPath();
             this.matchNamespaceHeader = configuration.matchNamespaceHeader();
@@ -408,6 +425,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.sloWindowRetentionMillis = configuration.sloWindowRetentionMillis();
             this.sloWindowMaxSamples = configuration.sloWindowMaxSamples();
             this.loadGenerationEnabled = configuration.loadGenerationEnabled();
+            this.loadGenerationSuppressEventLog = configuration.loadGenerationSuppressEventLog();
             this.loadGenerationMaxVirtualUsers = configuration.loadGenerationMaxVirtualUsers();
             this.loadGenerationMaxInFlightRequests = configuration.loadGenerationMaxInFlightRequests();
             this.loadGenerationMaxRequestsPerSecond = configuration.loadGenerationMaxRequestsPerSecond();
@@ -500,6 +518,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.controlPlaneOidcRequiredScopes = configuration.controlPlaneOidcRequiredScopes();
             this.controlPlaneOidcScopeClaim = configuration.controlPlaneOidcScopeClaim();
             this.controlPlaneAuthorizationEnabled = configuration.controlPlaneAuthorizationEnabled();
+            Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> scopeMapping = configuration.controlPlaneScopeMapping();
+            this.controlPlaneScopeMapping = scopeMapping != null && !scopeMapping.isEmpty() ? scopeMapping : null;
             this.transparentProxyEnabled = configuration.transparentProxyEnabled();
             this.transparentProxyTproxy = configuration.transparentProxyTproxy();
             this.transparentProxyEbpf = configuration.transparentProxyEbpf();
@@ -558,6 +578,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.detailedMatchFailures(detailedMatchFailures);
         configuration.launchUIForLogLevelDebug(launchUIForLogLevelDebug);
         configuration.metricsEnabled(metricsEnabled);
+        configuration.dashboardAnalyticsEnabled(dashboardAnalyticsEnabled);
+        configuration.dashboardAnalyticsEndpoint(dashboardAnalyticsEndpoint);
+        configuration.dashboardAnalyticsKey(dashboardAnalyticsKey);
         configuration.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
         configuration.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
         configuration.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
@@ -634,6 +657,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
         configuration.maximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
         configuration.attachMismatchDiagnosticToResponse(attachMismatchDiagnosticToResponse);
+        configuration.closestMatchHintEnabled(closestMatchHintEnabled);
 
         configuration.attemptToProxyIfNoMatchingExpectation(attemptToProxyIfNoMatchingExpectation);
         if (forwardHttpProxy != null) {
@@ -651,6 +675,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.proxyAuthenticationUsername(proxyAuthenticationUsername);
         configuration.proxyAuthenticationPassword(proxyAuthenticationPassword);
         configuration.noProxyHosts(noProxyHosts);
+        configuration.proxyRemoteHost(proxyRemoteHost);
+        configuration.proxyRemotePort(proxyRemotePort);
+        configuration.proxyPassMappings(proxyPassMappings);
 
         configuration.livenessHttpGetPath(livenessHttpGetPath);
 
@@ -704,6 +731,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.sloWindowRetentionMillis(sloWindowRetentionMillis);
         configuration.sloWindowMaxSamples(sloWindowMaxSamples);
         configuration.loadGenerationEnabled(loadGenerationEnabled);
+        configuration.loadGenerationSuppressEventLog(loadGenerationSuppressEventLog);
         configuration.loadGenerationMaxVirtualUsers(loadGenerationMaxVirtualUsers);
         configuration.loadGenerationMaxInFlightRequests(loadGenerationMaxInFlightRequests);
         configuration.loadGenerationMaxRequestsPerSecond(loadGenerationMaxRequestsPerSecond);
@@ -802,6 +830,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         configuration.controlPlaneOidcScopeClaim(controlPlaneOidcScopeClaim);
         configuration.controlPlaneAuthorizationEnabled(controlPlaneAuthorizationEnabled);
+        configuration.controlPlaneScopeMapping(controlPlaneScopeMapping);
         configuration.transparentProxyEnabled(transparentProxyEnabled);
         configuration.transparentProxyTproxy(transparentProxyTproxy);
         configuration.transparentProxyEbpf(transparentProxyEbpf);
@@ -833,6 +862,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (metricsEnabled != null) {
             target.metricsEnabled(metricsEnabled);
+        }
+        if (dashboardAnalyticsEnabled != null) {
+            target.dashboardAnalyticsEnabled(dashboardAnalyticsEnabled);
+        }
+        if (dashboardAnalyticsEndpoint != null) {
+            target.dashboardAnalyticsEndpoint(dashboardAnalyticsEndpoint);
+        }
+        if (dashboardAnalyticsKey != null) {
+            target.dashboardAnalyticsKey(dashboardAnalyticsKey);
         }
         if (chaosAutoHaltEnabled != null) {
             target.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
@@ -1017,6 +1055,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (attachMismatchDiagnosticToResponse != null) {
             target.attachMismatchDiagnosticToResponse(attachMismatchDiagnosticToResponse);
         }
+        if (closestMatchHintEnabled != null) {
+            target.closestMatchHintEnabled(closestMatchHintEnabled);
+        }
         if (attemptToProxyIfNoMatchingExpectation != null) {
             target.attemptToProxyIfNoMatchingExpectation(attemptToProxyIfNoMatchingExpectation);
         }
@@ -1046,6 +1087,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (noProxyHosts != null) {
             target.noProxyHosts(noProxyHosts);
+        }
+        if (proxyRemoteHost != null) {
+            target.proxyRemoteHost(proxyRemoteHost);
+        }
+        if (proxyRemotePort != null) {
+            target.proxyRemotePort(proxyRemotePort);
+        }
+        if (proxyPassMappings != null) {
+            target.proxyPassMappings(proxyPassMappings);
         }
         if (livenessHttpGetPath != null) {
             target.livenessHttpGetPath(livenessHttpGetPath);
@@ -1163,6 +1213,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (loadGenerationEnabled != null) {
             target.loadGenerationEnabled(loadGenerationEnabled);
+        }
+        if (loadGenerationSuppressEventLog != null) {
+            target.loadGenerationSuppressEventLog(loadGenerationSuppressEventLog);
         }
         if (loadGenerationMaxVirtualUsers != null) {
             target.loadGenerationMaxVirtualUsers(loadGenerationMaxVirtualUsers);
@@ -1440,6 +1493,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (controlPlaneAuthorizationEnabled != null) {
             target.controlPlaneAuthorizationEnabled(controlPlaneAuthorizationEnabled);
         }
+        if (controlPlaneScopeMapping != null) {
+            target.controlPlaneScopeMapping(controlPlaneScopeMapping);
+        }
         if (transparentProxyEnabled != null) {
             target.transparentProxyEnabled(transparentProxyEnabled);
         }
@@ -1531,6 +1587,33 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMetricsEnabled(Boolean metricsEnabled) {
         this.metricsEnabled = metricsEnabled;
+        return this;
+    }
+
+    public Boolean getDashboardAnalyticsEnabled() {
+        return dashboardAnalyticsEnabled;
+    }
+
+    public ConfigurationDTO setDashboardAnalyticsEnabled(Boolean dashboardAnalyticsEnabled) {
+        this.dashboardAnalyticsEnabled = dashboardAnalyticsEnabled;
+        return this;
+    }
+
+    public String getDashboardAnalyticsEndpoint() {
+        return dashboardAnalyticsEndpoint;
+    }
+
+    public ConfigurationDTO setDashboardAnalyticsEndpoint(String dashboardAnalyticsEndpoint) {
+        this.dashboardAnalyticsEndpoint = dashboardAnalyticsEndpoint;
+        return this;
+    }
+
+    public String getDashboardAnalyticsKey() {
+        return dashboardAnalyticsKey;
+    }
+
+    public ConfigurationDTO setDashboardAnalyticsKey(String dashboardAnalyticsKey) {
+        this.dashboardAnalyticsKey = dashboardAnalyticsKey;
         return this;
     }
 
@@ -2083,6 +2166,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Boolean getClosestMatchHintEnabled() {
+        return closestMatchHintEnabled;
+    }
+
+    public ConfigurationDTO setClosestMatchHintEnabled(Boolean closestMatchHintEnabled) {
+        this.closestMatchHintEnabled = closestMatchHintEnabled;
+        return this;
+    }
+
     public Boolean getAttemptToProxyIfNoMatchingExpectation() {
         return attemptToProxyIfNoMatchingExpectation;
     }
@@ -2174,6 +2266,33 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setNoProxyHosts(String noProxyHosts) {
         this.noProxyHosts = noProxyHosts;
+        return this;
+    }
+
+    public String getProxyRemoteHost() {
+        return proxyRemoteHost;
+    }
+
+    public ConfigurationDTO setProxyRemoteHost(String proxyRemoteHost) {
+        this.proxyRemoteHost = proxyRemoteHost;
+        return this;
+    }
+
+    public Integer getProxyRemotePort() {
+        return proxyRemotePort;
+    }
+
+    public ConfigurationDTO setProxyRemotePort(Integer proxyRemotePort) {
+        this.proxyRemotePort = proxyRemotePort;
+        return this;
+    }
+
+    public java.util.List<org.mockserver.model.ProxyPassMapping> getProxyPassMappings() {
+        return proxyPassMappings;
+    }
+
+    public ConfigurationDTO setProxyPassMappings(java.util.List<org.mockserver.model.ProxyPassMapping> proxyPassMappings) {
+        this.proxyPassMappings = proxyPassMappings;
         return this;
     }
 
@@ -2529,6 +2648,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setLoadGenerationEnabled(Boolean loadGenerationEnabled) {
         this.loadGenerationEnabled = loadGenerationEnabled;
+        return this;
+    }
+
+    public Boolean getLoadGenerationSuppressEventLog() {
+        return loadGenerationSuppressEventLog;
+    }
+
+    public ConfigurationDTO setLoadGenerationSuppressEventLog(Boolean loadGenerationSuppressEventLog) {
+        this.loadGenerationSuppressEventLog = loadGenerationSuppressEventLog;
         return this;
     }
 
@@ -3363,6 +3491,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setControlPlaneAuthorizationEnabled(Boolean controlPlaneAuthorizationEnabled) {
         this.controlPlaneAuthorizationEnabled = controlPlaneAuthorizationEnabled;
+        return this;
+    }
+
+    public Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> getControlPlaneScopeMapping() {
+        return controlPlaneScopeMapping;
+    }
+
+    public ConfigurationDTO setControlPlaneScopeMapping(Map<String, org.mockserver.authentication.authorization.ControlPlaneRole> controlPlaneScopeMapping) {
+        this.controlPlaneScopeMapping = controlPlaneScopeMapping;
         return this;
     }
 

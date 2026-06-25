@@ -4,7 +4,7 @@ description: AI assistants can use MockServer MCP tools to set up a forwarding p
 shortTitle: Debugging with AI
 layout: page
 pageOrder: 3
-section: 'AI Integration'
+section: 'AI & MCP'
 subsection: true
 sitemap:
   priority: 0.8
@@ -176,8 +176,8 @@ agent = create_react_agent(model, tools=tools)</code></pre>
 
 <p>The assistant will:</p>
 <ol>
-    <li>Use <code class="code inline">raw_retrieve</code> with type <code class="code inline">LOGS</code> to find recent log entries and identify the correlation ID for the request</li>
-    <li>Use <code class="code inline">raw_retrieve</code> with type <code class="code inline">LOGS</code> and the <code class="code inline">correlationId</code> parameter to get all log entries for that specific request</li>
+    <li>Use the dedicated <code class="code inline">retrieve_logs</code> tool to find recent log entries and identify the correlation ID for the request (or <code class="code inline">raw_retrieve</code> with type <code class="code inline">LOGS</code> for the full retrieve format)</li>
+    <li>Use <code class="code inline">retrieve_logs</code> with the <code class="code inline">correlationId</code> parameter to get all log entries for that specific request</li>
     <li>Present the full lifecycle: request received → expectation matching attempts → match result → response returned</li>
     <li>Highlight which expectations were compared and why each didn't match</li>
 </ol>

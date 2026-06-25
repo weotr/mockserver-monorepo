@@ -19,6 +19,17 @@ app:
   mountedLibsConfigMapName: "mockserver-config"
   propertiesFileName: "mockserver.properties"
   readOnlyRootFilesystem: false
+  # -- Extra JVM options, passed verbatim via the JAVA_TOOL_OPTIONS environment variable.
+  # Empty by default. The Docker image already caps the heap at 75% of the container memory
+  # limit (-XX:MaxRAMPercentage=75.0), so the in-memory request/expectation rings size off a
+  # bounded heap. To change the cap, set an explicit -Xmx here — that disables the image's
+  # MaxRAMPercentage. (A different MaxRAMPercentage set via jvmOptions has NO effect: the
+  # image's entrypoint flag is applied last and wins.) MockServer's in-memory log ring sizes
+  # off the heap, so always pair a heap setting with a matching resources.limits.memory below.
+  # Example - set an explicit heap (overrides the image's 75% MaxRAMPercentage; must fit inside
+  # resources.limits.memory):
+  #   jvmOptions: "-Xmx512m"
+  jvmOptions: ""
   serviceAccountName: default
   runAsUser: 65534
   config:
@@ -149,6 +160,20 @@ podAnnotations: {}
 
 podLabels: {}
 
+# -- Pod resource requests and limits, rendered verbatim into the container spec.
+# Empty by default (no requests/limits — the pod can consume unbounded node memory).
+# Setting a memory limit is strongly recommended: the JVM caps its heap at 75% of the
+# memory limit (-XX:MaxRAMPercentage=75.0 in the image), and MockServer's in-memory
+# request/expectation rings size off that heap. Without a limit the JVM sizes off total
+# node memory and can be OOM-killed under load. Set app.jvmOptions to tune the heap.
+# Example:
+#   resources:
+#     requests:
+#       cpu: 250m
+#       memory: 512Mi
+#     limits:
+#       cpu: "1"
+#       memory: 1Gi
 resources: {}
 
 nodeSelector: {}
@@ -276,7 +301,7 @@ webhook:
 #   clustering:
 #     enabled: true
 #   image:
-#     repositoryNameAndTag: "mockserver/mockserver:clustered-7.1.0"
+#     repositoryNameAndTag: "mockserver/mockserver:clustered-7.2.0"
 clustering:
   enabled: false
   # -- Cluster name for JGroups. All pods that should share state must use

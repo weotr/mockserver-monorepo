@@ -14,6 +14,8 @@ sitemap:
 
 <p>MockServer can import expectations directly from <strong>HAR (HTTP Archive)</strong> files, <strong>Postman Collection v2.x</strong> files, and <strong>Pact v3 consumer contracts</strong>. This lets you record real HTTP traffic, reuse existing collections, or bootstrap stubs from a published contract without writing expectations by hand.</p>
 
+<p><strong>Note:</strong> import is a server-side REST operation — all clients import by calling <span class="inline_code">PUT /mockserver/import</span> directly with the document as the request body. The examples below use <span class="inline_code">curl</span>; any HTTP client (or the language client's raw request method) sends the same request.</p>
+
 <p>Common use cases:</p>
 <ul>
     <li><strong>Record-and-replay</strong> &mdash; capture traffic with browser DevTools (Export HAR) or Postman, then import it to create a mock that replays the recorded responses</li>

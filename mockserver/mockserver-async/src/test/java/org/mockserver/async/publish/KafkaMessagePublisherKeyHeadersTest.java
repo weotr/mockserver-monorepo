@@ -1,5 +1,6 @@
 package org.mockserver.async.publish;
 
+import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
@@ -16,6 +17,7 @@ import java.util.Map;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.MockitoAnnotations.openMocks;
 
@@ -42,7 +44,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.topic(), is("my-topic"));
@@ -57,7 +59,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is(nullValue()));
@@ -74,7 +76,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         Header traceHeader = record.headers().lastHeader("trace-id");
@@ -93,7 +95,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.headers().toArray().length, is(0));
@@ -107,7 +109,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.topic(), is("my-topic"));
@@ -125,7 +127,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.topic(), is("my-topic"));
@@ -141,7 +143,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is(nullValue()));
@@ -154,7 +156,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is(nullValue()));
@@ -167,7 +169,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is(nullValue()));
@@ -185,7 +187,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is("key1"));
@@ -202,7 +204,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.headers().toArray().length, is(0));
@@ -219,7 +221,7 @@ public class KafkaMessagePublisherKeyHeadersTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<ProducerRecord<String, String>> captor =
             ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(mockProducer).send(captor.capture());
+        verify(mockProducer).send(captor.capture(), any(Callback.class));
 
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.key(), is("my-key"));

@@ -10,12 +10,113 @@ import type {
 } from '../types';
 import { ACTION_TYPES, LLM_PROVIDERS } from '../lib/clientFilters';
 
-export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'performance' | 'metrics' | 'drift' | 'verification' | 'async' | 'grpc' | 'breakpoints' | 'contract' | 'cluster' | 'optimise' | 'get-started';
+export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'performance' | 'metrics' | 'drift' | 'verification' | 'slo' | 'async' | 'grpc' | 'breakpoints' | 'contract' | 'cluster' | 'optimise' | 'get-started';
 
 /** Map legacy/removed ViewMode values to their replacement. */
 const VIEW_MIGRATION: Record<string, ViewMode> = {
   'mcp-tools': 'composer',
 };
+
+/** Every valid ViewMode, used to validate persisted/hash-derived values. */
+export const ALL_VIEWS: readonly ViewMode[] = [
+  'dashboard', 'traffic', 'sessions', 'composer', 'library', 'chaos', 'performance',
+  'metrics', 'drift', 'verification', 'slo', 'async', 'grpc', 'breakpoints', 'contract',
+  'cluster', 'optimise', 'get-started',
+];
+
+const VIEW_STORAGE_KEY = 'mockserver-view';
+const SEARCH_STORAGE_KEY = 'mockserver-search';
+
+/**
+ * Coerce an arbitrary string into a valid ViewMode, applying legacy migrations.
+ * Returns null when the value is unknown — callers fall back to their default,
+ * so a stale or hand-edited persisted/hash value can never poison the view.
+ */
+export function coerceView(value: string | null | undefined): ViewMode | null {
+  if (!value) return null;
+  const migrated = VIEW_MIGRATION[value] ?? value;
+  return (ALL_VIEWS as readonly string[]).includes(migrated) ? (migrated as ViewMode) : null;
+}
+
+/** Read the view encoded in the URL hash (e.g. `#/contract`), if any and valid. */
+function viewFromHash(): ViewMode | null {
+  try {
+    const hash = globalThis.location?.hash ?? '';
+    const match = /^#\/?(.+)$/.exec(hash);
+    return match ? coerceView(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the view to land on at startup. Precedence:
+ *   1. a valid view in the URL hash (linkable/deep-link),
+ *   2. else a previously-persisted view from localStorage,
+ *   3. else 'get-started' for a genuine first visit (nothing persisted).
+ */
+function getInitialView(): ViewMode {
+  const fromHash = viewFromHash();
+  if (fromHash) return fromHash;
+  try {
+    const stored = coerceView(globalThis.localStorage?.getItem(VIEW_STORAGE_KEY));
+    if (stored) return stored;
+  } catch {
+    // localStorage may not be available in test/SSR environments
+  }
+  return 'get-started';
+}
+
+/** Persist the active view to localStorage and reflect it in the URL hash. */
+function persistView(view: ViewMode): void {
+  try { globalThis.localStorage?.setItem(VIEW_STORAGE_KEY, view); } catch { /* noop */ }
+  try {
+    // Only assign when the hash actually differs so this can never trigger a
+    // hashchange event (and thus a feedback loop with App's hashchange listener),
+    // regardless of how the browser coalesces identical assignments.
+    const next = `#/${view}`;
+    if (globalThis.location && globalThis.location.hash !== next) {
+      globalThis.location.hash = next;
+    }
+  } catch { /* noop */ }
+}
+
+interface PersistedSearch {
+  logSearch: string;
+  expectationSearch: string;
+  receivedSearch: string;
+  proxiedSearch: string;
+  trafficSearch: string;
+}
+
+const EMPTY_SEARCH: PersistedSearch = {
+  logSearch: '', expectationSearch: '', receivedSearch: '', proxiedSearch: '', trafficSearch: '',
+};
+
+/** Restore the persisted per-panel search/filter terms; defaults to empty. */
+function getInitialSearch(): PersistedSearch {
+  try {
+    const raw = globalThis.localStorage?.getItem(SEARCH_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PersistedSearch>;
+      return {
+        logSearch: typeof parsed.logSearch === 'string' ? parsed.logSearch : '',
+        expectationSearch: typeof parsed.expectationSearch === 'string' ? parsed.expectationSearch : '',
+        receivedSearch: typeof parsed.receivedSearch === 'string' ? parsed.receivedSearch : '',
+        proxiedSearch: typeof parsed.proxiedSearch === 'string' ? parsed.proxiedSearch : '',
+        trafficSearch: typeof parsed.trafficSearch === 'string' ? parsed.trafficSearch : '',
+      };
+    }
+  } catch {
+    // unavailable or malformed — fall through to empty defaults
+  }
+  return { ...EMPTY_SEARCH };
+}
+
+/** Persist the current set of per-panel search/filter terms to localStorage. */
+function persistSearch(search: PersistedSearch): void {
+  try { globalThis.localStorage?.setItem(SEARCH_STORAGE_KEY, JSON.stringify(search)); } catch { /* noop */ }
+}
 
 /**
  * Per-panel cache mapping each `key` to the reference currently held for it and
@@ -214,13 +315,17 @@ function getInitialTheme(): ThemeMode {
   return 'dark';
 }
 
+const initialSearch = getInitialSearch();
+
 export const useDashboardStore = create<DashboardState>()((set) => ({
   logMessages: [],
   activeExpectations: [],
   recordedRequests: [],
   proxiedRequests: [],
 
-  view: 'get-started' as ViewMode,
+  // Restore the last-used view (URL hash wins over localStorage); a genuine
+  // first visit with nothing persisted falls back to 'get-started'.
+  view: getInitialView(),
   requestFilter: {},
   filterEnabled: false,
   filterExpanded: false,
@@ -229,11 +334,11 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   themeMode: getInitialTheme(),
   autoScroll: true,
 
-  logSearch: '',
-  expectationSearch: '',
-  receivedSearch: '',
-  proxiedSearch: '',
-  trafficSearch: '',
+  logSearch: initialSearch.logSearch,
+  expectationSearch: initialSearch.expectationSearch,
+  receivedSearch: initialSearch.receivedSearch,
+  proxiedSearch: initialSearch.proxiedSearch,
+  trafficSearch: initialSearch.trafficSearch,
 
   logShowForwarded: true,
 
@@ -286,6 +391,11 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
     activeExpectationsCache.clear();
     recordedRequestsCache.clear();
     proxiedRequestsCache.clear();
+    // A server reset returns the user to Get Started and discards all traffic;
+    // persist that view AND clear persisted/in-memory search so a subsequent
+    // reload doesn't restore the now-stale prior view or filters.
+    persistView('get-started');
+    persistSearch(EMPTY_SEARCH);
     set({
       logMessages: [],
       activeExpectations: [],
@@ -297,6 +407,12 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       error: null,
       notification: null,
       view: 'get-started' as ViewMode,
+
+      logSearch: '',
+      expectationSearch: '',
+      receivedSearch: '',
+      proxiedSearch: '',
+      trafficSearch: '',
 
       debugMismatchOpen: false,
       debugMismatchLoading: false,
@@ -313,6 +429,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
 
   setView: (view) => {
     const resolved = VIEW_MIGRATION[view as string] ?? view;
+    persistView(resolved);
     set({ view: resolved, selectedTrafficKey: null });
   },
   setRequestFilter: (filter) => set({ requestFilter: filter }),
@@ -332,16 +449,40 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
     }),
   setAutoScroll: (enabled) => set({ autoScroll: enabled }),
   toggleAutoScroll: () => set((s) => ({ autoScroll: !s.autoScroll })),
-  setLogSearch: (term) => set({ logSearch: term }),
+  // Each setter persists ONLY the five search fields (an explicit PersistedSearch
+  // slice) — never `{ ...s }`, which would serialize the entire store (logs,
+  // expectations, recorded/proxied requests) to localStorage on every keystroke.
+  setLogSearch: (term) => set((s) => {
+    persistSearch({ logSearch: term, expectationSearch: s.expectationSearch, receivedSearch: s.receivedSearch, proxiedSearch: s.proxiedSearch, trafficSearch: s.trafficSearch });
+    return { logSearch: term };
+  }),
   setLogShowForwarded: (show) => set({ logShowForwarded: show }),
-  setExpectationSearch: (term) => set({ expectationSearch: term }),
-  setReceivedSearch: (term) => set({ receivedSearch: term }),
-  setProxiedSearch: (term) => set({ proxiedSearch: term }),
-  setTrafficSearch: (term) => set({ trafficSearch: term }),
+  setExpectationSearch: (term) => set((s) => {
+    persistSearch({ logSearch: s.logSearch, expectationSearch: term, receivedSearch: s.receivedSearch, proxiedSearch: s.proxiedSearch, trafficSearch: s.trafficSearch });
+    return { expectationSearch: term };
+  }),
+  setReceivedSearch: (term) => set((s) => {
+    persistSearch({ logSearch: s.logSearch, expectationSearch: s.expectationSearch, receivedSearch: term, proxiedSearch: s.proxiedSearch, trafficSearch: s.trafficSearch });
+    return { receivedSearch: term };
+  }),
+  setProxiedSearch: (term) => set((s) => {
+    persistSearch({ logSearch: s.logSearch, expectationSearch: s.expectationSearch, receivedSearch: s.receivedSearch, proxiedSearch: term, trafficSearch: s.trafficSearch });
+    return { proxiedSearch: term };
+  }),
+  setTrafficSearch: (term) => set((s) => {
+    persistSearch({ logSearch: s.logSearch, expectationSearch: s.expectationSearch, receivedSearch: s.receivedSearch, proxiedSearch: s.proxiedSearch, trafficSearch: term });
+    return { trafficSearch: term };
+  }),
   setSelectedTrafficKey: (key) => set({ selectedTrafficKey: key }),
-  editExpectation: (expectation) => set({ pendingEditExpectation: expectation, view: 'composer' as ViewMode, selectedTrafficKey: null }),
+  editExpectation: (expectation) => {
+    persistView('composer');
+    set({ pendingEditExpectation: expectation, view: 'composer' as ViewMode, selectedTrafficKey: null });
+  },
   clearPendingEditExpectation: () => set({ pendingEditExpectation: null }),
-  setBreakpointPrefill: (prefill) => set({ pendingBreakpointPrefill: prefill, view: 'breakpoints' as ViewMode, selectedTrafficKey: null }),
+  setBreakpointPrefill: (prefill) => {
+    persistView('breakpoints');
+    set({ pendingBreakpointPrefill: prefill, view: 'breakpoints' as ViewMode, selectedTrafficKey: null });
+  },
   clearPendingBreakpointPrefill: () => set({ pendingBreakpointPrefill: null }),
   setError: (error) => set({ error }),
   setNotification: (notification) => set({ notification }),

@@ -49,11 +49,12 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | Category | Representative properties |
 |----------|--------------------------|
 | Ports & proxy | `serverPort`, `proxyRemoteHost`, `proxyRemotePort` |
-| Logging | `logLevel`, `disableSystemOut`, `detailedMatchFailures`, `compactLogFormat`, `metricsEnabled`, `slowRequestThresholdMillis`, `attachMismatchDiagnosticToResponse` |
+| Logging | `logLevel`, `disableSystemOut`, `detailedMatchFailures`, `compactLogFormat`, `metricsEnabled`, `slowRequestThresholdMillis`, `attachMismatchDiagnosticToResponse`, `closestMatchHintEnabled` |
 | Dev mode | `devMode` |
 | Memory usage | `maxExpectations`, `maxLogEntries`, `maxWebSocketExpectations`, `outputMemoryUsageCsv` |
 | HTTP behaviour | `nioEventLoopThreadCount`, `actionHandlerThreadCount`, `webSocketClientEventLoopThreadCount`, `clientNioEventLoopThreadCount`, `streamingResponsesEnabled`, `maxStreamingCaptureBytes` |
 | Matching | `matchersFailFast`, `matchExactCase` (when `true`, method/path/string-body matching is case-sensitive, and response reason-phrase matching in verification is also case-sensitive; header/cookie/query matching always stays case-insensitive — default `false`) |
+| JSON Schema matching (internal tuning) | `jsonSchemaAllowRemoteRefs`, `mockserver.candidateIndexThreshold` — **JVM system-property-only tuning knobs**, not part of the standard four-equivalent-forms property set; see [Internal Tuning-Only System Properties](#internal-tuning-only-system-properties) below |
 | Initialisation / OpenAPI | `initializationClass`, `initializationJsonPath`, `persistExpectations`, `persistedExpectationsPath`, `openAPIContextPathPrefix`, `openAPIResponseValidation`, `enforceResponseValidationForMocks`, `validateRequestsAgainstOpenApiSpec` (when `true`, requests matched by an OpenAPI-backed mock that violate the spec are rejected with a `400` instead of serving the mock response — default `false`; OpenAPI-backed expectations only), `generateRealisticExampleValues`, `validateProxyOpenAPISpec`, `validateProxyEnforce`, `failOnInitializationError` |
 | CORS | `enableCORSForAPI`, `enableCORSForAllResponses`, `corsAllowOrigin`, `corsAllowMethods`, `corsAllowHeaders`, `corsAllowCredentials` |
 | Default response headers | `defaultResponseHeaders` |
@@ -77,14 +78,14 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | Chaos auto-halt | `chaosAutoHaltEnabled`, `chaosAutoHaltErrorThreshold`, `chaosAutoHaltWindowMillis` |
 | Rate limiting | `rateLimitMaxNamedQuotas` |
 | SLO verdicts | `sloTrackingEnabled`, `sloWindowRetentionMillis`, `sloWindowMaxSamples` |
-| Load generation | `loadGenerationEnabled`, `loadGenerationMaxVirtualUsers`, `loadGenerationMaxInFlightRequests`, `loadGenerationMaxRequestsPerSecond`, `loadGenerationMaxDurationMillis`, `loadGenerationMaxSteps` |
+| Load generation | `loadGenerationEnabled`, `loadGenerationSuppressEventLog`, `loadGenerationMaxVirtualUsers`, `loadGenerationMaxInFlightRequests`, `loadGenerationMaxRequestsPerSecond`, `loadGenerationMaxDurationMillis`, `loadGenerationMaxSteps` |
 | Breakpoints | `breakpointTimeoutMillis`, `breakpointMaxHeld` (breakpoint activation is now via the matcher-based registry REST API) |
 | Drift detection | `driftSemanticAnalysisEnabled`, `driftResponseTimeThresholdMs`, `driftAlertWebhookEnabled`, `driftAlertWebhookUrl`, `driftAlertSeverityThreshold`, `driftAlertCooldownMillis` |
 | Control-plane audit | `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads` |
 | Clustered state | `stateBackend`, `clusterEnabled`, `clusterName`, `clusterTransportConfig`, `clusterSharedTimesEnabled` |
 | Blob store | `blobStoreType`, `blobStoreBucket`, `blobStoreRegion`, `blobStoreEndpoint`, `blobStoreKeyPrefix`, `blobStoreAccessKeyId`, `blobStoreSecretAccessKey`, `blobStoreContainer`, `blobStoreConnectionString`, `blobStoreProjectId` |
 | Async messaging | `asyncKafkaBootstrapServers`, `asyncMqttBrokerUrl`, `asyncRecordedMessageMaxEntries` |
-| JSON Schema matching | `jsonSchemaAllowRemoteRefs` (JVM system property only — not in `ConfigurationProperties`; read via `System.getProperty` in `JsonSchemaValidator` at schema-build time) |
+| JSON Schema matching | `jsonSchemaAllowRemoteRefs` — JVM system property only (see [Internal Tuning-Only System Properties](#internal-tuning-only-system-properties)) |
 | LLM mocking | `llmProvider`, `llmApiKey`, `llmModel`, `llmBaseUrl`, `llmBackendsConfig`, `llmSemanticMatchingEnabled`, `llmVcrStrict`, `fixtureBodyRedactFields` |
 | LLM metrics & budget | `llmMetricsEnabled`, `llmCostBudgetUsd`, `perExpectationMetricsEnabled` |
 | Recorded expectations | `deduplicateRecordedExpectations`, `redactSecretsInRecordedExpectations` |
@@ -136,6 +137,7 @@ Opt-in API-driven load generation that backs `PUT /mockserver/loadScenario` (see
 | Property | Default | Meaning |
 |----------|---------|---------|
 | `loadGenerationEnabled` | `false` | When `false`, `PUT /mockserver/loadScenario` returns `403`. Must be set to `true` to opt in — MockServer never self-generates traffic unless explicitly enabled. |
+| `loadGenerationSuppressEventLog` | `true` | Keep the server's own load-generation traffic out of the request event log. The marker is an in-process flag, never a wire header, so it stays on the driver and never reaches an upstream target. Set to `false` to record load-generation traffic in the driver's event log too. |
 | `loadGenerationMaxVirtualUsers` | `50` | Hard cap on the concurrent virtual users a scenario may drive; a profile requesting more is rejected at validation. |
 | `loadGenerationMaxInFlightRequests` | `200` | Hard cap on outstanding (not-yet-completed) requests, enforced live by an in-flight semaphore so a slow target cannot let the scenario queue unbounded work. |
 | `loadGenerationMaxRequestsPerSecond` | `500` | Hard cap on dispatch rate, enforced live by a token bucket. |
@@ -143,6 +145,22 @@ Opt-in API-driven load generation that backs `PUT /mockserver/loadScenario` (see
 | `loadGenerationMaxSteps` | `50` | Hard cap on the number of request steps a single scenario may define. |
 
 The caps are enforced both at validation (VU count, duration, step count) and live at dispatch (in-flight, RPS), so the feature cannot self-DoS the server even when enabled.
+
+## Internal Tuning-Only System Properties
+
+The properties in this section bypass the standard four-equivalent-forms mechanism (`ConfigurationProperties` / `Configuration` instance / environment variable / properties file). They are read directly via `System.getProperty` at the point of first use and have **no** environment-variable form, no properties-file form, no `Configuration` DTO setter, and no entry in `mockserver.example.properties`. They exist for low-level tuning and testing, and are intentionally absent from the standard property surface.
+
+### `mockserver.candidateIndexThreshold`
+
+**Default** `64`. **Clamp**: values less than `2` are silently clamped to `2`.
+
+Controls when `RequestMatchers.firstMatchingExpectation` switches from the full linear scan of the `CircularPriorityQueue` to the `CandidateIndex` matching-acceleration structure. When the number of active expectations is **less than** this threshold, the untouched linear scan always runs (no change in behaviour or performance at any expectation count below the threshold). When the expectation count **reaches or exceeds** the threshold, the candidate index engages and narrows the scan to a `(method, path)` bucket union the fallthrough list (see [CandidateIndex](request-processing.md#candidateindex--matching-acceleration-for-large-expectation-sets) in `request-processing.md`).
+
+**Read in**: `RequestMatchers.resolveCandidateIndexThreshold()` via `System.getProperty("mockserver.candidateIndexThreshold")`, called once per `RequestMatchers` construction. Changing it at runtime after construction has no effect (the resolved value is stored as an instance field). In tests, use `RequestMatchers.withCandidateIndexThreshold(int)` to inject a low threshold without mutating global state.
+
+**How to set**: pass `-Dmockserver.candidateIndexThreshold=N` on the JVM command line. This property is **not** recognised by the unknown-key warning scan (it is not a `MOCKSERVER_*` constant in `ConfigurationProperties`), so no warning is emitted if it is misspelled.
+
+**When to change**: the default of `64` is set above the measured ≈16 no-regression floor and at the n=100 clear-win point. Raising it delays index engagement (more expectations are handled by the linear scan). Lowering it engages the index earlier — useful only for benchmarking or high-expectation-count workloads where the index is observed to help but the default threshold is not reached.
 
 ### `rateLimitMaxNamedQuotas`
 

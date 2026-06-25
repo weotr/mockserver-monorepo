@@ -79,6 +79,9 @@ import {
   type ExperimentDefinitionDTO,
   type ExperimentStageDTO,
   type ExperimentStatusDTO,
+  type SloVerdictDTO,
+  type SloObjectiveResultDTO,
+  type SloResult,
 } from '../lib/chaosExperiment';
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -88,6 +91,7 @@ import { getConfiguration, updateConfiguration, type Configuration } from '../li
 import ConfirmDialog from './ConfirmDialog';
 import HumanErrorAlert from './HumanErrorAlert';
 import { humanizeError, type HumanError } from '../lib/errorMessage';
+import { trackFeature } from '../lib/analytics';
 
 // Responsive width helper for fixed-px form fields: full-width on a phone (xs),
 // the original fixed pixel width from `sm` up so the desktop layout is unchanged.
@@ -97,6 +101,87 @@ const responsiveWidth = (px: number) => ({ width: { xs: '100%', sm: px } });
 // and wrap uniformly via CSS Grid auto-fit instead of fixed pixel widths.
 const CHAOS_GRID = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 1, alignItems: 'start' } as const;
 const CHAOS_GRID_WIDE = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 1, alignItems: 'start' } as const;
+
+// --- SLO verdict display helpers (A1/A2: terminal experiment verdict) ---
+
+type ChipColor = 'success' | 'error' | 'warning' | 'default';
+
+/** Map an SLO result to a MUI Chip colour: PASS green, FAIL red, INCONCLUSIVE amber. */
+function sloResultColor(result: SloResult): ChipColor {
+  switch (result) {
+    case 'PASS':
+      return 'success';
+    case 'FAIL':
+      return 'error';
+    default:
+      return 'warning';
+  }
+}
+
+const SLI_LABELS: Record<SloObjectiveResultDTO['sli'], string> = {
+  LATENCY_P50: 'p50 latency',
+  LATENCY_P95: 'p95 latency',
+  LATENCY_P99: 'p99 latency',
+  ERROR_RATE: 'error rate',
+};
+
+const COMPARATOR_SYMBOLS: Record<SloObjectiveResultDTO['comparator'], string> = {
+  LESS_THAN: '<',
+  LESS_THAN_OR_EQUAL: '≤',
+  GREATER_THAN: '>',
+  GREATER_THAN_OR_EQUAL: '≥',
+};
+
+/** Format an objective's observed-vs-threshold as e.g. "p95 latency 312 ≤ 200". */
+function formatObjective(objective: SloObjectiveResultDTO): string {
+  const sli = SLI_LABELS[objective.sli] ?? objective.sli;
+  const comparator = COMPARATOR_SYMBOLS[objective.comparator] ?? objective.comparator;
+  const observed = objective.observedValue == null ? '—' : String(Math.round(objective.observedValue * 100) / 100);
+  return `${sli} ${observed} ${comparator} ${objective.threshold}`;
+}
+
+/**
+ * Renders the terminal SLO verdict for an experiment: a PASS/FAIL/INCONCLUSIVE
+ * chip plus the per-objective observed-vs-threshold breakdown. Only rendered by
+ * the caller when a verdict is present.
+ */
+function ExperimentVerdict({ verdict }: { verdict: SloVerdictDTO }) {
+  const objectives = verdict.objectiveResults ?? [];
+  return (
+    <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+          SLO Verdict
+        </Typography>
+        <Chip size="small" color={sloResultColor(verdict.result)} label={verdict.result} />
+        {verdict.name && (
+          <Typography variant="caption" color="text.secondary">
+            {verdict.name}
+          </Typography>
+        )}
+        <Box sx={{ flex: 1 }} />
+        <Typography variant="caption" color="text.secondary">
+          {verdict.sampleCount} sample{verdict.sampleCount === 1 ? '' : 's'}
+        </Typography>
+      </Box>
+      {objectives.length > 0 && (
+        <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          {objectives.map((objective, idx) => (
+            <Box key={idx} sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap' }}>
+              <Chip size="small" variant="outlined" color={sloResultColor(objective.result)} label={objective.result} />
+              <Typography variant="body2">{formatObjective(objective)}</Typography>
+              {objective.detail && (
+                <Typography variant="caption" color="text.secondary">
+                  {objective.detail}
+                </Typography>
+              )}
+            </Box>
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
 
 interface ServiceChaosPanelProps {
   connectionParams: ConnectionParams;
@@ -1035,6 +1120,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     if (!definition) return;
     void runAction(async () => {
       await startChaosExperiment(connectionParams, definition);
+      trackFeature('chaos_started');
     });
   }, [connectionParams, buildDefinitionFromEditor, runAction]);
 
@@ -1852,8 +1938,20 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
           </Typography>
           <Chip
             size="small"
-            label={isExperimentActive ? 'running' : experimentStatus?.status === 'halted_by_auto_halt' ? 'halted' : 'idle'}
-            color={isExperimentActive ? 'warning' : experimentStatus?.status === 'halted_by_auto_halt' ? 'error' : 'default'}
+            label={
+              isExperimentActive
+                ? 'running'
+                : experimentStatus?.status === 'halted_by_auto_halt' || experimentStatus?.status === 'halted_by_slo_breach'
+                  ? 'halted'
+                  : 'idle'
+            }
+            color={
+              isExperimentActive
+                ? 'warning'
+                : experimentStatus?.status === 'halted_by_auto_halt' || experimentStatus?.status === 'halted_by_slo_breach'
+                  ? 'error'
+                  : 'default'
+            }
             variant="outlined"
           />
           <Box sx={{ flex: 1 }} />
@@ -1898,7 +1996,7 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                     color={
                       experimentStatus.status === 'running' ? 'warning'
                         : experimentStatus.status === 'completed' ? 'success'
-                          : experimentStatus.status === 'halted_by_auto_halt' ? 'error'
+                          : experimentStatus.status === 'halted_by_auto_halt' || experimentStatus.status === 'halted_by_slo_breach' ? 'error'
                             : 'default'
                     }
                   />
@@ -1990,6 +2088,10 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                       );
                     })}
                   </Box>
+                )}
+                {/* Terminal SLO verdict (A1/A2): shown only when a verdict exists. */}
+                {experimentStatus.experimentVerdict && (
+                  <ExperimentVerdict verdict={experimentStatus.experimentVerdict} />
                 )}
               </Paper>
             )}

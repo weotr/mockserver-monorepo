@@ -40,7 +40,9 @@ public class InitializerMavenPluginTest {
             "content-type",
             "content-length",
             "accept-encoding",
-            "transfer-encoding"
+            "transfer-encoding",
+            // closest-match hint header (on by default on unmatched 404s)
+            "x-mockserver-closest-match-hint"
     );
     // http client
     private static EventLoopGroup clientEventLoopGroup;

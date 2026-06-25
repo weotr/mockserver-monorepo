@@ -41,13 +41,29 @@ if command -v buildkite-agent >/dev/null 2>&1; then
   buildkite-agent artifact download perf-result.json "$WORK/" || { echo "ERROR: no perf-result.json artifact" >&2; exit 0; }
   cp "$WORK/perf-result.json" "$RESULT"
   buildkite-agent artifact download perf-microbench.json "$WORK/" 2>/dev/null || true
+  buildkite-agent artifact download perf-sweep.json "$WORK/" 2>/dev/null || true
+  buildkite-agent artifact download perf-scaling.json "$WORK/" 2>/dev/null || true
 else
   cp "${PERF_RESULT_FILE:-$REPO_ROOT/perf-result.json}" "$RESULT"
   [ -f "$REPO_ROOT/perf-microbench.json" ] && cp "$REPO_ROOT/perf-microbench.json" "$WORK/perf-microbench.json" || true
+  [ -f "$REPO_ROOT/perf-sweep.json" ] && cp "$REPO_ROOT/perf-sweep.json" "$WORK/perf-sweep.json" || true
+  [ -f "$REPO_ROOT/perf-scaling.json" ] && cp "$REPO_ROOT/perf-scaling.json" "$WORK/perf-scaling.json" || true
 fi
 # Merge micro-benchmark results into the run object if present.
 if [ -f "$WORK/perf-microbench.json" ]; then
   jq -s '.[0] * .[1]' "$RESULT" "$WORK/perf-microbench.json" > "$WORK/merged.json" && mv "$WORK/merged.json" "$RESULT"
+fi
+# Persist the throughput-vs-latency sweep + JMH scaling sweep into the stored run
+# so the S3 history keeps them. NOTIFY-ONLY: these are recorded for the doc-site
+# knee/scaling charts and ad-hoc inspection — there is no baseline comparison or
+# pass/fail gate on them (the regression compare below is unchanged). perf-sweep
+# is also already embedded under .sweep by perf-test-run.sh; re-merging the
+# standalone artifact is harmless (same object) and robust if the embed is absent.
+if [ -f "$WORK/perf-sweep.json" ]; then
+  jq -s '.[0] + {sweep: .[1]}' "$RESULT" "$WORK/perf-sweep.json" > "$WORK/merged.json" && mv "$WORK/merged.json" "$RESULT"
+fi
+if [ -f "$WORK/perf-scaling.json" ]; then
+  jq -s '.[0] * .[1]' "$RESULT" "$WORK/perf-scaling.json" > "$WORK/merged.json" && mv "$WORK/merged.json" "$RESULT"
 fi
 
 BRANCH="$(jq -r '.branch // "unknown"' "$RESULT")"

@@ -28,6 +28,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
+import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
 import static org.mockserver.mock.action.http.HttpActionHandler.getRemoteAddress;
 import static org.mockserver.model.Protocol.HTTP_2;
 import static org.mockserver.netty.unification.PortUnificationHandler.*;
@@ -64,9 +65,9 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                 public void channelActive(final ChannelHandlerContext mockServerCtx) {
                     String hostForMessage = host.contains(":") ? "[" + host + "]" : host;
                     if (isSslEnabledUpstream(proxyClientCtx.channel())) {
-                        mockServerCtx.writeAndFlush(Unpooled.copiedBuffer((PROXIED_SECURE + hostForMessage + ":" + port).getBytes(StandardCharsets.UTF_8))).awaitUninterruptibly();
+                        mockServerCtx.writeAndFlush(Unpooled.copiedBuffer((PROXIED_SECURE + hostForMessage + ":" + port).getBytes(StandardCharsets.UTF_8)));
                     } else {
-                        mockServerCtx.writeAndFlush(Unpooled.copiedBuffer((PROXIED + hostForMessage + ":" + port).getBytes(StandardCharsets.UTF_8))).awaitUninterruptibly();
+                        mockServerCtx.writeAndFlush(Unpooled.copiedBuffer((PROXIED + hostForMessage + ":" + port).getBytes(StandardCharsets.UTF_8)));
                     }
                 }
 
@@ -159,6 +160,13 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                     .setMessageFormat(message)
                     .setThrowable(cause)
             );
+        } else if (isSslOrDecoderFault(cause)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.WARN)
+                    .setMessageFormat("SSL or decoder fault -> " + message)
+                    .setThrowable(cause)
+            );
         }
         Channel channel = ctx.channel();
         channel.writeAndFlush(response);
@@ -217,7 +225,7 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                     new DelegatingDecompressorFrameListener(
                         connection,
                         new InboundHttp2ToHttpAdapterBuilder(connection)
-                            .maxContentLength(Integer.MAX_VALUE)
+                            .maxContentLength(configuration.maxRequestBodySize())
                             .propagateSettings(true)
                             .validateHttpHeaders(false)
                             .build()
@@ -230,7 +238,7 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
         } else {
             pipelineToProxyClient.addLast(new HttpServerCodec(configuration.maxInitialLineLength(), configuration.maxHeaderSize(), configuration.maxChunkSize()));
             pipelineToProxyClient.addLast(new HttpContentDecompressor());
-            pipelineToProxyClient.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+            pipelineToProxyClient.addLast(new HttpObjectAggregator(configuration.maxRequestBodySize()));
         }
 
         pipelineToProxyClient.addLast(new UpstreamProxyRelayHandler(mockServerLogger, proxyClientCtx.channel(), mockServerCtx.channel()));
@@ -239,7 +247,7 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
     private void configureHttp1LoopbackPipeline(ChannelPipeline pipelineToMockServer, ChannelHandlerContext proxyClientCtx) {
         pipelineToMockServer.addLast(new HttpClientCodec(configuration.maxInitialLineLength(), configuration.maxHeaderSize(), configuration.maxChunkSize()));
         pipelineToMockServer.addLast(new HttpContentDecompressor());
-        pipelineToMockServer.addLast(new StreamingAwareHttpObjectAggregator(Integer.MAX_VALUE, configuration, mockServerLogger, true));
+        pipelineToMockServer.addLast(new StreamingAwareHttpObjectAggregator(configuration.maxRequestBodySize(), configuration, mockServerLogger, true));
         pipelineToMockServer.addLast(new DownstreamProxyRelayHandler(mockServerLogger, proxyClientCtx.channel()));
     }
 
@@ -250,7 +258,7 @@ public abstract class RelayConnectHandler<T> extends SimpleChannelInboundHandler
                 new DelegatingDecompressorFrameListener(
                     connection,
                     new InboundHttp2ToHttpAdapterBuilder(connection)
-                        .maxContentLength(Integer.MAX_VALUE)
+                        .maxContentLength(configuration.maxRequestBodySize())
                         .propagateSettings(true)
                         .validateHttpHeaders(false)
                         .build()

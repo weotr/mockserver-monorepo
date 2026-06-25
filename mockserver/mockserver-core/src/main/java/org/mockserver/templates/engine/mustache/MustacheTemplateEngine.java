@@ -15,6 +15,7 @@ import org.mockserver.serialization.model.DTO;
 import org.mockserver.templates.engine.TemplateEngine;
 import org.mockserver.templates.engine.TemplateFunctions;
 import org.mockserver.templates.engine.helpers.RequestBodyExtractionHelper;
+import org.mockserver.templates.engine.helpers.ScenarioTemplateHelper;
 import org.mockserver.templates.engine.model.HttpRequestTemplateObject;
 import org.mockserver.templates.engine.model.HttpResponseTemplateObject;
 import org.mockserver.templates.engine.serializer.HttpTemplateOutputDeserializer;
@@ -41,11 +42,19 @@ import static org.mockserver.log.model.LogEntryMessages.TEMPLATE_GENERATED_MESSA
 @SuppressWarnings("FieldMayBeFinal")
 public class MustacheTemplateEngine implements TemplateEngine {
 
-    private static ObjectMapper objectMapper;
+    private static final ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
     private final MockServerLogger mockServerLogger;
     private final Configuration configuration;
     private final Mustache.Compiler compiler;
     private HttpTemplateOutputDeserializer httpTemplateOutputDeserializer;
+
+    // jmustache cannot invoke a helper method with an argument the way Velocity ($scenario.get('x')) and
+    // JavaScript (scenario.get('x')) can, so scenario state is exposed the same way as jsonPath/xPath: as a
+    // section lambda whose section body is the argument. "scenario" is a Map holding a "get" lambda, so a
+    // template reads captured/scenario state by name with {{#scenario.get}}name{{/scenario.get}}. The map
+    // and lambda are stateless (the lambda resolves the live ScenarioManager lazily on each call via
+    // ScenarioTemplateHelper) so a single immutable instance is shared safely across all render threads.
+    private final Map<String, Object> scenarioMustacheHelper;
 
     // ----- parsed-template cache (compile once, render many) -----
     // Templates are mostly static for the lifetime of a mock — the same template string is rendered on
@@ -77,9 +86,6 @@ public class MustacheTemplateEngine implements TemplateEngine {
         this.mockServerLogger = mockServerLogger;
         this.configuration = configuration;
         this.httpTemplateOutputDeserializer = new HttpTemplateOutputDeserializer(mockServerLogger);
-        if (objectMapper == null) {
-            objectMapper = ObjectMapperFactory.createObjectMapper();
-        }
         compiler = Mustache
             .compiler()
             .emptyStringIsFalse(true)
@@ -87,6 +93,13 @@ public class MustacheTemplateEngine implements TemplateEngine {
             .strictSections(false)
             .defaultValue("")
             .withCollector(new ExtendedCollector());
+        ScenarioTemplateHelper scenarioTemplateHelper = new ScenarioTemplateHelper();
+        Map<String, Object> scenario = new LinkedHashMap<>();
+        scenario.put("get", (Mustache.Lambda) (frag, out) -> {
+            String state = scenarioTemplateHelper.get(frag.execute());
+            out.write(state == null ? "" : state);
+        });
+        this.scenarioMustacheHelper = Collections.unmodifiableMap(scenario);
     }
 
     /**
@@ -137,6 +150,7 @@ public class MustacheTemplateEngine implements TemplateEngine {
             }
             data.putAll(TemplateFunctions.BUILT_IN_FUNCTIONS);
             data.putAll(TemplateFunctions.BUILT_IN_HELPERS);
+            data.put("scenario", scenarioMustacheHelper);
             data.put("xPath", (Mustache.Lambda) (frag, out) -> evaluatedXPath(frag.execute(), request, out));
             data.put("jsonPath", (Mustache.Lambda) (frag, out) -> evaluateJsonPath(data, frag.execute(), request, out));
             compiledTemplate.execute(data, writer);
@@ -159,6 +173,7 @@ public class MustacheTemplateEngine implements TemplateEngine {
             }
             data.putAll(TemplateFunctions.BUILT_IN_FUNCTIONS);
             data.putAll(TemplateFunctions.BUILT_IN_HELPERS);
+            data.put("scenario", scenarioMustacheHelper);
             data.put("xPath", (Mustache.Lambda) (frag, out) -> evaluatedXPath(frag.execute(), request, out));
             data.put("jsonPath", (Mustache.Lambda) (frag, out) -> evaluateJsonPath(data, frag.execute(), request, out));
             compiledTemplate.execute(data, writer);

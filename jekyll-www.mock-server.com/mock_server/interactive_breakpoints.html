@@ -399,7 +399,7 @@ curl -X PUT http://localhost:1080/mockserver/breakpoint/matcher \
 <ul>
     <li><strong>Continue</strong> — send the original request/response unchanged</li>
     <li><strong>Modify</strong> — open a JSON editor, change the request or response, send the modified version</li>
-    <li><strong>Abort</strong> — REQUEST phase only; returns a 503 to the downstream client without forwarding</li>
+    <li><strong>Abort</strong> — REQUEST phase only; the dashboard Abort button specifically returns a <strong>503</strong> to the downstream client without forwarding. (This differs from a client-supplied abort: when a programmatic breakpoint callback returns an <span class="inline_code">HttpResponse</span> to abort, that response is sent verbatim with its own status code, as described above.)</li>
 </ul>
 
 <h3>Live Streams tab</h3>
@@ -715,8 +715,9 @@ client.clear_breakpoint_matchers()?;
 client.close_breakpoint_websocket();
 </code></pre>
 
-<a id="rest_api" class="anchor" href="#rest_api">&nbsp;</a>
 </div>
+
+<a id="rest_api" class="anchor" href="#rest_api">&nbsp;</a>
 
 <h2>REST API Reference</h2>
 

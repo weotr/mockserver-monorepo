@@ -40,7 +40,7 @@ describe('LogPanel', () => {
 
     render(<LogPanel />);
 
-    const searchInput = screen.getByPlaceholderText('Search...');
+    const searchInput = screen.getByLabelText('Search');
     await user.type(searchInput, 'error');
 
     expect(screen.getByText('error occurred')).toBeInTheDocument();
@@ -56,7 +56,7 @@ describe('LogPanel', () => {
     });
 
     render(<LogPanel />);
-    const searchInput = screen.getByPlaceholderText('Search...');
+    const searchInput = screen.getByLabelText('Search');
     await user.type(searchInput, 'xyz-nonexistent');
 
     expect(screen.getByText('No matching log messages')).toBeInTheDocument();

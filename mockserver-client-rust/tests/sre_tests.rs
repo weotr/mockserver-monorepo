@@ -358,6 +358,251 @@ fn test_run_load_scenario_registers_then_starts() {
 }
 
 // ---------------------------------------------------------------------------
+// Load scenario — new parity fields (thresholds, abort, pacing, feeder,
+// stepSelection, shape, captures, weight)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_load_scenario_serializes_thresholds_and_abort() {
+    let scenario = LoadScenario::new(
+        "thresholded",
+        LoadProfile::constant(5, 10_000),
+        vec![LoadStep::new(HttpRequest::new().method("GET").path("/x"))],
+    )
+    .threshold(LoadThreshold::new(
+        LoadThresholdMetric::LatencyP99,
+        LoadComparator::LessThan,
+        500.0,
+    ))
+    .threshold(LoadThreshold::new(
+        LoadThresholdMetric::ErrorRate,
+        LoadComparator::LessThanOrEqual,
+        0.01,
+    ))
+    .abort_on_fail(true)
+    .abort_grace_millis(3000);
+
+    let json = serde_json::to_value(&scenario).unwrap();
+    assert_eq!(json["thresholds"][0]["metric"], "LATENCY_P99");
+    assert_eq!(json["thresholds"][0]["comparator"], "LESS_THAN");
+    assert_eq!(json["thresholds"][0]["threshold"], 500.0);
+    assert_eq!(json["thresholds"][1]["metric"], "ERROR_RATE");
+    assert_eq!(json["thresholds"][1]["comparator"], "LESS_THAN_OR_EQUAL");
+    assert_eq!(json["thresholds"][1]["threshold"], 0.01);
+    assert_eq!(json["abortOnFail"], true);
+    assert_eq!(json["abortGraceMillis"], 3000);
+}
+
+#[test]
+fn test_load_scenario_omits_new_fields_when_unset() {
+    // Existing scenarios serialize unchanged: none of the new keys appear.
+    let scenario = LoadScenario::new(
+        "plain",
+        LoadProfile::constant(1, 1000),
+        vec![LoadStep::new(HttpRequest::new().method("GET").path("/x"))],
+    );
+    let json = serde_json::to_value(&scenario).unwrap();
+    assert!(json.get("thresholds").is_none());
+    assert!(json.get("abortOnFail").is_none());
+    assert!(json.get("abortGraceMillis").is_none());
+    assert!(json.get("pacing").is_none());
+    assert!(json.get("feeder").is_none());
+    assert!(json.get("stepSelection").is_none());
+    // Step new fields absent too.
+    let step = &json["steps"][0];
+    assert!(step.get("captures").is_none());
+    assert!(step.get("weight").is_none());
+}
+
+#[test]
+fn test_load_scenario_serializes_pacing_and_step_selection() {
+    let scenario = LoadScenario::new(
+        "paced",
+        LoadProfile::constant(5, 10_000),
+        vec![LoadStep::new(HttpRequest::new().method("GET").path("/x"))],
+    )
+    .pacing(LoadPacing::constant_throughput(2.0))
+    .step_selection(LoadStepSelection::Weighted);
+
+    let json = serde_json::to_value(&scenario).unwrap();
+    assert_eq!(json["pacing"]["mode"], "CONSTANT_THROUGHPUT");
+    assert_eq!(json["pacing"]["value"], 2.0);
+    assert_eq!(json["stepSelection"], "WEIGHTED");
+}
+
+#[test]
+fn test_load_scenario_serializes_feeder_rows() {
+    let mut row = std::collections::HashMap::new();
+    row.insert("user".to_string(), "alice".to_string());
+    let scenario = LoadScenario::new(
+        "fed",
+        LoadProfile::constant(1, 1000),
+        vec![LoadStep::new(HttpRequest::new().method("GET").path("/x"))],
+    )
+    .feeder(LoadFeeder::rows(vec![row]).strategy(LoadFeederStrategy::Sequential));
+
+    let json = serde_json::to_value(&scenario).unwrap();
+    assert_eq!(json["feeder"]["rows"][0]["user"], "alice");
+    assert_eq!(json["feeder"]["strategy"], "SEQUENTIAL");
+    assert!(json["feeder"].get("data").is_none());
+    assert!(json["feeder"].get("format").is_none());
+}
+
+#[test]
+fn test_load_scenario_serializes_feeder_raw_data() {
+    let feeder = LoadFeeder::data("user\nalice\nbob", LoadFeederFormat::Csv);
+    let json = serde_json::to_value(&feeder).unwrap();
+    assert_eq!(json["data"], "user\nalice\nbob");
+    assert_eq!(json["format"], "CSV");
+    assert!(json.get("rows").is_none());
+}
+
+#[test]
+fn test_load_step_serializes_captures_and_weight() {
+    let step = LoadStep::new(HttpRequest::new().method("POST").path("/login"))
+        .capture(
+            LoadCapture::new("token", LoadCaptureSource::BodyJsonpath, "$.token")
+                .default_value("anon"),
+        )
+        .weight(7.0);
+    let json = serde_json::to_value(&step).unwrap();
+    assert_eq!(json["captures"][0]["name"], "token");
+    assert_eq!(json["captures"][0]["source"], "BODY_JSONPATH");
+    assert_eq!(json["captures"][0]["expression"], "$.token");
+    assert_eq!(json["captures"][0]["defaultValue"], "anon");
+    assert_eq!(json["weight"], 7.0);
+}
+
+#[test]
+fn test_load_profile_shape_serializes() {
+    let profile = LoadProfile::shaped(
+        LoadShape::spike(1.0, 100.0, 5_000, 30_000, 5_000)
+            .metric(LoadShapeMetric::Vu)
+            .curve(RampCurve::Linear)
+            .recovery_hold_millis(10_000),
+    );
+    let json = serde_json::to_value(&profile).unwrap();
+    let shape = &json["shape"];
+    assert_eq!(shape["type"], "SPIKE");
+    assert_eq!(shape["metric"], "VU");
+    assert_eq!(shape["curve"], "LINEAR");
+    assert_eq!(shape["baseline"], 1.0);
+    assert_eq!(shape["peak"], 100.0);
+    assert_eq!(shape["rampUpMillis"], 5000);
+    assert_eq!(shape["holdMillis"], 30000);
+    assert_eq!(shape["rampDownMillis"], 5000);
+    assert_eq!(shape["recoveryHoldMillis"], 10000);
+    // Shape-only profile omits an empty stages array.
+    assert!(json.get("stages").is_none());
+    // STAIRS / RAMP_HOLD irrelevant fields absent.
+    assert!(shape.get("start").is_none());
+    assert!(shape.get("target").is_none());
+}
+
+#[test]
+fn test_load_shape_ramp_hold_and_stairs() {
+    let ramp_hold = serde_json::to_value(LoadShape::ramp_hold(50.0, 10_000, 60_000)).unwrap();
+    assert_eq!(ramp_hold["type"], "RAMP_HOLD");
+    assert_eq!(ramp_hold["target"], 50.0);
+    assert_eq!(ramp_hold["rampMillis"], 10000);
+    assert_eq!(ramp_hold["holdMillis"], 60000);
+    assert!(ramp_hold.get("baseline").is_none());
+
+    let stairs = serde_json::to_value(LoadShape::stairs(10.0, 10.0, 5, 15_000)).unwrap();
+    assert_eq!(stairs["type"], "STAIRS");
+    assert_eq!(stairs["start"], 10.0);
+    assert_eq!(stairs["step"], 10.0);
+    assert_eq!(stairs["steps"], 5);
+    assert_eq!(stairs["stepDurationMillis"], 15000);
+}
+
+// ---------------------------------------------------------------------------
+// Load scenario report + generate endpoints — HTTP plumbing
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_get_load_scenario_report_json_sends_get() {
+    let (client, rx) = stub(200, r#"{"scenario":"s","verdict":"PASS"}"#);
+    let result = client.get_load_scenario_report("s", None).unwrap();
+    assert!(result.contains("\"verdict\":\"PASS\""));
+    let cap = rx.recv().unwrap();
+    assert_eq!(cap.method, "GET");
+    assert_eq!(cap.url, "/mockserver/loadScenario/s/report");
+}
+
+#[test]
+fn test_get_load_scenario_report_junit_appends_format() {
+    let (client, rx) = stub(
+        200,
+        r#"<testsuite name="s"><testcase name="run"/></testsuite>"#,
+    );
+    let result = client.get_load_scenario_report("s", Some("junit")).unwrap();
+    assert!(result.contains("<testsuite"));
+    let cap = rx.recv().unwrap();
+    assert_eq!(cap.method, "GET");
+    assert_eq!(cap.url, "/mockserver/loadScenario/s/report?format=junit");
+}
+
+#[test]
+fn test_get_load_scenario_report_404_is_not_found() {
+    let (client, _rx) = stub(404, r#"{"error":"no run for s"}"#);
+    match client.get_load_scenario_report("s", None) {
+        Err(Error::NotFound(msg)) => assert!(msg.contains("no run")),
+        other => panic!("expected NotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_generate_load_scenario_from_openapi_sends_put() {
+    let (client, rx) = stub(
+        200,
+        r#"{"status":"loaded","name":"petstore-load","state":"LOADED"}"#,
+    );
+    let body = serde_json::json!({
+        "name": "petstore-load",
+        "specUrlOrPayload": "https://example.com/petstore.yaml",
+    });
+    let result = client.generate_load_scenario_from_openapi(&body).unwrap();
+    assert_eq!(result["status"], "loaded");
+    assert_eq!(result["name"], "petstore-load");
+    let cap = rx.recv().unwrap();
+    assert_eq!(cap.method, "PUT");
+    assert_eq!(cap.url, "/mockserver/loadScenario/generateFromOpenAPI");
+    let sent: serde_json::Value = serde_json::from_str(&cap.body).unwrap();
+    assert_eq!(sent["name"], "petstore-load");
+    assert_eq!(
+        sent["specUrlOrPayload"],
+        "https://example.com/petstore.yaml"
+    );
+}
+
+#[test]
+fn test_generate_load_scenario_from_recording_sends_put() {
+    let (client, rx) = stub(
+        200,
+        r#"{"status":"loaded","name":"replay","state":"LOADED"}"#,
+    );
+    let body = serde_json::json!({ "name": "replay" });
+    let result = client.generate_load_scenario_from_recording(&body).unwrap();
+    assert_eq!(result["status"], "loaded");
+    let cap = rx.recv().unwrap();
+    assert_eq!(cap.method, "PUT");
+    assert_eq!(cap.url, "/mockserver/loadScenario/generateFromRecording");
+    let sent: serde_json::Value = serde_json::from_str(&cap.body).unwrap();
+    assert_eq!(sent["name"], "replay");
+}
+
+#[test]
+fn test_generate_load_scenario_from_openapi_403_is_feature_disabled() {
+    let (client, _rx) = stub(403, r#"{"error":"disabled"}"#);
+    let body = serde_json::json!({ "name": "x", "specUrlOrPayload": "y" });
+    match client.generate_load_scenario_from_openapi(&body) {
+        Err(Error::FeatureDisabled(_)) => {}
+        other => panic!("expected FeatureDisabled, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Service chaos
 // ---------------------------------------------------------------------------
 

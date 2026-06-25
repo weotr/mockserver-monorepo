@@ -24,14 +24,18 @@ import {
   fetchOptimisationReport,
   fetchOptimisationBrief,
   sortSignalsBySeverity,
+  buildVerdictText,
+  gradeColor,
   type OptimisationReport,
   type OptimisationSignal,
+  type OptimisationVerdict,
   type SignalSeverity,
 } from '../lib/optimisation';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
 import { humanizeError, type HumanError } from '../lib/errorMessage';
 import HumanErrorAlert from './HumanErrorAlert';
 import { monospaceFontFamily, transitions } from '../theme';
+import { trackFeature } from '../lib/analytics';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -60,6 +64,12 @@ function severityColor(severity: SignalSeverity | string): 'error' | 'warning' |
     case 'LOW': return 'info';
     default: return 'default';
   }
+}
+
+/** A 0..1 ratio rendered as a whole-number percent, e.g. 0.62 → "62%". */
+function formatPercent(ratio: number): string {
+  if (!Number.isFinite(ratio)) return '—';
+  return `${Math.round(ratio * 100)}%`;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,10 +139,113 @@ function HeroCard({ label, value }: HeroCardProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Verdict banner
+// ---------------------------------------------------------------------------
+
+/** True when there is nothing to recommend — render the calm grade-A state. */
+function isCalmVerdict(verdict: OptimisationVerdict): boolean {
+  return gradeColor(verdict.grade) === 'success'
+    && verdict.grade.toUpperCase() === 'A'
+    && (verdict.totalEstimatedSavingUsd ?? 0) === 0
+    && verdict.highCount === 0
+    && verdict.mediumCount === 0
+    // also require no LOW findings — a LOW signal (e.g. OUTPUT_TOKEN_BLOAT, which
+    // reports no $ saving) still lists an opportunity below, so the calm
+    // "nothing to recommend" banner would contradict the opportunities panel.
+    && verdict.lowCount === 0;
+}
+
+function VerdictBanner({ verdict }: { verdict: OptimisationVerdict }) {
+  const color = gradeColor(verdict.grade);
+  const calm = isCalmVerdict(verdict);
+  const pct = formatPercent(verdict.savingFractionOfSpend);
+  const money = formatCost(verdict.totalEstimatedSavingUsd);
+  const estSuffix = verdict.costIsEstimated ? ' (est.)' : '';
+
+  if (calm) {
+    return (
+      <Paper variant="outlined" sx={{ p: 1.5, mb: 1.5, display: 'flex', alignItems: 'center', gap: 1.5 }} data-testid="optimise-verdict">
+        <Typography variant="h3" sx={{ fontWeight: 800, lineHeight: 1, color: `${color}.main` }}>
+          {verdict.grade}
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Grade {verdict.grade} — no optimisation opportunities detected
+        </Typography>
+      </Paper>
+    );
+  }
+
+  return (
+    <Paper
+      variant="outlined"
+      sx={{ p: 1.5, mb: 1.5, display: 'flex', alignItems: 'center', gap: 2, borderColor: (t) => t.palette[color].main }}
+      data-testid="optimise-verdict"
+    >
+      <Typography variant="h2" sx={{ fontWeight: 800, lineHeight: 1, color: `${color}.main`, minWidth: 48, textAlign: 'center' }}>
+        {verdict.grade}
+      </Typography>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
+          Est. {money}{estSuffix} recoverable ({pct} of spend)
+        </Typography>
+        {verdict.rationale && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {verdict.rationale}
+          </Typography>
+        )}
+      </Box>
+    </Paper>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Signals panel
 // ---------------------------------------------------------------------------
 
+/** A code block with a small copy-to-clipboard button. */
+function SnippetBlock({ label, snippet }: { label: string; snippet: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(() => {
+    void navigator.clipboard.writeText(snippet).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [snippet]);
+  return (
+    <Box sx={{ position: 'relative', mt: 0.5 }}>
+      <Tooltip title={copied ? 'Copied!' : `Copy ${label}`}>
+        <IconButton
+          size="small"
+          onClick={onCopy}
+          aria-label={`Copy ${label}`}
+          sx={{ position: 'absolute', top: 2, right: 2 }}
+        >
+          <ContentCopyIcon sx={{ fontSize: '0.8rem' }} />
+        </IconButton>
+      </Tooltip>
+      <Box
+        component="pre"
+        sx={{
+          m: 0,
+          p: 1,
+          pr: 4,
+          borderRadius: 1,
+          bgcolor: 'action.hover',
+          fontFamily: monospaceFontFamily,
+          fontSize: '0.7rem',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          overflowX: 'auto',
+        }}
+      >
+        {snippet}
+      </Box>
+    </Box>
+  );
+}
+
 function SignalCard({ signal }: { signal: OptimisationSignal }) {
+  const fix = signal.fix;
   return (
     <Paper variant="outlined" sx={{ p: 1.25, mb: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
@@ -168,9 +281,27 @@ function SignalCard({ signal }: { signal: OptimisationSignal }) {
           </Typography>
         )}
       </Box>
-      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-        Recommendation: <Box component="span" sx={{ fontWeight: 400 }}>{signal.recommendation}</Box>
-      </Typography>
+      {fix ? (
+        <Box>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>{fix.summary}</Typography>
+          {fix.action && (
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>{fix.action}</Typography>
+          )}
+          {fix.configSnippet && <SnippetBlock label="config snippet" snippet={fix.configSnippet} />}
+          {fix.exampleExpectation && <SnippetBlock label="example expectation" snippet={fix.exampleExpectation} />}
+          {fix.docsUrl && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              <Box component="a" href={fix.docsUrl} target="_blank" rel="noopener noreferrer" sx={{ color: 'primary.main' }}>
+                Learn more
+              </Box>
+            </Typography>
+          )}
+        </Box>
+      ) : (
+        <Typography variant="body2" sx={{ fontWeight: 600 }}>
+          Recommendation: <Box component="span" sx={{ fontWeight: 400 }}>{signal.recommendation}</Box>
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -191,9 +322,10 @@ export default function OptimiseView({ connectionParams }: OptimiseViewProps) {
   const [report, setReport] = useState<OptimisationReport | null>(null);
   const [state, setState] = useState<LoadState>('loading');
   const [error, setError] = useState<HumanError | null>(null);
-  const [busyAction, setBusyAction] = useState<null | 'copy' | 'download'>(null);
+  const [busyAction, setBusyAction] = useState<null | 'copy' | 'copyVerdict' | 'download'>(null);
   const [actionError, setActionError] = useState<HumanError | null>(null);
   const [copied, setCopied] = useState(false);
+  const [verdictCopied, setVerdictCopied] = useState(false);
 
   // Map the picker selection to the query the lib expects (omit for "all").
   const query = useMemo(
@@ -246,6 +378,23 @@ export default function OptimiseView({ connectionParams }: OptimiseViewProps) {
       setBusyAction(null);
     }
   }, [connectionParams, query]);
+
+  // Build a compact plain-text verdict CLIENT-SIDE from the already-loaded JSON
+  // report (no fetch) and write it to the clipboard.
+  const handleCopyVerdict = useCallback(async () => {
+    if (!report) return;
+    setBusyAction('copyVerdict');
+    setActionError(null);
+    try {
+      await navigator.clipboard.writeText(buildVerdictText(report));
+      setVerdictCopied(true);
+      setTimeout(() => setVerdictCopied(false), 2000);
+    } catch (e) {
+      setActionError(humanizeError(e));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [report]);
 
   const handleDownload = useCallback(async () => {
     setBusyAction('download');
@@ -304,7 +453,7 @@ export default function OptimiseView({ connectionParams }: OptimiseViewProps) {
           ))}
         </TextField>
         <Tooltip title="Refresh report">
-          <IconButton size="small" onClick={() => load()} aria-label="Refresh report">
+          <IconButton size="small" onClick={() => { trackFeature('optimise_run'); load(); }} aria-label="Refresh report">
             <RefreshIcon fontSize="small" />
           </IconButton>
         </Tooltip>
@@ -342,6 +491,9 @@ export default function OptimiseView({ connectionParams }: OptimiseViewProps) {
 
       {hasReport && totals && !isEmpty && (
         <>
+          {/* Verdict banner — A–F grade + "$X recoverable" headline */}
+          {report.verdict && <VerdictBanner verdict={report.verdict} />}
+
           {/* Hero cards */}
           <Box
             sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 1, mb: 1.5 }}
@@ -355,6 +507,8 @@ export default function OptimiseView({ connectionParams }: OptimiseViewProps) {
             <HeroCard label="Output tokens" value={totals.outputTokens.toLocaleString()} />
             <HeroCard label="Calls" value={totals.callCount.toLocaleString()} />
             <HeroCard label="Avg latency" value={formatMs(avgLatencyMs)} />
+            <HeroCard label="Cache hit" value={formatPercent(totals.cacheHitRatio)} />
+            <HeroCard label="One-shot" value={formatPercent(totals.oneShotRate)} />
           </Box>
 
           {/* Provider / model summary + actions */}
@@ -366,6 +520,15 @@ export default function OptimiseView({ connectionParams }: OptimiseViewProps) {
               <Chip key={`model-${m}`} size="small" variant="outlined" color="primary" label={m} sx={{ height: 20, fontSize: '0.65rem', fontFamily: monospaceFontFamily }} />
             ))}
             <Box sx={{ flex: 1 }} />
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<ContentCopyIcon sx={{ fontSize: '0.875rem' }} />}
+              onClick={() => void handleCopyVerdict()}
+              disabled={busyAction !== null}
+            >
+              {verdictCopied ? 'Copied!' : busyAction === 'copyVerdict' ? 'Copying…' : 'Copy verdict'}
+            </Button>
             <Button
               variant="outlined"
               size="small"

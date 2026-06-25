@@ -277,4 +277,67 @@ public class AnthropicCodecDecodeTest {
         assertThat(parsed.getMessages().get(3).getRole(), is(ParsedMessage.Role.ASSISTANT));
         assertThat(parsed.getMessages().get(3).getTextContent(), is("It is 18C and sunny in Paris."));
     }
+
+    @Test
+    public void shouldMapTopLevelStringSystemPromptToLeadingSystemMessage() {
+        // given - Anthropic carries the system prompt in a top-level "system" string field
+        HttpRequest request = request()
+            .withBody("{\n" +
+                "  \"model\": \"claude-sonnet-4-20250514\",\n" +
+                "  \"system\": \"You are a helpful assistant.\",\n" +
+                "  \"messages\": [\n" +
+                "    {\"role\": \"user\", \"content\": \"Hello\"}\n" +
+                "  ]\n" +
+                "}");
+
+        // when
+        ParsedConversation parsed = codec.decode(request);
+
+        // then - SYSTEM message is prepended, mirroring OpenAI-shaped traffic
+        assertThat(parsed.getMessages(), hasSize(2));
+        assertThat(parsed.getMessages().get(0).getRole(), is(ParsedMessage.Role.SYSTEM));
+        assertThat(parsed.getMessages().get(0).getTextContent(), is("You are a helpful assistant."));
+        assertThat(parsed.getMessages().get(1).getRole(), is(ParsedMessage.Role.USER));
+        assertThat(parsed.getMessages().get(1).getTextContent(), is("Hello"));
+    }
+
+    @Test
+    public void shouldConcatenateTopLevelSystemPromptContentBlocks() {
+        // given - Anthropic also allows "system" as an array of text content blocks (with cache_control)
+        HttpRequest request = request()
+            .withBody("{\n" +
+                "  \"model\": \"claude-sonnet-4-20250514\",\n" +
+                "  \"system\": [\n" +
+                "    {\"type\": \"text\", \"text\": \"Part one. \"},\n" +
+                "    {\"type\": \"text\", \"text\": \"Part two.\", \"cache_control\": {\"type\": \"ephemeral\"}}\n" +
+                "  ],\n" +
+                "  \"messages\": [\n" +
+                "    {\"role\": \"user\", \"content\": \"Hi\"}\n" +
+                "  ]\n" +
+                "}");
+
+        // when
+        ParsedConversation parsed = codec.decode(request);
+
+        // then
+        assertThat(parsed.getMessages(), hasSize(2));
+        assertThat(parsed.getMessages().get(0).getRole(), is(ParsedMessage.Role.SYSTEM));
+        assertThat(parsed.getMessages().get(0).getTextContent(), is("Part one. Part two."));
+        assertThat(parsed.getMessages().get(1).getRole(), is(ParsedMessage.Role.USER));
+    }
+
+    @Test
+    public void shouldNotAddSystemMessageWhenSystemFieldAbsentOrBlank() {
+        // given - no system field, plus an explicit empty-string system field
+        HttpRequest noSystem = request()
+            .withBody("{\"model\": \"claude-sonnet-4-20250514\", \"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}");
+        HttpRequest blankSystem = request()
+            .withBody("{\"model\": \"claude-sonnet-4-20250514\", \"system\": \"\", \"messages\": [{\"role\": \"user\", \"content\": \"Hi\"}]}");
+
+        // when / then - no SYSTEM message is synthesised in either case
+        assertThat(codec.decode(noSystem).getMessages(), hasSize(1));
+        assertThat(codec.decode(noSystem).getMessages().get(0).getRole(), is(ParsedMessage.Role.USER));
+        assertThat(codec.decode(blankSystem).getMessages(), hasSize(1));
+        assertThat(codec.decode(blankSystem).getMessages().get(0).getRole(), is(ParsedMessage.Role.USER));
+    }
 }

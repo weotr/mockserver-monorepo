@@ -94,6 +94,11 @@ public class KeyStoreFactory {
 
                 // ssl context
                 sslContext = getSSLContextInstance();
+                // This legacy javax.net.ssl SSLContext deliberately trusts ALL X.509 certificates: it is
+                // used only to build client SSLContexts in tests that connect to MockServer's own
+                // self-signed endpoint. Emit the same loud warning NettySslContextFactory uses so the
+                // trust-all behaviour is never silent.
+                warnTrustsEverything();
                 sslContext.init(keyManagerFactory.getKeyManagers(), InsecureTrustManagerFactory.INSTANCE.getTrustManagers(), null);
             } catch (Throwable throwable) {
                 throw new RuntimeException("Failed to initialize the SSLContext", throwable);
@@ -138,6 +143,16 @@ public class KeyStoreFactory {
             },
             trustX509CertificateChain
         );
+    }
+
+    private void warnTrustsEverything() {
+        if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(WARN)) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(WARN)
+                    .setMessageFormat("KeyStoreFactory SSLContext is configured to trust ALL X.509 certificates. Certificate validation is disabled — this should be used only for test clients connecting to MockServer's self-signed endpoint, never in production.")
+            );
+        }
     }
 
     private SSLContext getSSLContextInstance() throws NoSuchAlgorithmException {

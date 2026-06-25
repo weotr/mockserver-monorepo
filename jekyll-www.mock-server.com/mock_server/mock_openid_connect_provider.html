@@ -229,3 +229,12 @@ spring:
     configuration. For the OAuth2 login (authorization-code) flow, the mock <code>/authorize</code> endpoint
     issues a code (echoing <code>state</code> and recording any PKCE challenge and <code>nonce</code>), and the
     <code>/token</code> endpoint exchanges it for tokens carrying the <code>nonce</code>.</p>
+
+<a id="related_pages" class="anchor" href="#related_pages">&nbsp;</a>
+
+<h2>Related pages</h2>
+
+<p>This page covers the <strong>turnkey</strong> provider &mdash; a complete IdP in one call with verifiable
+    tokens. If instead you want to <strong>hand-roll individual OAuth2/OIDC expectations</strong> (discovery, JWKS,
+    userinfo, PKCE, bearer-token recipes) for fine-grained control, see
+    <a href="/mock_server/mocking_oauth2.html"><strong>Mocking OAuth2 Flows</strong></a>.</p>

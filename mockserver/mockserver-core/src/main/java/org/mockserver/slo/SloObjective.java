@@ -27,7 +27,30 @@ public class SloObjective extends ObjectWithJsonToString {
         LESS_THAN,
         LESS_THAN_OR_EQUAL,
         GREATER_THAN,
-        GREATER_THAN_OR_EQUAL
+        GREATER_THAN_OR_EQUAL;
+
+        /**
+         * The single source of truth for threshold comparison semantics, shared by both
+         * {@link SloObjective#satisfiedBy(double)} and
+         * {@link org.mockserver.load.LoadThreshold#satisfiedBy(double)} so the two features can never
+         * drift if the enum grows.
+         *
+         * @return true when {@code observed} satisfies this comparator against {@code threshold}.
+         */
+        public boolean test(double observed, double threshold) {
+            switch (this) {
+                case LESS_THAN:
+                    return observed < threshold;
+                case LESS_THAN_OR_EQUAL:
+                    return observed <= threshold;
+                case GREATER_THAN:
+                    return observed > threshold;
+                case GREATER_THAN_OR_EQUAL:
+                    return observed >= threshold;
+                default:
+                    return false;
+            }
+        }
     }
 
     private Sli sli;
@@ -80,17 +103,6 @@ public class SloObjective extends ObjectWithJsonToString {
      * {@link #comparator} against its {@link #threshold}.
      */
     public boolean satisfiedBy(double observed) {
-        switch (comparator) {
-            case LESS_THAN:
-                return observed < threshold;
-            case LESS_THAN_OR_EQUAL:
-                return observed <= threshold;
-            case GREATER_THAN:
-                return observed > threshold;
-            case GREATER_THAN_OR_EQUAL:
-                return observed >= threshold;
-            default:
-                return false;
-        }
+        return comparator.test(observed, threshold);
     }
 }

@@ -7,6 +7,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.model.HttpChaosProfile;
 import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.model.HttpChaosProfileDTO;
+import org.mockserver.serialization.model.SloCriteriaDTO;
+import org.mockserver.slo.SloCriteria;
+import org.mockserver.slo.SloEvaluator;
+import org.mockserver.slo.SloVerdict;
+import org.mockserver.slo.SloWindow;
 import org.mockserver.time.TimeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +72,8 @@ public class ChaosExperimentOrchestrator {
     static final long MAX_STAGE_DURATION_MILLIS = 24L * 60 * 60 * 1000;
     /** Maximum deferred-start delay: 7 days in milliseconds (runaway-timer bound). */
     static final long MAX_START_DELAY_MILLIS = 7L * 24 * 60 * 60 * 1000;
+    /** Interval between live SLO-breach probes for an experiment with {@code sloCriteria}. */
+    static final long SLO_PROBE_INTERVAL_MILLIS = 1000L;
 
     private static final ChaosExperimentOrchestrator INSTANCE = new ChaosExperimentOrchestrator(
         TimeService::currentTimeMillis,
@@ -74,20 +81,31 @@ public class ChaosExperimentOrchestrator {
             Thread t = new Thread(r, "chaos-experiment-scheduler");
             t.setDaemon(true);
             return t;
-        })
+        }),
+        new SloEvaluator()
     );
 
     private final LongSupplier clock;
     private final ScheduledExecutorService scheduler;
+    private final SloEvaluator sloEvaluator;
     private final AtomicReference<RunningExperiment> current = new AtomicReference<>(null);
     /** Terminal status of the last experiment after it detaches from {@link #current}.
      *  Allows {@link #getStatus()} to report {@code halted_by_auto_halt}, {@code completed},
-     *  or {@code stopped} for a short window after the experiment ends (instead of null). */
+     *  {@code halted_by_slo_breach}, or {@code stopped} for a short window after the
+     *  experiment ends (instead of null). */
     private volatile String lastTerminatedStatus;
+    /** Terminal SLO verdict of the last experiment after it detaches from {@link #current}.
+     *  {@code null} when the last experiment had no {@code sloCriteria}. */
+    private volatile SloVerdict lastTerminatedVerdict;
 
     ChaosExperimentOrchestrator(LongSupplier clock, ScheduledExecutorService scheduler) {
+        this(clock, scheduler, new SloEvaluator());
+    }
+
+    ChaosExperimentOrchestrator(LongSupplier clock, ScheduledExecutorService scheduler, SloEvaluator sloEvaluator) {
         this.clock = clock;
         this.scheduler = scheduler;
+        this.sloEvaluator = sloEvaluator;
     }
 
     public static ChaosExperimentOrchestrator getInstance() {
@@ -137,6 +155,10 @@ public class ChaosExperimentOrchestrator {
 
         // Schedule advancement to stage 1 (if there are more stages)
         scheduleNextStage(experiment, 0);
+
+        // A2: for an experiment with sloCriteria, probe the live SLO periodically so a
+        // breach halts the experiment between stage boundaries (not only at advance).
+        scheduleSloProbe(experiment);
 
         LOG.info("chaos experiment '{}' started with {} stage(s), loop={}",
             experiment.definition.name, experiment.definition.stages.size(), experiment.definition.loop);
@@ -206,12 +228,14 @@ public class ChaosExperimentOrchestrator {
     public void reset() {
         stopInternal(false);
         lastTerminatedStatus = null;
+        lastTerminatedVerdict = null;
     }
 
     /**
      * Returns the current experiment status. If no experiment is currently running
      * but one recently terminated, returns a status with the terminal status
-     * ({@code halted_by_auto_halt}, {@code completed}, or {@code stopped}).
+     * ({@code halted_by_auto_halt}, {@code halted_by_slo_breach}, {@code completed},
+     * or {@code stopped}).
      * Returns {@code null} only when no experiment has ever run (or after reset).
      */
     public ExperimentStatus getStatus() {
@@ -219,7 +243,7 @@ public class ChaosExperimentOrchestrator {
         if (exp == null) {
             String terminated = lastTerminatedStatus;
             if (terminated != null) {
-                return new ExperimentStatus(null, terminated, 0, 0, 0, 0, 0, 0, null, 0);
+                return new ExperimentStatus(null, terminated, 0, 0, 0, 0, 0, 0, null, 0, lastTerminatedVerdict);
             }
             return null;
         }
@@ -230,7 +254,7 @@ public class ChaosExperimentOrchestrator {
             long startRemaining = Math.max(0, exp.scheduledStartAtMillis - now);
             return new ExperimentStatus(
                 exp.definition.name, exp.status, 0, exp.definition.stages.size(),
-                0, 0, exp.loopIteration, now - exp.startedAtMillis, exp.definition, startRemaining);
+                0, 0, exp.loopIteration, now - exp.startedAtMillis, exp.definition, startRemaining, exp.experimentVerdict);
         }
         long stageElapsed = now - exp.stageStartedAtMillis;
         Stage currentStage = exp.currentStageIndex < exp.definition.stages.size()
@@ -247,11 +271,21 @@ public class ChaosExperimentOrchestrator {
             exp.loopIteration,
             now - exp.startedAtMillis,
             exp.definition,
-            0
+            0,
+            exp.experimentVerdict
         );
     }
 
     // -- Internal methods --
+
+    /** Cancels an experiment's live SLO probe (if any). Idempotent. */
+    private static void cancelProbe(RunningExperiment experiment) {
+        ScheduledFuture<?> probe = experiment.sloProbe;
+        if (probe != null) {
+            probe.cancel(false);
+            experiment.sloProbe = null;
+        }
+    }
 
     private void stopInternal(boolean autoHalted) {
         RunningExperiment exp = current.getAndSet(null);
@@ -260,7 +294,9 @@ public class ChaosExperimentOrchestrator {
             if (pending != null) {
                 pending.cancel(false);
             }
+            cancelProbe(exp);
             exp.status = autoHalted ? "halted_by_auto_halt" : "stopped";
+            finalizeVerdict(exp, autoHalted);
             lastTerminatedStatus = exp.status;
             // Clear chaos from the registry
             ServiceChaosRegistry.getInstance().reset();
@@ -304,9 +340,18 @@ public class ChaosExperimentOrchestrator {
         if (ServiceChaosRegistry.getInstance().entries().isEmpty() && experiment.status.equals("running")) {
             LOG.warn("chaos experiment '{}' halted by auto-halt safety circuit-breaker at stage {}",
                 experiment.definition.name, experiment.currentStageIndex);
+            cancelProbe(experiment);
             experiment.status = "halted_by_auto_halt";
+            finalizeVerdict(experiment, true);
             lastTerminatedStatus = experiment.status;
             current.compareAndSet(experiment, null);
+            return;
+        }
+
+        // SLO-breach auto-halt (A2): for an experiment with sloCriteria, an actual SLO
+        // FAIL over the live window halts the experiment with a FAIL verdict, in addition
+        // to the raw destructive-fault-volume circuit-breaker above.
+        if (checkSloBreachAndHalt(experiment)) {
             return;
         }
 
@@ -323,7 +368,9 @@ public class ChaosExperimentOrchestrator {
                     experiment.definition.name, experiment.loopIteration);
             } else {
                 // Experiment complete
+                cancelProbe(experiment);
                 experiment.status = "completed";
+                finalizeVerdict(experiment, false);
                 lastTerminatedStatus = experiment.status;
                 ServiceChaosRegistry.getInstance().reset();
                 current.compareAndSet(experiment, null);
@@ -353,6 +400,133 @@ public class ChaosExperimentOrchestrator {
             }
             advanceStage(exp);
         }
+    }
+
+    /**
+     * Schedules the next live SLO-breach probe for an experiment with {@code sloCriteria}.
+     * Each probe is a one-shot that re-arms itself only while the experiment is still
+     * {@link #current} and running; this self-cancels the moment the experiment terminates
+     * (or is replaced), so a stale probe can never touch the shared registries. No-op when
+     * the experiment has no {@code sloCriteria}.
+     */
+    private void scheduleSloProbe(RunningExperiment experiment) {
+        if (experiment.definition.sloCriteria == null) {
+            return;
+        }
+        experiment.sloProbe = scheduler.schedule(() -> {
+            // Only act while this experiment is still the live, running one.
+            if (current.get() != experiment || !"running".equals(experiment.status)) {
+                return;
+            }
+            if (!checkSloBreachAndHalt(experiment)) {
+                // Not breached (or no criteria) — re-arm the next probe.
+                scheduleSloProbe(experiment);
+            }
+        }, SLO_PROBE_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Evaluates the running experiment's SLO over its live window and halts it if
+     * an objective is breached. No-op unless an experiment with {@code sloCriteria}
+     * is currently {@code "running"}. Used by tests to drive the SLO-breach halt
+     * deterministically; in production the same check runs from the live probe and at
+     * every stage boundary (see {@link #advanceStage(RunningExperiment)}).
+     *
+     * @return {@code true} if the experiment was halted by an SLO breach
+     */
+    boolean checkSloNow() {
+        RunningExperiment exp = current.get();
+        return exp != null && checkSloBreachAndHalt(exp);
+    }
+
+    /**
+     * For an experiment with {@code sloCriteria}, evaluates the SLO over the live
+     * window {@code [start, now]}. On a FAIL verdict the experiment is halted with
+     * status {@code "halted_by_slo_breach"} and the FAIL verdict is attached. Other
+     * verdicts (PASS/INCONCLUSIVE) do not halt — the experiment runs to completion
+     * where the terminal verdict is produced. No-op when there is no {@code sloCriteria}.
+     *
+     * @return {@code true} when the experiment was halted by an SLO breach
+     */
+    private boolean checkSloBreachAndHalt(RunningExperiment experiment) {
+        if (experiment.definition.sloCriteria == null || !"running".equals(experiment.status)) {
+            return false;
+        }
+        SloVerdict verdict = evaluateSlo(experiment, clock.getAsLong());
+        if (verdict == null || verdict.getResult() != SloVerdict.Result.FAIL) {
+            return false;
+        }
+        // Claim the experiment atomically BEFORE mutating any shared state. A stale
+        // probe (or a probe racing a stop) that loses this CAS performs no global
+        // mutation, so it can never clear a registry that now belongs to a different
+        // experiment or test.
+        if (!current.compareAndSet(experiment, null)) {
+            return false;
+        }
+        LOG.warn("chaos experiment '{}' halted by SLO breach at stage {} (verdict {})",
+            experiment.definition.name, experiment.currentStageIndex, verdict.getResult());
+        cancelProbe(experiment);
+        ScheduledFuture<?> pending = experiment.pendingAdvance;
+        if (pending != null) {
+            pending.cancel(false);
+        }
+        experiment.status = "halted_by_slo_breach";
+        experiment.endedAtMillis = clock.getAsLong();
+        experiment.experimentVerdict = verdict;
+        lastTerminatedStatus = experiment.status;
+        lastTerminatedVerdict = verdict;
+        ServiceChaosRegistry.getInstance().reset();
+        return true;
+    }
+
+    /**
+     * Produces the terminal SLO verdict for a finished experiment. No-op (verdict
+     * stays null) when the experiment has no {@code sloCriteria} — back-compatible.
+     * When {@code autoHalted} is true the verdict is forced to {@link SloVerdict.Result#FAIL}
+     * (an auto-halted experiment did not hold its steady state), but the per-objective
+     * detail is still computed over the experiment window so the response is informative.
+     */
+    private void finalizeVerdict(RunningExperiment experiment, boolean autoHalted) {
+        if (experiment.definition.sloCriteria == null) {
+            return;
+        }
+        long end = clock.getAsLong();
+        experiment.endedAtMillis = end;
+        SloVerdict verdict = evaluateSlo(experiment, end);
+        if (verdict != null && autoHalted && verdict.getResult() != SloVerdict.Result.FAIL) {
+            // STRICT semantics: an auto-halted experiment is always a FAIL regardless of
+            // what the samples in the window happen to show.
+            verdict = verdict.withResult(SloVerdict.Result.FAIL);
+        }
+        experiment.experimentVerdict = verdict;
+        lastTerminatedVerdict = verdict;
+    }
+
+    /**
+     * Evaluates the experiment's {@code sloCriteria} over an EXPLICIT window scoped
+     * to the experiment: {@code [startedAtMillis, toEpochMillis]}. Scoping the window
+     * to the experiment's own start/end epoch (rather than the criteria's own window)
+     * makes the verdict strictly about what happened during the experiment. Returns
+     * {@code null} when there is no {@code sloCriteria}.
+     */
+    private SloVerdict evaluateSlo(RunningExperiment experiment, long toEpochMillis) {
+        SloCriteria criteria = experiment.definition.sloCriteria;
+        if (criteria == null) {
+            return null;
+        }
+        // Scope evaluation to the experiment window via an EXPLICIT window, overriding
+        // whatever window the criteria was submitted with. SloEvaluator uses EXPLICIT
+        // bounds verbatim, so the evaluation never reaches outside the experiment.
+        // Propagate minimumSampleCount unconditionally: an explicit null (guard disabled)
+        // must survive rather than being silently re-defaulted to the model default of 1.
+        // SloEvaluator null-handles the guard.
+        SloCriteria scoped = new SloCriteria()
+            .withName(criteria.getName())
+            .withObjectives(criteria.getObjectives())
+            .withUpstreamHosts(criteria.getUpstreamHosts())
+            .withWindow(SloWindow.explicit(experiment.startedAtMillis, toEpochMillis))
+            .withMinimumSampleCount(criteria.getMinimumSampleCount());
+        return sloEvaluator.evaluate(scoped);
     }
 
     private String validate(ExperimentDefinition definition) {
@@ -420,18 +594,31 @@ public class ChaosExperimentOrchestrator {
         public final long startDelayMillis;
         /** Standard 5-field cron expression for the start time; {@code null}/blank = none. */
         public final String cronSchedule;
+        /**
+         * Optional SLO asserted over the experiment window. When {@code null} the
+         * experiment behaves exactly as before (no verdict). When present, a terminal
+         * {@code experimentVerdict} is produced over the experiment window when the
+         * experiment terminates.
+         */
+        public final SloCriteria sloCriteria;
 
         public ExperimentDefinition(String name, List<Stage> stages, boolean loop) {
-            this(name, stages, loop, 0L, null);
+            this(name, stages, loop, 0L, null, null);
         }
 
         public ExperimentDefinition(String name, List<Stage> stages, boolean loop,
                                     long startDelayMillis, String cronSchedule) {
+            this(name, stages, loop, startDelayMillis, cronSchedule, null);
+        }
+
+        public ExperimentDefinition(String name, List<Stage> stages, boolean loop,
+                                    long startDelayMillis, String cronSchedule, SloCriteria sloCriteria) {
             this.name = name;
             this.stages = stages != null ? Collections.unmodifiableList(new ArrayList<>(stages)) : Collections.emptyList();
             this.loop = loop;
             this.startDelayMillis = startDelayMillis;
             this.cronSchedule = cronSchedule;
+            this.sloCriteria = sloCriteria;
         }
 
         /**
@@ -467,7 +654,17 @@ public class ChaosExperimentOrchestrator {
                     stages.add(new Stage(durationMillis, profiles));
                 }
             }
-            return new ExperimentDefinition(name, stages, loop, startDelayMillis, cronSchedule);
+            SloCriteria sloCriteria = null;
+            JsonNode sloNode = node.path("sloCriteria");
+            if (sloNode.isObject()) {
+                try {
+                    SloCriteriaDTO dto = mapper.treeToValue(sloNode, SloCriteriaDTO.class);
+                    sloCriteria = dto != null ? dto.buildObject() : null;
+                } catch (Exception e) {
+                    throw new IllegalArgumentException("invalid sloCriteria: " + e.getMessage(), e);
+                }
+            }
+            return new ExperimentDefinition(name, stages, loop, startDelayMillis, cronSchedule, sloCriteria);
         }
 
         /**
@@ -493,6 +690,9 @@ public class ChaosExperimentOrchestrator {
                     profilesNode.set(entry.getKey(), mapper.valueToTree(new HttpChaosProfileDTO(entry.getValue())));
                 }
                 stagesArray.add(stageNode);
+            }
+            if (sloCriteria != null) {
+                node.set("sloCriteria", mapper.valueToTree(new SloCriteriaDTO(sloCriteria)));
             }
             return node;
         }
@@ -528,11 +728,25 @@ public class ChaosExperimentOrchestrator {
         public final ExperimentDefinition definition;
         /** Milliseconds until a deferred-start experiment begins; {@code 0} unless status is {@code "scheduled"}. */
         public final long startRemainingMillis;
+        /**
+         * Terminal SLO verdict over the experiment window; {@code null} when the
+         * experiment had no {@code sloCriteria} or has not yet produced a verdict.
+         */
+        public final SloVerdict experimentVerdict;
 
         public ExperimentStatus(String name, String status, int currentStageIndex, int totalStages,
                                 long stageElapsedMillis, long stageRemainingMillis,
                                 int loopIteration, long totalElapsedMillis,
                                 ExperimentDefinition definition, long startRemainingMillis) {
+            this(name, status, currentStageIndex, totalStages, stageElapsedMillis, stageRemainingMillis,
+                loopIteration, totalElapsedMillis, definition, startRemainingMillis, null);
+        }
+
+        public ExperimentStatus(String name, String status, int currentStageIndex, int totalStages,
+                                long stageElapsedMillis, long stageRemainingMillis,
+                                int loopIteration, long totalElapsedMillis,
+                                ExperimentDefinition definition, long startRemainingMillis,
+                                SloVerdict experimentVerdict) {
             this.name = name;
             this.status = status;
             this.currentStageIndex = currentStageIndex;
@@ -543,6 +757,7 @@ public class ChaosExperimentOrchestrator {
             this.totalElapsedMillis = totalElapsedMillis;
             this.definition = definition;
             this.startRemainingMillis = startRemainingMillis;
+            this.experimentVerdict = experimentVerdict;
         }
 
         public ObjectNode toJson() {
@@ -562,6 +777,9 @@ public class ChaosExperimentOrchestrator {
             if (definition != null) {
                 node.set("experiment", definition.toJson());
             }
+            if (experimentVerdict != null) {
+                node.set("experimentVerdict", mapper.valueToTree(experimentVerdict));
+            }
             return node;
         }
     }
@@ -577,8 +795,15 @@ public class ChaosExperimentOrchestrator {
         volatile String status;
         volatile int loopIteration;
         volatile ScheduledFuture<?> pendingAdvance;
+        /** Live SLO-breach probe; {@code null} unless the experiment has {@code sloCriteria}. */
+        volatile ScheduledFuture<?> sloProbe;
         /** Absolute clock time (ms) when a deferred-start experiment is due to begin. */
         volatile long scheduledStartAtMillis;
+        /** Absolute clock time (ms) when the experiment terminated; {@code 0} until then. */
+        volatile long endedAtMillis;
+        /** Terminal SLO verdict over the experiment window; {@code null} until finalized
+         *  (and always {@code null} when the experiment has no {@code sloCriteria}). */
+        volatile SloVerdict experimentVerdict;
 
         RunningExperiment(ExperimentDefinition definition, long startedAtMillis) {
             this.definition = definition;

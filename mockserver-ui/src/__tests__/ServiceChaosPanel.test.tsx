@@ -925,4 +925,131 @@ describe('ServiceChaosPanel', () => {
     await waitFor(() => expect(deleteCalls.length).toBeGreaterThan(0));
     expect(deleteCalls[0]).toContain('/chaosExperiment');
   });
+
+  // --- SLO verdict / halted_by_slo_breach tests (A1/A2) ---
+
+  /**
+   * Stub the experiment-status GET to return a fixed terminal status, with the
+   * other chaos on-mount fetches served as empty-but-valid.
+   */
+  function stubExperimentStatus(status: Record<string, unknown>) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('/chaosExperiment') && !init?.method) {
+          return { ok: true, status: 200, statusText: 'ok', json: async () => status };
+        }
+        if (u.includes('/grpc/health')) {
+          return { ok: true, status: 200, statusText: 'ok', json: async () => ({}) };
+        }
+        if (u.includes('/tcpChaos')) {
+          return { ok: true, status: 200, statusText: 'ok', json: async () => ({ hosts: {} }) };
+        }
+        if (u.includes('/grpcChaos')) {
+          return { ok: true, status: 200, statusText: 'ok', json: async () => ({ services: {} }) };
+        }
+        return { ok: true, status: 200, statusText: 'ok', json: async () => ({ services: {} }) };
+      }),
+    );
+  }
+
+  it('renders the terminal SLO verdict chip and per-objective detail when present', async () => {
+    stubExperimentStatus({
+      name: 'slo-run',
+      status: 'completed',
+      currentStageIndex: 0,
+      totalStages: 1,
+      stageElapsedMillis: 5000,
+      stageRemainingMillis: 0,
+      loopIteration: 0,
+      totalElapsedMillis: 5000,
+      experimentVerdict: {
+        name: 'checkout-slo',
+        result: 'FAIL',
+        windowFromEpochMillis: 1000,
+        windowToEpochMillis: 6000,
+        sampleCount: 42,
+        objectiveResults: [
+          { sli: 'LATENCY_P95', comparator: 'LESS_THAN_OR_EQUAL', threshold: 200, observedValue: 312.5, result: 'FAIL' },
+          { sli: 'ERROR_RATE', comparator: 'LESS_THAN', threshold: 0.05, observedValue: 0.01, result: 'PASS' },
+        ],
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Experiments')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Expand experiments' }));
+    await waitFor(() => expect(screen.getByText('slo-run')).toBeInTheDocument());
+
+    // Verdict header + the overall FAIL chip
+    expect(screen.getByText('SLO Verdict')).toBeInTheDocument();
+    expect(screen.getByText('checkout-slo')).toBeInTheDocument();
+    expect(screen.getByText('42 samples')).toBeInTheDocument();
+    // Per-objective observed-vs-threshold detail
+    expect(screen.getByText('p95 latency 312.5 ≤ 200')).toBeInTheDocument();
+    expect(screen.getByText('error rate 0.01 < 0.05')).toBeInTheDocument();
+    // Both PASS and FAIL result chips are present (overall FAIL + per-objective)
+    expect(screen.getAllByText('FAIL').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('PASS')).toBeInTheDocument();
+  });
+
+  it('renders halted_by_slo_breach as a halted/error status with the FAIL verdict', async () => {
+    stubExperimentStatus({
+      name: 'breached-run',
+      status: 'halted_by_slo_breach',
+      currentStageIndex: 0,
+      totalStages: 1,
+      stageElapsedMillis: 3000,
+      stageRemainingMillis: 0,
+      loopIteration: 0,
+      totalElapsedMillis: 3000,
+      experimentVerdict: {
+        result: 'FAIL',
+        windowFromEpochMillis: 0,
+        windowToEpochMillis: 3000,
+        sampleCount: 10,
+        objectiveResults: [
+          { sli: 'ERROR_RATE', comparator: 'LESS_THAN_OR_EQUAL', threshold: 0.1, observedValue: 0.4, result: 'FAIL' },
+        ],
+      },
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Experiments')).toBeInTheDocument());
+    // Header summary chip shows "halted" (not "idle") for a slo-breach termination
+    expect(screen.getByText('halted')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Expand experiments' }));
+    await waitFor(() => expect(screen.getByText('breached-run')).toBeInTheDocument());
+
+    // The status chip renders the humanized status label with error colour
+    const statusChip = screen.getByText('halted by slo breach').closest('.MuiChip-root');
+    expect(statusChip).not.toBeNull();
+    expect(statusChip!.className).toContain('MuiChip-colorError');
+    // And the SLO verdict block is shown
+    expect(screen.getByText('SLO Verdict')).toBeInTheDocument();
+    expect(screen.getByText('error rate 0.4 ≤ 0.1')).toBeInTheDocument();
+  });
+
+  it('renders no SLO verdict block when the status carries no verdict', async () => {
+    stubExperimentStatus({
+      name: 'no-slo-run',
+      status: 'completed',
+      currentStageIndex: 0,
+      totalStages: 1,
+      stageElapsedMillis: 5000,
+      stageRemainingMillis: 0,
+      loopIteration: 0,
+      totalElapsedMillis: 5000,
+    });
+    const user = userEvent.setup({ delay: null });
+    render(<ServiceChaosPanel connectionParams={params} />);
+    await waitFor(() => expect(screen.getByText('Experiments')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Expand experiments' }));
+    await waitFor(() => expect(screen.getByText('no-slo-run')).toBeInTheDocument());
+
+    // No verdict → no SLO Verdict block at all
+    expect(screen.queryByText('SLO Verdict')).not.toBeInTheDocument();
+  });
 });

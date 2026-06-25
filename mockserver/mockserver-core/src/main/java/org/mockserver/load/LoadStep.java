@@ -4,7 +4,9 @@ import org.mockserver.model.Delay;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.ObjectWithJsonToString;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,8 +23,9 @@ import java.util.Map;
  * never calls {@link Delay#applyDelay()} (which would block a worker thread). A null
  * {@code thinkTime} means no pause.
  *
- * <p>Programmatic cross-step capture is deferred; cross-step state in v1 is template-side
- * (e.g. {@code $scenario.set/get} helpers).
+ * <p>Cross-step correlation is declarative: {@link #getCaptures()} extracts values from this step's
+ * response into the iteration's mutable captured-variable map, which a subsequent step references from
+ * its templated fields via {@code $iteration.captured.<name>}. See {@link LoadCapture} for scope.
  */
 public class LoadStep extends ObjectWithJsonToString {
 
@@ -39,6 +42,22 @@ public class LoadStep extends ObjectWithJsonToString {
      * (step keys win on conflict). See {@link LoadScenario#getLabels()} for how they are exported.
      */
     private Map<String, String> labels;
+    /**
+     * Cross-step capture rules applied to this step's response. Each binds an extracted value to a
+     * variable name visible to subsequent steps in the same iteration. See {@link LoadCapture}.
+     */
+    private List<LoadCapture> captures;
+    /**
+     * Relative selection weight, used only when the scenario's
+     * {@link LoadScenario#getStepSelection() stepSelection} is
+     * {@link LoadScenario.StepSelection#WEIGHTED WEIGHTED}: each iteration runs exactly ONE step chosen
+     * at random with probability proportional to its weight (e.g. weights {@code 7 / 2 / 1} model a
+     * 70% / 20% / 10% mixed workload). Nullable — an absent weight is treated as {@code 1.0} in
+     * WEIGHTED mode; a non-positive weight is rejected by validation. Ignored entirely under the default
+     * {@link LoadScenario.StepSelection#SEQUENTIAL SEQUENTIAL} mode (all steps run in order regardless
+     * of any weights present).
+     */
+    private Double weight;
 
     public static LoadStep loadStep() {
         return new LoadStep();
@@ -95,6 +114,38 @@ public class LoadStep extends ObjectWithJsonToString {
             this.labels = new LinkedHashMap<>();
         }
         this.labels.put(name, value);
+        return this;
+    }
+
+    /**
+     * Cross-step capture rules for this step (may be null/empty). See {@link #captures}.
+     */
+    public List<LoadCapture> getCaptures() {
+        return captures;
+    }
+
+    public LoadStep withCaptures(List<LoadCapture> captures) {
+        this.captures = captures != null ? new ArrayList<>(captures) : null;
+        return this;
+    }
+
+    public LoadStep withCapture(LoadCapture capture) {
+        if (this.captures == null) {
+            this.captures = new ArrayList<>();
+        }
+        this.captures.add(capture);
+        return this;
+    }
+
+    /**
+     * Relative selection weight for WEIGHTED step selection (may be null = treated as 1.0). See {@link #weight}.
+     */
+    public Double getWeight() {
+        return weight;
+    }
+
+    public LoadStep withWeight(Double weight) {
+        this.weight = weight;
         return this;
     }
 }

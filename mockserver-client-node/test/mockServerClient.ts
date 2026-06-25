@@ -1,6 +1,6 @@
 import {mockServerClient, ClockStatus, GrpcService, MockServerClient, ScenarioHandle, ScenarioList, ScenarioState, llm as llmFactory, mcpMock} from '../index';
 import {RequestResponse} from '../mockServerClient';
-import {CrossProtocolScenario, Expectation, ExpectationStep, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, LoadScenario, LoadScenarioEntry, LoadScenarioList, LoadScenarioRegistration, LoadScenarioStartResult, LoadScenarioStopResult, RequestDefinition} from '../mockServer';
+import {CrossProtocolScenario, Expectation, ExpectationStep, GenerateLoadScenarioFromOpenAPIRequest, GenerateLoadScenarioFromRecordingRequest, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, LoadScenario, LoadScenarioEntry, LoadScenarioGenerationResult, LoadScenarioList, LoadScenarioRegistration, LoadScenarioReport, LoadScenarioStartResult, LoadScenarioStopResult, RequestDefinition} from '../mockServer';
 
 const client: MockServerClient = mockServerClient('mockhttp', 1080);
 
@@ -232,6 +232,21 @@ async function test() {
     requestResponse = await client.mockSimpleResponse('some/path', {});
     requestResponse = await client.mockSimpleResponse('some/path', {}, 500);
 
+    // fluent when().respond() DSL (type-checking only)
+    requestResponse = await client.when('/somePath').respond({statusCode: 200, body: 'body'});
+    requestResponse = await client.when(requestDefinition, 2, {unlimited: false}, 10).respond({statusCode: 201});
+    requestResponse = await client
+        .when({path: '/somePath'})
+        .withTimes(3)
+        .withTimeToLive({unlimited: true})
+        .withPriority(5)
+        .withId('expectation-id')
+        .respond({statusCode: 200});
+    requestResponse = await client.when('/forward').forward({host: 'localhost', port: 8081});
+    requestResponse = await client.when('/error').error({dropConnection: true});
+    requestResponse = await client.when('/callback').callback((request) => ({statusCode: 200}));
+    requestResponse = await client.when('/forwardCallback').forwardCallback((request) => request);
+
     // advanced response builders (type-checking only)
     requestResponse = await client.respondWithSse('/sse', {
         statusCode: 200,
@@ -332,6 +347,55 @@ async function test() {
     requestResponse = await client.deleteLoadScenario("load-test");
     requestResponse = await client.clearLoadScenarios();
     loadStart = await client.runLoadScenario(loadScenarioDefinition);
+
+    // load injection: thresholds, verdict, pacing, feeder, captures, weighted steps, shape
+    const richLoadScenario: LoadScenario = {
+        name: "rich-load-test",
+        templateType: "MUSTACHE",
+        stepSelection: "WEIGHTED",
+        abortOnFail: true,
+        abortGraceMillis: 2000,
+        thresholds: [
+            {metric: "LATENCY_P999", comparator: "LESS_THAN", threshold: 750},
+            {metric: "ERROR_RATE", comparator: "LESS_THAN_OR_EQUAL", threshold: 0.01},
+            {metric: "THROUGHPUT_RPS", comparator: "GREATER_THAN_OR_EQUAL", threshold: 100}
+        ],
+        pacing: {mode: "CONSTANT_THROUGHPUT", value: 2},
+        feeder: {
+            rows: [{user: "alice"}, {user: "bob"}],
+            strategy: "CIRCULAR"
+        },
+        profile: {
+            shape: {type: "RAMP_HOLD", metric: "VU", target: 5, rampMillis: 1000, holdMillis: 5000, curve: "LINEAR"}
+        },
+        steps: [
+            {
+                name: "login",
+                weight: 7,
+                request: {method: "POST", path: "/login"},
+                captures: [{name: "token", source: "BODY_JSONPATH", expression: "$.token", defaultValue: "anon"}]
+            },
+            {name: "browse", weight: 3, request: {method: "GET", path: "/browse"}}
+        ]
+    };
+    loadRegistration = await client.loadScenario(richLoadScenario);
+
+    // load injection: report + generators
+    const loadReport: LoadScenarioReport | string = await client.getLoadScenarioReport("load-test");
+    const loadJUnitReport: LoadScenarioReport | string = await client.getLoadScenarioReport("load-test", "junit");
+    const openApiGenRequest: GenerateLoadScenarioFromOpenAPIRequest = {
+        name: "generated-openapi-load",
+        specUrlOrPayload: "https://example.com/openapi.yaml",
+        target: {host: "svc", port: 8080, scheme: "http"}
+    };
+    let loadGen: LoadScenarioGenerationResult = await client.generateLoadScenarioFromOpenAPI(openApiGenRequest);
+    const recordingGenRequest: GenerateLoadScenarioFromRecordingRequest = {
+        name: "generated-recording-load",
+        mode: "TEMPLATIZED",
+        maxSteps: 50,
+        target: {host: "svc", port: 8080, scheme: "https"}
+    };
+    loadGen = await client.generateLoadScenarioFromRecording(recordingGenRequest);
 
     // stateful scenario (state machine) management
     const deployScenario: ScenarioHandle = client.scenario("Deploy");

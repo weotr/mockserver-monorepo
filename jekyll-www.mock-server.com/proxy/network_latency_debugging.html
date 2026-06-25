@@ -4,7 +4,7 @@ shortTitle: Latency Debugging
 description: Capture per-request HTTP timing (connect, TTFB, total), export HAR with breakdowns, flag slow requests, and track latency percentiles via Prometheus.
 layout: page
 pageOrder: 6
-section: 'Proxy'
+section: 'Proxying'
 subsection: true
 sitemap:
   priority: 0.7
@@ -99,7 +99,7 @@ keywords: http latency debugging, slow request detection, proxy timing, har timi
 
 <ol>
     <li>Emit a <strong>WARN-level log entry</strong> in MockServer's event log, visible in the <a href="/mock_server/mockserver_ui.html">dashboard UI</a> and retrievable via the <a href="/mock_server/debugging_issues.html#retrieving_recorded_logs">log retrieval API</a>.</li>
-    <li>Increment the <code class="inline code">mock_server_slow_requests_total</code> <strong>Prometheus counter</strong> (when <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>), so you can alert on slow-request rates.</li>
+    <li>Increment the <code class="inline code">mock_server_slow_requests_total</code> <strong>Prometheus counter</strong> (when <a href="/mock_server/configuration_properties.html#button_configuration_metrics_enabled">metrics are enabled</a>), so you can alert on slow-request rates.</li>
 </ol>
 
 <p>Configuration examples:</p>
@@ -123,7 +123,7 @@ mockserver.slowRequestThresholdMillis=500</code></pre>
 
 <h2>Latency Percentiles via Prometheus</h2>
 
-<p>MockServer exposes a <code class="inline code">mock_server_request_duration_seconds</code> histogram via the <code class="inline code">GET /mockserver/metrics</code> Prometheus endpoint (when <a href="/mock_server/configuration_properties.html#button_configuration_enabled_metrics">metrics are enabled</a>). This histogram records the duration of every request MockServer handles, so you can compute p50, p95, and p99 latency percentiles in your monitoring system.</p>
+<p>MockServer exposes a <code class="inline code">mock_server_request_duration_seconds</code> histogram via the <code class="inline code">GET /mockserver/metrics</code> Prometheus endpoint (when <a href="/mock_server/configuration_properties.html#button_configuration_metrics_enabled">metrics are enabled</a>). This histogram records the duration of every request MockServer handles &mdash; mocked, proxied/forwarded, and control-plane API calls alike &mdash; so you can compute p50, p95, and p99 latency percentiles in your monitoring system. (By contrast, the slow-request flagging above is scoped to <em>forwarded</em> requests only.)</p>
 
 <p>For more granular analysis, enable the <a href="/mock_server/configuration_properties.html#button_configuration_metrics_request_duration_route_labels"><code class="inline code">metricsRequestDurationRouteLabels</code></a> property. This adds a per-HTTP-method histogram (<code class="inline code">mock_server_request_duration_by_method_seconds</code>) with a <code class="inline code">method</code> label (GET, POST, PUT, etc.), letting you compare latency distributions across different types of requests.</p>
 

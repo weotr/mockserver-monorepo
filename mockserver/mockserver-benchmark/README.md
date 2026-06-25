@@ -58,6 +58,50 @@ INFO logging off) — the common case Part A optimizes. The headline number for
 the allocation work is **`gc.alloc.rate.norm`** (B/op); `ns/op` (shown as µs/op)
 is the secondary signal.
 
+## Scaling sweep (`run-scaling.sh`)
+
+`run-scaling.sh` is a sibling of `run.sh` that runs a **fixed** param sweep and
+emits a machine-readable `perf-scaling.json` (the documentation-site chart
+contract). It is not free-form like `run.sh`: it runs two benchmark sets and
+reshapes their JMH JSON with `jq`.
+
+```bash
+# full sweep (bounded default iterations), writes <repo-root>/perf-scaling.json
+./run-scaling.sh
+
+# fast validation run (seconds-per-combo)
+JMH_ARGS_SCALING='-f 1 -wi 1 -i 2 -r 1 -w 1' ./run-scaling.sh
+
+# custom output path
+SCALING_RESULT_PATH=/tmp/perf-scaling.json ./run-scaling.sh
+```
+
+What it measures and the output shape:
+
+| Set | Benchmark | Sweep | Shows |
+|-----|-----------|-------|-------|
+| `matching` | `MatchingBenchmark` | `expectationCount={1,10,100,1000}` × `matcherType={EXACT,REGEX}`, `logLevel=WARN`, `-prof gc` | matching time + allocation **grow** with scan length |
+| `candidate_index` | `CandidateIndexBenchmark` | `n={1,10,100,1000,5000}` × `indexMode={SCAN,INDEX}`, `outcome=MISS`, `shape=LITERAL` | SCAN grows; **INDEX stays ~flat** |
+
+```json
+{
+  "scaling": {
+    "matching": [
+      {"expectations": 1, "matcherType": "EXACT", "time_per_op": 0.42, "time_unit": "us/op", "alloc_bytes_per_op": 120.0}
+    ],
+    "candidate_index": [
+      {"mode": "INDEX", "expectations": 5000, "time_per_op": 0.9, "time_unit": "us/op"}
+    ]
+  }
+}
+```
+
+`time_per_op` = `primaryMetric.score`, `time_unit` = `primaryMetric.scoreUnit`,
+`alloc_bytes_per_op` = `secondaryMetrics["gc.alloc.rate.norm"].score` (null if
+absent; only on the `matching` set). `expectations` is the integer param
+(`expectationCount` for `matching`, `n` for `candidate_index`). A validated
+sample lives at `fixtures/sample-perf-scaling.json`.
+
 ## Workflow for a Part-A change
 
 1. `./run.sh -prof gc | tee before.txt`

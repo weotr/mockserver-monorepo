@@ -84,6 +84,44 @@ public class OpenAPIConverterCorrectnessTest {
         assertThat(response.getBodyAsString(), containsString("Crumble"));
     }
 
+    // --- Regression #2370: a `format: date`/`date-time` property with an inline string example must be
+    //     rendered as the ISO string the author wrote, not as Jackson epoch-millis for the parsed Date. ---
+
+    @Test
+    public void shouldRenderFormatDateExampleAsIsoStringNotEpochMillis() {
+        // given - a spec with a `type: string, format: date` property carrying an explicit example
+        String spec = "openapi: 3.0.3\n" +
+            "info: { title: Date repro, version: '1.0' }\n" +
+            "paths:\n" +
+            "  /thing:\n" +
+            "    get:\n" +
+            "      operationId: getThing\n" +
+            "      responses:\n" +
+            "        '200':\n" +
+            "          description: ok\n" +
+            "          content:\n" +
+            "            application/json:\n" +
+            "              schema: { $ref: '#/components/schemas/Thing' }\n" +
+            "components:\n" +
+            "  schemas:\n" +
+            "    Thing:\n" +
+            "      type: object\n" +
+            "      required: [paymentDate]\n" +
+            "      properties:\n" +
+            "        paymentDate:\n" +
+            "          type: string\n" +
+            "          format: date\n" +
+            "          example: '2021-01-30'\n";
+
+        // when
+        List<Expectation> expectations = new OpenAPIConverter(mockServerLogger).buildExpectations(spec, null);
+
+        // then - the body keeps the ISO date string, not the epoch-millis number 1611964800000
+        HttpResponse response = expectationFor(expectations, "getThing").getHttpResponse();
+        assertThat(response.getBodyAsString(), containsString("\"2021-01-30\""));
+        assertThat(response.getBodyAsString(), not(containsString("1611964800000")));
+    }
+
     @Test
     public void shouldUseRequestedExampleNameWhenPresent() {
         // given

@@ -1,0 +1,691 @@
+<p>The following examples drive load scenarios through MockServer using each client library and the plain REST API. They all follow the same registry workflow &mdash; <strong>register &rarr; start &rarr; read live status &rarr; stop</strong>. Load generation must be enabled (<code class="inline code">loadGenerationEnabled=true</code>): <strong>registering is always allowed</strong>, but <strong>starting</strong> a run returns <code class="inline code">403</code> when it is off.</p>
+
+<button id="button_load_lifecycle" class="accordion">register, start, read status, then stop a multi-stage scenario</button>
+<div class="panel">
+    <p>A realistic multi-stage scenario: a linear <code class="inline code">RATE</code> ramp (5 &rarr; 50 req/s, capped at 50 virtual users), then a 25-VU hold, then a <code class="inline code">PAUSE</code>. Two Velocity-templated steps drive each iteration, <code class="inline code">startDelayMillis</code> defers load briefly after start, and custom labels tag the metric series. The full lifecycle is exercised: <strong>register</strong> (does not run), <strong>start</strong>, <strong>list</strong> / read live <strong>status</strong>, <strong>stop</strong>, then <strong>clear</strong> the registry.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.model.Delay;
+import org.mockserver.model.HttpTemplate;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("checkout-load")
+    .withTemplateType(HttpTemplate.TemplateType.VELOCITY)
+    .withMaxRequests(100000)
+    .withStartDelayMillis(500)
+    .withLabels(Map.of("team", "payments", "env", "staging"))
+    .withProfile(LoadProfile.of(
+        LoadStage.rampRate(5, 50, 30000, RampCurve.LINEAR).withMaxVus(50),
+        LoadStage.constantVus(25, 60000),
+        LoadStage.pause(10000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/products/$!iteration.index"))
+            .withName("browse")
+            .withThinkTime(new Delay(TimeUnit.MILLISECONDS, 500)),
+        LoadStep.loadStep(request().withMethod("POST").withPath("/cart/checkout")
+                .withBody("{\"item\":\"$!iteration.index\",\"qty\":1}"))
+            .withName("checkout")
+            .withLabels(Map.of("critical", "true"))
+    );
+
+client.loadScenario(scenario);                  // 1. register (does NOT start it yet)
+client.startLoadScenarios("checkout-load");     // 2. start (requires loadGenerationEnabled=true)
+String listing = client.loadScenarios();        // 3. list all registered scenarios
+String status = client.getLoadScenario("checkout-load"); // live throughput / latency status
+client.stopLoadScenarios("checkout-load");      // 4. stop (no args stops ALL running scenarios)
+client.clearLoadScenarios();                     //    tidy up the registry</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+// The per-step field is `request` (a full HttpRequest), not `httpRequest`.
+var scenario = {
+    name: 'checkout-load',
+    templateType: 'VELOCITY',
+    maxRequests: 100000,
+    startDelayMillis: 500,
+    labels: { team: 'payments', env: 'staging' },
+    profile: {
+        stages: [
+            { type: 'RATE', startRate: 5, endRate: 50, durationMillis: 30000, curve: 'LINEAR', maxVus: 50 },
+            { type: 'VU', vus: 25, durationMillis: 60000 },
+            { type: 'PAUSE', durationMillis: 10000 }
+        ]
+    },
+    steps: [
+        { name: 'browse', request: { method: 'GET', path: '/products/$!iteration.index' },
+          thinkTime: { timeUnit: 'MILLISECONDS', value: 500 } },
+        { name: 'checkout', labels: { critical: 'true' },
+          request: { method: 'POST', path: '/cart/checkout',
+                     headers: { 'Content-Type': ['application/json'] },
+                     body: '{"item":"$!iteration.index","qty":1}' } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);                 // 1. register (does NOT start it yet)
+    await client.startLoadScenarios('checkout-load');    // 2. start (requires loadGenerationEnabled=true)
+    var listing = await client.loadScenarios();          // 3. list all registered scenarios
+    var status = await client.getLoadScenario('checkout-load'); // live status
+    await client.stopLoadScenarios('checkout-load');     // 4. stop (no arg stops ALL running scenarios)
+    await client.clearLoadScenarios();                    //    tidy up the registry
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import (Delay, HttpRequest, LoadProfile, LoadScenario,
+                        LoadStage, LoadStep, MockServerClient)
+
+scenario = LoadScenario(
+    name="checkout-load",
+    template_type="VELOCITY",
+    max_requests=100000,
+    start_delay_millis=500,
+    labels={"team": "payments", "env": "staging"},
+    profile=LoadProfile(stages=[
+        LoadStage.rate_stage(30000, start_rate=5, end_rate=50, max_vus=50, curve="LINEAR"),
+        LoadStage.vu_stage(60000, vus=25),
+        LoadStage.pause_stage(10000),
+    ]),
+    steps=[
+        LoadStep(name="browse",
+                 request=HttpRequest(method="GET", path="/products/$!iteration.index"),
+                 think_time=Delay(time_unit="MILLISECONDS", value=500)),
+        LoadStep(name="checkout", labels={"critical": "true"},
+                 request=HttpRequest(method="POST", path="/cart/checkout",
+                                     body='{"item":"$!iteration.index","qty":1}')),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)                # 1. register (does NOT start it yet)
+    client.start_load_scenarios("checkout-load")  # 2. start (requires loadGenerationEnabled=true)
+    listing = client.load_scenarios()             # 3. list all registered scenarios
+    status = client.get_load_scenario("checkout-load")  # live status
+    client.stop_load_scenarios("checkout-load")   # 4. stop (None stops ALL running scenarios)
+    client.clear_load_scenarios()                  #    tidy up the registry</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+scenario = LoadScenario.new(
+  name: 'checkout-load',
+  template_type: 'VELOCITY',
+  max_requests: 100_000,
+  start_delay_millis: 500,
+  labels: { 'team' =&gt; 'payments', 'env' =&gt; 'staging' },
+  profile: LoadProfile.new(stages: [
+    LoadStage.rate(30_000, start_rate: 5, end_rate: 50, max_vus: 50, curve: 'LINEAR'),
+    LoadStage.vu(60_000, vus: 25),
+    LoadStage.pause(10_000)
+  ]),
+  steps: [
+    LoadStep.new(name: 'browse',
+                 request: HttpRequest.new(method: 'GET', path: '/products/$!iteration.index'),
+                 think_time: Delay.new(time_unit: 'MILLISECONDS', value: 500)),
+    LoadStep.new(name: 'checkout', labels: { 'critical' =&gt; 'true' },
+                 request: HttpRequest.new(method: 'POST', path: '/cart/checkout',
+                                          body: '{"item":"$!iteration.index","qty":1}'))
+  ]
+)
+
+client.load_scenario(scenario)               # 1. register (does NOT start it yet)
+client.start_load_scenarios('checkout-load') # 2. start (requires loadGenerationEnabled=true)
+client.load_scenarios                        # 3. list all registered scenarios
+client.get_load_scenario('checkout-load')    # live status
+client.stop_load_scenarios('checkout-load')  # 4. stop (nil stops ALL running scenarios)
+client.clear_load_scenarios                  #    tidy up the registry
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    browse := mockserver.Request().Method("GET").Path("/products/$!iteration.index").Build()
+    checkout := mockserver.Request().Method("POST").Path("/cart/checkout").
+        Body(`{"item":"$!iteration.index","qty":1}`).Build()
+
+    // MaxVus is an optional *int field on a RATE stage.
+    rampStage := mockserver.RampRateStage(5, 50, 30000, mockserver.RampLinear)
+    maxVus := 50
+    rampStage.MaxVus = &amp;maxVus
+
+    scenario := mockserver.LoadScenario{
+        Name:             "checkout-load",
+        TemplateType:     "VELOCITY",
+        MaxRequests:      100000,
+        StartDelayMillis: 500,
+        Labels:           map[string]string{"team": "payments", "env": "staging"},
+        Profile: &amp;mockserver.LoadProfile{
+            Stages: []mockserver.LoadStage{
+                rampStage,
+                mockserver.ConstantVusStage(25, 60000),
+                mockserver.PauseStage(10000),
+            },
+        },
+        Steps: []mockserver.LoadStep{
+            {Name: "browse", Request: &amp;browse, ThinkTime: &amp;mockserver.Delay{TimeUnit: "MILLISECONDS", Value: 500}},
+            {Name: "checkout", Request: &amp;checkout, Labels: map[string]string{"critical": "true"}},
+        },
+    }
+
+    client.LoadScenario(scenario)              // 1. register (does NOT start it yet)
+    client.StartLoadScenarios("checkout-load") // 2. start (requires loadGenerationEnabled=true)
+    client.LoadScenarios()                     // 3. list all registered scenarios
+    client.GetLoadScenario("checkout-load")    // live status
+    client.StopLoadScenarios("checkout-load")  // 4. stop (no args stops ALL running scenarios)
+    client.ClearLoadScenarios()                //    tidy up the registry
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var scenario = new LoadScenario
+{
+    Name = "checkout-load",
+    TemplateType = LoadTemplateType.VELOCITY,
+    MaxRequests = 100000,
+    StartDelayMillis = 500,
+    Labels = new Dictionary&lt;string, string&gt; { ["team"] = "payments", ["env"] = "staging" },
+    Profile = new LoadProfile
+    {
+        Stages =
+        {
+            new LoadStage { Type = LoadStageType.RATE, StartRate = 5, EndRate = 50,
+                            DurationMillis = 30000, Curve = RampCurve.LINEAR, MaxVus = 50 },
+            LoadStage.ConstantVus(25, 60000),
+            LoadStage.Pause(10000)
+        }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Name = "browse",
+                Request = HttpRequest.Request().WithMethod("GET").WithPath("/products/$!iteration.index"),
+                ThinkTime = new Delay { TimeUnit = TimeUnit.MILLISECONDS, Value = 500 } },
+        new() { Name = "checkout",
+                Request = HttpRequest.Request().WithMethod("POST").WithPath("/cart/checkout")
+                    .WithBody("{\"item\":\"$!iteration.index\",\"qty\":1}"),
+                Labels = new Dictionary&lt;string, string&gt; { ["critical"] = "true" } }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);              // 1. register (does NOT start it yet)
+await client.StartLoadScenariosAsync("checkout-load"); // 2. start (requires loadGenerationEnabled=true)
+var listing = await client.LoadScenariosAsync();       // 3. list all registered scenarios
+var status = await client.GetLoadScenarioAsync("checkout-load"); // live status
+await client.StopLoadScenariosAsync("checkout-load");  // 4. stop (no args stops ALL running scenarios)
+await client.ClearLoadScenariosAsync();                //    tidy up the registry</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{
+    ClientBuilder, Delay, HttpRequest, LoadProfile, LoadScenario, LoadStage, LoadStep, RampCurve,
+};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let profile = LoadProfile::of(vec![
+    LoadStage::rate_ramp(5.0, 50.0, 30_000, RampCurve::Linear).max_vus(50),
+    LoadStage::vu_hold(25, 60_000),
+    LoadStage::pause(10_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/products/$!iteration.index"))
+        .think_time(Delay::milliseconds(500)),
+    LoadStep::new(HttpRequest::new().method("POST").path("/cart/checkout")
+        .body(r#"{"item":"$!iteration.index","qty":1}"#)),
+];
+let scenario = LoadScenario::new("checkout-load", profile, steps)
+    .template_type("VELOCITY")
+    .max_requests(100_000)
+    .start_delay_millis(500);
+
+client.load_scenario(&amp;scenario).unwrap();                // 1. register (does NOT start it yet)
+client.start_load_scenarios(&amp;["checkout-load"]).unwrap(); // 2. start (requires loadGenerationEnabled=true)
+client.load_scenarios().unwrap();                         // 3. list all registered scenarios
+client.get_load_scenario("checkout-load").unwrap();       // live status
+client.stop_load_scenarios(&amp;["checkout-load"]).unwrap();  // 4. stop (&amp;[] stops ALL running scenarios)
+client.clear_load_scenarios().unwrap();                   //    tidy up the registry</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\Delay;
+use MockServer\HttpRequest;
+use MockServer\LoadProfile;
+use MockServer\LoadScenario;
+use MockServer\LoadStage;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$scenario = LoadScenario::scenario('checkout-load')
+    -&gt;templateType('VELOCITY')
+    -&gt;maxRequests(100000)
+    -&gt;startDelayMillis(500)
+    -&gt;labels(['team' =&gt; 'payments', 'env' =&gt; 'staging'])
+    -&gt;profile(LoadProfile::of(
+        LoadStage::rateRamp(5, 50, 30000, 'LINEAR')-&gt;maxVus(50),
+        LoadStage::vuHold(25, 60000),
+        LoadStage::pause(10000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/products/$!iteration.index'),
+        Delay::milliseconds(500),
+        'browse',
+    )
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('POST')-&gt;path('/cart/checkout')
+            -&gt;body('{"item":"$!iteration.index","qty":1}'),
+        null,
+        'checkout',
+        ['critical' =&gt; 'true'],
+    );
+
+$client-&gt;loadScenario($scenario);              // 1. register (does NOT start it yet)
+$client-&gt;startLoadScenarios('checkout-load');  // 2. start (requires loadGenerationEnabled=true)
+$client-&gt;loadScenarios();                       // 3. list all registered scenarios
+$client-&gt;getLoadScenario('checkout-load');      // live status
+$client-&gt;stopLoadScenarios('checkout-load');    // 4. stop (null stops ALL running scenarios)
+$client-&gt;clearLoadScenarios();                  //    tidy up the registry</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Start the server with load generation enabled:
+#   docker run -e MOCKSERVER_LOAD_GENERATION_ENABLED=true mockserver/mockserver
+
+# 1. REGISTER (does NOT run it) — PUT /mockserver/loadScenario
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "checkout-load",
+    "templateType": "VELOCITY",
+    "maxRequests": 100000,
+    "startDelayMillis": 500,
+    "labels": { "team": "payments", "env": "staging" },
+    "profile": { "stages": [
+      { "type": "RATE", "startRate": 5, "endRate": 50, "durationMillis": 30000, "curve": "LINEAR", "maxVus": 50 },
+      { "type": "VU", "vus": 25, "durationMillis": 60000 },
+      { "type": "PAUSE", "durationMillis": 10000 }
+    ] },
+    "steps": [
+      { "name": "browse", "request": { "method": "GET", "path": "/products/$!iteration.index" },
+        "thinkTime": { "timeUnit": "MILLISECONDS", "value": 500 } },
+      { "name": "checkout", "labels": { "critical": "true" },
+        "request": { "method": "POST", "path": "/cart/checkout",
+                     "body": "{\"item\":\"$!iteration.index\",\"qty\":1}" } }
+    ]
+  }'
+
+# 2. START it (requires loadGenerationEnabled=true; else 403)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
+  -d '{ "name": "checkout-load" }'
+
+# 3. LIST all registered scenarios, and read one scenario's live status
+curl -s http://localhost:1080/mockserver/loadScenario
+curl -s http://localhost:1080/mockserver/loadScenario/checkout-load
+
+# 4. STOP it (stays registered, STOPPED — can be re-triggered)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
+  -d '{ "name": "checkout-load" }'</code></pre>
+    </div>
+</div>
+
+<button id="button_load_vu_ramp" class="accordion">VU ramp then hold (closed model) — templated path</button>
+<div class="panel">
+    <p>Ramp from 1 to 10 concurrent virtual users over 30&nbsp;seconds, then hold 10 VUs for a minute. Each iteration fetches a different order derived from the global iteration index. <code class="inline code">runLoadScenario</code> registers and starts in a single call (so it still requires <code class="inline code">loadGenerationEnabled=true</code>).</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">LoadScenario scenario = LoadScenario.loadScenario("orders-ramp")
+    .withProfile(LoadProfile.of(
+        LoadStage.rampVus(1, 10, 30000, RampCurve.LINEAR),
+        LoadStage.constantVus(10, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/orders/$!iteration.index"))
+            .withThinkTime(new Delay(TimeUnit.MILLISECONDS, 20))
+    );
+
+client.runLoadScenario(scenario);          // register + start in one call
+client.stopLoadScenarios("orders-ramp");   // stop when done</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'orders-ramp',
+    profile: { stages: [
+        { type: 'VU', startVus: 1, endVus: 10, durationMillis: 30000, curve: 'LINEAR' },
+        { type: 'VU', vus: 10, durationMillis: 60000 }
+    ] },
+    steps: [
+        { request: { method: 'GET', path: '/api/orders/$!iteration.index' },
+          thinkTime: { timeUnit: 'MILLISECONDS', value: 20 } }
+    ]
+};
+
+await client.runLoadScenario(scenario);     // register + start in one call
+await client.stopLoadScenarios('orders-ramp');</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="orders-ramp",
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(30000, start_vus=1, end_vus=10, curve="LINEAR"),
+        LoadStage.vu_stage(60000, vus=10),
+    ]),
+    steps=[
+        LoadStep(request=HttpRequest(method="GET", path="/api/orders/$!iteration.index"),
+                 think_time=Delay(time_unit="MILLISECONDS", value=20)),
+    ],
+)
+
+client.run_load_scenario(scenario)          # register + start in one call
+client.stop_load_scenarios("orders-ramp")</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'orders-ramp',
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(30_000, start_vus: 1, end_vus: 10, curve: 'LINEAR'),
+    LoadStage.vu(60_000, vus: 10)
+  ]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(method: 'GET', path: '/api/orders/$!iteration.index'),
+                 think_time: Delay.new(time_unit: 'MILLISECONDS', value: 20))
+  ]
+)
+
+client.run_load_scenario(scenario)          # register + start in one call
+client.stop_load_scenarios('orders-ramp')</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">order := mockserver.Request().Method("GET").Path("/api/orders/$!iteration.index").Build()
+
+scenario := mockserver.LoadScenario{
+    Name: "orders-ramp",
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.RampVusStage(1, 10, 30000, mockserver.RampLinear),
+            mockserver.ConstantVusStage(10, 60000),
+        },
+    },
+    Steps: []mockserver.LoadStep{
+        {Request: &amp;order, ThinkTime: &amp;mockserver.Delay{TimeUnit: "MILLISECONDS", Value: 20}},
+    },
+}
+
+client.RunLoadScenario(scenario)            // register + start in one call
+client.StopLoadScenarios("orders-ramp")</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var scenario = new LoadScenario
+{
+    Name = "orders-ramp",
+    Profile = new LoadProfile
+    {
+        Stages =
+        {
+            LoadStage.RampVus(1, 10, 30000, RampCurve.LINEAR),
+            LoadStage.ConstantVus(10, 60000)
+        }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = HttpRequest.Request().WithMethod("GET").WithPath("/api/orders/$!iteration.index"),
+                ThinkTime = new Delay { TimeUnit = TimeUnit.MILLISECONDS, Value = 20 } }
+    }
+};
+
+await client.RunLoadScenarioAsync(scenario);     // register + start in one call
+await client.StopLoadScenariosAsync("orders-ramp");</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let profile = LoadProfile::of(vec![
+    LoadStage::vu_ramp(1, 10, 30_000, RampCurve::Linear),
+    LoadStage::vu_hold(10, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/api/orders/$!iteration.index"))
+        .think_time(Delay::milliseconds(20)),
+];
+let scenario = LoadScenario::new("orders-ramp", profile, steps);
+
+client.run_load_scenario(&amp;scenario).unwrap();      // register + start in one call
+client.stop_load_scenarios(&amp;["orders-ramp"]).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$scenario = LoadScenario::scenario('orders-ramp')
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuRamp(1, 10, 30000, 'LINEAR'),
+        LoadStage::vuHold(10, 60000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/api/orders/$!iteration.index'),
+        Delay::milliseconds(20),
+    );
+
+$client-&gt;runLoadScenario($scenario);             // register + start in one call
+$client-&gt;stopLoadScenarios('orders-ramp');</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Register the scenario...
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "orders-ramp",
+    "profile": { "stages": [
+      { "type": "VU", "startVus": 1, "endVus": 10, "durationMillis": 30000, "curve": "LINEAR" },
+      { "type": "VU", "vus": 10, "durationMillis": 60000 }
+    ] },
+    "steps": [
+      { "request": { "method": "GET", "path": "/api/orders/$!iteration.index" },
+        "thinkTime": { "timeUnit": "MILLISECONDS", "value": 20 } }
+    ]
+  }'
+
+# ...then start it (requires loadGenerationEnabled=true)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "orders-ramp" }'</code></pre>
+    </div>
+</div>
+
+<button id="button_load_rate_soak" class="accordion">arrival-rate soak with a pause (open model)</button>
+<div class="panel">
+    <p>Hold 2 VUs to warm the target up, <code class="inline code">PAUSE</code> to let it settle, then ramp the <em>arrival rate</em> from 10 to 200 iterations/second and hold it. The open model starts iterations on schedule regardless of how fast the target responds &mdash; this is what exposes queue build-up and tail latency. <code class="inline code">maxVus</code> caps the auto-scaling virtual-user pool used to meet the rate.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">LoadScenario scenario = LoadScenario.loadScenario("rate-soak")
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(2, 10000),
+        LoadStage.pause(5000),
+        LoadStage.rampRate(10, 200, 30000, RampCurve.EXPONENTIAL).withMaxVus(40),
+        LoadStage.constantRate(200, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/health"))
+    );
+
+client.runLoadScenario(scenario);          // register + start in one call
+client.stopLoadScenarios("rate-soak");</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'rate-soak',
+    profile: { stages: [
+        { type: 'VU', vus: 2, durationMillis: 10000 },
+        { type: 'PAUSE', durationMillis: 5000 },
+        { type: 'RATE', startRate: 10, endRate: 200, durationMillis: 30000, curve: 'EXPONENTIAL', maxVus: 40 },
+        { type: 'RATE', rate: 200, durationMillis: 60000 }
+    ] },
+    steps: [ { request: { method: 'GET', path: '/health' } } ]
+};
+
+await client.runLoadScenario(scenario);     // register + start in one call
+await client.stopLoadScenarios('rate-soak');</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="rate-soak",
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(10000, vus=2),
+        LoadStage.pause_stage(5000),
+        LoadStage.rate_stage(30000, start_rate=10, end_rate=200, max_vus=40, curve="EXPONENTIAL"),
+        LoadStage.rate_stage(60000, rate=200),
+    ]),
+    steps=[LoadStep(request=HttpRequest(method="GET", path="/health"))],
+)
+
+client.run_load_scenario(scenario)          # register + start in one call
+client.stop_load_scenarios("rate-soak")</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'rate-soak',
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(10_000, vus: 2),
+    LoadStage.pause(5_000),
+    LoadStage.rate(30_000, start_rate: 10, end_rate: 200, max_vus: 40, curve: 'EXPONENTIAL'),
+    LoadStage.rate(60_000, rate: 200)
+  ]),
+  steps: [LoadStep.new(request: HttpRequest.new(method: 'GET', path: '/health'))]
+)
+
+client.run_load_scenario(scenario)          # register + start in one call
+client.stop_load_scenarios('rate-soak')</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">health := mockserver.Request().Method("GET").Path("/health").Build()
+
+ramp := mockserver.RampRateStage(10, 200, 30000, mockserver.RampExponential)
+maxVus := 40
+ramp.MaxVus = &amp;maxVus
+
+scenario := mockserver.LoadScenario{
+    Name: "rate-soak",
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.ConstantVusStage(2, 10000),
+            mockserver.PauseStage(5000),
+            ramp,
+            mockserver.ConstantRateStage(200, 60000),
+        },
+    },
+    Steps: []mockserver.LoadStep{ {Request: &amp;health} },
+}
+
+client.RunLoadScenario(scenario)            // register + start in one call
+client.StopLoadScenarios("rate-soak")</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var scenario = new LoadScenario
+{
+    Name = "rate-soak",
+    Profile = new LoadProfile
+    {
+        Stages =
+        {
+            LoadStage.ConstantVus(2, 10000),
+            LoadStage.Pause(5000),
+            new LoadStage { Type = LoadStageType.RATE, StartRate = 10, EndRate = 200,
+                            DurationMillis = 30000, Curve = RampCurve.EXPONENTIAL, MaxVus = 40 },
+            LoadStage.ConstantRate(200, 60000)
+        }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = HttpRequest.Request().WithMethod("GET").WithPath("/health") }
+    }
+};
+
+await client.RunLoadScenarioAsync(scenario);     // register + start in one call
+await client.StopLoadScenariosAsync("rate-soak");</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(2, 10_000),
+    LoadStage::pause(5_000),
+    LoadStage::rate_ramp(10.0, 200.0, 30_000, RampCurve::Exponential).max_vus(40),
+    LoadStage::rate_hold(200.0, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/health")),
+];
+let scenario = LoadScenario::new("rate-soak", profile, steps);
+
+client.run_load_scenario(&amp;scenario).unwrap();      // register + start in one call
+client.stop_load_scenarios(&amp;["rate-soak"]).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$scenario = LoadScenario::scenario('rate-soak')
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(2, 10000),
+        LoadStage::pause(5000),
+        LoadStage::rateRamp(10, 200, 30000, 'EXPONENTIAL')-&gt;maxVus(40),
+        LoadStage::rateHold(200, 60000),
+    ))
+    -&gt;addStep(HttpRequest::request()-&gt;method('GET')-&gt;path('/health'));
+
+$client-&gt;runLoadScenario($scenario);             // register + start in one call
+$client-&gt;stopLoadScenarios('rate-soak');</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Register the open-model soak...
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "rate-soak",
+    "profile": { "stages": [
+      { "type": "VU", "vus": 2, "durationMillis": 10000 },
+      { "type": "PAUSE", "durationMillis": 5000 },
+      { "type": "RATE", "startRate": 10, "endRate": 200, "durationMillis": 30000, "curve": "EXPONENTIAL", "maxVus": 40 },
+      { "type": "RATE", "rate": 200, "durationMillis": 60000 }
+    ] },
+    "steps": [
+      { "request": { "method": "GET", "path": "/health" } }
+    ]
+  }'
+
+# ...then start it (requires loadGenerationEnabled=true)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "rate-soak" }'</code></pre>
+    </div>
+</div>

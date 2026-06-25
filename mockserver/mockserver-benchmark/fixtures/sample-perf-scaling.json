@@ -1,0 +1,124 @@
+{
+  "scaling": {
+    "matching": [
+      {
+        "expectations": 1,
+        "matcherType": "EXACT",
+        "time_per_op": 0.21440124061082524,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 32.0014836903068
+      },
+      {
+        "expectations": 1,
+        "matcherType": "REGEX",
+        "time_per_op": 6.965177994188867,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 416.045124380322
+      },
+      {
+        "expectations": 10,
+        "matcherType": "EXACT",
+        "time_per_op": 1.2860767060906257,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 32.008832981334706
+      },
+      {
+        "expectations": 10,
+        "matcherType": "REGEX",
+        "time_per_op": 61.75236367551372,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 4112.3966857812575
+      },
+      {
+        "expectations": 100,
+        "matcherType": "EXACT",
+        "time_per_op": 0.2635951620584055,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 128.0018149924615
+      },
+      {
+        "expectations": 100,
+        "matcherType": "REGEX",
+        "time_per_op": 634.8218237352844,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 39348.174807665826
+      },
+      {
+        "expectations": 1000,
+        "matcherType": "EXACT",
+        "time_per_op": 3.0473807934956127,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 128.02093973537944
+      },
+      {
+        "expectations": 1000,
+        "matcherType": "REGEX",
+        "time_per_op": 6564.487875562347,
+        "time_unit": "us/op",
+        "alloc_bytes_per_op": 357442.4257703081
+      }
+    ],
+    "candidate_index": [
+      {
+        "mode": "SCAN",
+        "expectations": 1,
+        "time_per_op": 0.16685785304378883,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "SCAN",
+        "expectations": 10,
+        "time_per_op": 1.1756568128718374,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "SCAN",
+        "expectations": 100,
+        "time_per_op": 10.839606172680284,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "SCAN",
+        "expectations": 1000,
+        "time_per_op": 124.11864346762891,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "SCAN",
+        "expectations": 5000,
+        "time_per_op": 671.7622168112896,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "INDEX",
+        "expectations": 1,
+        "time_per_op": 0.190652270694939,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "INDEX",
+        "expectations": 10,
+        "time_per_op": 0.1011126121635398,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "INDEX",
+        "expectations": 100,
+        "time_per_op": 0.24728387610213648,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "INDEX",
+        "expectations": 1000,
+        "time_per_op": 2.5701552934150707,
+        "time_unit": "us/op"
+      },
+      {
+        "mode": "INDEX",
+        "expectations": 5000,
+        "time_per_op": 33.893526205402296,
+        "time_unit": "us/op"
+      }
+    ]
+  }
+}

@@ -12,7 +12,7 @@ module.exports = function (grunt) {
 
     grunt.initConfig({
         exec: {
-            stop_existing_mockservers: './stop_MockServer.sh'
+            stop_existing_mockservers: '../scripts/stop_MockServer.sh'
         },
         jshint: {
             all: [

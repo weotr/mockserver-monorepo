@@ -95,6 +95,7 @@ required?"}
 | `PUT /mockserver/explainUnmatched` | Retrieve recent unmatched requests with ranked closest-expectation diagnostics and remediation hints |
 | `PUT /mockserver/replay` | Re-issue a recorded request to its target and return the upstream response (see [Request Replay](#request-replay)) |
 | `PUT/GET/DELETE /mockserver/chaosExperiment` | Start, query, or stop a scheduled multi-stage chaos experiment (see [docs/code/chaos.md](chaos.md)) |
+| `PUT /mockserver/trafficValidate` | Validate recorded traffic (all `REQUEST_RESPONSES` from the event log) against an OpenAPI spec supplied in the request body as `{"spec": "<url|path|inline>"}`. Returns a per-pair conformance report in the same shape as `/contractTest`. The `spec` URL host is checked against the same SSRF policy enforced by the forward/replay/contract-test paths before the parser fetches it. Subject to control-plane authentication. |
 
 All control-plane requests go through `controlPlaneRequestAuthenticated()` which enforces mTLS and/or JWT authentication if configured.
 
@@ -202,6 +203,35 @@ When no expectation matches, the method logs a **closest match summary** identif
 `HttpState` obtains its `RequestMatchers` through `ExpectationStoreFactory` (a small SPI/registry) rather than constructing it directly. By default the factory returns the standard in-memory `RequestMatchers` (zero behaviour change). This is the **clustered-state seam**: an optional backend can register a factory returning a clustering-aware `RequestMatchers` so a fleet of MockServer instances shares expectations. The optional `mockserver-state-infinispan` module implements this with an embedded Infinispan data-grid backend; activate it by setting `stateBackend=infinispan`. See [Clustered State](clustered-state.md) for full details.
 
 A `MatchDifference` context is always created for each comparison (regardless of log level), so detailed field-level difference information is always available in the `EXPECTATION_NOT_MATCHED` log entries. The `MatchFailureHints` utility adds actionable suggestions for common mistakes (trailing slashes, Content-Type charset mismatches, unescaped regex metacharacters).
+
+#### CandidateIndex — matching acceleration for large expectation sets
+
+For small expectation sets the full sorted list is always scanned (O(n)). When the expectation count reaches or exceeds `candidateIndexThreshold` (default 64), `RequestMatchers` delegates to `CandidateIndex` (`mockserver-core/.../mock/CandidateIndex.java`) to narrow the scan to a **candidate set** for the incoming request. The matched expectation is byte-for-byte identical to the full linear scan result because:
+
+1. An expectation is placed in a `(method, path)` bucket **only** when both its method and path are plain literal equality matchers — non-null, non-blank, non-notted, non-optional, non-schema, regex-metacharacter-free, and pure-ASCII. Any expectation that does not meet every criterion (regex, notted, optional, blank, schema/OpenAPI string, path-parameter rewrite, or non-`HttpRequest` definition) goes in the **fallthrough** list instead.
+2. The candidate set for a request is `bucket(method+path) ∪ fallthrough`. Any expectation outside this set is in a different literal bucket and provably cannot match the request.
+3. Candidates are evaluated in the **same global priority/insertion sort order** as the full scan, so the first match among candidates equals the first match of the full scan.
+
+Additional correctness constraints:
+
+- **Case-insensitive mode** (`matchExactCase=false`, the default): bucket keys are folded with `toLowerCase(ROOT)`. However, a non-ASCII request method or path cannot be safely narrowed by fold-based bucketing (e.g. Turkish dotted-I U+0130 changes length under `toLowerCase`), so such requests fall back to the full authoritative scan.
+- **Blank method/path on the request** (only constructible programmatically): falls back to the full scan because a blank request component matches the method/path criterion of every expectation.
+- **Generation-driven lazy rebuild**: the index is rebuilt from the authoritative sorted snapshot whenever the control-plane's monotonic modification counter changes. In steady state (no control-plane mutations between requests) no rebuild occurs.
+
+```mermaid
+flowchart TD
+    REQ([firstMatchingExpectation]) --> SZ{"expectation count\n>= threshold?"}
+    SZ -->|No| LINSCAN["Full linear scan\nCircularPriorityQueue.toSortedList()"]
+    SZ -->|Yes| BLANK{"Request has concrete\nmethod AND path?"}
+    BLANK -->|No| LINSCAN
+    BLANK -->|Yes| CASE{"Case-insensitive mode\nAND non-ASCII method/path?"}
+    CASE -->|Yes| LINSCAN
+    CASE -->|No| INDEX["CandidateIndex\nbucket(method+path) union fallthrough\nin global sort order"]
+    LINSCAN --> EVAL
+    INDEX --> EVAL["Evaluate each candidate\nin priority/insertion order"]
+    EVAL -->|Match| DONE([Return expectation])
+    EVAL -->|Exhausted| NULL([Return null])
+```
 
 ### Expectation Namespacing (Multi-Tenancy)
 
@@ -339,13 +369,20 @@ Deserialization is handled by `LogEntrySerializer.deserializeArray()` using Jack
 sequenceDiagram
     participant AH as HttpActionHandler
     participant RM as RequestMatchers
+    participant CI as CandidateIndex
     participant Q as CircularPriorityQueue
     participant M as HttpRequestPropertiesMatcher
 
     AH->>RM: firstMatchingExpectation(request)
-    RM->>Q: stream() [sorted by priority/time]
-    loop For each expectation
-        Q->>M: matches(request)
+    alt count < threshold OR blank/non-ASCII method/path
+        RM->>Q: toSortedList() (full linear scan)
+        Q-->>RM: all matchers in priority/time order
+    else count >= threshold AND concrete ASCII method/path
+        RM->>CI: candidatesInGlobalOrder(request, generation, caseInsensitive)
+        CI-->>RM: bucket(method+path) union fallthrough in sort order
+    end
+    loop For each candidate
+        RM->>M: matches(request)
         M->>M: Check method, path, headers, body, etc.
         alt Match found
             M-->>RM: true
@@ -414,7 +451,7 @@ Each `Expectation` binds a request matcher to exactly one action. There are 19 a
 
 | Type | Handler | Description |
 |------|---------|-------------|
-| `FORWARD` | `HttpForwardActionHandler` | Forwards to a specified host:port:scheme |
+| `FORWARD` | `HttpForwardActionHandler` | Forwards to a specified host:port:scheme. SSRF validation (`InetAddressValidator.validateForwardTarget`) resolves and rejects the host before the connect attempt; the connect path then receives an `InetSocketAddress.createUnresolved` address so Netty's event-loop resolver performs DNS lookup off the calling thread rather than blocking it. |
 | `FORWARD_TEMPLATE` | `HttpForwardTemplateActionHandler` | Template generates the forwarding request |
 | `FORWARD_CLASS_CALLBACK` | `HttpForwardClassCallbackActionHandler` | Java class modifies the request before forwarding |
 | `FORWARD_OBJECT_CALLBACK` | `HttpForwardObjectCallbackActionHandler` | WebSocket client modifies request before forwarding |

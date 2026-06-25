@@ -414,6 +414,124 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldHandleTrafficValidateRequestWhenRecordedTrafficConformsToSpec() throws Exception {
+        // given — a recorded request/response pair whose response conforms to the GET /pets schema
+        String spec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+        httpState.log(
+            new LogEntry()
+                .setType(EXPECTATION_RESPONSE)
+                .setHttpRequest(request("/pets").withMethod("GET"))
+                .setHttpResponse(response()
+                    .withStatusCode(200)
+                    .withHeader("content-type", "application/json")
+                    .withBody("[{\"id\":1,\"name\":\"Fido\"}]"))
+        );
+        HttpRequest trafficValidateRequest = request("/mockserver/trafficValidate")
+            .withMethod("PUT")
+            .withBody("{\"spec\":" + org.mockserver.serialization.ObjectMapperFactory.createObjectMapper().writeValueAsString(spec) + "}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when — handler offloads onto the scheduler executor, so await the async response
+        boolean handle = httpState.handle(trafficValidateRequest, responseWriter, false);
+        responseWriter.awaitResponse();
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("totalRequests").asInt(), is(1));
+        assertThat(report.get("passed").asInt(), is(1));
+        assertThat(report.get("failed").asInt(), is(0));
+        assertThat(report.get("allPassed").asBoolean(), is(true));
+        com.fasterxml.jackson.databind.JsonNode result = report.get("results").get(0);
+        assertThat(result.get("method").asText(), is("GET"));
+        assertThat(result.get("path").asText(), is("/pets"));
+        assertThat(result.get("matchedOperation").asText(), is(notNullValue()));
+        assertThat(result.get("passed").asBoolean(), is(true));
+        assertThat(result.get("responseErrors").size(), is(0));
+    }
+
+    @Test
+    public void shouldHandleTrafficValidateRequestWhenRecordedTrafficViolatesSpec() throws Exception {
+        // given — a recorded response that VIOLATES the GET /pets schema (object, not array)
+        String spec = FileReader.readFileFromClassPathOrPath("org/mockserver/openapi/openapi_petstore_example.json");
+        httpState.log(
+            new LogEntry()
+                .setType(EXPECTATION_RESPONSE)
+                .setHttpRequest(request("/pets").withMethod("GET"))
+                .setHttpResponse(response()
+                    .withStatusCode(200)
+                    .withHeader("content-type", "application/json")
+                    .withBody("{\"not\":\"an array\"}"))
+        );
+        HttpRequest trafficValidateRequest = request("/mockserver/trafficValidate")
+            .withMethod("PUT")
+            .withBody("{\"spec\":" + org.mockserver.serialization.ObjectMapperFactory.createObjectMapper().writeValueAsString(spec) + "}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(trafficValidateRequest, responseWriter, false);
+        responseWriter.awaitResponse();
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(200));
+        com.fasterxml.jackson.databind.JsonNode report =
+            org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+        assertThat(report.get("totalRequests").asInt(), is(1));
+        assertThat(report.get("passed").asInt(), is(0));
+        assertThat(report.get("failed").asInt(), is(1));
+        assertThat(report.get("allPassed").asBoolean(), is(false));
+        com.fasterxml.jackson.databind.JsonNode result = report.get("results").get(0);
+        assertThat(result.get("passed").asBoolean(), is(false));
+        assertThat(result.get("responseErrors").size(), is(greaterThan(0)));
+    }
+
+    @Test
+    public void shouldRejectTrafficValidateRequestWithoutSpec() {
+        // given — body missing the required spec
+        HttpRequest trafficValidateRequest = request("/mockserver/trafficValidate")
+            .withMethod("PUT")
+            .withBody("{}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = httpState.handle(trafficValidateRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(400));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("spec"));
+    }
+
+    @Test
+    public void shouldBlockTrafficValidateSpecUrlBySsrfPolicy() {
+        // given — SSRF protection enabled (forwardProxyBlockPrivateNetworks=true), and a spec
+        // referenced by an http URL whose host is the cloud-metadata endpoint, which must be rejected
+        // before the OpenAPI parser is allowed to dereference it.
+        Configuration ssrfConfiguration = configuration().forwardProxyBlockPrivateNetworks(true);
+        Scheduler scheduler = mock(Scheduler.class);
+        org.mockito.Mockito.when(scheduler.getExecutorService()).thenReturn(schedulerExecutor);
+        HttpState ssrfState = new HttpState(ssrfConfiguration, new MockServerLogger(ssrfConfiguration, MockServerLogger.class), scheduler);
+
+        HttpRequest trafficValidateRequest = request("/mockserver/trafficValidate")
+            .withMethod("PUT")
+            .withBody("{\"spec\":\"http://169.254.169.254/openapi.json\"}");
+        FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+        // when
+        boolean handle = ssrfState.handle(trafficValidateRequest, responseWriter, false);
+
+        // then
+        assertThat(handle, is(true));
+        assertThat(responseWriter.response.getStatusCode(), is(403));
+        assertThat(responseWriter.response.getBodyAsString(), containsString("SSRF"));
+    }
+
+    @Test
     public void shouldHandleClearRequest() {
         // given
         httpState.add(new Expectation(request("request_one")).thenRespond(response("response_one")));
@@ -3706,6 +3824,29 @@ public class HttpStateTest {
 
         // then
         assertThat(matched, is(expectation));
+    }
+
+    @Test
+    public void shouldNotEarlyMatchControlPlaneRequestsAgainstCatchAllRespondBeforeBody() {
+        // given a catch-all respondBeforeBody expectation (e.g. seeded via an initialization file)
+        httpState.add(new Expectation(
+            request().withRespondBeforeBody(true)
+        ).thenRespond(response().withStatusCode(404)));
+
+        // when control-plane requests are checked for an early match
+        // then they are never hijacked by the data-plane early expectation — they fall through
+        // to the standard pipeline so HttpState.handle() dispatches the control plane
+        assertThat(httpState.firstMatchingEarlyExpectation(
+            request().withMethod("PUT").withPath("/mockserver/reset")
+        ), is(nullValue()));
+        assertThat(httpState.firstMatchingEarlyExpectation(
+            request().withMethod("PUT").withPath("/mockserver/status")
+        ), is(nullValue()));
+
+        // and a genuine data-plane request still early-matches the catch-all
+        assertThat(httpState.firstMatchingEarlyExpectation(
+            request().withMethod("GET").withPath("/some/data/plane/path")
+        ), is(notNullValue()));
     }
 
     @Test

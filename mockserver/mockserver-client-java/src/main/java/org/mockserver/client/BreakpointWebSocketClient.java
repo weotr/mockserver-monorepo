@@ -434,6 +434,7 @@ class BreakpointWebSocketClient {
                 eventLoopGroup.shutdownGracefully();
             }
         } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RuntimeException("Exception while closing breakpoint web socket client", e);
         }
     }

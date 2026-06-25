@@ -233,7 +233,7 @@ public class NettyHttpClient {
             .option(ChannelOption.AUTO_READ, true)
             .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
             .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(8 * 1024, 32 * 1024))
-            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectionTimeoutMillis != null ? connectionTimeoutMillis.intValue() : null)
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectionTimeoutMillis != null ? (int) Math.min(connectionTimeoutMillis, Integer.MAX_VALUE) : null)
             .attr(SECURE, secure)
             .attr(REMOTE_SOCKET, remoteAddress)
             .attr(RESPONSE_FUTURE, responseFuture)
@@ -283,7 +283,7 @@ public class NettyHttpClient {
                 .option(ChannelOption.AUTO_READ, true)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
                 .option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(8 * 1024, 32 * 1024))
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectionTimeoutMillis != null ? connectionTimeoutMillis.intValue() : null)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectionTimeoutMillis != null ? (int) Math.min(connectionTimeoutMillis, Integer.MAX_VALUE) : null)
                 .attr(SECURE, isSecure)
                 .attr(REMOTE_SOCKET, remoteAddress)
                 .attr(RESPONSE_FUTURE, responseFuture)
@@ -369,6 +369,11 @@ public class NettyHttpClient {
         if (NoProxyHostsUtils.isHostOnNoProxyList(remoteAddress.getHostString(), configuration.noProxyHosts())) {
             return false;
         }
+        // Forward targets are now unresolved (DNS happens on the Netty event loop, not the calling
+        // thread), so getAddress() is null for them and this IP-literal branch is skipped: only
+        // hostname-form no_proxy entries match a hostname target; an IP-literal no_proxy entry will
+        // not match a hostname target by its resolved IP. This branch still applies when the address
+        // arrived already resolved (e.g. a literal-IP target).
         if (remoteAddress.getAddress() != null) {
             String ipAddress = remoteAddress.getAddress().getHostAddress();
             return !NoProxyHostsUtils.isHostOnNoProxyList(ipAddress, configuration.noProxyHosts());

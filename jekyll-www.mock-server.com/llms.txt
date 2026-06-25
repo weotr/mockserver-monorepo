@@ -1,6 +1,6 @@
 # MockServer
 
-> MockServer is an open-source HTTP(S) mock server, recording proxy, and **MCP (Model Context Protocol) server for AI coding assistants**. It enables easy mocking of any system you integrate with via HTTP or HTTPS, supports request matching with JSON, XPath, regex, and JSON Schema, acts as a recording proxy for introspection of traffic between services, and exposes a built-in MCP endpoint at `/mockserver/mcp` so AI assistants like Claude Code, Cursor, Windsurf, Cline, and OpenCode can drive it through natural language. Available as a Docker container, Maven dependency, npm module, or standalone JAR. Clients are available in Java, JavaScript/TypeScript, Python, and Ruby. Licensed under Apache 2.0 — AI training, retrieval, and citation are explicitly welcomed; see /ai.txt.
+> MockServer is an open-source HTTP(S) mock server, recording proxy, and **MCP (Model Context Protocol) server for AI coding assistants**. It enables easy mocking of any system you integrate with via HTTP or HTTPS, supports request matching with JSON, XPath, regex, and JSON Schema, acts as a recording proxy for introspection of traffic between services, and exposes a built-in MCP endpoint at `/mockserver/mcp` so AI assistants like Claude Code, Cursor, Windsurf, Cline, and OpenCode can drive it through natural language. Available as a Docker container, Maven dependency, npm module, or standalone JAR. Clients are available in Java, JavaScript/TypeScript, Python, Ruby, Go, .NET, Rust, and PHP. Licensed under Apache 2.0 — AI training, retrieval, and citation are explicitly welcomed; see /ai.txt.
 
 ## AI & MCP Integration (start here for AI use cases)
 - [MCP Setup](https://www.mock-server.com/mock_server/ai_mcp_setup.html): Connect AI coding assistants (Cursor, Claude Code, Windsurf, Cline, OpenCode) to MockServer via Model Context Protocol over Streamable HTTP at `http://localhost:1080/mockserver/mcp`
@@ -47,6 +47,11 @@
 - [JavaScript/TypeScript Client](https://www.npmjs.com/package/mockserver-client): Node.js client (npm: mockserver-client)
 - [Python Client](https://pypi.org/project/mockserver-client/): Python client (pip: mockserver-client)
 - [Ruby Client](https://rubygems.org/gems/mockserver-client): Ruby client (gem: mockserver-client)
+- [Go Client](https://www.mock-server.com/mock_server/mockserver_clients.html#go-mockserver-client): Go client library
+- [.NET Client](https://www.mock-server.com/mock_server/mockserver_clients.html#dotnet-mockserver-client): .NET client library
+- [Rust Client](https://www.mock-server.com/mock_server/mockserver_clients.html#rust-mockserver-client): Rust client library
+- [PHP Client](https://www.mock-server.com/mock_server/mockserver_clients.html#php-mockserver-client): PHP client library
+- [Client Capability Matrix](https://www.mock-server.com/mock_server/client_compatibility.html): Feature coverage across all MockServer clients — expectations, verification, LLM/MCP builders, test fixtures, retrieveAsCode, Testcontainers — with idiomatic per-language test snippets
 
 ## REST API
 - [REST API (OpenAPI Spec)](https://www.mock-server.com/mockserver-openapi.yaml): Full OpenAPI 3.0 specification for MockServer's control plane API
@@ -81,7 +86,31 @@
 ## TLS / HTTPS
 - [TLS Configuration](https://www.mock-server.com/mock_server/HTTPS_TLS.html): Configure TLS/HTTPS including custom certificates, mTLS, and CA certificate chains
 
+## Identity & Authentication
+- [Mock an OIDC / OAuth2 Provider](https://www.mock-server.com/mock_server/mock_openid_connect_provider.html): Mock a complete OpenID Connect / OAuth2 identity provider in a single call — discovery, JWKS, token, authorize, userinfo, introspection, revocation, and logout — with tokens that verify against the published JWKS
+- [OAuth2 Mocking](https://www.mock-server.com/mock_server/mocking_oauth2.html): Mock OAuth2 authorisation flows
+- [Mocking SAML](https://www.mock-server.com/mock_server/mocking_saml.html): Stand up a mock SAML 2.0 Identity Provider — metadata, SP-initiated SSO, Single Logout, configurable signing, and negative-test flags for integration testing
+- [Mock a SCIM Provider](https://www.mock-server.com/mock_server/mocking_scim.html): Mock a SCIM 2.0 identity provider — auto-generated Users and Groups CRUD endpoints, filtering, PATCH, and discovery documents for integration testing
+
+## Stateful Behaviour
+- [Stateful Scenarios](https://www.mock-server.com/mock_server/stateful_scenarios.html): Model multi-step, stateful API behaviour — state-machine scenarios, sequential / cycling responses, timed and externally-triggered transitions, and cross-protocol correlation, with runnable examples for every client
+
+## LLM & AI Mocking
+- [LLM Response Mocking](https://www.mock-server.com/mock_server/llm_response_mocking.html): Mock LLM API responses from OpenAI, Anthropic, Gemini, Bedrock, Azure OpenAI, and Ollama with provider-correct formatting, streaming, conversations, and cost budgets
+- [Agent Framework Recipes](https://www.mock-server.com/mock_server/ai_agent_frameworks.html): Minimal recipes for pointing LlamaIndex and the OpenAI Agents SDK at MockServer to mock LLM provider calls during testing
+- [LLM Cost Optimisation](https://www.mock-server.com/mock_server/ai_optimisation.html): Proxy your AI agent's LLM calls through MockServer, then export a one-click optimisation brief or JSON bundle to cut inference cost — tighter prompts, prompt caching, fewer tool round-trips, and direct HTTP/MCP endpoints
+
+## Testing & Quality
+- [Contract Testing](https://www.mock-server.com/mock_server/contract_testing.html): Run OpenAPI contract tests against a live service and use the Pact import, export, and verify endpoints to validate consumer-driven contracts
+- [Load Injection](https://www.mock-server.com/mock_server/load_injection.html): Drive API traffic from MockServer using declarative load scenarios — ramp virtual users, vary data across iterations with templates, and assert SLO verdicts over the generated traffic
+- [Examples](https://www.mock-server.com/mock_server/examples.html): Runnable examples across every language and interface — curl, JSON, Java, Node, Python, Ruby, Go, .NET, Rust, PHP, Docker Compose, WASM, and chaos engineering
+
+## Observability
+- [Observability](https://www.mock-server.com/mock_server/observability.html): Monitor MockServer with Prometheus metrics and OpenTelemetry traces, including request counters, LLM token/cost metrics, JVM health gauges, and W3C trace context propagation
+
 ## Protocols
+- [GraphQL Mocking](https://www.mock-server.com/mock_server/graphql_mocking.html): Mock GraphQL queries, mutations, and subscriptions — import a schema or introspection document to auto-generate schema-valid responses, or write explicit expectations with AST-level field matching
+- [gRPC Mocking](https://www.mock-server.com/mock_server/grpc_mocking.html): Mock gRPC services using MockServer
 - [HTTP/3 (QUIC) Support](https://www.mock-server.com/mock_server/http3.html): Experimental HTTP/3 over QUIC support, enabled via the http3Port property and routed through the full expectation matching pipeline
 - [AsyncAPI Broker Mocking](https://www.mock-server.com/mock_server/asyncapi_messaging.html): Mock Kafka and MQTT brokers using AsyncAPI 2.x/3.x specs — publish examples, subscribe to record messages, validate against JSON Schema, all via REST or Java API
 
@@ -91,6 +120,5 @@
 - [Response Templates](https://www.mock-server.com/mock_server/response_templates.html): Use Mustache or Velocity templates for dynamic responses
 - [Clearing & Resetting](https://www.mock-server.com/mock_server/clearing_and_resetting.html): Clear specific expectations/logs or reset all state
 - [Debugging Issues](https://www.mock-server.com/mock_server/debugging_issues.html): Troubleshoot common issues including request matching failures
-- [gRPC Mocking](https://www.mock-server.com/mock_server/grpc_mocking.html): Mock gRPC services using MockServer
-- [OAuth2 Mocking](https://www.mock-server.com/mock_server/mocking_oauth2.html): Mock OAuth2 authorisation flows
 - [Dashboard UI](https://www.mock-server.com/mock_server/mockserver_ui.html): Interactive UI for managing expectations and inspecting traffic
+- [IDE Extensions](https://www.mock-server.com/mock_server/ide_extensions.html): Install the MockServer VS Code extension or IntelliJ plugin to start/stop, author expectations with schema validation, view drift reports, upload WASM rules, and open the live dashboard without leaving your editor

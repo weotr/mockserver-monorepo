@@ -83,7 +83,7 @@ public class Socks5ProxyHandler extends SocksProxyHandler<Socks5Message> {
         if (isNotBlank(username) && isNotBlank(password)
             && username.equals(passwordAuthRequest.username()) && password.equals(passwordAuthRequest.password())) {
             ctx.pipeline().replace(Socks5PasswordAuthRequestDecoder.class, null, new Socks5CommandRequestDecoder());
-            ctx.writeAndFlush(new DefaultSocks5PasswordAuthResponse(Socks5PasswordAuthStatus.SUCCESS)).awaitUninterruptibly();
+            ctx.writeAndFlush(new DefaultSocks5PasswordAuthResponse(Socks5PasswordAuthStatus.SUCCESS));
         } else {
             ctx.writeAndFlush(new DefaultSocks5PasswordAuthResponse(Socks5PasswordAuthStatus.FAILURE)).addListener(ChannelFutureListener.CLOSE);
             mockServerLogger.logEvent(

@@ -8,6 +8,44 @@ description: Continuously monitors Buildkite pipeline builds, detects failures, 
 
 Continuously monitor the Buildkite pipeline, detect failures, investigate root causes, fix code issues, perform adversarial review, and push fixes — all in an automated loop.
 
+## Tooling — use `scripts/ci/bk-pipeline-status.sh`
+
+Do NOT re-derive the build polling/parsing each time. Use the reusable
+`scripts/ci/bk-pipeline-status.sh`, which wraps the **reliable** `bk build list`
+/ `bk job log` commands. (Prefer these over `bk auth token` + `curl` to the REST
+API and over the AWS Secrets Manager tokens: only the local `bk` CLI dependably
+has both build-state and `read_build_logs` scope here, and it does not need an
+AWS SSO session — see [docs/infrastructure/ci-cd.md](../../../docs/infrastructure/ci-cd.md).)
+
+```bash
+# one-shot status of a build (by commit prefix, build number, or newest)
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -c <commitSha>
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b <buildNumber>
+
+# tail the failing job's log for investigation
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b <buildNumber> --logs -n 80
+
+# find the failure in the WHOLE log (the failure is usually NOT in the tail)
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b <buildNumber> \
+  --grep 'Tests run: [0-9]+, Failures: [1-9]|<<< (FAILURE|ERROR)|BUILD FAILURE|There was a timeout|npm error'
+
+# raw JSON of the matched build (for classifying exit_status / agent state)
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b <buildNumber> --json
+```
+
+It prints `build#<n> <commit> build=<state> <job>=<state> exit=<code>` and exits
+`0` when the watched job passed, `2` when failed/broken/canceled, `3` on timeout.
+
+**For continuous watching, drive it with the agent Monitor tool in `--watch`
+mode** instead of an in-context polling loop — it emits one line per state change
+and exits when terminal, so you are only re-invoked on a real change:
+
+```
+Monitor(command="scripts/ci/bk-pipeline-status.sh -p mockserver-java -c <commitSha> --watch")
+```
+
+The prose check-loop below is the fallback when a script run is not appropriate.
+
 ## Prerequisites — Authentication Check
 
 Before starting the monitoring loop, verify ALL required authentication is in place. **Stop and report any failures** before proceeding.
@@ -78,27 +116,16 @@ For each check iteration:
 
 #### 1. Fetch Recent Builds
 
+Use the reusable script (newest build of the pipeline, or a specific commit):
+
 ```bash
-TOKEN=$(bk auth token)
-curl -sH "Authorization: Bearer $TOKEN" \
-  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver/builds?per_page=10" \
-  | python3 -c "
-import json, sys
-builds = json.load(sys.stdin)
-for b in builds:
-    state = b['state']
-    num = b['number']
-    branch = b['branch']
-    msg = b['message'].split('\n')[0][:60] if b['message'] else 'N/A'
-    jobs = []
-    for j in b.get('jobs', []):
-        if j.get('type') == 'script' and j.get('name') != ':pipeline:':
-            jobs.append(f'{j.get(\"name\",\"?\")}: {j[\"state\"]}')
-    print(f'#{num} [{state:>10}] {branch[:30]:30} {msg}')
-    if jobs:
-        print(f'    Jobs: {\", \".join(jobs)}')
-"
+scripts/ci/bk-pipeline-status.sh -p mockserver           # newest build
+scripts/ci/bk-pipeline-status.sh -p mockserver -c <sha>  # the build for a commit
 ```
+
+Run it once per pipeline you track (`mockserver` for the top-level fan-out,
+`mockserver-java` for the core test fork). It prints
+`build#<n> <commit> build=<state> :maven: build=<state> exit=<code>`.
 
 #### 2. Classify Builds
 
@@ -121,19 +148,10 @@ For each new failed build:
 **a. Classify the failure type:**
 
 ```bash
-TOKEN=$(bk auth token)
-# Get the failed build details
-curl -sH "Authorization: Bearer $TOKEN" \
-  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver/builds/{number}" \
-  | python3 -c "
-import json, sys
-b = json.load(sys.stdin)
-for j in b.get('jobs', []):
-    if j.get('state') == 'failed' and j.get('type') == 'script':
-        print(f'job_id={j[\"id\"]} name={j.get(\"name\",\"?\")} exit={j.get(\"exit_status\",\"?\")}')
-        agent = j.get('agent', {})
-        print(f'agent_state={agent.get(\"connection_state\",\"?\")}')
-"
+# job state + exit_status for the failed build
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b {number}
+# full build JSON (inspect each failed job's exit_status + agent connection_state)
+scripts/ci/bk-pipeline-status.sh -p mockserver-java -b {number} --json
 ```
 
 | exit_status | agent_state | Diagnosis |
@@ -251,10 +269,8 @@ git push
 **e. Verify new build triggered:**
 
 ```bash
-TOKEN=$(bk auth token)
-curl -sH "Authorization: Bearer $TOKEN" \
-  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver/builds?per_page=1&branch=master" \
-  | python3 -c "import json,sys; b=json.load(sys.stdin)[0]; print(f'#{b[\"number\"]} {b[\"state\"]} {b[\"commit\"][:10]}')"
+scripts/ci/bk-pipeline-status.sh -p mockserver                 # newest build of the orchestrator
+scripts/ci/bk-pipeline-status.sh -p mockserver -c <newCommit>  # the build for the pushed fix
 ```
 
 #### 7. Wait for Next Check

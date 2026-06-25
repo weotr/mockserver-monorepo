@@ -71,6 +71,20 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     // only non-sort fields (e.g. response body) — without this, such updates
     // would leave a stale matcher serving the old behaviour.
     private final ConcurrentHashMap<String, Long> lastReconciledVersion = new ConcurrentHashMap<>();
+    // T1-C1: candidate index for expectation matching above a size threshold. Below
+    // the threshold firstMatchingExpectation runs the EXACT existing linear scan
+    // (byte-for-byte, zero added per-request cost); above it the scan is narrowed to
+    // the request's (method, exact-path) bucket plus an always-checked fallthrough
+    // list, evaluated in the SAME global sorted order. See CandidateIndex.
+    private final CandidateIndex candidateIndex = new CandidateIndex();
+    // Monotonic control-plane modification counter. Incremented on every structural
+    // mutation of httpRequestMatchers (add / remove / update-in-place / reconcile /
+    // eviction / reset). The CandidateIndex is rebuilt lazily whenever its built
+    // generation differs from this counter — the same invalidate-on-mutation /
+    // rebuild-on-read contract CircularPriorityQueue.sortedCache uses, so it is
+    // correct for ALL mutation kinds (including update-in-place, where a matcher
+    // keeps identity but its method/path bucket changes) without per-site hooks.
+    private final java.util.concurrent.atomic.AtomicLong matchersModificationCount = new java.util.concurrent.atomic.AtomicLong(0);
     // The match fields a plain HTTP request can actually exercise. Used as the
     // denominator of the closest-expectation "matched X/Y fields" diagnostic so
     // it is not inflated by the DNS/binary/OpenAPI/operation enum constants that
@@ -104,6 +118,57 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     // not consulted for the Expectation overload), so each cold-path diagnostic
     // allocates a matcher — acceptable on this already-gated, no-match cold path.
     private volatile MatcherBuilder nonFailFastMatcherBuilder;
+
+    // T1-C1: candidate-index engagement threshold. Below this many expectations
+    // firstMatchingExpectation runs the UNTOUCHED linear scan so small scenarios are
+    // never slowed to benefit large ones (the cleanest guarantee of "no regression at
+    // small n" — the same code path runs as today, the index object is never touched
+    // except for a single int comparison). At or above it the candidate index engages.
+    //
+    // Empirically determined from CandidateIndexBenchmark (avgt, us/op; 99.9% error bars).
+    // For a bucketable (literal method+path) set the index clearly wins from n=100 (HIT
+    // 6.0→0.47us ≈ 13x, MISS 10.5→0.25us ≈ 43x) and far more at 1k/5k. At small n (≤~5)
+    // the index and the linear scan are a statistical tie; the smallest n from which there
+    // is NO measured regression (both hit and miss) upward is ≈16. A regex-heavy
+    // (all-fallthrough) set degenerates the candidate set to the full fallthrough, so the
+    // index neither helps nor hurts (≈1.0x at every n). 64 is set a safe margin above the
+    // measured ≈16 no-regression floor and at the n=100 clear-win point, so small/common
+    // scenarios stay byte-for-byte on the linear scan (never slower at any size) while large
+    // ones get the full speedup. Overridable for tuning via the system property
+    // {@code mockserver.candidateIndexThreshold}; values < 2 are clamped to 2 (a
+    // 0/1-expectation store can never benefit and must stay on the scan).
+    static final int DEFAULT_CANDIDATE_INDEX_THRESHOLD = 64;
+    // Non-final so tests can inject a low threshold via withCandidateIndexThreshold()
+    // WITHOUT mutating any global/system state (keeping them parallel-safe). Production
+    // code never reassigns it after construction.
+    private int candidateIndexThreshold = resolveCandidateIndexThreshold();
+
+    private static int resolveCandidateIndexThreshold() {
+        try {
+            String override = System.getProperty("mockserver.candidateIndexThreshold");
+            if (override != null && !override.trim().isEmpty()) {
+                return Math.max(2, Integer.parseInt(override.trim()));
+            }
+        } catch (NumberFormatException ignore) {
+            // fall through to the default on a malformed override
+        }
+        return DEFAULT_CANDIDATE_INDEX_THRESHOLD;
+    }
+
+    /**
+     * Sets the candidate-index engagement threshold on this instance without mutating any
+     * global/system state (so tests stay parallel-safe). Below this many expectations
+     * {@link #firstMatchingExpectation} runs the untouched linear scan; at or above it the
+     * candidate index engages. Used by the matcher's own tests and the matching benchmark
+     * to exercise both paths deterministically; production code relies on the
+     * constructor-resolved value (default {@link #DEFAULT_CANDIDATE_INDEX_THRESHOLD},
+     * overridable via {@code -Dmockserver.candidateIndexThreshold}) and need not call this.
+     * Values below 2 are clamped to 2 (a 0/1-expectation store can never benefit).
+     */
+    public RequestMatchers withCandidateIndexThreshold(int threshold) {
+        this.candidateIndexThreshold = Math.max(2, threshold);
+        return this;
+    }
 
     public RequestMatchers(Configuration configuration, MockServerLogger mockServerLogger, Scheduler scheduler, WebSocketClientRegistry webSocketClientRegistry) {
         super(scheduler);
@@ -245,6 +310,9 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                 reconcileEvictions();
             }
 
+            // Invalidate the candidate index: this add may have created a new matcher
+            // or updated an existing one in place (changing its method/path bucket).
+            markMatchersModified();
             notifyListeners(this, cause);
         }
         return upsertedExpectation;
@@ -338,6 +406,8 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             }
 
             if (numberOfChanges.get() > 0) {
+                // Invalidate the candidate index after a batch of adds/updates/removes.
+                markMatchersModified();
                 notifyListeners(this, cause);
             }
         }
@@ -384,6 +454,26 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         return httpRequestMatcher;
     }
 
+    /**
+     * Signals that the node-local httpRequestMatchers store changed structurally
+     * (an add, remove, update-in-place, reconcile, eviction or reset). Bumps the
+     * monotonic modification counter so the {@link CandidateIndex} rebuilds lazily on
+     * the next above-threshold match. Cheap (a single atomic increment) and only ever
+     * called on the control plane, never on the match hot path.
+     */
+    private void markMatchersModified() {
+        matchersModificationCount.incrementAndGet();
+    }
+
+    /**
+     * Test-only accessor for the control-plane modification counter, used by the
+     * generation guard test to assert that every CPQ-mutating operation bumps it (so a
+     * future mutation site that forgets {@link #markMatchersModified()} fails the build).
+     */
+    long matchersModificationCountForTesting() {
+        return matchersModificationCount.get();
+    }
+
     public int size() {
         // The node-local cache is kept in sync with the backend, so
         // either source gives the same answer; prefer the CPQ as it
@@ -399,6 +489,8 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         if (expectationBackend != null) {
             expectationBackend.clear();
         }
+        // Invalidate the candidate index — the store is now empty.
+        markMatchersModified();
         scenarioManager.reset();
         Metrics.clearActionMetrics();
         Metrics.clearRequestAndExpectationMetrics();
@@ -437,7 +529,34 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             ? null
             : new MatchDifference(false, requestDefinition);
 
-        for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
+        // T1-C1: choose the scan set. Below the threshold use the UNTOUCHED full sorted
+        // list (byte-for-byte the existing behaviour, zero added per-request cost beyond
+        // one size read). At/above it, narrow to the request's (method, exact-path) bucket
+        // plus the always-checked fallthrough list, evaluated in the SAME global sorted
+        // order — so the first match is provably identical to the full scan (any expectation
+        // outside the candidate set is in a different literal bucket and cannot match this
+        // request). The candidate set is a SUBSET, so the in-loop closest-match accumulation
+        // could differ; when no candidate matches and the closest-match diagnostic is needed,
+        // it is recomputed over the FULL sorted list below to keep diagnostics identical.
+        //
+        // SAFETY BYPASS: a request whose method OR path is BLANK matches the method/path
+        // criterion of EVERY expectation (HttpRequestPropertiesMatcher short-circuits the
+        // gate to true when the REQUEST value is blank), so it could match a bucketed literal
+        // in ANY bucket — narrowing to a single (method,path) bucket would be unsound. Such a
+        // request (only constructible programmatically — every Netty data-plane entry point
+        // supplies a concrete method+path) falls back to the full scan. This keeps the index
+        // engaged only when the request's literal (method,path) can be soundly bucketed.
+        final boolean useCandidateIndex = httpRequestMatchers.size() >= candidateIndexThreshold
+            && requestHasConcreteMethodAndPath(requestDefinition);
+        final List<HttpRequestMatcher> scanList = useCandidateIndex
+            ? candidateIndex.candidatesInGlobalOrder(
+                requestDefinition,
+                matchersModificationCount.get(),
+                !configuration.matchExactCase(),
+                httpRequestMatchers::toSortedList)
+            : httpRequestMatchers.toSortedList();
+
+        for (HttpRequestMatcher httpRequestMatcher : scanList) {
             // Namespace (multi-tenancy) gate: skip expectations belonging to a
             // different namespace than the request's. Global (null-namespace)
             // expectations always pass; a request with no namespace sees only
@@ -571,6 +690,35 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             }
         }
 
+        // T1-C1 cold-path reconciliation: when the candidate index was used and nothing
+        // matched, the in-loop accumulation above only saw the candidate subset, so the
+        // closest-match diagnostic and the namespace-skip count could differ from the full
+        // scan. Recompute them over the FULL sorted list here so the EMITTED diagnostics are
+        // byte-for-byte identical to the un-indexed behaviour.
+        //
+        // GATED on the diagnostics actually being emittable: the closest-match "matched X/Y"
+        // entry fires only at INFO, the namespace-silence entry only at DEBUG. When neither is
+        // enabled (the perf-tuned deployment the index targets) this O(n) reconciliation is
+        // skipped entirely — preserving the index's miss-path speedup — because its only other
+        // effect, the best-effort lazy removal of inactive non-candidate matchers, is redundant
+        // (it is also driven by retrieveActiveExpectations / postProcess / any later scan that
+        // observes the matcher). When INFO/DEBUG IS enabled the full reconciliation runs, so the
+        // diagnostics (and the lazy removal that the un-indexed scan would have performed) are
+        // identical. Net: zero change to any EMITTED diagnostic; the only difference when logging
+        // is off is the timing of a best-effort cleanup, never a matching result.
+        boolean diagnosticsEmittable = mockServerLogger.isEnabledForInstance(Level.INFO)
+            || mockServerLogger.isEnabledForInstance(Level.DEBUG);
+        if (useCandidateIndex && matchedExpectation == null && diagnosticsEmittable) {
+            ClosestMatchAccumulator accumulator = fullScanClosestMatchAndLazyRemoval(requestDefinition, detailedMatchFailures, sharedMatchDifference);
+            closestMatchExpectation = accumulator.closestMatchExpectation;
+            closestMatchMatcher = accumulator.closestMatchMatcher;
+            closestMatchFailures = accumulator.closestMatchFailures;
+            // Reconcile the namespace-skip count over the FULL list so the namespaced-
+            // silence DEBUG diagnostic below is identical to the un-indexed scan (the
+            // narrowed candidate scan above only saw the candidate subset's skips).
+            namespaceSkipped = accumulator.namespaceSkipped;
+        }
+
         if (matchedExpectation == null && closestMatchExpectation != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
             // Cold path only (no match AND INFO logging on): compute a MEANINGFUL
             // matched/total ratio. The denominator is the number of match fields
@@ -633,7 +781,94 @@ public class RequestMatchers extends MockServerMatcherNotifier {
         return matchedExpectation;
     }
 
+    /**
+     * Whether the candidate index may be soundly used for this request. True for any
+     * non-{@link HttpRequest} request definition (DNS/binary/OpenAPI — their candidate
+     * set is the fallthrough only, which is correct since no such expectation is ever
+     * bucketed). For an {@link HttpRequest} it is true only when BOTH the request method
+     * and path are non-blank: a blank request method/path passes the method/path gate of
+     * EVERY expectation (the matcher short-circuits on a blank REQUEST value), so it could
+     * match a bucketed literal in any bucket and must not be narrowed to one bucket.
+     */
+    private static boolean requestHasConcreteMethodAndPath(RequestDefinition requestDefinition) {
+        if (!(requestDefinition instanceof HttpRequest)) {
+            return true;
+        }
+        HttpRequest request = (HttpRequest) requestDefinition;
+        return request.getMethod() != null && !request.getMethod().isBlank()
+            && request.getPath() != null && !request.getPath().isBlank();
+    }
+
+    /**
+     * Holder for the result of {@link #fullScanClosestMatchAndLazyRemoval}.
+     */
+    private static final class ClosestMatchAccumulator {
+        Expectation closestMatchExpectation = null;
+        HttpRequestMatcher closestMatchMatcher = null;
+        int closestMatchFailures = Integer.MAX_VALUE;
+        // Number of expectations skipped purely by the namespace gate during the full
+        // scan — reconciled back so the namespaced-silence DEBUG diagnostic matches the
+        // un-indexed scan (only counted when the request carries a namespace).
+        int namespaceSkipped = 0;
+    }
+
+    /**
+     * Full-scan reconciliation used ONLY on the cold no-match path when the candidate
+     * index narrowed the serving scan. Re-walks the ENTIRE sorted matcher list (the same
+     * order the un-indexed scan uses) and reproduces, byte-for-byte, the two side-effects
+     * the narrowed scan could not have produced for non-candidate matchers:
+     * <ol>
+     *   <li>the closest-match accumulation (fewest field differences, first wins on a tie,
+     *       namespace-gated), and</li>
+     *   <li>the lazy removal scheduling of inactive non-matching matchers.</li>
+     * </ol>
+     * This mirrors the non-match {@code else} branch of {@link #firstMatchingExpectation}
+     * exactly (namespace gate, per-matcher MatchDifference handling, closest selection,
+     * lazy removal), so the diagnostic and cleanup behaviour is identical to the full scan.
+     * It does NOT re-run the match commit logic (Times/scenario/metrics) — by definition no
+     * expectation matched, so there is nothing to commit. Runs only above the threshold and
+     * only on a miss (already a cold path).
+     */
+    private ClosestMatchAccumulator fullScanClosestMatchAndLazyRemoval(RequestDefinition requestDefinition, boolean detailedMatchFailures, MatchDifference sharedMatchDifference) {
+        ClosestMatchAccumulator accumulator = new ClosestMatchAccumulator();
+        String requestNamespace = extractRequestNamespace(requestDefinition);
+        for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
+            if (!matchesNamespace(httpRequestMatcher.getExpectation(), requestNamespace)) {
+                if (requestNamespace != null) {
+                    accumulator.namespaceSkipped++;
+                }
+                continue;
+            }
+            MatchDifference matchDifference = detailedMatchFailures
+                ? new MatchDifference(true, requestDefinition)
+                : sharedMatchDifference;
+            if (!httpRequestMatcher.matches(matchDifference, requestDefinition)) {
+                if (!httpRequestMatcher.isResponseInProgress() && !httpRequestMatcher.isActive()) {
+                    scheduleLazyRemoval(httpRequestMatcher);
+                }
+                int failures = matchDifference.getAllDifferences().size();
+                if (failures < accumulator.closestMatchFailures && httpRequestMatcher.getExpectation() != null) {
+                    accumulator.closestMatchFailures = failures;
+                    accumulator.closestMatchExpectation = httpRequestMatcher.getExpectation();
+                    accumulator.closestMatchMatcher = httpRequestMatcher;
+                }
+            }
+        }
+        return accumulator;
+    }
+
     public Expectation firstMatchingEarlyExpectation(HttpRequest headersOnlyRequest) {
+        // Control-plane requests (path under HttpState.PATH_PREFIX, e.g. /mockserver/reset,
+        // /mockserver/status) must never be answered by a data-plane early (respondBeforeBody)
+        // expectation. EarlyMatchingHandler runs before the control-plane dispatch in
+        // HttpState.handle(), so without this guard a catch-all respondBeforeBody expectation
+        // (e.g. seeded via an initialization file) would hijack the server's own management API.
+        if (headersOnlyRequest != null
+            && headersOnlyRequest.getPath() != null
+            && headersOnlyRequest.getPath().getValue() != null
+            && headersOnlyRequest.getPath().getValue().startsWith(HttpState.PATH_PREFIX)) {
+            return null;
+        }
         String requestNamespace = extractRequestNamespace(headersOnlyRequest);
         for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
             Expectation expectation = httpRequestMatcher.getExpectation();
@@ -862,6 +1097,16 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             trimEvictedFromBackend();
             return;
         }
+        reconcileClusteredScan();
+    }
+
+    /**
+     * The expensive clustered reconcile scan: snapshots the entire backend and
+     * diffs it against the node-local matcher cache (evict / remote-add /
+     * remote-update). Only ever invoked from {@link #reconcileFromBackend()}
+     * under its {@code synchronized} monitor.
+     */
+    private void reconcileClusteredScan() {
         // Snapshot backend state
         Map<String, KeyValueStore.Entry<ExpectationEntry>> backendEntries = new HashMap<>();
         expectationBackend.entries().forEach(e -> backendEntries.put(e.getKey(), e));
@@ -922,6 +1167,9 @@ public class RequestMatchers extends MockServerMatcherNotifier {
                 }
             }
         }
+        // Clustered reconcile may have added/updated/removed matchers — invalidate
+        // the candidate index unconditionally (a single atomic increment).
+        markMatchersModified();
     }
 
     /**
@@ -968,6 +1216,11 @@ public class RequestMatchers extends MockServerMatcherNotifier {
             expectationRequestDefinitions.remove(evictedId);
             lastReconciledVersion.remove(evictedId);
         }
+        // Backend eviction dropped matchers from the node-local store — invalidate
+        // the candidate index so it no longer holds the evicted entries.
+        if (!evictedIds.isEmpty()) {
+            markMatchersModified();
+        }
     }
 
     /**
@@ -981,15 +1234,27 @@ public class RequestMatchers extends MockServerMatcherNotifier {
 
     public Expectation postProcess(Expectation expectation) {
         if (expectation != null) {
-            getHttpRequestMatchersCopy()
-                .filter(httpRequestMatcher -> httpRequestMatcher.getExpectation() == expectation)
-                .findFirst()
-                .ifPresent(httpRequestMatcher -> {
-                    if (!expectation.isActive()) {
-                        removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID());
-                    }
-                    httpRequestMatcher.setResponseInProgress(false);
-                });
+            // O(1) fast path: the id-keyed cache is kept in sync on add/update/remove. Guard with a
+            // reference-equality check so semantics exactly match the original O(n) scan — if the
+            // cached matcher's expectation is a different instance (e.g. updated under the same id
+            // since this request matched), fall back to the scan, which finds nothing in that case.
+            HttpRequestMatcher cachedMatcher = matcherCacheById.get(expectation.getId());
+            if (cachedMatcher != null && cachedMatcher.getExpectation() == expectation) {
+                if (!expectation.isActive()) {
+                    removeHttpRequestMatcher(cachedMatcher, UUIDService.getUUID());
+                }
+                cachedMatcher.setResponseInProgress(false);
+            } else {
+                getHttpRequestMatchersCopy()
+                    .filter(httpRequestMatcher -> httpRequestMatcher.getExpectation() == expectation)
+                    .findFirst()
+                    .ifPresent(httpRequestMatcher -> {
+                        if (!expectation.isActive()) {
+                            removeHttpRequestMatcher(httpRequestMatcher, UUIDService.getUUID());
+                        }
+                        httpRequestMatcher.setResponseInProgress(false);
+                    });
+            }
         }
         return expectation;
     }
@@ -1020,6 +1285,8 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     @SuppressWarnings("rawtypes")
     private void removeHttpRequestMatcher(HttpRequestMatcher httpRequestMatcher, Cause cause, boolean notifyAndUpdateMetrics, String logCorrelationId) {
         if (httpRequestMatchers.remove(httpRequestMatcher)) {
+            // Invalidate the candidate index — a matcher was removed from the store.
+            markMatchersModified();
             // Remove from backend KV and node-local cache
             if (httpRequestMatcher.getExpectation() != null) {
                 String id = httpRequestMatcher.getExpectation().getId();
@@ -1345,21 +1612,67 @@ public class RequestMatchers extends MockServerMatcherNotifier {
     }
 
     public Map<MatchDifference.Field, List<String>> findClosestMatchDiff(HttpRequest httpRequest) {
+        ClosestMatchHint hint = findClosestMatchHint(httpRequest);
+        return hint == null ? null : hint.getDifferences();
+    }
+
+    /**
+     * Compact closest-match diagnostic used by the unmatched-404 hint header
+     * ({@code closestMatchHintEnabled}). Holds the id of the closest non-matching
+     * expectation and the field differences that kept it from matching, so the
+     * caller can render a short, safe one-line hint (expectation id + first
+     * differing field + reason) without serialising the whole expectation.
+     */
+    public static final class ClosestMatchHint {
+        private final String expectationId;
+        private final Map<MatchDifference.Field, List<String>> differences;
+
+        public ClosestMatchHint(String expectationId, Map<MatchDifference.Field, List<String>> differences) {
+            this.expectationId = expectationId;
+            this.differences = differences;
+        }
+
+        public String getExpectationId() {
+            return expectationId;
+        }
+
+        public Map<MatchDifference.Field, List<String>> getDifferences() {
+            return differences;
+        }
+    }
+
+    /**
+     * Find the expectation that came closest to matching the request (fewest field
+     * differences) together with its id and field diff. Cold-path only — invoked when
+     * a request matched nothing and a diagnostic is being produced. Returns {@code null}
+     * when there are no expectations (or none produced a usable diff).
+     */
+    public ClosestMatchHint findClosestMatchHint(HttpRequest httpRequest) {
         int closestMatchFailures = Integer.MAX_VALUE;
         Map<MatchDifference.Field, List<String>> closestDifferences = null;
+        String closestExpectationId = null;
 
         for (HttpRequestMatcher httpRequestMatcher : httpRequestMatchers.toSortedList()) {
-            MatchDifference matchDifference = new MatchDifference(true, httpRequest);
+            // suppressMatchResultLogging: this is a read-only diagnostic re-evaluation (it runs
+            // AFTER the request already failed to match), so it must NOT emit a second round of
+            // EXPECTATION_NOT_MATCHED events into the event log — those would be uncorrelated and
+            // would shift/duplicate the recorded log sequence. Especially important now the hint
+            // header is on by default, so this scan runs on the common no-match path.
+            MatchDifference matchDifference = new MatchDifference(true, httpRequest).suppressMatchResultLogging();
             if (!httpRequestMatcher.matches(matchDifference, httpRequest)) {
                 Map<MatchDifference.Field, List<String>> differences = matchDifference.getAllDifferences();
                 int failures = differences.size();
                 if (failures < closestMatchFailures && httpRequestMatcher.getExpectation() != null) {
                     closestMatchFailures = failures;
                     closestDifferences = differences;
+                    closestExpectationId = httpRequestMatcher.getExpectation().getId();
                 }
             }
         }
-        return closestDifferences;
+        if (closestDifferences == null) {
+            return null;
+        }
+        return new ClosestMatchHint(closestExpectationId, closestDifferences);
     }
 
     public boolean isEmpty() {

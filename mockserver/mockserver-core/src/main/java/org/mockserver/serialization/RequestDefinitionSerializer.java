@@ -117,6 +117,42 @@ public class RequestDefinitionSerializer implements Serializer<RequestDefinition
         }
     }
 
+    /**
+     * Serialise recorded requests for retrieval via retrieveRecordedRequests. This is the only serialisation path
+     * that emits the original wire bytes (base64 {@code rawBytes}) when they differ from the canonical JSON value,
+     * so a JSON request body retrieved over the wire round-trips byte-for-byte (#2374). All other serialisation
+     * (matcher/expectation serialisation, verification diagnostic logs) goes through {@link #serialize} and stays
+     * clean, because the {@code emitRawBytes} attribute is scoped to this call only.
+     */
+    public String serializeRecordedRequests(boolean prettyPrint, List<? extends RequestDefinition> requestDefinitions) {
+        RequestDefinition[] definitions = requestDefinitions.toArray(new RequestDefinition[0]);
+        try {
+            if (definitions.length > 0) {
+                Object[] requestDefinitionDTOs = new Object[definitions.length];
+                for (int i = 0; i < definitions.length; i++) {
+                    if (definitions[i] instanceof HttpRequest) {
+                        requestDefinitionDTOs[i] = prettyPrint ? new HttpRequestPrettyPrintedDTO((HttpRequest) definitions[i]) : new HttpRequestDTO((HttpRequest) definitions[i]);
+                    } else if (definitions[i] instanceof OpenAPIDefinition) {
+                        requestDefinitionDTOs[i] = new OpenAPIDefinitionDTO((OpenAPIDefinition) definitions[i]);
+                    } else if (definitions[i] instanceof ConditionalRequestDefinition) {
+                        requestDefinitionDTOs[i] = new ConditionalRequestDefinitionDTO((ConditionalRequestDefinition) definitions[i]);
+                    }
+                }
+                return objectWriter.withAttribute("emitRawBytes", Boolean.TRUE).writeValueAsString(requestDefinitionDTOs);
+            } else {
+                return "[]";
+            }
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setMessageFormat("exception while serializing RequestDefinition to JSON with value " + definitions)
+                    .setThrowable(e)
+            );
+            throw new RuntimeException("Exception while serializing RequestDefinition to JSON with value " + Arrays.asList(definitions), e);
+        }
+    }
+
     public RequestDefinition deserialize(String jsonRequestDefinition) {
         if (isBlank(jsonRequestDefinition)) {
             throw new IllegalArgumentException(

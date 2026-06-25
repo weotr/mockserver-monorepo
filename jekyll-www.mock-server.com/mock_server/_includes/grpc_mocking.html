@@ -70,7 +70,7 @@
   -e MOCKSERVER_GRPC_PROTO_DIRECTORY=/protos \
   mockserver/mockserver:latest</code></pre>
 
-<p>Replace <span class="inline_code">latest</span> with a specific version tag (e.g. <span class="inline_code">mockserver/mockserver:7.1.0</span>) to pin a known working version.</p>
+<p>Replace <span class="inline_code">latest</span> with a specific version tag (e.g. <span class="inline_code">mockserver/mockserver:7.2.0</span>) to pin a known working version.</p>
 
 <a id="creating_grpc_expectations" class="anchor" href="#creating_grpc_expectations">&nbsp;</a>
 
@@ -569,7 +569,7 @@ curl_close($ch);</code></pre>{% endraw %}
     <li><strong>Reactive rules</strong> — each inbound client message is matched against rules in order; the first rule whose <span class="inline_code">matchJson</span> matches emits its responses. The <span class="inline_code">matchJson</span> field supports exact string match and regex (via <span class="inline_code">String.matches()</span> semantics)</li>
 </ul>
 
-<p>Each reactive-rule response message can optionally be a <strong>response template</strong> by setting its <span class="inline_code">templateType</span> to <span class="inline_code">VELOCITY</span> or <span class="inline_code">MUSTACHE</span>. A templated response is rendered against the matched inbound message (exposed as the request body), so the reply can echo or derive fields from the request — for example <span class="inline_code">{"greeting": "Hi $jsonPath.find(\"$.name\")"}</span> — and can transition <a href="/mock_server/creating_expectations.html#button_match_request_by_scenario_state">scenario state</a> via <span class="inline_code">$scenario.set('name','state')</span> on an inbound match. Templating is opt-in: response messages with no <span class="inline_code">templateType</span> are sent exactly as written. <span class="inline_code">JAVASCRIPT</span> is not supported for bidi stream responses.</p>
+<p>Each reactive-rule response message can optionally be a <strong>response template</strong> by setting its <span class="inline_code">templateType</span> to <span class="inline_code">VELOCITY</span> or <span class="inline_code">MUSTACHE</span>. A templated response is rendered against the matched inbound message (exposed as the request body), so the reply can echo or derive fields from the request — for example <span class="inline_code">{"greeting": "Hi $jsonPath.find(\"$.name\")"}</span> — and can transition <a href="/mock_server/stateful_scenarios.html">scenario state</a> via <span class="inline_code">$scenario.set('name','state')</span> on an inbound match. Templating is opt-in: response messages with no <span class="inline_code">templateType</span> are sent exactly as written. <span class="inline_code">JAVASCRIPT</span> is not supported for bidi stream responses.</p>
 
 <button id="button_grpc_bidi" class="accordion title"><strong>Bidirectional Streaming RPC Code Examples</strong></button>
 <div class="panel title">

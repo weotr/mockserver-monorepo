@@ -320,6 +320,293 @@ public class SreControlPlaneTests
         result.Started.Should().ContainSingle(r => r.Name == "checkout-load");
     }
 
+    [Fact]
+    public void LoadScenario_SerialisesParitySchemaFields()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "{\"name\":\"parity\",\"state\":\"LOADED\"}";
+
+        var scenario = new LoadScenario
+        {
+            Name = "parity",
+            StepSelection = LoadStepSelection.WEIGHTED,
+            AbortOnFail = true,
+            AbortGraceMillis = 3000,
+            Thresholds = new List<LoadThreshold>
+            {
+                new() { Metric = LoadThresholdMetric.LATENCY_P999, Comparator = LoadThresholdComparator.LESS_THAN, Threshold = 250 },
+                new() { Metric = LoadThresholdMetric.ERROR_RATE, Comparator = LoadThresholdComparator.LESS_THAN_OR_EQUAL, Threshold = 0.01 }
+            },
+            Pacing = new LoadPacing { Mode = LoadPacingMode.CONSTANT_THROUGHPUT, Value = 5 },
+            Feeder = new LoadFeeder
+            {
+                Rows = new List<Dictionary<string, string>>
+                {
+                    new() { ["user"] = "alice" },
+                    new() { ["user"] = "bob" }
+                },
+                Strategy = LoadFeederStrategy.RANDOM
+            },
+            Profile = new LoadProfile
+            {
+                Shape = new LoadShape
+                {
+                    Type = LoadShapeType.SPIKE,
+                    Metric = LoadShapeMetric.RATE,
+                    Baseline = 0,
+                    Peak = 100,
+                    RampUpMillis = 5000,
+                    HoldMillis = 10000,
+                    RampDownMillis = 5000
+                }
+            },
+            Steps = new List<LoadStep>
+            {
+                new()
+                {
+                    Name = "login",
+                    Weight = 7,
+                    Request = HttpRequest.Request().WithMethod("POST").WithPath("/login").Build(),
+                    Captures = new List<LoadCapture>
+                    {
+                        new() { Name = "token", Source = LoadCaptureSource.BODY_JSONPATH, Expression = "$.token", DefaultValue = "none" }
+                    }
+                }
+            }
+        };
+
+        client.LoadScenario(scenario);
+
+        var body = handler.LastRequestBody!;
+        body.Should().Contain("\"stepSelection\":\"WEIGHTED\"");
+        body.Should().Contain("\"abortOnFail\":true");
+        body.Should().Contain("\"abortGraceMillis\":3000");
+        body.Should().Contain("\"thresholds\"");
+        body.Should().Contain("\"metric\":\"LATENCY_P999\"");
+        body.Should().Contain("\"comparator\":\"LESS_THAN\"");
+        body.Should().Contain("\"threshold\":250");
+        body.Should().Contain("\"metric\":\"ERROR_RATE\"");
+        body.Should().Contain("\"pacing\"");
+        body.Should().Contain("\"mode\":\"CONSTANT_THROUGHPUT\"");
+        body.Should().Contain("\"value\":5");
+        body.Should().Contain("\"feeder\"");
+        body.Should().Contain("\"rows\"");
+        body.Should().Contain("\"user\":\"alice\"");
+        body.Should().Contain("\"strategy\":\"RANDOM\"");
+        body.Should().Contain("\"shape\"");
+        body.Should().Contain("\"type\":\"SPIKE\"");
+        body.Should().Contain("\"peak\":100");
+        // A meaningful zero (baseline=0) must still be serialised.
+        body.Should().Contain("\"baseline\":0");
+        body.Should().Contain("\"weight\":7");
+        body.Should().Contain("\"captures\"");
+        body.Should().Contain("\"source\":\"BODY_JSONPATH\"");
+        body.Should().Contain("\"expression\":\"$.token\"");
+        body.Should().Contain("\"defaultValue\":\"none\"");
+    }
+
+    [Fact]
+    public void LoadScenario_OmitsParityFieldsWhenUnset()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "{\"name\":\"basic\",\"state\":\"LOADED\"}";
+
+        var scenario = new LoadScenario
+        {
+            Name = "basic",
+            Profile = new LoadProfile { Stages = new List<LoadStage> { LoadStage.ConstantVus(1, 1000) } },
+            Steps = new List<LoadStep> { new() { Request = HttpRequest.Request().WithMethod("GET").WithPath("/x").Build() } }
+        };
+
+        client.LoadScenario(scenario);
+
+        var body = handler.LastRequestBody!;
+        // Existing scenarios serialise unchanged — none of the new optional fields appear.
+        body.Should().NotContain("thresholds");
+        body.Should().NotContain("abortOnFail");
+        body.Should().NotContain("abortGraceMillis");
+        body.Should().NotContain("pacing");
+        body.Should().NotContain("feeder");
+        body.Should().NotContain("stepSelection");
+        body.Should().NotContain("shape");
+        body.Should().NotContain("captures");
+        body.Should().NotContain("weight");
+    }
+
+    [Fact]
+    public void GetLoadScenario_ParsesNewStatusFields()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody =
+            "{\"name\":\"checkout\",\"state\":\"COMPLETED\",\"p999Millis\":312.5," +
+            "\"droppedIterations\":7,\"verdict\":\"FAIL\",\"abortedByThreshold\":true," +
+            "\"thresholdResults\":[{\"metric\":\"LATENCY_P999\",\"comparator\":\"LESS_THAN\"," +
+            "\"threshold\":250,\"observed\":312.5,\"satisfied\":false}]}";
+
+        var entry = client.GetLoadScenario("checkout");
+
+        entry.State.Should().Be(LoadScenarioState.COMPLETED);
+        entry.P999Millis.Should().Be(312.5);
+        entry.DroppedIterations.Should().Be(7);
+        entry.Verdict.Should().Be(LoadVerdict.FAIL);
+        entry.AbortedByThreshold.Should().BeTrue();
+        entry.ThresholdResults.Should().ContainSingle();
+        entry.ThresholdResults![0].Metric.Should().Be("LATENCY_P999");
+        entry.ThresholdResults[0].Observed.Should().Be(312.5);
+        entry.ThresholdResults[0].Satisfied.Should().BeFalse();
+    }
+
+    [Fact]
+    public void GetLoadScenarioReport_FetchesJsonReportWithGet()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "{\"scenario\":\"checkout\",\"verdict\":\"PASS\"}";
+
+        var report = client.GetLoadScenarioReport("checkout load");
+
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/loadScenario/checkout%20load/report");
+        report.Should().Contain("\"verdict\":\"PASS\"");
+    }
+
+    [Fact]
+    public void GetLoadScenarioReport_AppendsJunitFormatQuery()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "<testsuite/>";
+
+        var report = client.GetLoadScenarioReport("checkout", "junit");
+
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Get);
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/loadScenario/checkout/report?format=junit");
+        report.Should().Be("<testsuite/>");
+    }
+
+    [Fact]
+    public void GetLoadScenarioReport_Throws404WhenNeverRan()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.NotFound;
+
+        var act = () => client.GetLoadScenarioReport("missing");
+
+        act.Should().Throw<MockServerClientException>().WithMessage("*404*");
+    }
+
+    [Fact]
+    public void GenerateLoadScenarioFromOpenAPI_PutsNameSpecTargetProfile()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody =
+            "{\"status\":\"loaded\",\"name\":\"petstore-load\",\"state\":\"LOADED\"," +
+            "\"scenario\":{\"name\":\"petstore-load\"}}";
+
+        var result = client.GenerateLoadScenarioFromOpenAPI(
+            "petstore-load",
+            "https://example.com/petstore.yaml",
+            new LoadGenerateTarget { Host = "petstore.svc", Port = 8080, Scheme = LoadTargetScheme.http },
+            new LoadProfile { Stages = new List<LoadStage> { LoadStage.ConstantVus(2, 5000) } });
+
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Put);
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/loadScenario/generateFromOpenAPI");
+        var body = handler.LastRequestBody!;
+        body.Should().Contain("\"name\":\"petstore-load\"");
+        body.Should().Contain("\"specUrlOrPayload\":\"https://example.com/petstore.yaml\"");
+        body.Should().Contain("\"target\"");
+        body.Should().Contain("\"host\":\"petstore.svc\"");
+        body.Should().Contain("\"port\":8080");
+        body.Should().Contain("\"scheme\":\"http\"");
+        body.Should().Contain("\"profile\"");
+
+        result.Status.Should().Be("loaded");
+        result.Name.Should().Be("petstore-load");
+        result.State.Should().Be(LoadScenarioState.LOADED);
+        result.Scenario!.Name.Should().Be("petstore-load");
+    }
+
+    [Fact]
+    public void GenerateLoadScenarioFromOpenAPI_OmitsOptionalsWhenNull()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "{\"status\":\"loaded\",\"name\":\"x\",\"state\":\"LOADED\"}";
+
+        client.GenerateLoadScenarioFromOpenAPI("x", "inline-spec");
+
+        var body = handler.LastRequestBody!;
+        body.Should().Contain("\"specUrlOrPayload\":\"inline-spec\"");
+        body.Should().NotContain("target");
+        body.Should().NotContain("profile");
+    }
+
+    [Fact]
+    public void GenerateLoadScenarioFromOpenAPI_Throws400OnInvalid()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.BadRequest;
+
+        var act = () => client.GenerateLoadScenarioFromOpenAPI("x", "bad-spec");
+
+        act.Should().Throw<MockServerClientException>();
+    }
+
+    [Fact]
+    public void GenerateLoadScenarioFromRecording_PutsModeFilterMaxStepsTarget()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody =
+            "{\"status\":\"loaded\",\"name\":\"replay\",\"state\":\"LOADED\"," +
+            "\"scenario\":{\"name\":\"replay\"}}";
+
+        var result = client.GenerateLoadScenarioFromRecording(
+            "replay",
+            LoadRecordingMode.TEMPLATIZED,
+            HttpRequest.Request().WithMethod("GET").WithPath("/api/.*").Build(),
+            new LoadGenerateTarget { Host = "staging.svc", Port = 8080, Scheme = LoadTargetScheme.http },
+            maxSteps: 25);
+
+        handler.LastRequest!.Method.Should().Be(HttpMethod.Put);
+        handler.LastRequest!.RequestUri!.PathAndQuery.Should().Be("/mockserver/loadScenario/generateFromRecording");
+        var body = handler.LastRequestBody!;
+        body.Should().Contain("\"name\":\"replay\"");
+        body.Should().Contain("\"mode\":\"TEMPLATIZED\"");
+        body.Should().Contain("\"requestFilter\"");
+        body.Should().Contain("\"maxSteps\":25");
+        body.Should().Contain("\"target\"");
+        body.Should().Contain("\"host\":\"staging.svc\"");
+
+        result.Status.Should().Be("loaded");
+        result.Name.Should().Be("replay");
+        result.State.Should().Be(LoadScenarioState.LOADED);
+    }
+
+    [Fact]
+    public void GenerateLoadScenarioFromRecording_OmitsOptionalsWhenNull()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseBody = "{\"status\":\"loaded\",\"name\":\"r\",\"state\":\"LOADED\"}";
+
+        client.GenerateLoadScenarioFromRecording("r");
+
+        var body = handler.LastRequestBody!;
+        body.Should().Contain("\"name\":\"r\"");
+        body.Should().NotContain("mode");
+        body.Should().NotContain("requestFilter");
+        body.Should().NotContain("maxSteps");
+        body.Should().NotContain("target");
+        body.Should().NotContain("profile");
+    }
+
+    [Fact]
+    public void GenerateLoadScenarioFromRecording_Throws400OnInvalid()
+    {
+        var (client, handler) = CreateClient();
+        handler.ResponseStatusCode = HttpStatusCode.BadRequest;
+
+        var act = () => client.GenerateLoadScenarioFromRecording("r");
+
+        act.Should().Throw<MockServerClientException>();
+    }
+
     // -------------------------------------------------------------------
     // Service chaos
     // -------------------------------------------------------------------

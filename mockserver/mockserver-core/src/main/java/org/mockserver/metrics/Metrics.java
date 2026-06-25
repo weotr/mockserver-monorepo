@@ -54,6 +54,16 @@ public class Metrics {
     private static volatile Counter forwardRequestsTotal;
     // Counter for HTTP chaos faults injected (error or latency). Null until metrics are enabled.
     private static volatile Counter httpChaosInjectedTotal;
+    /**
+     * The complete, authoritative set of {@code fault_type} label values the HTTP chaos-injection
+     * counter ({@code mock_server_http_chaos_injected}) is incremented with. Single source of truth
+     * for the per-fault-type OTLP mirror in {@link OtelMetricsExporter} so it can never drift behind
+     * the set of fault types {@link #incrementHttpChaosInjected(String)} actually records. Distinct
+     * from {@code ServiceChaosRegistry.FAULT_TYPES} (the service-profile set, which has no
+     * {@code rateLimit}); these are the injection-counter label values.
+     */
+    static final java.util.List<String> CHAOS_FAULT_TYPES =
+        java.util.List.of("drop", "error", "latency", "truncate", "malformed", "slow", "quota", "graphql", "rateLimit");
     // Counter for chaos auto-halt events. Null until metrics are enabled.
     private static volatile Counter chaosAutoHaltTotal;
     // Counter for MCP tool calls, labeled by tool name. Null until metrics are enabled.
@@ -1129,9 +1139,13 @@ public class Metrics {
                                           Map<String, String> customLabels) {
         String statusClass = statusClass(statusCode);
         double latency = latencySeconds > 0 ? latencySeconds : 0;
+        // Compute the per-request structured+custom label values once and reuse for all four
+        // Prometheus metrics below (the label values are identical across them). The array is never
+        // mutated after creation, so sharing the single instance across the labelValues(...) calls
+        // is safe.
+        String[] values = loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels);
         Histogram histogram = loadRequestDurationSeconds;
         if (histogram != null) {
-            String[] values = loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels);
             if (traceId != null && !traceId.isEmpty()) {
                 try {
                     histogram.labelValues(values).observeWithExemplar(latency,
@@ -1145,15 +1159,15 @@ public class Metrics {
         }
         Counter requests = loadRequestsTotal;
         if (requests != null) {
-            requests.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels)).inc();
+            requests.labelValues(values).inc();
         }
         Counter reqBytes = loadRequestBytesTotal;
         if (reqBytes != null && requestBytes > 0) {
-            reqBytes.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels)).inc(requestBytes);
+            reqBytes.labelValues(values).inc(requestBytes);
         }
         Counter respBytes = loadResponseBytesTotal;
         if (respBytes != null && responseBytes > 0) {
-            respBytes.labelValues(loadLabelValues(scenario, runId, step, route, method, statusClass, customLabels)).inc(responseBytes);
+            respBytes.labelValues(values).inc(responseBytes);
         }
         // OTLP mirror: structured labels + all custom labels as attributes (arbitrary keys).
         io.opentelemetry.api.common.Attributes otelAttrs =
@@ -1452,7 +1466,7 @@ public class Metrics {
     }
 
     public enum Name {
-        REQUESTS_RECEIVED_COUNT("Expectation not matched count"),
+        REQUESTS_RECEIVED_COUNT("Total requests received count"),
         EXPECTATIONS_NOT_MATCHED_COUNT("Expectation not matched count"),
         RESPONSE_EXPECTATIONS_MATCHED_COUNT("Response expectation matched count"),
         FORWARD_EXPECTATIONS_MATCHED_COUNT("Forward expectation matched count"),

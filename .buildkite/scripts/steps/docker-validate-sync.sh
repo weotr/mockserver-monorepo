@@ -10,6 +10,7 @@ DOCKERFILES=(
   "docker/root-snapshot/Dockerfile"
   "docker/local/Dockerfile"
   "docker/graaljs/Dockerfile"
+  "docker/clustered/Dockerfile"
 )
 
 errors=0
@@ -38,6 +39,16 @@ for df in "${DOCKERFILES[@]}"; do
 
   if ! grep -q 'org.mockserver.cli.Main' "$filepath"; then
     echo "FAIL: $df missing 'org.mockserver.cli.Main' in ENTRYPOINT"
+    errors=$((errors + 1))
+  fi
+
+  # Every image that runs org.mockserver.cli.Main must cap the JVM heap so the in-memory
+  # request/expectation rings size off a bounded heap, otherwise the container is liable to be
+  # OOM-SIGKILLed under load. Assert the cap is present so it cannot silently drift back out of
+  # one variant (the consumer docs promise "the Docker image caps the JVM heap at 75%").
+  if grep -q 'org.mockserver.cli.Main' "$filepath" \
+     && ! grep -qE '"-XX:MaxRAMPercentage=75\.0"' "$filepath"; then
+    echo "FAIL: $df runs org.mockserver.cli.Main but is missing '-XX:MaxRAMPercentage=75.0' heap cap in ENTRYPOINT"
     errors=$((errors + 1))
   fi
 done
