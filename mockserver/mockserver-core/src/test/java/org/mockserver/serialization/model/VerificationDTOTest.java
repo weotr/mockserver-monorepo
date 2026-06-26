@@ -186,6 +186,58 @@ public class VerificationDTOTest {
     }
 
     @Test
+    public void shouldReturnTimeoutSetInConstructor() {
+        // given
+        Verification verification = verification()
+            .withRequest(request())
+            .withTimeout(5000L);
+
+        // when
+        VerificationDTO verificationDTO = new VerificationDTO(verification);
+
+        // then
+        assertThat(verificationDTO.getTimeout(), is(5000L));
+    }
+
+    @Test
+    public void shouldBuildObjectWithTimeout() {
+        // given
+        Verification verification = verification()
+            .withRequest(request())
+            .withTimeout(2500L);
+
+        // when
+        Verification builtVerification = new VerificationDTO(verification).buildObject();
+
+        // then
+        assertThat(builtVerification.getTimeout(), is(2500L));
+    }
+
+    @Test
+    public void shouldReturnTimeoutSetInSetter() {
+        // given
+        VerificationDTO verificationDTO = new VerificationDTO(verification());
+
+        // when
+        verificationDTO.setTimeout(1000L);
+
+        // then
+        assertThat(verificationDTO.getTimeout(), is(1000L));
+    }
+
+    @Test
+    public void shouldBuildObjectWithNullTimeout() {
+        // given
+        Verification verification = verification().withRequest(request());
+
+        // when
+        Verification builtVerification = new VerificationDTO(verification).buildObject();
+
+        // then
+        assertThat(builtVerification.getTimeout(), nullValue());
+    }
+
+    @Test
     public void shouldBuildObjectWithNullResponse() {
         // given
         HttpRequest request = request();

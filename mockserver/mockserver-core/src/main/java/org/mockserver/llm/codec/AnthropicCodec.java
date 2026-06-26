@@ -49,6 +49,22 @@ public class AnthropicCodec implements ProviderCodec {
 
         ArrayNode content = root.putArray("content");
 
+        // Thinking/reasoning block (prepended before the text block when reasoning is set).
+        // Anthropic encodes extended-thinking output as a leading
+        // {"type":"thinking","thinking":"...","signature":"..."} content block. Additive: absent
+        // unless Completion.reasoningText is set, so existing fixtures are unchanged.
+        String reasoningText = completion.getReasoningText();
+        boolean hasReasoning = reasoningText != null && !reasoningText.isEmpty();
+        if (hasReasoning) {
+            ObjectNode thinkingBlock = content.addObject();
+            thinkingBlock.put("type", "thinking");
+            thinkingBlock.put("thinking", reasoningText);
+            String signature = completion.getReasoningSignature();
+            if (signature != null && !signature.isEmpty()) {
+                thinkingBlock.put("signature", signature);
+            }
+        }
+
         // Text block (if text is non-null and non-empty)
         String text = completion.getText();
         boolean hasText = text != null && !text.isEmpty();
@@ -100,6 +116,18 @@ public class AnthropicCodec implements ProviderCodec {
         int outputTokens = completionUsage != null && completionUsage.getOutputTokens() != null ? completionUsage.getOutputTokens() : 0;
         usage.put("input_tokens", inputTokens);
         usage.put("output_tokens", outputTokens);
+        // Cached/cache-creation tokens are emitted only when set (non-null, non-zero) so existing
+        // fixtures stay byte-identical when these optional fields are unset. Native Anthropic keys.
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                usage.put("cache_read_input_tokens", cachedInputTokens);
+            }
+            Integer cacheCreationTokens = completionUsage.getCacheCreationTokens();
+            if (cacheCreationTokens != null && cacheCreationTokens != 0) {
+                usage.put("cache_creation_input_tokens", cacheCreationTokens);
+            }
+        }
 
         try {
             String json = OBJECT_MAPPER.writeValueAsString(root);
@@ -122,13 +150,53 @@ public class AnthropicCodec implements ProviderCodec {
         int inputTokens = completionUsage != null && completionUsage.getInputTokens() != null ? completionUsage.getInputTokens() : 0;
         int outputTokens = completionUsage != null && completionUsage.getOutputTokens() != null ? completionUsage.getOutputTokens() : 0;
 
-        // 1. message_start
+        // 1. message_start — mirror cached/cache-creation tokens into the message_start usage when
+        // set (non-null, non-zero), matching the non-streaming encode(). Omitted when unset so
+        // existing streaming fixtures stay byte-identical.
+        StringBuilder messageStartUsage = new StringBuilder();
+        messageStartUsage.append("{\"input_tokens\":").append(inputTokens).append(",\"output_tokens\":1");
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                messageStartUsage.append(",\"cache_read_input_tokens\":").append(cachedInputTokens);
+            }
+            Integer cacheCreationTokens = completionUsage.getCacheCreationTokens();
+            if (cacheCreationTokens != null && cacheCreationTokens != 0) {
+                messageStartUsage.append(",\"cache_creation_input_tokens\":").append(cacheCreationTokens);
+            }
+        }
+        messageStartUsage.append("}");
         String messageStartData = "{\"type\":\"message_start\",\"message\":{\"id\":\"" + messageId +
             "\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"" + escapeJson(modelName) +
-            "\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":" + inputTokens + ",\"output_tokens\":1}}}";
+            "\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":" + messageStartUsage + "}}";
         events.add(sseEvent().withEvent("message_start").withData(messageStartData));
 
         int contentIndex = 0;
+
+        // 2a. Thinking/reasoning content block (before the text block) when reasoning is set.
+        // Emits content_block_start (thinking), a thinking_delta with the text, an optional
+        // signature_delta, then content_block_stop. Additive — absent unless reasoningText is set.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            String thinkingStartData = "{\"type\":\"content_block_start\",\"index\":" + contentIndex +
+                ",\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}";
+            events.add(sseEvent().withEvent("content_block_start").withData(thinkingStartData));
+
+            String thinkingDeltaData = "{\"type\":\"content_block_delta\",\"index\":" + contentIndex +
+                ",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"" + escapeJson(reasoningText) + "\"}}";
+            events.add(sseEvent().withEvent("content_block_delta").withData(thinkingDeltaData));
+
+            String signature = completion.getReasoningSignature();
+            if (signature != null && !signature.isEmpty()) {
+                String signatureDeltaData = "{\"type\":\"content_block_delta\",\"index\":" + contentIndex +
+                    ",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"" + escapeJson(signature) + "\"}}";
+                events.add(sseEvent().withEvent("content_block_delta").withData(signatureDeltaData));
+            }
+
+            String thinkingStopData = "{\"type\":\"content_block_stop\",\"index\":" + contentIndex + "}";
+            events.add(sseEvent().withEvent("content_block_stop").withData(thinkingStopData));
+            contentIndex++;
+        }
 
         // 2. Text content (if present)
         String text = completion.getText();

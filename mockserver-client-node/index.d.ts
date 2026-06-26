@@ -10,7 +10,10 @@ export { mockServerClient, ClockStatus, GrpcMethod, GrpcService, KeysToMultiValu
 export { Llm, LlmMockBuilder, LlmConversationBuilder, LlmFailoverBuilder, TurnBuilder, Completion, ToolUse, Usage, StreamingPhysics, EmbeddingResponse, IsolationSource, Provider, Role } from './llm';
 export { default as llm } from './llm';
 export { mcpMock, McpMockBuilder, McpToolBuilder, McpResourceBuilder, McpPromptBuilder } from './mcpMockBuilder';
+export { a2aMock, A2aMockBuilder, A2aSkillBuilder, A2aTaskHandlerBuilder } from './a2aMockBuilder';
 export {
+  ChaosExperiment,
+  ChaosExperimentStage,
   CrossProtocolScenario,
   Expectation,
   ExpectationId,
@@ -63,6 +66,14 @@ export {
   OpenAPIExpectation,
   RampCurve,
   RequestDefinition,
+  SloComparator,
+  SloCriteria,
+  SloIndicator,
+  SloObjective,
+  SloObjectiveResult,
+  SloScope,
+  SloVerdict,
+  SloWindow,
   SseEvent,
   Times,
   TimeToLive,

@@ -509,6 +509,77 @@ module MockServer
     end
 
     # -------------------------------------------------------------------
+    # SRE control plane: SLO verification + chaos experiments
+    # -------------------------------------------------------------------
+
+    # Evaluate a set of service-level objectives (SLOs) over a window
+    # (PUT /mockserver/verifySLO).
+    #
+    # The server encodes the verdict in the HTTP status: 200 for PASS or
+    # INCONCLUSIVE, 406 for FAIL, 400 for malformed criteria or when SLO tracking
+    # is disabled (+sloTrackingEnabled=false+). The decoded verdict Hash carries
+    # the overall +result+ and the per-objective +objectiveResults+ so callers can
+    # inspect why an SLO failed.
+    #
+    # +criteria+ may be any Hash already shaped to the +SloCriteria+ JSON contract
+    # (+name+, +window+, +minimumSampleCount+, +upstreamHosts+,
+    # +objectives+[{+sli+, +comparator+, +threshold+, +scope+}]) or an object that
+    # responds to +to_h+.
+    #
+    # @param criteria [Hash, #to_h] the SLO criteria
+    # @return [Hash] the SLO verdict (result PASS or INCONCLUSIVE)
+    # @raise [VerificationError] if the verdict is FAIL (HTTP 406)
+    # @raise [Error] if criteria are malformed or SLO tracking is disabled (HTTP 400),
+    #   or on any other failure
+    def verify_slo(criteria)
+      payload = criteria.respond_to?(:to_h) ? criteria.to_h : criteria
+      body = JSON.generate(payload)
+      status, response_body = request('PUT', '/mockserver/verifySLO', body)
+      if status == 406
+        raise VerificationError, (response_body && !response_body.empty? ? response_body : 'SLO verdict: FAIL')
+      end
+      if status == 400
+        raise Error, 'Invalid SLO criteria (or SLO tracking disabled — set ' \
+                     "sloTrackingEnabled=true on the server): #{response_body}"
+      end
+      if status >= 400
+        raise Error, "Failed to verify SLO (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # Start a scheduled multi-stage chaos experiment
+    # (PUT /mockserver/chaosExperiment).
+    #
+    # The experiment is an ordered sequence of stages, each applying
+    # service-scoped chaos profiles to one or more hosts for a duration; stages
+    # progress automatically. Only one experiment may be active at a time;
+    # starting a new one stops the previous one.
+    #
+    # +experiment+ may be any Hash already shaped to the +ChaosExperiment+ JSON
+    # contract (+name+, +loop+, +stages+[{+durationMillis+, +profiles+{host:
+    # profile}}]) or an object that responds to +to_h+.
+    #
+    # @param experiment [Hash, #to_h] the experiment definition
+    # @return [Hash] the started status, e.g. { "status" => "started", "name" => ... }
+    # @raise [Error] if the experiment definition is invalid or chaos is disabled
+    #   (HTTP 400/403), or on any other failure
+    def start_chaos_experiment(experiment)
+      payload = experiment.respond_to?(:to_h) ? experiment.to_h : experiment
+      body = JSON.generate(payload)
+      status, response_body = request('PUT', '/mockserver/chaosExperiment', body)
+      if status == 403
+        raise Error, 'Chaos experiment rejected (status=403): chaos is disabled on the server'
+      end
+      if status >= 400
+        raise Error, "Failed to start chaos experiment (status=#{status}): #{response_body}"
+      end
+
+      response_body && !response_body.empty? ? JSON.parse(response_body) : {}
+    end
+
+    # -------------------------------------------------------------------
     # Stateful scenarios (state machine control plane)
     # -------------------------------------------------------------------
 

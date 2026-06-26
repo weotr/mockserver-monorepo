@@ -61,6 +61,55 @@ public class ConfigurationDTOTest {
     }
 
     @Test
+    public void shouldRoundTripDataPlaneAuthenticationFields() {
+        Configuration original = configuration()
+            .dataPlaneAuthenticationRequired(true)
+            .dataPlaneBasicAuthenticationUsername("user")
+            .dataPlaneBasicAuthenticationPassword("secret")
+            .dataPlaneBasicAuthenticationRealm("my-realm")
+            .dataPlaneBearerAuthenticationToken("tok-123")
+            .dataPlaneApiKeyAuthenticationHeader("X-API-Key")
+            .dataPlaneApiKeyAuthenticationValue("key-abc");
+
+        ConfigurationDTO dto = new ConfigurationDTO(original);
+
+        assertThat(dto.getDataPlaneAuthenticationRequired(), is(true));
+        assertThat(dto.getDataPlaneBasicAuthenticationUsername(), is("user"));
+        assertThat(dto.getDataPlaneBasicAuthenticationPassword(), is("secret"));
+        assertThat(dto.getDataPlaneBasicAuthenticationRealm(), is("my-realm"));
+        assertThat(dto.getDataPlaneBearerAuthenticationToken(), is("tok-123"));
+        assertThat(dto.getDataPlaneApiKeyAuthenticationHeader(), is("X-API-Key"));
+        assertThat(dto.getDataPlaneApiKeyAuthenticationValue(), is("key-abc"));
+
+        Configuration rebuilt = dto.buildObject();
+
+        assertThat(rebuilt.dataPlaneAuthenticationRequired(), is(true));
+        assertThat(rebuilt.dataPlaneBasicAuthenticationUsername(), is("user"));
+        assertThat(rebuilt.dataPlaneBasicAuthenticationPassword(), is("secret"));
+        assertThat(rebuilt.dataPlaneBasicAuthenticationRealm(), is("my-realm"));
+        assertThat(rebuilt.dataPlaneBearerAuthenticationToken(), is("tok-123"));
+        assertThat(rebuilt.dataPlaneApiKeyAuthenticationHeader(), is("X-API-Key"));
+        assertThat(rebuilt.dataPlaneApiKeyAuthenticationValue(), is("key-abc"));
+    }
+
+    @Test
+    public void shouldApplyOnlyNonNullDataPlaneFieldsToTarget() {
+        Configuration target = configuration()
+            .dataPlaneAuthenticationRequired(true)
+            .dataPlaneBearerAuthenticationToken("original-token");
+
+        // a fresh DTO with only the realm set must not overwrite the existing token (null fields skipped)
+        ConfigurationDTO dto = new ConfigurationDTO();
+        dto.setDataPlaneBasicAuthenticationRealm("changed-realm");
+
+        dto.applyTo(target);
+
+        assertThat(target.dataPlaneAuthenticationRequired(), is(true));
+        assertThat(target.dataPlaneBearerAuthenticationToken(), is("original-token"));
+        assertThat(target.dataPlaneBasicAuthenticationRealm(), is("changed-realm"));
+    }
+
+    @Test
     public void shouldCreateDTOFromConfiguration() {
         Configuration config = configuration()
             .logLevel(Level.ERROR)
@@ -100,18 +149,21 @@ public class ConfigurationDTOTest {
         Configuration original = configuration()
             .dashboardAnalyticsEnabled(false)
             .dashboardAnalyticsEndpoint("https://analytics.example.com")
-            .dashboardAnalyticsKey("phc_test_key");
+            .dashboardAnalyticsKey("phc_test_key")
+            .dashboardAnalyticsDistribution("docker");
 
         ConfigurationDTO dto = new ConfigurationDTO(original);
         assertThat(dto.getDashboardAnalyticsEnabled(), is(false));
         assertThat(dto.getDashboardAnalyticsEndpoint(), is("https://analytics.example.com"));
         assertThat(dto.getDashboardAnalyticsKey(), is("phc_test_key"));
+        assertThat(dto.getDashboardAnalyticsDistribution(), is("docker"));
 
         String json = new org.mockserver.serialization.ConfigurationSerializer(new org.mockserver.logging.MockServerLogger())
             .serialize(original);
         assertThat(json, containsString("dashboardAnalyticsEnabled"));
         assertThat(json, containsString("dashboardAnalyticsEndpoint"));
         assertThat(json, containsString("dashboardAnalyticsKey"));
+        assertThat(json, containsString("dashboardAnalyticsDistribution"));
 
         Configuration rebuilt = new org.mockserver.serialization.ConfigurationSerializer(new org.mockserver.logging.MockServerLogger())
             .deserialize(json);
@@ -119,6 +171,7 @@ public class ConfigurationDTOTest {
         assertThat(rebuilt.dashboardAnalyticsEnabled(), is(false));
         assertThat(rebuilt.dashboardAnalyticsEndpoint(), is("https://analytics.example.com"));
         assertThat(rebuilt.dashboardAnalyticsKey(), is("phc_test_key"));
+        assertThat(rebuilt.dashboardAnalyticsDistribution(), is("docker"));
     }
 
     @Test
@@ -364,7 +417,14 @@ public class ConfigurationDTOTest {
         "logEventListener",
         "binaryProxyListener",
         "rebuildTLSContext",
-        "rebuildServerTLSContext"
+        "rebuildServerTLSContext",
+        // ringBufferSize() is a DERIVED, rounded-to-the-next-power-of-two EFFECTIVE getter (the
+        // disruptor requires a power-of-two ring), not a faithfully round-trippable raw setting:
+        // ringBufferSize(N) then ringBufferSize() returns nextPowerOfTwo(N) >= N, so value-equality
+        // round-trip cannot hold. It IS carried through the DTO (constructor/applyTo/buildObject) for
+        // observability/parity — see ConfigurationDTO — but is excluded from this value-equality drift
+        // guard for the rounding reason above.
+        "ringBufferSize"
     ));
 
     @Test

@@ -221,6 +221,33 @@ Structured-output validation against a JSON Schema works on **both sides** of a 
 
 When the opt-in `mockserver.llmInferUsageEnabled` flag is set, `HttpLlmResponseActionHandler.withInferredUsageIfEnabled(...)` returns a **per-request shallow copy** of the completion carrying approximate `prompt_tokens` / `completion_tokens` for a mocked completion that omits `usage`, on both the non-streaming and streaming paths, **before** the codec encodes. The shared expectation `Completion` is never mutated, so the request-dependent prompt estimate is recomputed every request (no stale caching, no concurrent-write race). The prompt estimate comes from decoding the inbound request with the provider codec (`ProviderCodec.decode`); the completion estimate from the response text and tool-call arguments. It is **off by default** so existing responses are unchanged (an absent `usage` continues to encode as zeros) and a completion that already declares a non-zero `usage` is never overwritten. Decoding failures are fail-soft (prompt estimate degrades to 0, never an error). This is independent of `HttpLlmResponseActionHandler.estimateTokenCount(...)`, the existing rough character estimate that backs the token-based chaos quota, which is unchanged.
 
+## Cached/reasoning token usage and reasoning content encoding
+
+The `Usage` optional fields and the `Completion` reasoning fields are **encoded** by every chat codec onto the response wire — additively, and only when set, so a completion that omits them encodes byte-identically to before (the golden fixtures are unchanged).
+
+**Usage token details** — emitted only when the corresponding `Usage` field is non-null and non-zero, under each provider's native key (the same keys the runtime-LLM clients *decode*, so encode/decode are symmetric):
+
+| Provider(s) | `cachedInputTokens` key | `cacheCreationTokens` key | `reasoningTokens` key |
+|-------------|-------------------------|---------------------------|-----------------------|
+| ANTHROPIC / BEDROCK | `usage.cache_read_input_tokens` | `usage.cache_creation_input_tokens` | — (no native field) |
+| OPENAI / AZURE_OPENAI | `usage.prompt_tokens_details.cached_tokens` | — | `usage.completion_tokens_details.reasoning_tokens` |
+| OPENAI_RESPONSES | `usage.input_tokens_details.cached_tokens` | — | `usage.output_tokens_details.reasoning_tokens` |
+| GEMINI | `usageMetadata.cachedContentTokenCount` | — | `usageMetadata.thoughtsTokenCount` |
+| OLLAMA | — (no native field) | — | — (no native field) |
+
+The Anthropic `cache_read`/`cache_creation` keys are mirrored into the streaming `message_start` usage; the OpenAI Responses details into the `response.completed` usage; the Gemini counts into the final streaming chunk's `usageMetadata`. (Bedrock and Azure inherit the Anthropic/OpenAI behaviour by delegation.)
+
+**Reasoning ("thinking") content** — `Completion.reasoningText` (plus optional `reasoningSignature` for Anthropic redaction) encodes a provider-correct reasoning block **before** the visible text block, on both paths, absent unless set:
+
+| Provider | Non-streaming shape | Streaming events |
+|----------|--------------------|------------------|
+| ANTHROPIC / BEDROCK | leading `{"type":"thinking","thinking":…,"signature":…}` content block | `content_block_start`(thinking) → `thinking_delta` → optional `signature_delta` → `content_block_stop`, at index 0 before the text block |
+| OPENAI_RESPONSES | leading `{"type":"reasoning","summary":[{"type":"summary_text","text":…}]}` output item | `response.output_item.added`(reasoning) → `response.reasoning_summary_part.added` → `response.reasoning_summary_text.delta`/`.done` → `…part.done` → `output_item.done` |
+| GEMINI | leading `{"text":…,"thought":true}` part | a thought chunk (`parts:[{text,thought:true}]`) before the text chunks |
+| OLLAMA | `message.thinking` sibling string | a leading chunk with `message.thinking` set |
+
+OpenAI Chat Completions has no reasoning-content representation on the response wire (reasoning is summarised only via the Responses API), so `reasoningText` is not encoded for `OPENAI`/`AZURE_OPENAI`. None of this touches the request matcher — only response encoding.
+
 ## Adversarial-response harness
 
 `AdversarialResponseLibrary` (`org.mockserver.llm.adversarial`) is a curated catalog of hostile/malformed *responses* an agent might receive from a compromised tool or jailbroken model — prompt injection, jailbreak persona-swaps, data-exfiltration requests, malformed/truncated JSON, an empty response, and an over-long repetition. The `mock_adversarial_llm_response` MCP tool mocks a chosen payload as the provider-correct LLM response so you can test that your agent **resists** it. The payloads are short, well-known benign test fixtures (not working exploits) — a defensive testing aid — and generation is deterministic (each id maps to fixed text).
@@ -318,6 +345,8 @@ classDiagram
         +streamingPhysics: StreamingPhysics
         +outputSchema: String
         +enforceOutputSchema: Boolean
+        +reasoningText: String
+        +reasoningSignature: String
     }
     class ToolUse {
         +id: String
@@ -638,7 +667,8 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `llm/analysis/LlmOptimisationReportBuilder.java` | Builds the report from `FORWARDED_REQUEST` log entries via `ProviderCodecRegistry` + `LlmProviderSniffer` + `LlmPricing` + `FixtureRedactor` |
 | `llm/analysis/OptimisationSignals.java` | Six deterministic signal detectors (see below); pure — no network, no LLM |
 | `llm/analysis/LlmOptimisationBriefRenderer.java` | Renders an `LlmOptimisationReport` to a pre-framed Markdown brief |
-| `llm/analysis/LlmOptimisationReportService.java` | Façade: `build(pairs, filter)` + `renderBrief(result)` — used by both the REST handler and the MCP tool |
+| `llm/analysis/LlmOptimisationCsvRenderer.java` | Renders an `LlmOptimisationReport` to CSV (per-call rows + totals/verdict summary, RFC-4180 escaped) |
+| `llm/analysis/LlmOptimisationReportService.java` | Façade: `build(pairs, filter)` + `renderBrief(result)` + `renderCsv(result)` — used by both the REST handler and the MCP tool; also pushes the verdict snapshot to `Metrics` for the optimisation gauges |
 
 ## LLM Optimisation Export
 
@@ -676,14 +706,29 @@ The per-call `latencyMs` is the measured upstream round-trip time. It is carried
 
 | Query parameter | Values | Default |
 |-----------------|--------|---------|
-| `format` | `json` \| `markdown` | `json` |
+| `format` | `json` \| `markdown` \| `csv` | `json` |
 | `session` | grouping key | all captured LLM traffic |
 | `host` | upstream hostname | all hosts |
 | `provider` | `OPENAI` \| `ANTHROPIC` \| `GEMINI` \| `BEDROCK` \| `AZURE_OPENAI` \| `OLLAMA` | all providers |
 
+An unrecognised `format` returns `400` with `format must be one of: json, markdown, csv`. The `csv` format is served as `text/csv; charset=utf-8`.
+
 CORS is enabled on this endpoint so the dashboard UI can call it even when the dashboard and control plane are on different origins.
 
-**MCP tool** — `export_optimisation_report` (registered in `McpToolRegistry.registerExportOptimisationReport`), same parameters as the REST endpoint. Returns the brief text or JSON bundle as a tool result.
+**MCP tool** — `export_optimisation_report` (registered in `McpToolRegistry.registerExportOptimisationReport`), same parameters as the REST endpoint (`format` accepts `markdown` (default), `json`, or `csv`). Returns the brief text (`brief`), JSON bundle (`report`), or CSV text (`csv`) as a tool result.
+
+### CSV format
+
+`format=csv` is served by `LlmOptimisationCsvRenderer` (mirroring the structure of `LlmOptimisationBriefRenderer`). It is intended for spreadsheets and data pipelines: deterministic ordering, RFC-4180 escaping (a field containing a comma, double quote, CR, or LF is wrapped in double quotes with embedded quotes doubled). The output has two sections separated by a blank line:
+
+1. **Per-call rows** — header `index,provider,model,input_tokens,output_tokens,cached_input_tokens,reasoning_tokens,estimated_cost_usd,cost_is_estimated,latency_ms,tool_calls,finish_reason`, one row per captured `Call`.
+2. **Totals/verdict summary** — header `section,metric,value`, carrying the aggregate `Totals` (`call_count`, token totals, `estimated_cost_usd`, `total_latency_ms`, `tool_call_count`, `cache_hit_ratio`, `one_shot_rate`, `retry_call_count`) and the headline `Verdict` (`grade`, `total_estimated_saving_usd`, `total_wasted_input_tokens`, `saving_fraction_of_spend`, severity counts).
+
+An empty report renders the per-call header row with no data rows, followed by the totals section with zeros — always a valid, header-bearing CSV. The CSV is additive to (not a substitute for) the JSON bundle, so unlike the JSON shape it is not a frozen wire contract.
+
+### Optimisation verdict Prometheus gauges
+
+Three single global Prometheus gauges expose the latest report's headline verdict/totals — `mock_server_llm_estimated_waste_usd` (from `verdict.totalEstimatedSavingUsd`), `mock_server_llm_cache_hit_ratio` (from `totals.cacheHitRatio`), and `mock_server_llm_one_shot_rate` (from `totals.oneShotRate`). They read a cached snapshot that `LlmOptimisationReportService.build(...)` pushes on every build, so they reflect the most-recently-built report (0 until one is built, and after a reset). See [metrics.md → LLM Optimisation Verdict Gauges](metrics.md#llm-optimisation-verdict-gauges) for the source-of-truth rationale and OTLP mirroring.
 
 **Dashboard** — the LLM Optimise screen (`OptimiseView.tsx`, the **LLM Optimise** nav tab, positioned immediately after **Chaos**) fetches `format=json` for display and `format=markdown` for the "Copy optimisation brief" and "Download bundle" buttons.
 

@@ -198,7 +198,36 @@ bk build cancel {build_number} -p {pipeline} -y
 bk build rebuild {build_number} -p {pipeline} -y
 ```
 
-### Step 10: Classify Error
+### Step 10: Confirm Flaky-vs-Real
+
+If the failure looks timing/ordering/port/resource-related (e.g. `Timeout`,
+`Connection refused`/`BindException`, intermittent assertion on order or
+timing), re-run the single failing test (or check recent builds of the same
+commit) to confirm intermittency BEFORE classifying it real-vs-flaky:
+
+```bash
+# Re-run only the failing build (does NOT change the commit under test)
+bk build rebuild {build_number} -p {pipeline} -y
+
+# Or check whether other builds of the SAME commit passed/failed
+TOKEN=$(bk auth token)
+curl -sH "Authorization: Bearer $TOKEN" \
+  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/{pipeline}/builds?commit={commit}&per_page=10" \
+  | jq '.[] | {number,state,created_at}'
+```
+
+If it passes on re-run (or other builds of the same commit passed), classify it
+`FLAKY` and set `reproduced: false`. If it fails again deterministically, it is a
+real failure — set `reproduced: true`.
+
+### Step 11: Enumerate Competing Hypotheses
+
+Before concluding a root cause, enumerate the competing hypotheses and the
+evidence that rules each out (correlation is not causation — a commit landing
+just before the failure is not proof it caused it). Record the survivors and the
+ruled-out alternatives in `root_cause.alternative_hypotheses`.
+
+### Step 12: Classify Error
 
 Match the identified root cause against common failure patterns:
 
@@ -210,11 +239,12 @@ Match the identified root cause against common failure patterns:
 | `Connection refused` | `NETWORK_ERROR` | MAY_BE_SYSTEMIC |
 | `docker: Error` | `DOCKER_ERROR` | ISOLATED |
 | `Timeout` | `TIMEOUT` | MAY_BE_SYSTEMIC |
+| Passes on re-run / intermittent across builds of same commit | `FLAKY` | ISOLATED (intermittent) |
 | Agent did not connect | `AGENT_ERROR` | SYSTEMIC |
 | Build `skipped` | `AUTO_SKIPPED` | NORMAL (newer commit superseded) |
 | Build `scheduled` (stuck) | `QUEUE_STARVATION` | SYSTEMIC |
 
-### Step 11: Check for Already-Pushed Fixes
+### Step 13: Check for Already-Pushed Fixes
 
 **CRITICAL:** Before recommending a fix, check whether the root cause has already been addressed:
 
@@ -263,12 +293,16 @@ Return this structure in your final message:
     "started_at": "<ISO8601>",
     "finished_at": "<ISO8601>"
   },
+  "reproduced": true,
   "root_cause": {
     "summary": "<one-line description>",
     "detail": "<technical explanation>",
     "error_excerpt": "<relevant log lines>",
-    "failure_category": "<category from table above or null>",
-    "scope": "SYSTEMIC|ISOLATED|MAY_BE_SYSTEMIC"
+    "failure_category": "<category from table above (e.g. FLAKY) or null>",
+    "scope": "SYSTEMIC|ISOLATED|MAY_BE_SYSTEMIC",
+    "alternative_hypotheses": [
+      { "hypothesis": "<competing explanation>", "ruled_out_by": "<evidence that excludes it>" }
+    ]
   },
   "fix_status": "OPEN|ALREADY_FIXED",
   "fix_commit": "<sha or null>",
@@ -276,6 +310,7 @@ Return this structure in your final message:
   "github_actions": [
     { "run_id": 0, "workflow": "<name>", "conclusion": "failure|success", "root_cause": "<summary or null>" }
   ],
+  "commands_run": ["<exact bk / curl / git command used to gather evidence>"],
   "recommended_fix": "<actionable steps, null if already fixed>"
 }
 ```
@@ -287,6 +322,8 @@ After returning the JSON, provide a brief summary (2-3 lines).
 - Always investigate the deepest failure first (root cause in logs, not surface symptoms)
 - Build artifacts often contain more detailed logs than the console output
 - For recurring failures, check recent commits and pipeline definition changes
-- **Always run Step 11** before reporting — check if the issue was already fixed
+- **Always run Step 13** before reporting — check if the issue was already fixed
 - When builds are stuck/scheduled, check agent availability across ALL pipelines, not just the one being investigated
+- Set `reproduced: true` only when the failure recurs deterministically (failed again on re-run, or every build of the commit failed); set `reproduced: false` for `FLAKY` failures that passed on re-run
+- Always populate `commands_run` with the exact commands used so the conclusion can be replayed by the reader
 - The `bk` CLI uses `-p {pipeline}` for pipeline selection, NOT `--org` — the org is set via `bk auth switch`

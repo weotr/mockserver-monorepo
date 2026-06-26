@@ -16,6 +16,7 @@ public class Verification extends ObjectWithJsonToString {
     private VerificationTimes times = VerificationTimes.atLeast(1);
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Disposition disposition;
+    private Long timeout;
 
     public static Verification verification() {
         return new Verification();
@@ -81,6 +82,29 @@ public class Verification extends ObjectWithJsonToString {
      */
     public Verification withDisposition(Disposition disposition) {
         this.disposition = disposition;
+        return this;
+    }
+
+    public Long getTimeout() {
+        return timeout;
+    }
+
+    /**
+     * Enable server-side eventual verification: when set to a positive number of milliseconds the
+     * server waits (asynchronously) and re-evaluates this verification until it passes or the timeout
+     * elapses, rather than evaluating the event log once and immediately accepting/rejecting. The
+     * server returns success as soon as the verification is satisfied, or the last failure message when
+     * the timeout elapses. {@code null}, absent, or {@code 0} preserves the original single-shot
+     * behaviour. The accepted value is capped server-side (see
+     * {@code MockServerEventLog.MAX_VERIFY_TIMEOUT_MILLIS}) so a client cannot tie up server resources
+     * indefinitely. The wait is fully asynchronous and never holds a Netty I/O thread.
+     *
+     * @param timeout the maximum time, in milliseconds, to wait for the verification to pass, or
+     *                {@code null}/{@code 0} for the original single-shot behaviour
+     * @return this verification for chaining
+     */
+    public Verification withTimeout(Long timeout) {
+        this.timeout = timeout;
         return this;
     }
 }

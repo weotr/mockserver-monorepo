@@ -70,8 +70,12 @@ public class OpenAPIRequestValidatorTest {
 
     @Test
     public void shouldMatchPathWithTemplateParameters() {
+        // showPetById declares a required X-Request-ID header parameter; supply it so the request is
+        // valid and this test continues to assert template-path matching (not parameter validation)
         List<String> errors = OpenAPIRequestValidator.validate(SPEC,
-            request("/pets/123").withMethod("GET"),
+            request("/pets/123")
+                .withMethod("GET")
+                .withHeader("X-Request-ID", "3fa85f64-5717-4562-b3fc-2c963f66afa6"),
             logger
         );
         assertThat(errors, is(empty()));
@@ -154,6 +158,152 @@ public class OpenAPIRequestValidatorTest {
         // the message names what was being validated and the exception type, and never echoes a bare "null"
         assertThat(errors.get(0), containsString("OpenAPI request validation failed"));
         assertThat(errors.get(0), not(endsWith(": null")));
+    }
+
+    // ---- parameter validation (path / query / header / cookie) ----
+
+    private static final String PARAMS = "org/mockserver/openapi/openapi_parameters_example.yaml";
+
+    @Test
+    public void shouldPassWhenAllRequiredParametersPresentAndValid() {
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/42")
+                .withMethod("GET")
+                .withQueryStringParameter("filter", "active")
+                .withHeader("X-Trace-Id", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+                .withCookie("session", "abc123"),
+            logger
+        );
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldFailForMissingRequiredQueryParameter() {
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/42")
+                .withMethod("GET")
+                .withHeader("X-Trace-Id", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+                .withCookie("session", "abc123"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("required query parameter"), containsString("filter"), containsString("missing"))));
+    }
+
+    @Test
+    public void shouldFailForMissingRequiredHeaderParameter() {
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/42")
+                .withMethod("GET")
+                .withQueryStringParameter("filter", "active")
+                .withCookie("session", "abc123"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("required header parameter"), containsString("X-Trace-Id"), containsString("missing"))));
+    }
+
+    @Test
+    public void shouldFailForMissingRequiredCookieParameter() {
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/42")
+                .withMethod("GET")
+                .withQueryStringParameter("filter", "active")
+                .withHeader("X-Trace-Id", "3fa85f64-5717-4562-b3fc-2c963f66afa6"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("required cookie parameter"), containsString("session"), containsString("missing"))));
+    }
+
+    @Test
+    public void shouldFailForSchemaInvalidPathParameter() {
+        // itemId schema is integer; a non-numeric path value must fail schema validation
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/not-a-number")
+                .withMethod("GET")
+                .withQueryStringParameter("filter", "active")
+                .withHeader("X-Trace-Id", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+                .withCookie("session", "abc123"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("path parameter"), containsString("itemId"), containsString("validation error"))));
+    }
+
+    @Test
+    public void shouldFailForSchemaInvalidQueryParameter() {
+        // page schema is integer with minimum 1; a non-numeric value must fail schema validation
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/42")
+                .withMethod("GET")
+                .withQueryStringParameter("filter", "active")
+                .withQueryStringParameter("page", "not-a-number")
+                .withHeader("X-Trace-Id", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+                .withCookie("session", "abc123"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("query parameter"), containsString("page"), containsString("validation error"))));
+    }
+
+    @Test
+    public void shouldPassWhenOptionalParameterAbsent() {
+        // 'page' is optional; omitting it is valid as long as required params are present
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/items/42")
+                .withMethod("GET")
+                .withQueryStringParameter("filter", "active")
+                .withHeader("X-Trace-Id", "3fa85f64-5717-4562-b3fc-2c963f66afa6")
+                .withCookie("session", "abc123"),
+            logger
+        );
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldNotFailForArrayQueryParameterSerialisedInNonJsonStyle() {
+        // status is an array parameter; supplied comma-delimited (OpenAPI default form/explode style)
+        // the value is not JSON-shaped, so the schema check is skipped rather than false-positiving
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/search")
+                .withMethod("GET")
+                .withQueryStringParameter("status", "available,pending")
+                .withHeader("X-Tags", "red,green"),
+            logger
+        );
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldNotFailForArrayHeaderParameterSerialisedInNonJsonStyle() {
+        // X-Tags is an array header parameter supplied as a comma-delimited (simple style) value
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/search")
+                .withMethod("GET")
+                .withQueryStringParameter("status", "available")
+                .withHeader("X-Tags", "red,green,blue"),
+            logger
+        );
+        assertThat(errors, is(empty()));
+    }
+
+    @Test
+    public void shouldStillEnforceRequiredPresenceForArrayParameter() {
+        // skipping the schema check for non-JSON-shaped array values must NOT skip required-presence:
+        // omitting the required 'status' array query parameter is still an error
+        List<String> errors = OpenAPIRequestValidator.validate(PARAMS,
+            request("/search")
+                .withMethod("GET")
+                .withHeader("X-Tags", "red"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("required query parameter"), containsString("status"), containsString("missing"))));
+    }
+
+    @Test
+    public void shouldFailForMissingRequiredPathParameterViaPetstoreHeader() {
+        // petstore showPetById declares a required X-Request-ID header; omitting it is an error
+        List<String> errors = OpenAPIRequestValidator.validate(SPEC,
+            request("/pets/123").withMethod("GET"),
+            logger
+        );
+        assertThat(errors, hasItem(allOf(containsString("required header parameter"), containsString("X-Request-ID"), containsString("missing"))));
     }
 
     @Test

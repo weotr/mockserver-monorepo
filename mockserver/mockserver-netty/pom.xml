@@ -172,6 +172,78 @@
 
     <build>
         <plugins>
+            <!-- Forked-charset regression guard for issue #2347 (dashboard white page).
+                 The dashboard Content-Length must be the UTF-8 byte count of the body (which is
+                 always written to the wire as UTF-8). A revert to content.getBytes() (JVM default
+                 charset) only differs from getBytes(UTF_8) on a NON-UTF-8-default host, so it is
+                 invisible at runtime on a UTF-8-default CI host. To make the regression catchable in
+                 CI regardless of the host locale we run ONE focused test class
+                 (DashboardContentLengthCharsetForkTest) in a dedicated fork whose default charset is
+                 forced to ISO-8859-1; under that charset a getBytes() revert yields the wrong (ISO)
+                 length and the test turns RED.
+
+                 - The DEFAULT surefire execution is reconfigured to EXCLUDE this class so it does not
+                   run under the normal (UTF-8) charset (where it would vacuously skip) and does not
+                   run twice. All other inherited config (the @{argLine}, systemPropertyVariables,
+                   locale, listener, timeouts) is inherited from the parent surefire <configuration>.
+                 - A new dashboard-charset-fork-test execution runs ONLY this class with a fresh fork
+                   (forkCount=1, reuseForks=false) and -Dfile.encoding=ISO-8859-1
+                   -Dsun.jnu.encoding=ISO-8859-1 appended AFTER the inherited @{argLine}
+                   (last -D wins, so the override beats any inherited file.encoding).
+
+                 On Java 17 (the project floor), and on Java 18+ builds that still honour an explicit
+                 non-UTF-8 file.encoding, the forced charset takes effect and the guard runs RED on a
+                 regression. On any JVM where the override is ignored and Charset.defaultCharset()
+                 stays UTF-8 (JEP 400 behaviour), the test SKIPS itself (org.junit.Assume) rather than
+                 false-passing; the host-dependent DashboardHandlerTest remains the backstop there. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <executions>
+                    <!-- reconfigure the inherited default execution to exclude the forked-charset
+                         class (per-execution includes/excludes replace, not merge, so the inherited
+                         **/*Test.java include and **/*IntegrationTest.java exclude are restated). -->
+                    <execution>
+                        <id>default-test</id>
+                        <configuration>
+                            <includes>
+                                <include>**/*Test.java</include>
+                            </includes>
+                            <excludes>
+                                <exclude>**/*IntegrationTest.java</exclude>
+                                <exclude>**/DashboardContentLengthCharsetForkTest.java</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                    <!-- run ONLY the forked-charset guard, in a fresh fork forced to a non-UTF-8
+                         default charset (ISO-8859-1). -->
+                    <execution>
+                        <id>dashboard-charset-fork-test</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                        <configuration>
+                            <includes>
+                                <include>**/DashboardContentLengthCharsetForkTest.java</include>
+                            </includes>
+                            <excludes combine.self="override"/>
+                            <forkCount>1</forkCount>
+                            <reuseForks>false</reuseForks>
+                            <!-- Append the charset override AFTER the inherited @{argLine} (jacoco agent
+                                 + locale). The order matters: the last -Dfile.encoding on the command
+                                 line wins, so it MUST stay after @{argLine} — do not move it before, or
+                                 an inherited file.encoding=UTF-8 would win and silently disable the
+                                 guard. On Java 17 this forces Charset.defaultCharset() to ISO-8859-1;
+                                 on any JVM that ignores the override (JEP 400) the test skips itself. -->
+                            <argLine>@{argLine} -Dfile.encoding=ISO-8859-1 -Dsun.jnu.encoding=ISO-8859-1 -Duser.language=en -Duser.country=GB -Dmockserver.testOutput=${mockserver.testOutput} ${mockserver.testArgLine}</argLine>
+                            <!-- never fail the build if this is the only execution targeted (e.g. a
+                                 developer running -Dtest pointed elsewhere) -->
+                            <failIfNoTests>false</failIfNoTests>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <!-- make jar executable -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

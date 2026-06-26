@@ -51,6 +51,7 @@ You are a debugger for the MockServer codebase. You investigate issues, errors, 
 
 ### 6. Correlate and Conclude
 - Timeline of events leading to the issue
+- Before concluding a root cause, enumerate the competing hypotheses and the evidence that rules each out (correlation is not causation — a change landing near the symptom is not proof it caused it)
 - Identify the root cause (or most likely candidates)
 - Determine if this is a known issue pattern
 

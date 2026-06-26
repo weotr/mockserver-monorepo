@@ -27,8 +27,15 @@ import java.util.concurrent.TimeUnit;
  *     <li>On saturation (per-key idle limit reached) {@link #release(String, Channel)} returns
  *     {@code false} so the caller closes the surplus channel rather than blocking or failing.</li>
  *     <li>Idle channels are evicted after {@code idleTimeoutMillis} of inactivity via a one-shot
- *     close scheduled on the channel's own event loop (cancelled if the channel is re-acquired).</li>
+ *     close scheduled on the channel's own event loop (cancelled if the channel is re-acquired) —
+ *     this reaper applies equally to keep-warm-retained channels, so a long-idle warm pool drains.</li>
  * </ul>
+ * The opt-in keep-warm mode (off by default) only RAISES the per-key idle ceiling from
+ * {@code maxIdleConnectionsPerKey} to {@code maxTotalConnectionsPerKey} so that, under sustained
+ * high-rate low-latency forwarding, channels are retained on release instead of being closed back
+ * down to the idle cap — eliminating the connection churn that otherwise caps single-instance
+ * forward/inject throughput. With keep-warm off the close decision is byte-identical to the
+ * historical behaviour.
  * The pool itself holds no event-loop threads and performs no I/O; it is a thread-safe index of
  * idle channels. All mutation of the per-key deques is guarded by the deque's own monitor.
  */
@@ -45,6 +52,24 @@ class HttpForwardConnectionPool {
      */
     private final long idleTimeoutMillis;
 
+    /**
+     * Opt-in keep-warm retention (default off). When false the pool behaves exactly as it always has:
+     * {@link #release(String, Channel)} caps the idle set at {@link #maxIdleConnectionsPerKey} and the
+     * caller closes any surplus. When true, surplus channels are RETAINED on release (up to
+     * {@link #maxTotalConnectionsPerKey}) instead of being closed, so a sustained high-rate,
+     * low-latency forward/inject workload accumulates a warm keep-alive set sized to its offered
+     * concurrency and stops churning fresh connections. The acquire path is byte-identical in both
+     * modes; only the release-time close decision changes.
+     */
+    private final boolean keepAlive;
+
+    /**
+     * Per-key ceiling on retained idle channels when {@link #keepAlive} is on. Channels offered beyond
+     * this ceiling are rejected (the caller closes them), bounding the warm set so it cannot grow
+     * without limit. Ignored entirely when {@link #keepAlive} is off.
+     */
+    private final int maxTotalConnectionsPerKey;
+
     private final Map<String, Deque<Channel>> idleChannels = new ConcurrentHashMap<>();
 
     /**
@@ -55,8 +80,26 @@ class HttpForwardConnectionPool {
     private static final AttributeKey<Boolean> CLOSE_LISTENER_ADDED = AttributeKey.valueOf("POOL_CLOSE_LISTENER_ADDED");
 
     HttpForwardConnectionPool(int maxIdleConnectionsPerKey, long idleTimeoutMillis) {
+        this(maxIdleConnectionsPerKey, idleTimeoutMillis, false, 0);
+    }
+
+    HttpForwardConnectionPool(int maxIdleConnectionsPerKey, long idleTimeoutMillis, boolean keepAlive, int maxTotalConnectionsPerKey) {
         this.maxIdleConnectionsPerKey = Math.max(1, maxIdleConnectionsPerKey);
         this.idleTimeoutMillis = idleTimeoutMillis;
+        this.keepAlive = keepAlive;
+        // When keep-warm is on the per-key idle ceiling is maxTotal (never below the plain idle cap,
+        // since keep-warm only ever RAISES retention); clamped to at least 1 like the idle cap.
+        this.maxTotalConnectionsPerKey = Math.max(this.maxIdleConnectionsPerKey, maxTotalConnectionsPerKey);
+    }
+
+    /**
+     * The effective per-key idle ceiling: the plain idle cap by default, raised to the keep-warm
+     * total ceiling when keep-warm retention is enabled. This is the ONLY behavioural divergence
+     * between the default (off) and keep-warm (on) paths — when {@link #keepAlive} is false this
+     * returns exactly {@link #maxIdleConnectionsPerKey}, so the release close-decision is unchanged.
+     */
+    private int effectiveIdleCeiling() {
+        return keepAlive ? maxTotalConnectionsPerKey : maxIdleConnectionsPerKey;
     }
 
     /**
@@ -111,7 +154,7 @@ class HttpForwardConnectionPool {
         }
         Deque<Channel> deque = idleChannels.computeIfAbsent(key, k -> new ArrayDeque<>());
         synchronized (deque) {
-            if (deque.size() >= maxIdleConnectionsPerKey) {
+            if (deque.size() >= effectiveIdleCeiling()) {
                 return false;
             }
             deque.addLast(channel);

@@ -81,8 +81,9 @@ public class OpenApiTrafficValidator {
         String matchedPath = match.getLeft();
         String matchedMethodAndPath = match.getRight().getLeft().toUpperCase() + " " + matchedPath;
 
-        // Validate request
-        List<String> requestErrors = OpenAPIRequestValidator.validate(specUrlOrPayload, request, mockServerLogger);
+        // Validate request — thread the already-resolved matched path template through so path
+        // parameter presence/schema validation maps the concrete path onto the right template
+        List<String> requestErrors = OpenAPIRequestValidator.validate(specUrlOrPayload, request, mockServerLogger, matchedPath);
 
         // Validate response
         List<String> responseErrors = OpenAPIResponseValidator.validate(specUrlOrPayload, operationId, response, mockServerLogger);

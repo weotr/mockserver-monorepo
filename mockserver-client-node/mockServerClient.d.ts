@@ -8,9 +8,10 @@
  * Licensed under the Apache License, Version 2.0
  */
 
-import {BinaryResponse, DnsResponse, Expectation, ExpectationId, GenerateLoadScenarioFromOpenAPIRequest, GenerateLoadScenarioFromRecordingRequest, GrpcStreamResponse, HttpChaosProfile, HttpClassCallback, HttpError, HttpForward, HttpOverrideForwardedRequest, HttpRequest, HttpRequestAndHttpResponse, HttpResponse, HttpSseResponse, HttpTemplate, HttpWebSocketResponse, KeyToMultiValue, LoadScenario, LoadScenarioGenerationResult, LoadScenarioReport, LoadScenarioStatus, LoadScenarioEntry, LoadScenarioList, LoadScenarioRegistration, LoadScenarioStartResult, LoadScenarioStopResult, OpenAPIExpectation, RequestDefinition, Times, TimeToLive,} from './mockServer';
+import {BinaryResponse, ChaosExperiment, DnsResponse, Expectation, ExpectationId, GenerateLoadScenarioFromOpenAPIRequest, GenerateLoadScenarioFromRecordingRequest, GrpcStreamResponse, HttpChaosProfile, HttpClassCallback, HttpError, HttpForward, HttpOverrideForwardedRequest, HttpRequest, HttpRequestAndHttpResponse, HttpResponse, HttpSseResponse, HttpTemplate, HttpWebSocketResponse, KeyToMultiValue, LoadScenario, LoadScenarioGenerationResult, LoadScenarioReport, LoadScenarioStatus, LoadScenarioEntry, LoadScenarioList, LoadScenarioRegistration, LoadScenarioStartResult, LoadScenarioStopResult, OpenAPIExpectation, RequestDefinition, SloCriteria, SloVerdict, Times, TimeToLive,} from './mockServer';
 import {Llm, LlmConversationBuilder, LlmFailoverBuilder, LlmMockBuilder} from './llm';
 import {McpMockBuilder} from './mcpMockBuilder';
+import {A2aMockBuilder} from './a2aMockBuilder';
 
 export type Host = string;
 export type Port = number;
@@ -298,6 +299,20 @@ export interface MockServerClient {
 
     serviceChaosStatus(): Promise<{ services: { [host: string]: HttpChaosProfile } }>;
 
+    /**
+     * Evaluate a set of service-level objectives (SLOs) over a window of the
+     * recorded SLI samples. Resolves with the parsed verdict on PASS or
+     * INCONCLUSIVE (HTTP 200); rejects on FAIL (HTTP 406, the rejection value
+     * carries the verdict body) and on a malformed/disabled request (HTTP 400).
+     */
+    verifySLO(criteria: SloCriteria): Promise<SloVerdict>;
+
+    /**
+     * Start a scheduled multi-stage chaos experiment. Only one experiment may
+     * be active at a time; starting a new one stops the previous one.
+     */
+    startChaosExperiment(experiment: ChaosExperiment): Promise<{ status?: string; name?: string }>;
+
     loadScenario(scenario: LoadScenario): Promise<LoadScenarioRegistration>;
 
     loadScenarios(): Promise<LoadScenarioList>;
@@ -449,6 +464,18 @@ export interface MockServerClient {
      * @param path the HTTP path the MCP server is mounted on (default "/mcp")
      */
     mcpMock(path?: string): McpMockBuilder;
+
+    /**
+     * Start building a mock A2A (Agent-to-Agent) agent: a static agent-card
+     * document over GET plus JSON-RPC 2.0 task methods (tasks/send, tasks/get,
+     * tasks/cancel) over POST, with optional SSE streaming and push
+     * notifications. Returns a fluent builder; call .applyTo() (no argument —
+     * this client is used) to register the generated expectations, or .build()
+     * for the raw expectation array.
+     *
+     * @param path the HTTP path the A2A agent is mounted on (default "/a2a")
+     */
+    a2aMock(path?: string): A2aMockBuilder;
 
     /**
      * Explicit resource management support (TC39 `await using`). Resets the

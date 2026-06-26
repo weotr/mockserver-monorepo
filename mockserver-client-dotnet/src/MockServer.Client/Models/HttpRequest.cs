@@ -31,6 +31,15 @@ public sealed class HttpRequest
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Secure { get; set; }
 
+    /// <summary>
+    /// Overrides the host/port/scheme used to connect when this request is forwarded
+    /// (e.g. as the request override of an override-forwarded-request action), independent
+    /// of the <see cref="Path"/> and <c>Host</c> header sent on the wire.
+    /// </summary>
+    [JsonPropertyName("socketAddress")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SocketAddress? SocketAddress { get; set; }
+
     [JsonPropertyName("keepAlive")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? KeepAlive { get; set; }

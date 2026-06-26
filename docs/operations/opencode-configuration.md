@@ -22,9 +22,9 @@ global instructions"]
         AG["agents/
 12 sub-agent prompts"]
         RU["rules/
-10 guardrail files"]
+24 guardrail files"]
         SK["skills/
-16 workflow definitions"]
+17 workflow definitions"]
         CM["commands/
 12 slash commands"]
         PL["plugins/
@@ -49,8 +49,8 @@ global instructions"]
 | 1 | [Config](#building-block-1-config) | `opencode.jsonc` | Root configuration: models, permissions, agent definitions |
 | 2 | [Model Strategy](#building-block-2-model-strategy) | `opencode.jsonc` (agent entries) | Right model for the right task |
 | 3 | [Agents](#building-block-3-agents) | `.opencode/agents/*.md` | 12 specialist sub-agents with least-privilege access |
-| 4 | [Rules](#building-block-4-rules) | `.opencode/rules/*.md` | 10 guardrails always enforced |
-| 5 | [Skills](#building-block-5-skills) | `.opencode/skills/*/SKILL.md` | 16 reusable multi-step workflows |
+| 4 | [Rules](#building-block-4-rules) | `.opencode/rules/*.md` | 24 guardrails always enforced |
+| 5 | [Skills](#building-block-5-skills) | `.opencode/skills/*/SKILL.md` | 17 reusable multi-step workflows |
 | 6 | [Commands](#building-block-6-commands) | `.opencode/commands/*.md` | 12 slash shortcuts with guaranteed routing |
 | 7 | [Plugins & Tools](#building-block-7-plugins--tools) | `.opencode/plugins/*.ts` | Session hooks and external integrations |
 
@@ -154,11 +154,11 @@ flowchart LR
         SA["security-auditor"]
         DB["debugger"]
         IMP["implementer"]
+        PI["pipeline-investigator"]
     end
 
     subgraph Premium["Premium Tier"]
         SIM["simplifier"]
-        PI["pipeline-investigator"]
     end
 
     subgraph Standard["Standard Tier"]
@@ -181,14 +181,14 @@ flowchart LR
 
 | Tier | opencode (OpenAI) | Claude Code (Anthropic) | Agents | Rationale |
 |------|-------------------|--------------------------|--------|-----------|
-| **Reasoning** | `openai/gpt-5` | `claude-opus-4-8` + `effort: high` | review-final, security-auditor, debugger, implementer | Highest-stakes reasoning — authoritative binding review, security audit, hard debugging, and production code |
-| **Premium** | `openai/gpt-4o` | `claude-opus-4-8` + `effort: high` | simplifier, pipeline-investigator | Strong reasoning for refactoring and CI investigation — deep enough to warrant a high reasoning budget at moderate model cost |
+| **Reasoning** | `openai/gpt-5` | `claude-opus-4-8` + `effort: high` | review-final, security-auditor, debugger, implementer, pipeline-investigator | Highest-stakes reasoning — authoritative binding review, security audit, hard debugging, production code, and CI failure investigation |
+| **Premium** | `openai/gpt-4o` | `claude-sonnet-4-6` + `effort: medium` | simplifier | Strong reasoning for refactoring at moderate model cost and reasoning budget |
 | **Standard** | `openai/gpt-4o` | `claude-sonnet-4-6` + `effort: medium` | code-reviewer, docs-writer, taskify-agent, review-cheap | Strong analysis and writing at moderate cost and reasoning budget |
 | **Fast** | `openai/gpt-4o-mini` | `claude-haiku-4-5-20251001` + `effort: low–medium` | test-runner (`low`), council-seat (`medium`) | Rote test execution (`low`) vs short exploratory debate seats (`medium`) — speed over depth |
 
 This gives the review escalation a genuine **capability gradient** on both harnesses: `review-cheap` (gpt-4o / sonnet + `effort: medium`) → `review-final` (gpt-5 / opus + `effort: high`), so the binding gate is a stronger second brain, not a same-model re-run. **`effort` is now set explicitly on every Claude agent** (not just the high-stakes lanes) so the reasoning budget is an intentional, auditable choice that tracks each task's reasoning depth — `high` for hard implementation/review/audit/investigation, `medium` for standard analysis and writing, `low` for mechanical work. `implementer` is deliberately on the Reasoning tier alongside the reviewers: generating production code has equal or higher blast radius than reviewing it, so it warrants the same model capability and reasoning budget.
 
-**Caveat — reasoning models and `temperature`:** OpenAI reasoning models may reject or ignore a custom sampling `temperature` (only the default is accepted). The Reasoning-tier agents retain their low `temperature` entries for documentation/auditability, but if the provider rejects them, drop the `temperature` field for those four agents and rely on the model's native low-variance reasoning. Re-verify against the OpenAI API behaviour for `gpt-5` after provisioning.
+**Caveat — reasoning models and `temperature`:** OpenAI reasoning models may reject or ignore a custom sampling `temperature` (only the default is accepted). The Reasoning-tier agents retain their low `temperature` entries for documentation/auditability, but if the provider rejects them, drop the `temperature` field for those five agents and rely on the model's native low-variance reasoning. Re-verify against the OpenAI API behaviour for `gpt-5` after provisioning.
 
 ### Temperature (opencode)
 
@@ -232,7 +232,7 @@ Each sub-agent is a configured AI persona with a specific model, system prompt, 
 | **review-final** | Reasoning | Authoritative binding PASS/BLOCK verdict | - | - | Y | Y |
 | **review-cheap** | Standard | Non-authoritative intermediate review | - | - | Y | Y |
 | **debugger** | Reasoning | Investigates issues using logs, CI, AWS | - | - | Y | Y |
-| **pipeline-investigator** | Premium | Buildkite pipeline failure analysis | - | - | Y | Y |
+| **pipeline-investigator** | Reasoning | Buildkite pipeline failure analysis | - | - | Y | Y |
 | **test-runner** | Fast | Runs Maven tests, reports results | - | - | Y | - |
 | **council-seat** | Fast | Design council parallel debate seat | - | - | - | - |
 
@@ -306,6 +306,20 @@ Rules are mandatory constraints loaded into sessions. They encode what experienc
 | `mermaid-diagrams.md` | 86 | Yes | Mermaid diagram conventions and formatting rules |
 | `coding-principles.md` | 29 | Yes | Think before coding, simplicity first, surgical changes |
 | `aws-ids-file.md` | 31 | Yes | Require `~/mockserver-aws-ids.md` before AWS operations |
+| `operating-model.md` | 188 | Yes | The DVRR operating model — decompose, verify, review, reintegrate |
+| `worktree-workflow.md` | 313 | Yes | Per-session worktree isolation, linear history, locked rebase merge |
+| `subagent-routing.md` | 67 | Yes | Conversational routing of tasks to the correct subagent |
+| `risk-authority-classification.md` | 71 | Yes | Classify each unit by risk and act within its authority class |
+| `control-integrity.md` | 57 | Yes | Higher-scrutiny gated-approval for changes to the controls themselves |
+| `operator-halt.md` | 49 | Yes | Operator halt — stop autonomous work on demand |
+| `untrusted-input.md` | 63 | Yes | Treat ingested content as data, not instructions |
+| `decision-log.md` | 100 | Yes | Per-unit telemetry and routing-rationale decision log |
+| `multi-pass-temperature.md` | 32 | Yes | Staged explore → refine → validate temperature pipeline |
+| `evaluation-harness.md` | 50 | Yes | Agent/config evaluation fixtures and conformance checks |
+| `metrics.md` | 128 | Yes | SDLC metrics capture and reporting conventions |
+| `documentation-style.md` | 96 | Yes | Pyramid Principle with progressive disclosure for all docs |
+| `local-plans.md` | 56 | Yes | Uncommitted `*.local.md` plan docs in `docs/plans/` |
+| `licence-provenance.md` | 30 | Yes | Dependency licence and provenance constraints |
 
 ### git-safety.md — Banned Commands
 
@@ -386,6 +400,8 @@ A skill is a self-contained multi-step workflow — a runbook the agent executes
 | `docker-build-push` | SKILL.md | No | "build docker image", "push maven image", "rebuild CI image" |
 | `issue-review` | SKILL.md | No | "review issue", "triage issue", "is this a bug" |
 | `build-monitor` | SKILL.md | No | "monitor builds", "watch pipeline", "continuous monitoring" |
+| `release-management` | SKILL.md | No | "prepare release", "release version", "run release pipeline" |
+| `ui-screenshots` | SKILL.md | No | "screenshot the dashboard", "capture UI", "dashboard screenshots" |
 
 ### Skill Anatomy
 
@@ -620,18 +636,32 @@ mockserver/
     │   ├── simplifier.md
     │   ├── taskify-agent.md
     │   └── test-runner.md
-    ├── rules/                               # 10 guardrail files
+    ├── rules/                               # 24 guardrail files
     │   ├── aws-ids-file.md
     │   ├── coding-principles.md
     │   ├── commit-locking.md
     │   ├── commit-workflow.md
+    │   ├── control-integrity.md
+    │   ├── decision-log.md
+    │   ├── documentation-style.md
+    │   ├── evaluation-harness.md
     │   ├── git-safety.md
+    │   ├── licence-provenance.md
+    │   ├── local-plans.md
     │   ├── mermaid-diagrams.md
+    │   ├── metrics.md
+    │   ├── multi-pass-temperature.md
+    │   ├── operating-model.md
+    │   ├── operator-halt.md
     │   ├── report-formatting.md
     │   ├── review-constitution.md
+    │   ├── risk-authority-classification.md
+    │   ├── subagent-routing.md
     │   ├── testing-policy.md
-    │   └── tmp-directory.md
-    ├── skills/                              # 16 skill workflows
+    │   ├── tmp-directory.md
+    │   ├── untrusted-input.md
+    │   └── worktree-workflow.md
+    ├── skills/                              # 17 skill workflows
     │   ├── aws-investigation/
     │   │   ├── SKILL.md
     │   │   └── report-template.md
@@ -665,7 +695,9 @@ mockserver/
     │   │   └── SKILL.md
     │   ├── review-spec/
     │   │   └── SKILL.md
-    │   └── terraform-tfvars/
+    │   ├── terraform-tfvars/
+    │   │   └── SKILL.md
+    │   └── ui-screenshots/
     │       └── SKILL.md
     ├── commands/                             # 12 slash commands
     │   ├── aws-investigation.md

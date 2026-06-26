@@ -258,6 +258,29 @@ else
   BUILD_WEBHOOK=false
 fi
 
+# --- Dashboard usage analytics (PostHog Cloud EU) ----------------------------
+# The official released dashboard images (local / graaljs / clustered — NOT webhook, which has
+# no dashboard) activate cookieless usage analytics by baking the project's PostHog Cloud EU
+# endpoint + write-only public ingest key into the image as MOCKSERVER_DASHBOARD_ANALYTICS_*
+# (read by the dashboard's activation gate). The values live ONLY in Secrets Manager
+# (mockserver-release/dashboard-analytics, keys: endpoint + key) — never in the source tree — so
+# a fork building these Dockerfiles directly ships analytics INERT. In dry-run we leave them
+# empty so locally-built test images also stay inert; a missing secret degrades to inert, never
+# a release failure.
+DASHBOARD_ANALYTICS_ENDPOINT=""
+DASHBOARD_ANALYTICS_KEY=""
+if ! is_dry_run; then
+  DASHBOARD_ANALYTICS_ENDPOINT="$(load_secret "mockserver-release/dashboard-analytics" "endpoint" 2>/dev/null || echo "")"
+  DASHBOARD_ANALYTICS_KEY="$(load_secret "mockserver-release/dashboard-analytics" "key" 2>/dev/null || echo "")"
+  # A secret present but missing the field yields the jq literal "null"; normalise to empty so a
+  # misconfigured secret ships INERT rather than baking endpoint/key="null".
+  [[ "$DASHBOARD_ANALYTICS_ENDPOINT" == "null" ]] && DASHBOARD_ANALYTICS_ENDPOINT=""
+  [[ "$DASHBOARD_ANALYTICS_KEY" == "null" ]] && DASHBOARD_ANALYTICS_KEY=""
+  if [[ -z "$DASHBOARD_ANALYTICS_KEY" || -z "$DASHBOARD_ANALYTICS_ENDPOINT" ]]; then
+    log_info "WARNING: mockserver-release/dashboard-analytics not fully available — dashboard analytics will ship INERT in released images"
+  fi
+fi
+
 if is_dry_run; then
   # Local single-arch via the default daemon. Plain `docker build` reuses
   # Docker Desktop's CA trust (whereas a fresh buildx builder does not).
@@ -311,6 +334,8 @@ else
   docker buildx build \
     --platform "linux/amd64,linux/arm64" \
     --push \
+    --build-arg DASHBOARD_ANALYTICS_ENDPOINT="$DASHBOARD_ANALYTICS_ENDPOINT" \
+    --build-arg DASHBOARD_ANALYTICS_KEY="$DASHBOARD_ANALYTICS_KEY" \
     --tag "mockserver/mockserver:$FULL_TAG" \
     --tag "mockserver/mockserver:$SHORT_TAG" \
     --tag "mockserver/mockserver:latest" \
@@ -323,6 +348,8 @@ else
     --platform "linux/amd64,linux/arm64" \
     --push \
     --build-arg source=copy \
+    --build-arg DASHBOARD_ANALYTICS_ENDPOINT="$DASHBOARD_ANALYTICS_ENDPOINT" \
+    --build-arg DASHBOARD_ANALYTICS_KEY="$DASHBOARD_ANALYTICS_KEY" \
     --tag "mockserver/mockserver:$FULL_TAG-graaljs" \
     --tag "mockserver/mockserver:$SHORT_TAG-graaljs" \
     --tag "mockserver/mockserver:latest-graaljs" \
@@ -339,6 +366,8 @@ else
     retry 3 5 -- docker buildx build \
       --platform "linux/amd64,linux/arm64" \
       --push \
+      --build-arg DASHBOARD_ANALYTICS_ENDPOINT="$DASHBOARD_ANALYTICS_ENDPOINT" \
+      --build-arg DASHBOARD_ANALYTICS_KEY="$DASHBOARD_ANALYTICS_KEY" \
       --tag "mockserver/mockserver:clustered-$FULL_TAG" \
       --tag "mockserver/mockserver:clustered-$SHORT_TAG" \
       --tag "mockserver/mockserver:clustered-latest" \

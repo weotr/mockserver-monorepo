@@ -1,3 +1,5 @@
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask.FailureLevel
+
 plugins {
     id("org.jetbrains.intellij.platform") version "2.16.0"
     kotlin("jvm") version "2.1.21"
@@ -58,6 +60,28 @@ intellijPlatform {
             // case — it only fails at the Marketplace publish step.
             untilBuild = provider { null }
         }
+    }
+    // Run by the `verifyPlugin` CI step (.buildkite/scripts/steps/jetbrains-verify.sh)
+    // on every commit that touches the plugin, so internal/deprecated/incompatible
+    // IntelliJ Platform API usages are caught before a Marketplace upload is rejected.
+    pluginVerification {
+        // Verify against JetBrains' recommended IDE set — the same range the
+        // Marketplace checks, including the latest EAP (which is what surfaced the
+        // PluginManagerCore internal-API and JBCefBrowser deprecated-API findings).
+        ides {
+            recommended()
+        }
+        // Fail the build on the Marketplace-blocking finding classes: internal API,
+        // deprecated / scheduled-for-removal API, and binary compatibility problems.
+        // (By default the verifier only fails on COMPATIBILITY_PROBLEMS + INVALID_PLUGIN,
+        // so internal/deprecated usages would pass silently without this.)
+        failureLevel = listOf(
+            FailureLevel.COMPATIBILITY_PROBLEMS,
+            FailureLevel.INTERNAL_API_USAGES,
+            FailureLevel.DEPRECATED_API_USAGES,
+            FailureLevel.SCHEDULED_FOR_REMOVAL_API_USAGES,
+            FailureLevel.INVALID_PLUGIN,
+        )
     }
     signing {
         certificateChain = providers.environmentVariable("CERTIFICATE_CHAIN")

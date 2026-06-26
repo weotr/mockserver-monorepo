@@ -1,0 +1,135 @@
+{
+  "name": "inject-ceiling-complex",
+  "templateType": "VELOCITY",
+  "feeder": {
+    "strategy": "CIRCULAR",
+    "rows": [
+      {
+        "userId": "alice",
+        "accountId": "A1001",
+        "region": "eu-west-1",
+        "tier": "gold"
+      },
+      {
+        "userId": "bob",
+        "accountId": "A1002",
+        "region": "us-east-1",
+        "tier": "silver"
+      },
+      {
+        "userId": "carol",
+        "accountId": "A1003",
+        "region": "ap-south-1",
+        "tier": "bronze"
+      },
+      {
+        "userId": "dave",
+        "accountId": "A1004",
+        "region": "eu-central-1",
+        "tier": "gold"
+      },
+      {
+        "userId": "erin",
+        "accountId": "A1005",
+        "region": "us-west-2",
+        "tier": "platinum"
+      }
+    ]
+  },
+  "profile": {
+    "stages": [
+      {
+        "type": "RATE",
+        "rate": 2000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 4000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 6000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 8000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 10000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 12000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 14000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 16000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 18000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      },
+      {
+        "type": "RATE",
+        "rate": 20000,
+        "durationMillis": 25000,
+        "maxVus": 4000
+      }
+    ]
+  },
+  "steps": [
+    {
+      "name": "complex-sink",
+      "request": {
+        "method": "POST",
+        "path": "/sink/$iteration.data.region/$iteration.index",
+        "headers": {
+          "Host": [
+            "envoy:8000"
+          ],
+          "Content-Type": [
+            "application/json"
+          ],
+          "X-User": [
+            "$iteration.data.userId"
+          ],
+          "X-Account": [
+            "$iteration.data.accountId"
+          ],
+          "X-Region": [
+            "$iteration.data.region"
+          ]
+        },
+        "body": "{\"requestId\":\"req-$iteration.index-$iteration.data.userId\",\"timestamp\":\"2026-06-25T00:00:00Z\",\"iteration\":$iteration.index,\"user\":{\"id\":\"$iteration.data.userId\",\"accountId\":\"$iteration.data.accountId\",\"region\":\"$iteration.data.region\",\"tier\":\"$iteration.data.tier\",\"email\":\"$iteration.data.userId@example.com\"},\"order\":{\"orderId\":\"ord-$iteration.index\",\"accountId\":\"$iteration.data.accountId\",\"currency\":\"USD\",\"region\":\"$iteration.data.region\",\"items\":[{\"sku\":\"SKU-$iteration.data.region-1\",\"qty\":2,\"price\":19.99,\"owner\":\"$iteration.data.userId\"},{\"sku\":\"SKU-$iteration.data.region-2\",\"qty\":1,\"price\":99.50,\"owner\":\"$iteration.data.userId\"},{\"sku\":\"SKU-$iteration.data.region-3\",\"qty\":5,\"price\":4.25,\"owner\":\"$iteration.data.userId\"}],\"shipping\":{\"region\":\"$iteration.data.region\",\"tier\":\"$iteration.data.tier\",\"priority\":true},\"notes\":\"order $iteration.index for $iteration.data.userId in $iteration.data.region tier $iteration.data.tier account $iteration.data.accountId\"},\"metadata\":{\"source\":\"load-injection-complex\",\"tier\":\"$iteration.data.tier\",\"trace\":\"$iteration.data.accountId-$iteration.index-$iteration.data.region\",\"tags\":[\"region:$iteration.data.region\",\"tier:$iteration.data.tier\",\"user:$iteration.data.userId\",\"iter:$iteration.index\"]}}",
+        "socketAddress": {
+          "host": "envoy",
+          "port": 8000,
+          "scheme": "HTTP"
+        }
+      }
+    }
+  ]
+}

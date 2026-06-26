@@ -542,7 +542,9 @@ public class HttpLlmResponseActionHandler {
             .withStreamingPhysics(source.getStreamingPhysics())
             .withOutputSchema(source.getOutputSchema())
             .withEnforceOutputSchema(source.getEnforceOutputSchema())
-            .withModel(source.getModel());
+            .withModel(source.getModel())
+            .withReasoningText(source.getReasoningText())
+            .withReasoningSignature(source.getReasoningSignature());
     }
 
     /** Copy of a {@link Usage} preserving any cached/reasoning sub-counts already declared. */

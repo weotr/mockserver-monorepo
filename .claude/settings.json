@@ -23,6 +23,10 @@
           {
             "type": "command",
             "command": "osascript -e 'display notification \"Task completed\" with title \"Claude Code — MockServer\"'"
+          },
+          {
+            "type": "command",
+            "command": "bash .opencode/scripts/aggregate-telemetry.sh .tmp/decisions --csv .tmp/telemetry-latest.csv >/dev/null 2>&1 || true"
           }
         ]
       }

@@ -58,6 +58,11 @@ word to `tasks/<id>.result`.
 - **Cost:** when comparing model/routing changes, record model/tokens per run; a
   cost-per-task increase **>20%** without a quality gain is flagged for review.
   Advisory (not gate-blocking) — the gating threshold is an open decision (spec §22.6).
+  **The runner does not yet capture cost/tokens** — it only scores recorded
+  verdicts. Until a token/cost-accounting hook exists, record model and tokens
+  per run **manually** (alongside the verdict, from the agent's usage telemetry)
+  and apply the >20% advisory by hand; mechanising this capture is an open item
+  (spec §22.6).
 
 ## Growing the suite
 

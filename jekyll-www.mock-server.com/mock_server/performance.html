@@ -105,6 +105,8 @@ lastmod: 2026-06-24T08:00:00+01:00
 </table>
 <p>Latencies are in milliseconds. Achieved throughput tracks the offered rate up to about 32,000&nbsp;req/s; beyond that the six-core instance saturates near 36,000&nbsp;req/s and latency climbs predictably rather than collapsing. (More CPU cores raise the ceiling; this run pins the server to six.)</p>
 
+<p><strong>These figures are per instance.</strong> The ~36,000&nbsp;req/s saturation point is the throughput of a <em>single</em> six-core instance &mdash; you scale beyond it by adding instances. <strong>Scaling beyond one instance:</strong> for more <em>serving</em> capacity (handling more inbound mock traffic) or high availability, run several instances as a <a href="#clustering_mockserver">cluster behind a load balancer</a> &mdash; see <a href="/mock_server/centralized_deployment.html">Centralised Deployment</a>. To drive more <em>load injection</em> (generating more outbound traffic with <a href="/mock_server/load_injection.html">Load Scenarios</a>), run injector instances in parallel &mdash; see <a href="/mock_server/load_injection_performance.html">Load Injection Performance</a>, which measures how injected throughput scales near-linearly with the number of instances.</p>
+
 <h3>Matcher scaling (time per request match)</h3>
 <p>Microbenchmark of a single request match against a growing set of literal expectations, worst case (no match, so every candidate is examined): MockServer's candidate index versus a naive linear scan.</p>
 <table class="results">

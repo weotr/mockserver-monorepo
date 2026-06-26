@@ -6,22 +6,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Security
 
-- **`generateFromRecording` in `TEMPLATIZED` mode now reproduces the recorded traffic mix.** Each generated
-  step's `weight` is set to the route's observed hit count and the scenario uses `stepSelection: WEIGHTED`,
-  so replaying picks routes in proportion to how often they appeared in the recording (instead of plain
-  ordered steps). `VERBATIM` mode is unchanged.
+- **A2A client builders: the custom-handler regex `messagePattern` is now escaped completely.** Every client
+  library (Java, Node, Python, Ruby, Go, Rust, PHP, .NET) inlines `messagePattern` into a JSONPath `=~ /…/` regex
+  literal but previously escaped only the `/` delimiter, so a pattern ending in a lone backslash (or containing
+  `\/`) could escape the closing delimiter and break out of the regex literal into the surrounding JSONPath/JSON
+  (CodeQL `rb/incomplete-sanitization`). The escaping now preserves valid regex escape sequences (e.g. `\d`) while
+  neutralising the delimiter-breakout; normal patterns are unaffected.
+- **Dashboard load-scenario report download now validates the URL scheme.** The "download report" action passed a
+  URL assembled from the user-configured connection to `window.open` without checking its scheme; it now opens the
+  report only when the URL resolves to `http`/`https`, ruling out `javascript:`/`data:` redirection (CodeQL
+  `js/client-side-unvalidated-url-redirection`).
+- **`/bind` and `/stop` now honour control-plane authentication/authorization.** These mutating lifecycle
+  endpoints were serviced before the auth gate; they now require the same control-plane auth as
+  `/mockserver/configuration`. Default deployments with no control-plane auth configured are unaffected, and
+  `/status` / `/ready` remain open for health probes. Closes the lifecycle-endpoint gap noted in 7.2.0.
+- **MCP tool calls now honour control-plane authorization.** With `controlPlaneAuthorizationEnabled`, each MCP
+  tool is classified read vs mutate (fail-closed) and checked against the same role model as the HTTP control
+  plane, so a read-only principal can no longer invoke mutating MCP tools (create/clear/reset/…). Default
+  (authorization disabled) behaviour is unchanged; enforced across HTTP and HTTP/3, single and batch. Closes
+  the per-tool MCP gap noted in 7.2.0.
+- **Control-plane JWT validation cross-request race fixed.** A single shared `JWTValidator` reconfigured the
+  Nimbus processor (key selector + claims verifier) on every call, so concurrent control-plane requests could be
+  verified against another request's policy. The processor is now configured once and `validate()` is stateless.
+- **Remote JWKS / OIDC discovery fetches are now bounded.** JWKS-key-set and OIDC discovery-document fetches on
+  the authentication path used the JOSE library defaults (infinite connect/read timeout, no size limit); they now
+  use finite timeouts and a size cap, so a slow or hostile identity-provider endpoint can no longer hang the auth
+  path or be used as an amplification vector.
+- **Velocity templates can no longer fetch arbitrary URLs or read local files.** The Apache Velocity
+  `ImportTool` (which exposes `$import.read(url|file)`) was registered in the template toolbox; it has been
+  removed, closing an SSRF / local-file-disclosure vector in response templates.
+- **mTLS control-plane authentication rejects expired client certificates.** Client-certificate authentication
+  validated only that the certificate chained to the configured CA; it now also enforces the certificate
+  validity window, so an expired or not-yet-valid (but correctly signed) client certificate is rejected.
+- **Mock OIDC client-secret comparison is now constant-time.**
 
 ### Added
 
-- **Anonymous, cookieless dashboard usage analytics via self-hosted PostHog.** The dashboard can report coarse, enumerated usage events (`app_open`, `view_change`, `feature_used`, `error_shown`) to a self-hosted PostHog instance. No request URLs, hostnames, headers, bodies, or expectation data are ever sent. Inactive by default until an operator supplies `dashboardAnalyticsEndpoint` and `dashboardAnalyticsKey`; disable globally with `dashboardAnalyticsEnabled=false`. Respects Do Not Track, Global Privacy Control, and a per-browser opt-out banner.
-- **All client libraries now expose the full load-scenario surface.** The Java, Node, Python, Ruby, Go,
-  .NET, PHP, and Rust clients gained the new scenario fields (`thresholds`, `abortOnFail`, `abortGraceMillis`,
-  `pacing`, `feeder`, `stepSelection`, per-step `captures`/`weight`, profile `shape`), the new run-status
-  fields (`p999Millis`, `droppedIterations`, `verdict`, `abortedByThreshold`, `thresholdResults`), and three
-  new methods — `getLoadScenarioReport` (with optional `junit` format), `generateLoadScenarioFromOpenAPI`,
-  and `generateLoadScenarioFromRecording`.
+#### Load injection, chaos & SRE
+- **Chaos experiments can assert an SLO and emit a verdict.** A chaos experiment may now carry an optional
+  `sloCriteria`; on termination MockServer attaches a terminal `experimentVerdict` (`PASS` / `FAIL` /
+  `INCONCLUSIVE`) evaluated strictly over the experiment's window — `PASS` only if every objective held
+  throughout, `FAIL` on any breach or auto-halt, `INCONCLUSIVE` below the minimum sample count. Turns
+  "inject faults" into "verify resilience held."
+- **SLO-breach auto-halt for chaos experiments.** An experiment carrying `sloCriteria` is halted immediately
+  (status `halted_by_slo_breach`, verdict `FAIL`) when an SLO objective is breached mid-run. No behaviour
+  change when `sloCriteria` is absent. The dashboard's chaos panel now shows the terminal `experimentVerdict`
+  (PASS / FAIL / INCONCLUSIVE) with per-objective observed-vs-threshold detail.
+
+#### Request matching & response generation
+- **JavaScript response templates now have a configurable execution timeout.** A runaway or malicious
+  JavaScript template (for example one containing an infinite loop) could previously pin the data-plane
+  worker thread handling that request indefinitely. A new `javascriptTemplateExecutionTimeout` property
+  (milliseconds) caps how long a template may run; on expiry a watchdog cancels the evaluation and the
+  request fails fast with a clear, logged timeout error. The default is `5000` (5 seconds), far longer
+  than any legitimate template needs. Set it to `0` (or a negative value) to disable the timeout and
+  restore the previous unbounded behaviour. NOTE: this introduces a bounded behaviour change — templates
+  that genuinely run longer than 5 seconds (previously allowed) will now be cancelled unless the timeout
+  is raised or disabled.
 - **Mustache response templates can now read scenario state by name.** Velocity
   (`$scenario.get('orderId')`) and JavaScript (`scenario.get('orderId')`) could already read
   scenario/captured state in a response template; the Mustache engine now exposes the same through a
@@ -30,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completes `capture` → template value reuse across all three template engines, so an id captured
   from one request can be returned in the response body of a later request regardless of template
   engine. Documented on the Stateful Scenarios page with a per-engine example.
+- **Closest-match hint on unmatched requests** (`closestMatchHintEnabled`, default **on**). When a request
+  matches no expectation, the `404` response now carries a compact, length-bounded
+  `x-mockserver-closest-match-hint` header naming the closest expectation and the first field that differed —
+  answering "why didn't my mock match?" without enabling verbose diagnostics. Set `closestMatchHintEnabled=false`
+  to suppress. (The opt-in `attachMismatchDiagnosticToResponse`, which adds a full JSON diagnostic body, is
+  unchanged and still off by default.)
+
+#### OpenAPI & contract testing
 - **Validate recorded traffic against an OpenAPI spec** (`PUT /mockserver/trafficValidate`). A new
   control-plane endpoint validates the request/response traffic MockServer has already recorded against a
   provided OpenAPI spec (URL, file path, or inline), returning a structured pass/fail report
@@ -42,48 +93,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `trafficValidate(spec)`, `pactImport(json)`, `pactExport(consumer, provider)`, and `pactVerify(json)`. The
   contract-test and traffic-validation reports parse into typed `ContractReport` / `ContractResult` objects so
   callers no longer hand-roll raw HTTP.
-- **Chaos experiments can assert an SLO and emit a verdict.** A chaos experiment may now carry an optional
-  `sloCriteria`; on termination MockServer attaches a terminal `experimentVerdict` (`PASS` / `FAIL` /
-  `INCONCLUSIVE`) evaluated strictly over the experiment's window — `PASS` only if every objective held
-  throughout, `FAIL` on any breach or auto-halt, `INCONCLUSIVE` below the minimum sample count. Turns
-  "inject faults" into "verify resilience held."
-- **SLO-breach auto-halt for chaos experiments.** An experiment carrying `sloCriteria` is halted immediately
-  (status `halted_by_slo_breach`, verdict `FAIL`) when an SLO objective is breached mid-run. No behaviour
-  change when `sloCriteria` is absent. The dashboard's chaos panel now shows the terminal `experimentVerdict`
-  (PASS / FAIL / INCONCLUSIVE) with per-objective observed-vs-threshold detail.
-- **Closest-match hint on unmatched requests** (`closestMatchHintEnabled`, default **on**). When a request
-  matches no expectation, the `404` response now carries a compact, length-bounded
-  `x-mockserver-closest-match-hint` header naming the closest expectation and the first field that differed —
-  answering "why didn't my mock match?" without enabling verbose diagnostics. Set `closestMatchHintEnabled=false`
-  to suppress. (The opt-in `attachMismatchDiagnosticToResponse`, which adds a full JSON diagnostic body, is
-  unchanged and still off by default.)
-- **Standard OTLP endpoint fallback.** When `mockserver.otelEndpoint` / `MOCKSERVER_OTEL_ENDPOINT` is unset,
-  MockServer now falls back to the OpenTelemetry-standard `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
-- **Dashboard remembers where you were.** The active view and per-panel search/filter terms persist across
-  reloads, and the view is reflected in the URL hash (e.g. `#/contract`) so views are linkable. A first visit
-  still opens Get Started.
-- **Dashboard search-operator hints.** The search box now advertises its operators (`status:>=400`,
-  `method:POST`, `path:/api/*`, `/regex/`) via the placeholder and an accessible help tooltip.
-- **Fluent `when().respond()` DSL in the Node client.** The Node client now offers a chainable
-  `when(request).respond(response)` — plus `.forward()`, `.error()`, `.callback()`, and
-  `.withTimes()` / `.withTimeToLive()` / `.withPriority()` builders — mirroring the Java client, alongside the
-  existing procedural methods (which are unchanged).
-- **SLO verification dashboard panel.** A new dashboard view authors service-level objectives (latency
-  p50/p95/p99, error-rate) and runs them against the existing `/mockserver/verifySLO` endpoint, showing
-  observed-vs-threshold per objective and an overall PASS / FAIL / INCONCLUSIVE verdict.
-- **Opt-in per-test reset for the JUnit 5 extension.** `@MockServerSettings(resetBeforeEach = true)` resets the
-  shared MockServer before each test (matching the JUnit 4 rule and Spring listener). Default off, so existing
-  behaviour is unchanged.
-- **Contract testing & Pact consumer guide.** New documentation page covering the `/contractTest` endpoint and
-  Pact import / export / verify, with verified response codes.
 - **Per-import realistic example generation.** OpenAPI imports can now request realistic (Datafaker) example
   values for a single import via a `"realisticValues": true` entry in the reserved `__generationOptions__`
   map (alongside the existing `seed` and `fieldOverrides` options), without changing the global
   `generateRealisticExampleValues` configuration. When the entry is absent, behaviour is unchanged and the
   global default still applies.
+- **Contract testing & Pact consumer guide.** New documentation page covering the `/contractTest` endpoint and
+  Pact import / export / verify, with verified response codes.
+
+#### Dashboard UI
+- **Anonymous, cookieless dashboard usage analytics (PostHog Cloud EU).** The dashboard reports coarse, enumerated usage events (`app_open`, `view_change`, `feature_used`, `error_shown`) to a cookieless, EU-hosted PostHog project to help improve the UI. No request URLs, hostnames, headers, bodies, or expectation data are ever sent, and no tracking cookie is set. The **official Docker images** ship with this enabled; it is **inactive in any build without `dashboardAnalyticsEndpoint` + `dashboardAnalyticsKey`** (so plain JARs/WARs and source/fork builds send nothing). Disable globally with `dashboardAnalyticsEnabled=false` (or `MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED=false`); respects Do Not Track, Global Privacy Control, and a per-browser opt-out banner. See [dashboard privacy](https://www.mock-server.com/mock_server/dashboard_privacy.html).
+- **Official binary launcher bundles now also report anonymous cookieless dashboard usage analytics**, joining the Docker images and Helm deployments. The plain downloadable JAR and any embedded/library/dependency use remain inert (no endpoint or key configured). Analytics events from all official artefacts now include a `distribution` label (from the new `dashboardAnalyticsDistribution` config property) identifying which artefact produced the event (`docker-standard`, `docker-graaljs`, `docker-clustered`, `helm`, or `binary`); values outside the closed allow-list are normalised to `unknown` — free text is never forwarded.
+- **SLO verification dashboard panel.** A new dashboard view authors service-level objectives (latency
+  p50/p95/p99, error-rate) and runs them against the existing `/mockserver/verifySLO` endpoint, showing
+  observed-vs-threshold per objective and an overall PASS / FAIL / INCONCLUSIVE verdict.
+- **Dashboard remembers where you were.** The active view and per-panel search/filter terms persist across
+  reloads, and the view is reflected in the URL hash (e.g. `#/contract`) so views are linkable. A first visit
+  still opens Get Started.
+- **Dashboard search-operator hints.** The search box now advertises its operators (`status:>=400`,
+  `method:POST`, `path:/api/*`, `/regex/`) via the placeholder and an accessible help tooltip.
+
+#### Client libraries
+- **All client libraries now expose the full load-scenario surface.** The Java, Node, Python, Ruby, Go,
+  .NET, PHP, and Rust clients gained the new scenario fields (`thresholds`, `abortOnFail`, `abortGraceMillis`,
+  `pacing`, `feeder`, `stepSelection`, per-step `captures`/`weight`, profile `shape`), the new run-status
+  fields (`p999Millis`, `droppedIterations`, `verdict`, `abortedByThreshold`, `thresholdResults`), and three
+  new methods — `getLoadScenarioReport` (with optional `junit` format), `generateLoadScenarioFromOpenAPI`,
+  and `generateLoadScenarioFromRecording`.
+- **Fluent `when().respond()` DSL in the Node client.** The Node client now offers a chainable
+  `when(request).respond(response)` — plus `.forward()`, `.error()`, `.callback()`, and
+  `.withTimes()` / `.withTimeToLive()` / `.withPriority()` builders — mirroring the Java client, alongside the
+  existing procedural methods (which are unchanged).
+- **Opt-in per-test reset for the JUnit 5 extension.** `@MockServerSettings(resetBeforeEach = true)` resets the
+  shared MockServer before each test (matching the JUnit 4 rule and Spring listener). Default off, so existing
+  behaviour is unchanged.
+
+#### Clustering & observability
+- **Standard OTLP endpoint fallback.** When `mockserver.otelEndpoint` / `MOCKSERVER_OTEL_ENDPOINT` is unset,
+  MockServer now falls back to the OpenTelemetry-standard `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable.
 
 ### Changed
 
+- **`generateFromRecording` in `TEMPLATIZED` mode now reproduces the recorded traffic mix.** Each generated
+  step's `weight` is set to the route's observed hit count and the scenario uses `stepSelection: WEIGHTED`,
+  so replaying picks routes in proportion to how often they appeared in the recording (instead of plain
+  ordered steps). `VERBATIM` mode is unchanged.
 - **Docker images cap the JVM heap at 75% of the container memory limit** (`-XX:MaxRAMPercentage=75.0`, in
   every published image that runs the server — standard, snapshot, root, root-snapshot, graaljs, local, and
   clustered), making memory use predictable and avoiding OOM-kills that looked
@@ -106,19 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **OpenAPI `format: date`/`date-time` examples render as ISO strings again** ([#2370](https://github.com/mock-server/mockserver-monorepo/issues/2370)).
-  An inline `example: '2021-01-30'` on a `type: string, format: date` property was serialised in generated
-  responses as epoch-millis (`1611964800000`) instead of the ISO string, because swagger-parser deserialises
-  the example into a `java.util.Date` that the explicit-example path handed straight to Jackson. Date/date-time
-  examples are now normalised back to their schema string form before serialisation (regression since 6.0.0).
-- **Spring `@MockServerTest` works with JUnit 5 `@Nested` classes again** ([#2371](https://github.com/mock-server/mockserver-monorepo/issues/2371)).
-  Injecting the `MockServerClient` declared on an outer test class into a `@Nested` inner test instance threw
-  `IllegalArgumentException` because the field was set on the inner instance rather than the enclosing instance
-  that declares it. Injection now resolves the correct enclosing instance via the synthetic outer reference
-  (regression since 6.0.0).
-- **Dashboard LLM pricing corrected.** The dashboard cost estimates were ~1 year stale and up to ~3× too high
-  (e.g. Opus 4.8 shown at 15/75 instead of 5/25); the table is now synced to the server's pricing and guarded
-  by a drift test.
+#### Correctness & reliability
 - **SSL/decoder faults in the proxy/relay handlers are now logged at WARN** instead of being silently dropped,
   so genuine TLS/decoder problems are visible without the noise of benign connection closes.
 - **LLM streaming pacing above 1000 tokens/sec is preserved.** Sub-millisecond per-token delays were
@@ -127,15 +169,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Forward DNS resolution moved off the calling thread.** Forward actions hand the connect path an unresolved
   address so DNS runs on the Netty event loop; SSRF validation still resolves and rejects private/loopback
   targets first, and a missing SSRF guard was added to the forward-validate path.
-- **`mockserver-core` no longer triggers dependency-convergence errors in downstream builds**
-  ([#1970](https://github.com/mock-server/mockserver-monorepo/issues/1970)). Projects that depend on
-  `mockserver-core` and run `maven-enforcer`'s `dependencyConvergence` rule saw conflicts for guava, jsr305,
-  rhino, libphonenumber, snakeyaml, commons-*, slf4j-api, jackson-* and jakarta.xml.bind-api, because those
-  versions are pinned in MockServer's parent `dependencyManagement` (which is not transitive) while
-  swagger-parser, json-patch, velocity and protobuf-java-util dragged in older transitive copies. The stale
-  transitive edges are now pruned with `<exclusion>`s (the resolved classpath is unchanged — the pinned/newer
-  versions already won nearest-wins), and `jackson-dataformat-yaml` and `jsr305` are declared directly so a
-  single version of each reaches consumers. (The `mockserver-client-java` half of this was fixed in 7.1.0.)
 - **Code-review hardening sweep — correctness, concurrency, resources and performance.** A repo-wide review
   surfaced and fixed a set of latent defects:
   - **Stale `hashCode` broke matching.** `KeyToMultiValue.replaceValues()`/`addNottableValues()` mutated the
@@ -179,31 +212,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `PUT /mockserver/reset`). Early header matching now excludes the reserved `/mockserver` control-plane path
     prefix, so management endpoints always reach the control plane.
 
-### Security
+#### Dashboard UI
+- **Dashboard LLM pricing corrected.** The dashboard cost estimates were ~1 year stale and up to ~3× too high
+  (e.g. Opus 4.8 shown at 15/75 instead of 5/25); the table is now synced to the server's pricing and guarded
+  by a drift test.
 
-- **`/bind` and `/stop` now honour control-plane authentication/authorization.** These mutating lifecycle
-  endpoints were serviced before the auth gate; they now require the same control-plane auth as
-  `/mockserver/configuration`. Default deployments with no control-plane auth configured are unaffected, and
-  `/status` / `/ready` remain open for health probes. Closes the lifecycle-endpoint gap noted in 7.2.0.
-- **MCP tool calls now honour control-plane authorization.** With `controlPlaneAuthorizationEnabled`, each MCP
-  tool is classified read vs mutate (fail-closed) and checked against the same role model as the HTTP control
-  plane, so a read-only principal can no longer invoke mutating MCP tools (create/clear/reset/…). Default
-  (authorization disabled) behaviour is unchanged; enforced across HTTP and HTTP/3, single and batch. Closes
-  the per-tool MCP gap noted in 7.2.0.
-- **Control-plane JWT validation cross-request race fixed.** A single shared `JWTValidator` reconfigured the
-  Nimbus processor (key selector + claims verifier) on every call, so concurrent control-plane requests could be
-  verified against another request's policy. The processor is now configured once and `validate()` is stateless.
-- **Remote JWKS / OIDC discovery fetches are now bounded.** JWKS-key-set and OIDC discovery-document fetches on
-  the authentication path used the JOSE library defaults (infinite connect/read timeout, no size limit); they now
-  use finite timeouts and a size cap, so a slow or hostile identity-provider endpoint can no longer hang the auth
-  path or be used as an amplification vector.
-- **Velocity templates can no longer fetch arbitrary URLs or read local files.** The Apache Velocity
-  `ImportTool` (which exposes `$import.read(url|file)`) was registered in the template toolbox; it has been
-  removed, closing an SSRF / local-file-disclosure vector in response templates.
-- **mTLS control-plane authentication rejects expired client certificates.** Client-certificate authentication
-  validated only that the certificate chained to the configured CA; it now also enforces the certificate
-  validity window, so an expired or not-yet-valid (but correctly signed) client certificate is rejected.
-- **Mock OIDC client-secret comparison is now constant-time.**
+#### IDE extensions (VS Code & JetBrains)
+- **JetBrains plugin no longer uses internal/deprecated IntelliJ Platform APIs.** A blocking IntelliJ Plugin
+  Verifier gate now runs in CI against the full recommended IDE set (IntelliJ IDEA 2024.3 through the 2026.2 EAP)
+  and rejects internal, deprecated, and scheduled-for-removal API usages — the same classes the Marketplace
+  flags. The plugin's self-version lookup is resolved from its own plugin class loader
+  (`PluginAwareClassLoader.pluginDescriptor.version`), because the id-based `PluginManager.getPluginByClass(...)` /
+  `PluginManagerCore.getPlugin(PluginId)` lookups are both marked internal on newer platforms; the tool-window
+  buttons fire their actions via the stable `AnActionEvent.createEvent(...)` + `update`/`actionPerformed`
+  primitives instead of the deprecated `ActionUtil.invokeAction(...)`; and the deprecated `JBCefBrowser(...)`
+  constructors use the `JBCefBrowser.createBuilder()...build()` API. No behaviour change; keeps the plugin
+  installable on current and future IDE builds.
+
+#### OpenAPI & contract testing
+- **OpenAPI `format: date`/`date-time` examples render as ISO strings again** ([#2370](https://github.com/mock-server/mockserver-monorepo/issues/2370)).
+  An inline `example: '2021-01-30'` on a `type: string, format: date` property was serialised in generated
+  responses as epoch-millis (`1611964800000`) instead of the ISO string, because swagger-parser deserialises
+  the example into a `java.util.Date` that the explicit-example path handed straight to Jackson. Date/date-time
+  examples are now normalised back to their schema string form before serialisation (regression since 6.0.0).
+
+#### Client libraries & integrations
+- **Spring `@MockServerTest` works with JUnit 5 `@Nested` classes again** ([#2371](https://github.com/mock-server/mockserver-monorepo/issues/2371)).
+  Injecting the `MockServerClient` declared on an outer test class into a `@Nested` inner test instance threw
+  `IllegalArgumentException` because the field was set on the inner instance rather than the enclosing instance
+  that declares it. Injection now resolves the correct enclosing instance via the synthetic outer reference
+  (regression since 6.0.0).
+
+#### Build & dependencies
+- **`mockserver-core` no longer triggers dependency-convergence errors in downstream builds**
+  ([#1970](https://github.com/mock-server/mockserver-monorepo/issues/1970)). Projects that depend on
+  `mockserver-core` and run `maven-enforcer`'s `dependencyConvergence` rule saw conflicts for guava, jsr305,
+  rhino, libphonenumber, snakeyaml, commons-*, slf4j-api, jackson-* and jakarta.xml.bind-api, because those
+  versions are pinned in MockServer's parent `dependencyManagement` (which is not transitive) while
+  swagger-parser, json-patch, velocity and protobuf-java-util dragged in older transitive copies. The stale
+  transitive edges are now pruned with `<exclusion>`s (the resolved classpath is unchanged — the pinned/newer
+  versions already won nearest-wins), and `jackson-dataformat-yaml` and `jsr305` are declared directly so a
+  single version of each reaches consumers. (The `mockserver-client-java` half of this was fixed in 7.1.0.)
 
 ## [7.2.0] - 2026-06-22
 

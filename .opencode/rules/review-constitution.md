@@ -290,3 +290,8 @@ is iteration 1, and each re-review after a fix is the next iteration.
   outstanding findings and why they remain, in `docs/plans/<task>.local.md` or
   inline in the escalation message — and **escalate to the user**. The
   8-iteration ceiling is a hard cap. (Spec: `docs/operations/ai-sdlc-integration-spec.md` §14.5.)
+- The **iteration count and time-to-PASS** are part of **rework cost** (§18.6 T10):
+  record them in the decision-log telemetry block (`review_iterations`, `rework_s`
+  — see [[decision-log]]) so review effort can be aggregated and tracked in the
+  learning loop ([[metrics]]). High iteration counts argue for better first-pass
+  quality (context/model); slow iterations argue for faster review cycles.

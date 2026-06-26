@@ -289,6 +289,28 @@ _, _ = mockserver.McpMock("/mcp").
 
 Responses use a Velocity template that echoes the inbound JSON-RPC id back via `$!{request.jsonRpcRawId}`. Tool input schemas are validated (invalid JSON panics) and compacted. `McpMock("")` defaults the path to `/mcp`.
 
+### A2A Mocking
+
+Mock an A2A (Agent2Agent) agent speaking JSON-RPC 2.0 over HTTP. `A2aMock` generates a GET agent-card discovery document plus the task methods (`tasks/send`, `tasks/get`, `tasks/cancel`), with optional SSE streaming and push-notification delivery. Skills are advertised on the agent card; custom `tasks/send` handlers match the inbound message text by regex.
+
+```go
+_, _ = mockserver.A2aMock("/a2a").
+    WithAgentName("WeatherAgent").
+    WithAgentDescription("Provides weather forecasts").
+    WithSkill("forecast", func(s *mockserver.A2aSkillBuilder) {
+        s.WithName("Forecast").
+            WithDescription("Provides weather forecasts").
+            WithTag("weather").
+            WithExample("What is the weather in London?")
+    }).
+    OnTaskSend("(?i).*london.*", "Sunny in London", false).
+    WithStreaming().
+    WithPushNotifications("http://localhost:1234/a2a/callback").
+    ApplyTo(client)
+```
+
+The agent card is served at `/.well-known/agent.json` (override via `WithAgentCardPath`) and reports `capabilities.streaming` / `capabilities.pushNotifications`. With `WithStreaming`, the streaming method (default `message/stream`, override via `WithStreamingMethod`) returns an SSE stream of status/artifact update events wrapped in JSON-RPC envelopes. With `WithPushNotifications`, each `tasks/send` both returns the JSON-RPC task response and POSTs the completed task to the webhook URL. Task responses use a Velocity template that echoes the inbound JSON-RPC id via `$!{request.jsonRpcRawId}`. `A2aMock("")` defaults the path to `/a2a`.
+
 ## Start / Launch MockServer
 
 The Go client can download and launch a local MockServer instance directly -- no Java installation and no Docker required. The launcher downloads a self-contained platform bundle (`mockserver-<version>-<os>-<arch>`) from the GitHub Release, verifies its SHA-256, caches it per-user, and starts it.

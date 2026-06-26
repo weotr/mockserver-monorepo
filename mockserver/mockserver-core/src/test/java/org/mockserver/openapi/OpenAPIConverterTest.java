@@ -11,6 +11,7 @@ import org.mockserver.model.HttpRequest;
 import org.mockserver.model.OpenAPIDefinition;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.fail;
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -1539,6 +1540,77 @@ public class OpenAPIConverterTest {
         assertThat("body must carry the wrapping element", body, containsString("<Tag"));
         assertThat("the attribute must be rendered on the element", body, containsString("id=\""));
         assertThat("the element child must still be present", body, containsString("<name>"));
+    }
+
+    // ---- example request generation (path / query / header / cookie parameters) ----
+
+    @Test
+    public void shouldGenerateExampleRequestsWithParameterValues() {
+        // given - the parameters spec declares a path (itemId), required query (filter), required
+        // header (X-Trace-Id), and required cookie (session) parameter on operation getItem
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_parameters_example.yaml";
+
+        // when
+        Map<String, HttpRequest> exampleRequests = new OpenAPIConverter(mockServerLogger).buildExampleRequests(specUrlOrPayload);
+
+        // then - the generated example request carries concrete example values for every declared
+        // path/query/header/cookie parameter
+        assertThat(exampleRequests.keySet(), hasItem("getItem"));
+        HttpRequest getItem = exampleRequests.get("getItem");
+        assertThat(getItem.getMethod().getValue(), is("GET"));
+        // path parameter substituted (itemId schema is integer -> "0")
+        assertThat(getItem.getPath().getValue(), is("/items/0"));
+        // required query parameter present
+        assertThat(getItem.getFirstQueryStringParameter("filter"), is(not(emptyString())));
+        // required header parameter present
+        assertThat(getItem.getFirstHeader("X-Trace-Id"), is(not(emptyString())));
+        // required cookie parameter present
+        assertThat(getItem.getCookieList().stream().anyMatch(c -> "session".equals(c.getName().getValue())), is(true));
+    }
+
+    @Test
+    public void shouldGenerateExampleRequestWithBodyForOperationWithRequestBody() {
+        // given - petstore createPets declares a required JSON request body
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_petstore_example.json";
+
+        // when
+        Map<String, HttpRequest> exampleRequests = new OpenAPIConverter(mockServerLogger).buildExampleRequests(specUrlOrPayload);
+
+        // then - createPets carries a content-type header and a generated example body
+        HttpRequest createPets = exampleRequests.get("createPets");
+        assertThat(createPets, is(notNullValue()));
+        assertThat(createPets.getMethod().getValue(), is("POST"));
+        assertThat(createPets.getFirstHeader("content-type"), is("application/json"));
+        assertThat(createPets.getBodyAsString(), containsString("name"));
+    }
+
+    @Test
+    public void shouldGenerateExampleRequestsWithoutParametersForParameterlessOperation() {
+        // given - the simple spec's listPets operation declares no parameters
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_simple_example.json";
+
+        // when
+        Map<String, HttpRequest> exampleRequests = new OpenAPIConverter(mockServerLogger).buildExampleRequests(specUrlOrPayload);
+
+        // then - the example request carries no query parameters, headers, or cookies beyond the path
+        HttpRequest listPets = exampleRequests.get("listPets");
+        assertThat(listPets, is(notNullValue()));
+        assertThat(listPets.getQueryStringParameterList() == null || listPets.getQueryStringParameterList().isEmpty(), is(true));
+        assertThat(listPets.getHeaderList() == null || listPets.getHeaderList().isEmpty(), is(true));
+        assertThat(listPets.getCookieList() == null || listPets.getCookieList().isEmpty(), is(true));
+    }
+
+    @Test
+    public void shouldNotChangeBuildExpectationsOutputForSpecsWithoutParameters() {
+        // given - the additive buildExampleRequests must not regress the existing buildExpectations
+        // output; the petstore expectations remain an OpenAPIDefinition matcher with the same response
+        String specUrlOrPayload = "org/mockserver/openapi/openapi_petstore_example.json";
+
+        // when
+        List<Expectation> actualExpectations = new OpenAPIConverter(mockServerLogger).buildExpectations(specUrlOrPayload, null);
+
+        // then
+        shouldBuildPetStoreExpectations(specUrlOrPayload, actualExpectations);
     }
 
 }

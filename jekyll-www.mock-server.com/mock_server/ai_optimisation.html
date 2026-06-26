@@ -44,7 +44,7 @@ keywords: llm cost optimisation, ai cost reduction, prompt caching, token reduct
 flowchart LR
     A["AI Agent\n(e.g. Claude Code)"] -->|"HTTPS via proxy"| B["MockServer\n(captures traffic)"]
     B -->|"forwards to"| C["LLM API\n(OpenAI, Anthropic…)"]
-    B -->|"GET /mockserver/llm/optimisationReport"| D["Optimisation Report\n(JSON bundle + Markdown brief)"]
+    B -->|"GET /mockserver/llm/optimisationReport"| D["Optimisation Report\n(JSON bundle + Markdown brief + CSV)"]
     D -->|"paste into"| E["Any LLM\n(cost-reduction advice)"]
 ```
 
@@ -207,6 +207,23 @@ opencode run "summarise the README and suggest one improvement"</code></pre>
     </p>
 </div>
 
+<button id="button_export_optimisation_mcp_csv" class="accordion">Export CSV via MCP</button>
+<div class="panel">
+<pre class="prettyprint code"><code class="code">{
+  "method": "tools/call",
+  "params": {
+    "name": "export_optimisation_report",
+    "arguments": {
+      "format": "csv"
+    }
+  }
+}</code></pre>
+    <p>
+        Returns the spreadsheet-friendly CSV (per-call table plus totals/verdict summary) in the
+        <code class="code inline">csv</code> field of the tool result.
+    </p>
+</div>
+
 <h3>REST Endpoint</h3>
 
 <p>
@@ -225,6 +242,12 @@ opencode run "summarise the README and suggest one improvement"</code></pre>
 <div class="panel">
 <pre class="prettyprint lang-bash code"><code class="code">curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=json" | python3 -m json.tool</code></pre>
     <p>Returns <code class="code inline">application/json</code> — the <code class="code inline">LlmOptimisationReport</code> bundle including session metadata, per-call breakdown, detected signals, and redaction status.</p>
+</div>
+
+<button id="button_export_optimisation_rest_csv" class="accordion">CSV export</button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code">curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=csv"</code></pre>
+    <p>Returns <code class="code inline">text/csv; charset=utf-8</code> — a spreadsheet-friendly export with two sections: a per-call table (provider, model, input/output/cached/reasoning tokens, estimated cost, latency, tool-call count, finish reason) and a totals/verdict summary. Open it in a spreadsheet or feed it to a data pipeline.</p>
 </div>
 
 <button id="button_export_optimisation_rest_filtered" class="accordion">Filtered by host or provider</button>
@@ -253,9 +276,9 @@ curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown
     <tbody>
         <tr>
             <td><code class="code inline">format</code></td>
-            <td><code class="code inline">json</code> | <code class="code inline">markdown</code></td>
+            <td><code class="code inline">json</code> | <code class="code inline">markdown</code> | <code class="code inline">csv</code></td>
             <td><code class="code inline">json</code></td>
-            <td>Output format. <code class="code inline">markdown</code> returns the pre-framed optimisation brief; <code class="code inline">json</code> returns the structured <code class="code inline">LlmOptimisationReport</code> bundle.</td>
+            <td>Output format. <code class="code inline">markdown</code> returns the pre-framed optimisation brief; <code class="code inline">json</code> returns the structured <code class="code inline">LlmOptimisationReport</code> bundle; <code class="code inline">csv</code> returns a per-call table plus a totals/verdict summary as <code class="code inline">text/csv</code>.</td>
         </tr>
         <tr>
             <td><code class="code inline">session</code></td>

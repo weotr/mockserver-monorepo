@@ -33,6 +33,8 @@ import org.mockserver.scim.ScimProviderConfiguration;
 import org.mockserver.scheduler.Scheduler;
 import org.mockserver.serialization.*;
 import org.mockserver.serialization.model.HttpChaosProfileDTO;
+import org.mockserver.slo.SloCriteria;
+import org.mockserver.slo.SloVerdict;
 import org.mockserver.socket.tls.NettySslContextFactory;
 import org.mockserver.stop.Stoppable;
 import org.mockserver.uuid.UUIDService;
@@ -59,6 +61,7 @@ import java.util.function.Supplier;
 import static io.netty.handler.codec.http.HttpHeaderNames.*;
 import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_ACCEPTABLE;
 import static io.netty.handler.codec.http.HttpResponseStatus.UNAUTHORIZED;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -112,6 +115,7 @@ public class MockServerClient implements Stoppable {
     private HttpRequestSerializer httpRequestSerializer = new HttpRequestSerializer(MOCK_SERVER_LOGGER);
     private HttpResponseSerializer httpResponseSerializer = new HttpResponseSerializer(MOCK_SERVER_LOGGER);
     private LoadScenarioSerializer loadScenarioSerializer = new LoadScenarioSerializer(MOCK_SERVER_LOGGER);
+    private SloCriteriaSerializer sloCriteriaSerializer = new SloCriteriaSerializer(MOCK_SERVER_LOGGER);
     private final CompletableFuture<MockServerClient> stopFuture = new CompletableFuture<>();
     private volatile BreakpointWebSocketClient breakpointWebSocketClient;
 
@@ -3006,6 +3010,134 @@ public class MockServerClient implements Stoppable {
         );
         if (httpResponse != null && httpResponse.getStatusCode() != null && httpResponse.getStatusCode() >= 400) {
             throw new ClientException(formatLogMessage("error:{}while generating load scenario from recording", httpResponse.getBodyAsString()));
+        }
+        return httpResponse != null ? httpResponse.getBodyAsString() : "";
+    }
+
+    // SRE control-plane: SLO verdicts and scheduled chaos experiments
+
+    /**
+     * Verify a service-level objective (SLO) over a window of recorded SLI samples via
+     * {@code PUT /mockserver/verifySLO}. The supplied {@link SloCriteria} is evaluated
+     * synchronously against the samples the server has already recorded and answered with
+     * an {@link SloVerdict} whose {@link SloVerdict.Result result} is {@code PASS},
+     * {@code FAIL} or {@code INCONCLUSIVE}.
+     *
+     * <p>Status mapping mirrors the server contract and the other clients:
+     * <ul>
+     *   <li>{@code 200 OK} — a {@code PASS} or {@code INCONCLUSIVE} verdict; the parsed
+     *       {@link SloVerdict} is returned.</li>
+     *   <li>{@code 406 NOT_ACCEPTABLE} — a {@code FAIL} verdict; this throws an
+     *       {@link AssertionError} carrying the verdict body, exactly like the other
+     *       {@code verify(...)} methods so an SLO gate is catchable the same way. The
+     *       verdict is also attached via {@link Throwable#initCause(Throwable)} as an
+     *       {@link SloVerdictAssertionError} for callers that want the parsed result.</li>
+     *   <li>{@code 400 BAD_REQUEST} — malformed criteria, or SLO tracking is disabled on
+     *       the server (set {@code sloTrackingEnabled=true}); this surfaces as an
+     *       {@link IllegalArgumentException} carrying the server's error body (the common
+     *       client convention — {@code sendRequest} maps every {@code 400} this way).</li>
+     * </ul>
+     *
+     * @param criteria the SLO criteria to evaluate (see {@link org.mockserver.slo.SloCriteria})
+     * @return the parsed {@link SloVerdict} for a {@code PASS} or {@code INCONCLUSIVE} result
+     * @throws AssertionError         if the verdict is {@code FAIL} (server responds {@code 406})
+     * @throws IllegalArgumentException if the criteria are invalid or SLO tracking is disabled (server responds {@code 400})
+     */
+    public SloVerdict verifySLO(SloCriteria criteria) throws AssertionError {
+        if (criteria == null) {
+            throw new IllegalArgumentException("verifySLO requires a non-null SloCriteria");
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("verifySLO"))
+                .withBody(sloCriteriaSerializer.serialize(criteria), StandardCharsets.UTF_8),
+            false
+        );
+        Integer statusCode = httpResponse != null ? httpResponse.getStatusCode() : null;
+        String body = httpResponse != null ? httpResponse.getBodyAsString() : "";
+        if (statusCode != null) {
+            if (statusCode == NOT_ACCEPTABLE.code()) {
+                SloVerdictAssertionError assertionError = new SloVerdictAssertionError(body);
+                try {
+                    assertionError.initCause(new SloVerdictHolder(sloCriteriaSerializer.deserializeVerdict(body)));
+                } catch (Throwable ignore) {
+                    // body was not a parseable verdict — the message still carries it
+                }
+                throw assertionError;
+            } else if (statusCode >= 400) {
+                // 400 is already mapped to IllegalArgumentException by sendRequest (SLO tracking
+                // disabled / malformed criteria); this covers any other unexpected error status.
+                throw new ClientException(formatLogMessage("error:{}while verifying SLO", body));
+            }
+        }
+        return sloCriteriaSerializer.deserializeVerdict(body);
+    }
+
+    /**
+     * An {@link AssertionError} raised when {@link #verifySLO(SloCriteria)} receives a
+     * {@code FAIL} verdict ({@code 406}). The raw verdict JSON is the message; when it
+     * parsed, the {@link SloVerdict} is available via {@link #getVerdict()}.
+     */
+    public static class SloVerdictAssertionError extends AssertionError {
+        public SloVerdictAssertionError(String message) {
+            super(message);
+        }
+
+        public SloVerdict getVerdict() {
+            Throwable cause = getCause();
+            return cause instanceof SloVerdictHolder ? ((SloVerdictHolder) cause).verdict : null;
+        }
+    }
+
+    private static class SloVerdictHolder extends Throwable {
+        private final SloVerdict verdict;
+
+        private SloVerdictHolder(SloVerdict verdict) {
+            this.verdict = verdict;
+        }
+    }
+
+    /**
+     * Start a scheduled multi-stage chaos experiment via {@code PUT /mockserver/chaosExperiment}.
+     * The experiment is an ordered sequence of stages, each applying service-scoped chaos
+     * profiles to one or more hosts for a duration; stages progress automatically. Only one
+     * experiment may be active at a time — starting a new one stops the previous one.
+     *
+     * <p>The body is a JSON object the caller builds, carrying at least {@code name} and a
+     * {@code stages} array, e.g.
+     * {@code {"name":"flaky-upstream","loop":false,"stages":[{"durationMillis":30000,"profiles":{"api.example.com":{...}}}]}}.
+     *
+     * <p>If service chaos is disabled the server responds {@code 403} and this throws a
+     * {@link ClientException} with a helpful message. A malformed definition (server responds
+     * {@code 400}) surfaces as an {@link IllegalArgumentException} carrying the server's error
+     * body (the common client convention — {@code sendRequest} maps every {@code 400} this way);
+     * any other {@code >= 400} status is surfaced as a {@link ClientException}.
+     *
+     * @param experimentJson the experiment definition as JSON ({@code {name, loop?, stages[...]}})
+     * @return JSON string describing the started experiment ({@code {"status":"started","name":...,"stages":...,"loop":...}})
+     * @throws ClientException          if chaos is disabled (server responds {@code 403}) or an unexpected error status is returned
+     * @throws IllegalArgumentException if the definition is rejected (server responds {@code 400})
+     */
+    public String startChaosExperiment(String experimentJson) {
+        if (experimentJson == null || experimentJson.isBlank()) {
+            throw new IllegalArgumentException("startChaosExperiment requires a non-null non-empty experiment definition JSON string");
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("chaosExperiment"))
+                .withBody(experimentJson, StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && httpResponse.getStatusCode() != null) {
+            if (httpResponse.getStatusCode() == FORBIDDEN.code()) {
+                throw new ClientException("forbidden while starting chaos experiment (control-plane authorization denied, or chaos disabled) - server responded: " + httpResponse.getBodyAsString());
+            } else if (httpResponse.getStatusCode() >= 400) {
+                throw new ClientException(formatLogMessage("error:{}while starting chaos experiment", httpResponse.getBodyAsString()));
+            }
         }
         return httpResponse != null ? httpResponse.getBodyAsString() : "";
     }

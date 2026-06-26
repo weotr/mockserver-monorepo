@@ -71,6 +71,16 @@ public class OllamaCodec implements ProviderCodec {
         String text = completion.getText();
         message.put("content", text != null ? text : "");
 
+        // Reasoning ("thinking") content. Ollama 0.5+ surfaces a reasoning-capable model's chain of
+        // thought as message.thinking (a sibling string to content). Emitted only when reasoningText
+        // is set so existing fixtures stay byte-identical. Ollama has NO native cached/reasoning
+        // *token-count* field, so the Usage.cachedInputTokens / reasoningTokens counts are not
+        // encoded here — only the reasoning text is representable on the wire.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            message.put("thinking", reasoningText);
+        }
+
         // Tool calls
         List<ToolUse> toolCalls = completion.getToolCalls();
         boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
@@ -131,6 +141,18 @@ public class OllamaCodec implements ProviderCodec {
         String modelName = model != null ? model : "unknown";
 
         String text = completion.getText();
+
+        // Reasoning ("thinking") delta chunk (before content) when reasoning is set. Ollama streams
+        // a reasoning model's chain of thought as message.thinking deltas ahead of the content
+        // deltas. Additive — absent unless reasoningText is set.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            String thinkingChunk = "{\"model\":\"" + escapeJson(modelName) +
+                "\",\"created_at\":\"" + Instant.now().toString() +
+                "\",\"message\":{\"role\":\"assistant\",\"content\":\"\",\"thinking\":\"" + escapeJson(reasoningText) +
+                "\"},\"done\":false}";
+            events.add(sseEvent().withData(thinkingChunk));
+        }
 
         // Text delta chunks
         if (text != null && !text.isEmpty()) {

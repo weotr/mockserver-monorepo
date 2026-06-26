@@ -23,6 +23,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean dashboardAnalyticsEnabled;
     private String dashboardAnalyticsEndpoint;
     private String dashboardAnalyticsKey;
+    private String dashboardAnalyticsDistribution;
     private Boolean chaosAutoHaltEnabled;
     private Long chaosAutoHaltErrorThreshold;
     private Long chaosAutoHaltWindowMillis;
@@ -36,6 +37,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     private Integer maxExpectations;
     private Integer maxLogEntries;
+    private Integer ringBufferSize;
     private Integer maxWebSocketExpectations;
     private Boolean outputMemoryUsageCsv;
     private String memoryUsageCsvDirectory;
@@ -74,6 +76,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     private String javascriptDisallowedClasses;
     private String javascriptDisallowedText;
+    private Long javascriptTemplateExecutionTimeout;
     private Boolean velocityDisallowClassLoading;
     private String velocityDisallowedText;
     private String mustacheDisallowedText;
@@ -108,6 +111,14 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String proxyAuthenticationRealm;
     private String proxyAuthenticationUsername;
     private String proxyAuthenticationPassword;
+    // data plane (mocked endpoint) authentication — opt-in, default off
+    private Boolean dataPlaneAuthenticationRequired;
+    private String dataPlaneBasicAuthenticationUsername;
+    private String dataPlaneBasicAuthenticationPassword;
+    private String dataPlaneBasicAuthenticationRealm;
+    private String dataPlaneBearerAuthenticationToken;
+    private String dataPlaneApiKeyAuthenticationHeader;
+    private String dataPlaneApiKeyAuthenticationValue;
     private String noProxyHosts;
     private String proxyRemoteHost;
     private Integer proxyRemotePort;
@@ -199,8 +210,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean forwardConnectionPoolEnabled;
     private Integer forwardConnectionPoolMaxIdlePerKey;
     private Long forwardConnectionPoolIdleTimeoutMillis;
+    private Boolean forwardConnectionPoolKeepAlive;
+    private Integer forwardConnectionPoolMaxTotalPerKey;
+    private Boolean forwardSocketKeepAlive;
+    private Integer forwardSocketKeepAliveIdleSeconds;
+    private Integer forwardSocketKeepAliveIntervalSeconds;
+    private Integer forwardSocketKeepAliveCount;
     private Integer forwardProxyRetryCount;
     private Long forwardProxyRetryBackoffMillis;
+    private Boolean forwardProxyHttp2Enabled;
     private Boolean forwardProxyCircuitBreakerEnabled;
     private Integer forwardProxyCircuitBreakerFailureThreshold;
     private Long forwardProxyCircuitBreakerWindowMillis;
@@ -277,6 +295,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.dashboardAnalyticsEnabled = configuration.dashboardAnalyticsEnabled();
             this.dashboardAnalyticsEndpoint = configuration.dashboardAnalyticsEndpoint();
             this.dashboardAnalyticsKey = configuration.dashboardAnalyticsKey();
+            this.dashboardAnalyticsDistribution = configuration.dashboardAnalyticsDistribution();
             this.chaosAutoHaltEnabled = configuration.chaosAutoHaltEnabled();
             this.chaosAutoHaltErrorThreshold = configuration.chaosAutoHaltErrorThreshold();
             this.chaosAutoHaltWindowMillis = configuration.chaosAutoHaltWindowMillis();
@@ -291,6 +310,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
             this.maxExpectations = configuration.maxExpectations();
             this.maxLogEntries = configuration.maxLogEntries();
+            this.ringBufferSize = configuration.ringBufferSize();
             this.maxWebSocketExpectations = configuration.maxWebSocketExpectations();
             this.outputMemoryUsageCsv = configuration.outputMemoryUsageCsv();
             this.memoryUsageCsvDirectory = configuration.memoryUsageCsvDirectory();
@@ -330,6 +350,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
             this.javascriptDisallowedClasses = configuration.javascriptDisallowedClasses();
             this.javascriptDisallowedText = configuration.javascriptDisallowedText();
+            this.javascriptTemplateExecutionTimeout = configuration.javascriptTemplateExecutionTimeout();
             this.velocityDisallowClassLoading = configuration.velocityDisallowClassLoading();
             this.velocityDisallowedText = configuration.velocityDisallowedText();
             this.mustacheDisallowedText = configuration.mustacheDisallowedText();
@@ -373,6 +394,13 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.proxyAuthenticationRealm = configuration.proxyAuthenticationRealm();
             this.proxyAuthenticationUsername = configuration.proxyAuthenticationUsername();
             this.proxyAuthenticationPassword = configuration.proxyAuthenticationPassword();
+            this.dataPlaneAuthenticationRequired = configuration.dataPlaneAuthenticationRequired();
+            this.dataPlaneBasicAuthenticationUsername = configuration.dataPlaneBasicAuthenticationUsername();
+            this.dataPlaneBasicAuthenticationPassword = configuration.dataPlaneBasicAuthenticationPassword();
+            this.dataPlaneBasicAuthenticationRealm = configuration.dataPlaneBasicAuthenticationRealm();
+            this.dataPlaneBearerAuthenticationToken = configuration.dataPlaneBearerAuthenticationToken();
+            this.dataPlaneApiKeyAuthenticationHeader = configuration.dataPlaneApiKeyAuthenticationHeader();
+            this.dataPlaneApiKeyAuthenticationValue = configuration.dataPlaneApiKeyAuthenticationValue();
             this.noProxyHosts = configuration.noProxyHosts();
             this.proxyRemoteHost = configuration.proxyRemoteHost();
             this.proxyRemotePort = configuration.proxyRemotePort();
@@ -467,8 +495,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.forwardConnectionPoolEnabled = configuration.forwardConnectionPoolEnabled();
             this.forwardConnectionPoolMaxIdlePerKey = configuration.forwardConnectionPoolMaxIdlePerKey();
             this.forwardConnectionPoolIdleTimeoutMillis = configuration.forwardConnectionPoolIdleTimeoutMillis();
+            this.forwardConnectionPoolKeepAlive = configuration.forwardConnectionPoolKeepAlive();
+            this.forwardConnectionPoolMaxTotalPerKey = configuration.forwardConnectionPoolMaxTotalPerKey();
+            this.forwardSocketKeepAlive = configuration.forwardSocketKeepAlive();
+            this.forwardSocketKeepAliveIdleSeconds = configuration.forwardSocketKeepAliveIdleSeconds();
+            this.forwardSocketKeepAliveIntervalSeconds = configuration.forwardSocketKeepAliveIntervalSeconds();
+            this.forwardSocketKeepAliveCount = configuration.forwardSocketKeepAliveCount();
             this.forwardProxyRetryCount = configuration.forwardProxyRetryCount();
             this.forwardProxyRetryBackoffMillis = configuration.forwardProxyRetryBackoffMillis();
+            this.forwardProxyHttp2Enabled = configuration.forwardProxyHttp2Enabled();
             this.forwardProxyCircuitBreakerEnabled = configuration.forwardProxyCircuitBreakerEnabled();
             this.forwardProxyCircuitBreakerFailureThreshold = configuration.forwardProxyCircuitBreakerFailureThreshold();
             this.forwardProxyCircuitBreakerWindowMillis = configuration.forwardProxyCircuitBreakerWindowMillis();
@@ -545,6 +580,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (maxLogEntries != null && (maxLogEntries < 0 || maxLogEntries > 1000000)) {
             throw new IllegalArgumentException("maxLogEntries must be between 0 and 1000000, got: " + maxLogEntries);
         }
+        if (ringBufferSize != null && (ringBufferSize < 0 || ringBufferSize > 1073741824)) {
+            throw new IllegalArgumentException("ringBufferSize must be between 0 and 1073741824, got: " + ringBufferSize);
+        }
         if (maxWebSocketExpectations != null && (maxWebSocketExpectations < 0 || maxWebSocketExpectations > 100000)) {
             throw new IllegalArgumentException("maxWebSocketExpectations must be between 0 and 100000, got: " + maxWebSocketExpectations);
         }
@@ -581,6 +619,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.dashboardAnalyticsEnabled(dashboardAnalyticsEnabled);
         configuration.dashboardAnalyticsEndpoint(dashboardAnalyticsEndpoint);
         configuration.dashboardAnalyticsKey(dashboardAnalyticsKey);
+        configuration.dashboardAnalyticsDistribution(dashboardAnalyticsDistribution);
         configuration.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
         configuration.chaosAutoHaltErrorThreshold(chaosAutoHaltErrorThreshold);
         configuration.chaosAutoHaltWindowMillis(chaosAutoHaltWindowMillis);
@@ -594,6 +633,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
         configuration.maxExpectations(maxExpectations);
         configuration.maxLogEntries(maxLogEntries);
+        configuration.ringBufferSize(ringBufferSize);
         configuration.maxWebSocketExpectations(maxWebSocketExpectations);
         configuration.outputMemoryUsageCsv(outputMemoryUsageCsv);
         configuration.memoryUsageCsvDirectory(memoryUsageCsvDirectory);
@@ -634,6 +674,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
         configuration.javascriptDisallowedClasses(javascriptDisallowedClasses);
         configuration.javascriptDisallowedText(javascriptDisallowedText);
+        configuration.javascriptTemplateExecutionTimeout(javascriptTemplateExecutionTimeout);
         configuration.velocityDisallowClassLoading(velocityDisallowClassLoading);
         configuration.velocityDisallowedText(velocityDisallowedText);
         configuration.mustacheDisallowedText(mustacheDisallowedText);
@@ -674,6 +715,13 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.proxyAuthenticationRealm(proxyAuthenticationRealm);
         configuration.proxyAuthenticationUsername(proxyAuthenticationUsername);
         configuration.proxyAuthenticationPassword(proxyAuthenticationPassword);
+        configuration.dataPlaneAuthenticationRequired(dataPlaneAuthenticationRequired);
+        configuration.dataPlaneBasicAuthenticationUsername(dataPlaneBasicAuthenticationUsername);
+        configuration.dataPlaneBasicAuthenticationPassword(dataPlaneBasicAuthenticationPassword);
+        configuration.dataPlaneBasicAuthenticationRealm(dataPlaneBasicAuthenticationRealm);
+        configuration.dataPlaneBearerAuthenticationToken(dataPlaneBearerAuthenticationToken);
+        configuration.dataPlaneApiKeyAuthenticationHeader(dataPlaneApiKeyAuthenticationHeader);
+        configuration.dataPlaneApiKeyAuthenticationValue(dataPlaneApiKeyAuthenticationValue);
         configuration.noProxyHosts(noProxyHosts);
         configuration.proxyRemoteHost(proxyRemoteHost);
         configuration.proxyRemotePort(proxyRemotePort);
@@ -773,8 +821,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.forwardConnectionPoolEnabled(forwardConnectionPoolEnabled);
         configuration.forwardConnectionPoolMaxIdlePerKey(forwardConnectionPoolMaxIdlePerKey);
         configuration.forwardConnectionPoolIdleTimeoutMillis(forwardConnectionPoolIdleTimeoutMillis);
+        configuration.forwardConnectionPoolKeepAlive(forwardConnectionPoolKeepAlive);
+        configuration.forwardConnectionPoolMaxTotalPerKey(forwardConnectionPoolMaxTotalPerKey);
+        configuration.forwardSocketKeepAlive(forwardSocketKeepAlive);
+        configuration.forwardSocketKeepAliveIdleSeconds(forwardSocketKeepAliveIdleSeconds);
+        configuration.forwardSocketKeepAliveIntervalSeconds(forwardSocketKeepAliveIntervalSeconds);
+        configuration.forwardSocketKeepAliveCount(forwardSocketKeepAliveCount);
         configuration.forwardProxyRetryCount(forwardProxyRetryCount);
         configuration.forwardProxyRetryBackoffMillis(forwardProxyRetryBackoffMillis);
+        configuration.forwardProxyHttp2Enabled(forwardProxyHttp2Enabled);
         configuration.forwardProxyCircuitBreakerEnabled(forwardProxyCircuitBreakerEnabled);
         configuration.forwardProxyCircuitBreakerFailureThreshold(forwardProxyCircuitBreakerFailureThreshold);
         configuration.forwardProxyCircuitBreakerWindowMillis(forwardProxyCircuitBreakerWindowMillis);
@@ -872,6 +927,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (dashboardAnalyticsKey != null) {
             target.dashboardAnalyticsKey(dashboardAnalyticsKey);
         }
+        if (dashboardAnalyticsDistribution != null) {
+            target.dashboardAnalyticsDistribution(dashboardAnalyticsDistribution);
+        }
         if (chaosAutoHaltEnabled != null) {
             target.chaosAutoHaltEnabled(chaosAutoHaltEnabled);
         }
@@ -904,6 +962,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (maxLogEntries != null) {
             target.maxLogEntries(maxLogEntries);
+        }
+        if (ringBufferSize != null) {
+            target.ringBufferSize(ringBufferSize);
         }
         if (maxWebSocketExpectations != null) {
             target.maxWebSocketExpectations(maxWebSocketExpectations);
@@ -998,6 +1059,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (javascriptDisallowedText != null) {
             target.javascriptDisallowedText(javascriptDisallowedText);
         }
+        if (javascriptTemplateExecutionTimeout != null) {
+            target.javascriptTemplateExecutionTimeout(javascriptTemplateExecutionTimeout);
+        }
         if (velocityDisallowClassLoading != null) {
             target.velocityDisallowClassLoading(velocityDisallowClassLoading);
         }
@@ -1084,6 +1148,27 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (proxyAuthenticationPassword != null) {
             target.proxyAuthenticationPassword(proxyAuthenticationPassword);
+        }
+        if (dataPlaneAuthenticationRequired != null) {
+            target.dataPlaneAuthenticationRequired(dataPlaneAuthenticationRequired);
+        }
+        if (dataPlaneBasicAuthenticationUsername != null) {
+            target.dataPlaneBasicAuthenticationUsername(dataPlaneBasicAuthenticationUsername);
+        }
+        if (dataPlaneBasicAuthenticationPassword != null) {
+            target.dataPlaneBasicAuthenticationPassword(dataPlaneBasicAuthenticationPassword);
+        }
+        if (dataPlaneBasicAuthenticationRealm != null) {
+            target.dataPlaneBasicAuthenticationRealm(dataPlaneBasicAuthenticationRealm);
+        }
+        if (dataPlaneBearerAuthenticationToken != null) {
+            target.dataPlaneBearerAuthenticationToken(dataPlaneBearerAuthenticationToken);
+        }
+        if (dataPlaneApiKeyAuthenticationHeader != null) {
+            target.dataPlaneApiKeyAuthenticationHeader(dataPlaneApiKeyAuthenticationHeader);
+        }
+        if (dataPlaneApiKeyAuthenticationValue != null) {
+            target.dataPlaneApiKeyAuthenticationValue(dataPlaneApiKeyAuthenticationValue);
         }
         if (noProxyHosts != null) {
             target.noProxyHosts(noProxyHosts);
@@ -1340,11 +1425,32 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (forwardConnectionPoolIdleTimeoutMillis != null) {
             target.forwardConnectionPoolIdleTimeoutMillis(forwardConnectionPoolIdleTimeoutMillis);
         }
+        if (forwardConnectionPoolKeepAlive != null) {
+            target.forwardConnectionPoolKeepAlive(forwardConnectionPoolKeepAlive);
+        }
+        if (forwardConnectionPoolMaxTotalPerKey != null) {
+            target.forwardConnectionPoolMaxTotalPerKey(forwardConnectionPoolMaxTotalPerKey);
+        }
+        if (forwardSocketKeepAlive != null) {
+            target.forwardSocketKeepAlive(forwardSocketKeepAlive);
+        }
+        if (forwardSocketKeepAliveIdleSeconds != null) {
+            target.forwardSocketKeepAliveIdleSeconds(forwardSocketKeepAliveIdleSeconds);
+        }
+        if (forwardSocketKeepAliveIntervalSeconds != null) {
+            target.forwardSocketKeepAliveIntervalSeconds(forwardSocketKeepAliveIntervalSeconds);
+        }
+        if (forwardSocketKeepAliveCount != null) {
+            target.forwardSocketKeepAliveCount(forwardSocketKeepAliveCount);
+        }
         if (forwardProxyRetryCount != null) {
             target.forwardProxyRetryCount(forwardProxyRetryCount);
         }
         if (forwardProxyRetryBackoffMillis != null) {
             target.forwardProxyRetryBackoffMillis(forwardProxyRetryBackoffMillis);
+        }
+        if (forwardProxyHttp2Enabled != null) {
+            target.forwardProxyHttp2Enabled(forwardProxyHttp2Enabled);
         }
         if (forwardProxyCircuitBreakerEnabled != null) {
             target.forwardProxyCircuitBreakerEnabled(forwardProxyCircuitBreakerEnabled);
@@ -1617,6 +1723,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public String getDashboardAnalyticsDistribution() {
+        return dashboardAnalyticsDistribution;
+    }
+
+    public ConfigurationDTO setDashboardAnalyticsDistribution(String dashboardAnalyticsDistribution) {
+        this.dashboardAnalyticsDistribution = dashboardAnalyticsDistribution;
+        return this;
+    }
+
     public Boolean getChaosAutoHaltEnabled() {
         return chaosAutoHaltEnabled;
     }
@@ -1713,6 +1828,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMaxLogEntries(Integer maxLogEntries) {
         this.maxLogEntries = maxLogEntries;
+        return this;
+    }
+
+    public Integer getRingBufferSize() {
+        return ringBufferSize;
+    }
+
+    public ConfigurationDTO setRingBufferSize(Integer ringBufferSize) {
+        this.ringBufferSize = ringBufferSize;
         return this;
     }
 
@@ -1995,6 +2119,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Long getJavascriptTemplateExecutionTimeout() {
+        return javascriptTemplateExecutionTimeout;
+    }
+
+    public ConfigurationDTO setJavascriptTemplateExecutionTimeout(Long javascriptTemplateExecutionTimeout) {
+        this.javascriptTemplateExecutionTimeout = javascriptTemplateExecutionTimeout;
+        return this;
+    }
+
     public Boolean getVelocityDisallowClassLoading() {
         return velocityDisallowClassLoading;
     }
@@ -2257,6 +2390,75 @@ public class ConfigurationDTO implements DTO<Configuration> {
     @JsonProperty
     public ConfigurationDTO setProxyAuthenticationPassword(String proxyAuthenticationPassword) {
         this.proxyAuthenticationPassword = proxyAuthenticationPassword;
+        return this;
+    }
+
+    public Boolean getDataPlaneAuthenticationRequired() {
+        return dataPlaneAuthenticationRequired;
+    }
+
+    public ConfigurationDTO setDataPlaneAuthenticationRequired(Boolean dataPlaneAuthenticationRequired) {
+        this.dataPlaneAuthenticationRequired = dataPlaneAuthenticationRequired;
+        return this;
+    }
+
+    public String getDataPlaneBasicAuthenticationUsername() {
+        return dataPlaneBasicAuthenticationUsername;
+    }
+
+    public ConfigurationDTO setDataPlaneBasicAuthenticationUsername(String dataPlaneBasicAuthenticationUsername) {
+        this.dataPlaneBasicAuthenticationUsername = dataPlaneBasicAuthenticationUsername;
+        return this;
+    }
+
+    @JsonIgnore
+    public String getDataPlaneBasicAuthenticationPassword() {
+        return dataPlaneBasicAuthenticationPassword;
+    }
+
+    @JsonProperty
+    public ConfigurationDTO setDataPlaneBasicAuthenticationPassword(String dataPlaneBasicAuthenticationPassword) {
+        this.dataPlaneBasicAuthenticationPassword = dataPlaneBasicAuthenticationPassword;
+        return this;
+    }
+
+    public String getDataPlaneBasicAuthenticationRealm() {
+        return dataPlaneBasicAuthenticationRealm;
+    }
+
+    public ConfigurationDTO setDataPlaneBasicAuthenticationRealm(String dataPlaneBasicAuthenticationRealm) {
+        this.dataPlaneBasicAuthenticationRealm = dataPlaneBasicAuthenticationRealm;
+        return this;
+    }
+
+    @JsonIgnore
+    public String getDataPlaneBearerAuthenticationToken() {
+        return dataPlaneBearerAuthenticationToken;
+    }
+
+    @JsonProperty
+    public ConfigurationDTO setDataPlaneBearerAuthenticationToken(String dataPlaneBearerAuthenticationToken) {
+        this.dataPlaneBearerAuthenticationToken = dataPlaneBearerAuthenticationToken;
+        return this;
+    }
+
+    public String getDataPlaneApiKeyAuthenticationHeader() {
+        return dataPlaneApiKeyAuthenticationHeader;
+    }
+
+    public ConfigurationDTO setDataPlaneApiKeyAuthenticationHeader(String dataPlaneApiKeyAuthenticationHeader) {
+        this.dataPlaneApiKeyAuthenticationHeader = dataPlaneApiKeyAuthenticationHeader;
+        return this;
+    }
+
+    @JsonIgnore
+    public String getDataPlaneApiKeyAuthenticationValue() {
+        return dataPlaneApiKeyAuthenticationValue;
+    }
+
+    @JsonProperty
+    public ConfigurationDTO setDataPlaneApiKeyAuthenticationValue(String dataPlaneApiKeyAuthenticationValue) {
+        this.dataPlaneApiKeyAuthenticationValue = dataPlaneApiKeyAuthenticationValue;
         return this;
     }
 
@@ -3029,6 +3231,60 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Boolean getForwardConnectionPoolKeepAlive() {
+        return forwardConnectionPoolKeepAlive;
+    }
+
+    public ConfigurationDTO setForwardConnectionPoolKeepAlive(Boolean forwardConnectionPoolKeepAlive) {
+        this.forwardConnectionPoolKeepAlive = forwardConnectionPoolKeepAlive;
+        return this;
+    }
+
+    public Integer getForwardConnectionPoolMaxTotalPerKey() {
+        return forwardConnectionPoolMaxTotalPerKey;
+    }
+
+    public ConfigurationDTO setForwardConnectionPoolMaxTotalPerKey(Integer forwardConnectionPoolMaxTotalPerKey) {
+        this.forwardConnectionPoolMaxTotalPerKey = forwardConnectionPoolMaxTotalPerKey;
+        return this;
+    }
+
+    public Boolean getForwardSocketKeepAlive() {
+        return forwardSocketKeepAlive;
+    }
+
+    public ConfigurationDTO setForwardSocketKeepAlive(Boolean forwardSocketKeepAlive) {
+        this.forwardSocketKeepAlive = forwardSocketKeepAlive;
+        return this;
+    }
+
+    public Integer getForwardSocketKeepAliveIdleSeconds() {
+        return forwardSocketKeepAliveIdleSeconds;
+    }
+
+    public ConfigurationDTO setForwardSocketKeepAliveIdleSeconds(Integer forwardSocketKeepAliveIdleSeconds) {
+        this.forwardSocketKeepAliveIdleSeconds = forwardSocketKeepAliveIdleSeconds;
+        return this;
+    }
+
+    public Integer getForwardSocketKeepAliveIntervalSeconds() {
+        return forwardSocketKeepAliveIntervalSeconds;
+    }
+
+    public ConfigurationDTO setForwardSocketKeepAliveIntervalSeconds(Integer forwardSocketKeepAliveIntervalSeconds) {
+        this.forwardSocketKeepAliveIntervalSeconds = forwardSocketKeepAliveIntervalSeconds;
+        return this;
+    }
+
+    public Integer getForwardSocketKeepAliveCount() {
+        return forwardSocketKeepAliveCount;
+    }
+
+    public ConfigurationDTO setForwardSocketKeepAliveCount(Integer forwardSocketKeepAliveCount) {
+        this.forwardSocketKeepAliveCount = forwardSocketKeepAliveCount;
+        return this;
+    }
+
     public Integer getForwardProxyRetryCount() {
         return forwardProxyRetryCount;
     }
@@ -3044,6 +3300,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setForwardProxyRetryBackoffMillis(Long forwardProxyRetryBackoffMillis) {
         this.forwardProxyRetryBackoffMillis = forwardProxyRetryBackoffMillis;
+        return this;
+    }
+
+    public Boolean getForwardProxyHttp2Enabled() {
+        return forwardProxyHttp2Enabled;
+    }
+
+    public ConfigurationDTO setForwardProxyHttp2Enabled(Boolean forwardProxyHttp2Enabled) {
+        this.forwardProxyHttp2Enabled = forwardProxyHttp2Enabled;
         return this;
     }
 

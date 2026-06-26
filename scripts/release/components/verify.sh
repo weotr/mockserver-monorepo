@@ -216,6 +216,88 @@ check_body_contains "$V listed in Helm index.yaml" \
   "https://www.mock-server.com/index.yaml" \
   "^[[:space:]]+version:[[:space:]]+\"?${V}\"?$"
 
+# == Helm index integrity (issue #2282 — HARD) ==
+# Checking only the just-released $V is insufficient: the original bug was that
+# HISTORICAL chart versions (5.14.0/5.15.0/6.0.0) 404'd while still LISTED in
+# index.yaml, because a new major/minor release lands in a freshly created
+# bucket and the versioned-site mirror failed to carry older .tgz files across.
+# helm.sh now self-heals by syncing every chart on each run; this gate proves it
+# stuck. Enumerate EVERY .tgz URL the live index advertises and HEAD-check each
+# one resolves to a real artifact — a single dangling entry fails the release.
+# No yq in this image (only curl + jq + grep/sed, see require_cmd above), so the
+# `urls:` list is parsed with grep: helm writes one `    - <url>.tgz` line per
+# version (see `helm repo index --url` in helm.sh).
+log_info ""
+log_info "== Helm index integrity (every listed .tgz must resolve — issue #2282, HARD) =="
+index_body=$(curl -sS --connect-timeout 10 --max-time 30 \
+  "https://www.mock-server.com/index.yaml" 2>/dev/null || echo "")
+if [[ -z "$index_body" ]]; then
+  log_error "  FAIL  could not fetch Helm index.yaml for integrity check"
+  HARD_FAILS+=("Helm index integrity (fetch)")
+else
+  # Extract every chart .tgz URL advertised under any entry's urls: list.
+  # Portable array fill (no `mapfile` — absent in the bash 3.2 shipped on macOS,
+  # where these release scripts are also dry-run tested; see binary.sh).
+  index_tgz_urls=()
+  while IFS= read -r _tgz; do
+    [[ -n "$_tgz" ]] && index_tgz_urls+=("$_tgz")
+  done < <(echo "$index_body" | grep -oE 'https?://[^[:space:]"]+\.tgz' | sort -u)
+  if [[ ${#index_tgz_urls[@]} -eq 0 ]]; then
+    log_error "  FAIL  Helm index.yaml advertised no .tgz URLs (parse error or empty index)"
+    HARD_FAILS+=("Helm index integrity (no urls)")
+  else
+    log_info "  index.yaml advertises ${#index_tgz_urls[@]} chart .tgz URL(s) — HEAD-checking each"
+    index_dangling=0
+    for tgz_url in "${index_tgz_urls[@]}"; do
+      tgz_code=$(curl -sS --connect-timeout 10 --max-time 30 \
+        -A 'mockserver-release (+https://github.com/mock-server/mockserver-monorepo)' \
+        -o /dev/null -w '%{http_code}' -L -I "$tgz_url" 2>/dev/null || echo "000")
+      if [[ "$tgz_code" =~ ^(200|301|302)$ ]]; then
+        log_info "    PASS  $tgz_url  (HTTP $tgz_code)"
+      else
+        log_error "    FAIL  $tgz_url  (HTTP $tgz_code) — listed in index.yaml but does not resolve"
+        index_dangling=$((index_dangling + 1))
+      fi
+    done
+    if [[ "$index_dangling" -eq 0 ]]; then
+      log_info "  PASS  all ${#index_tgz_urls[@]} index.yaml chart URLs resolve"
+    else
+      log_error "  FAIL  $index_dangling chart URL(s) listed in index.yaml do NOT resolve (issue #2282)"
+      HARD_FAILS+=("Helm index integrity ($index_dangling dangling .tgz)")
+    fi
+  fi
+fi
+
+# == OCI chart publish (issue #2281 — HARD) ==
+# The image-mirror block above probes the container IMAGE (ghcr.io/mock-server/
+# mockserver). The Helm chart is a SEPARATE OCI artifact at a different repo —
+# ghcr.io/mock-server/charts/mockserver — pushed by helm.sh (fix 11bd3808a) and
+# never previously verified. Probe it the same way: an anonymous GHCR pull token
+# scoped to the chart repo, then HEAD the chart manifest by version tag. HARD:
+# unlike the convenience image mirror, the OCI chart is the documented install
+# source (`helm pull oci://ghcr.io/mock-server/charts/mockserver`) and Artifact
+# Hub listing, so a missing publish is a release defect, not a lagging mirror.
+log_info ""
+log_info "== Helm OCI chart (ghcr.io/mock-server/charts/mockserver — issue #2281, HARD) =="
+chart_ghcr_token=$(curl -sS --max-time 20 \
+  "https://ghcr.io/token?service=ghcr.io&scope=repository:mock-server/charts/mockserver:pull" 2>/dev/null \
+  | jq -r '.token // empty' 2>/dev/null)
+if [[ -n "$chart_ghcr_token" ]]; then
+  chart_ghcr_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+    -H "Authorization: Bearer $chart_ghcr_token" \
+    -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+    "https://ghcr.io/v2/mock-server/charts/mockserver/manifests/$V" 2>/dev/null)
+  if [[ "$chart_ghcr_code" == "200" ]]; then
+    log_info "  PASS  oci://ghcr.io/mock-server/charts/mockserver:$V"
+  else
+    log_error "  FAIL  oci://ghcr.io/mock-server/charts/mockserver:$V returned HTTP ${chart_ghcr_code:-?} (OCI chart not published — issue #2281)"
+    HARD_FAILS+=("Helm OCI chart")
+  fi
+else
+  log_error "  FAIL  could not obtain GHCR pull token for the chart repo (issue #2281)"
+  HARD_FAILS+=("Helm OCI chart (token)")
+fi
+
 log_info ""
 log_info "== GitHub Release =="
 check_http "release tag mockserver-$V" \

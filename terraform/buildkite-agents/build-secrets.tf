@@ -279,6 +279,17 @@ data "aws_secretsmanager_secret" "postman_api_key" {
   name = "mockserver-build/postman-api-key"
 }
 
+# Dashboard usage analytics (mockserver-release/dashboard-analytics, keys: endpoint + key) is
+# created out of band — it holds the project's PostHog Cloud EU ingest host + write-only PUBLIC
+# project key used to bake cookieless dashboard usage analytics into the official released images
+# (scripts/release/components/docker.sh, --build-arg). The key is non-secret (it is exposed in
+# every browser once analytics is active) but is kept OUT of the source tree so a fork/self-hoster
+# building the Dockerfiles directly ships analytics inert. Read via GetSecretValue (load_secret)
+# by docker.sh on the release queue. Referenced as a data source purely for its ARN below.
+data "aws_secretsmanager_secret" "dashboard_analytics" {
+  name = "mockserver-release/dashboard-analytics"
+}
+
 # Release-only secrets.
 resource "aws_iam_policy" "read_release_secrets" {
   name        = "buildkite-read-release-secrets"
@@ -306,6 +317,7 @@ resource "aws_iam_policy" "read_release_secrets" {
           data.aws_secretsmanager_secret.ovsx.arn,
           data.aws_secretsmanager_secret.jetbrains.arn,
           data.aws_secretsmanager_secret.postman_api_key.arn,
+          data.aws_secretsmanager_secret.dashboard_analytics.arn,
         ]
       },
       {

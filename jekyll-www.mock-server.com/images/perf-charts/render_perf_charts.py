@@ -260,6 +260,116 @@ def chart_http_vs_h2(result, out_dir):
     save(fig, out_dir, "perf_http_vs_h2")
 
 
+# --- injection charts (load-generation capacity) ----------------------------
+def _fmt_k(v, _=None):
+    return f"{v / 1000:.0f}k" if v >= 1000 else f"{v:.0f}"
+
+
+def _clean_ceiling_points(d):
+    # keep only sustained points: achieved kept up (>= 0.5x offered, drops the
+    # achieved~0 collapse/end stage), near-zero throttle, no errors.
+    pts = sorted(d["points"], key=lambda p: p["offered_rps"])
+    return [p for p in pts
+            if p["achieved_rps"] >= max(50.0, 0.5 * p["offered_rps"])
+            and p.get("throttled_rps", 0) <= max(1.0, 0.01 * p["offered_rps"])
+            and p.get("error_rate", 0) <= 0.01]
+
+
+def chart_inject_ceiling(ceiling, out_dir, complex_ceiling=None):
+    fig, ax = plt.subplots(figsize=(8.8, 5.2))
+    series = [("simple GET", ceiling, BLUE)]
+    if complex_ceiling:
+        series.append(("templated POST", complex_ceiling, PURPLE))
+
+    maxx = 0
+    for label, d, color in series:
+        pts = _clean_ceiling_points(d)
+        if not pts:
+            continue
+        ox = [p["offered_rps"] for p in pts]
+        ay = [p["achieved_rps"] for p in pts]
+        maxx = max(maxx, max(ox))
+        ax.plot(ox, ay, "-o", color=color, lw=2.4, ms=6, label=label, zorder=4)
+        cap = d.get("ceiling_rps") or max(ay)
+        ax.axhline(cap, color=color, lw=1.0, ls=":", alpha=0.55, zorder=1)
+        ax.annotate(f"{label}: ~{cap / 1000:.0f}k req/s", xy=(ox[-1], cap),
+                    xytext=(0, 6), textcoords="offset points", ha="right",
+                    va="bottom", color=color, fontsize=10)
+
+    ax.plot([0, maxx], [0, maxx], "--", color=GREY, lw=1.2, alpha=0.5,
+            label="ideal (keeps up)", zorder=2)
+    _grid(ax)
+    ax.xaxis.set_major_formatter(mticker.FuncFormatter(_fmt_k))
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_k))
+    ax.set_xlabel("offered arrival rate (requests / sec)")
+    ax.set_ylabel("achieved injected throughput (requests / sec)")
+    ax.set_title("One MockServer instance — injection ceiling",
+                 fontweight="bold", fontsize=14)
+    ax.set_ylim(bottom=0)
+    ax.set_xlim(left=0)
+    ax.legend(frameon=False, loc="upper left")
+    save(fig, out_dir, "perf_inject_ceiling")
+
+
+def chart_inject_scaling(scale, out_dir):
+    s = sorted(scale["series"], key=lambda r: r["instances"])
+    n = [r["instances"] for r in s]
+    agg = [r["aggregate_rps"] for r in s]
+    single = next((r["aggregate_rps"] for r in s if r["instances"] == 1), agg[0] / n[0])
+    ideal = [single * k for k in n]
+
+    fig, ax = plt.subplots(figsize=(8.8, 5.0))
+    ax.plot(n, ideal, "--", color=GREY, lw=1.4, alpha=0.6,
+            label="ideal (linear: N × one instance)", zorder=2)
+    ax.plot(n, agg, "-o", color=BLUE, lw=2.6, ms=7, label="achieved aggregate", zorder=4)
+    for x, y in zip(n, agg):
+        ax.text(x, y, f"  {y / 1000:.0f}k", ha="left", va="center", fontsize=10, color=GREY)
+    _grid(ax)
+    ax.set_xticks(n)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_k))
+    ax.set_xlabel("MockServer load-generator instances (in parallel)")
+    ax.set_ylabel("aggregate injected throughput (requests / sec)")
+    ax.set_title("Injection throughput scales with instances",
+                 fontweight="bold", fontsize=14)
+    ax.set_ylim(bottom=0)
+    eff = (scale.get("scaling_efficiency") or {}).get("efficiency_pct")
+    if eff is not None:
+        ax.annotate(f"{eff:.0f}% of linear at {n[-1]} instances",
+                    xy=(n[-1], agg[-1]), xytext=(0.04, 0.88), textcoords="axes fraction",
+                    ha="left", color=GREY, fontsize=11,
+                    arrowprops=dict(arrowstyle="->", color=GREY, lw=1.2))
+    ax.legend(frameon=False, loc="lower right")
+    save(fig, out_dir, "perf_inject_scaling")
+
+
+def chart_inject_percore(percore, out_dir):
+    pts = sorted(percore["points"], key=lambda p: p["cores"])
+    cores = [p["cores"] for p in pts]
+    rps = [p["ceiling_rps"] for p in pts]
+    base = next((p["rps_per_core"] for p in pts if p["cores"] == 1), rps[0] / cores[0])
+    ideal = [base * c for c in cores]
+
+    fig, ax = plt.subplots(figsize=(8.8, 5.2))
+    ax.plot(cores, ideal, "--", color=GREY, lw=1.4, alpha=0.6,
+            label="ideal (linear: 1-core rate × cores)", zorder=2)
+    ax.plot(cores, rps, "-o", color=BLUE, lw=2.6, ms=7,
+            label="achieved ceiling", zorder=4)
+    for p in pts:
+        ax.annotate(f"{p['rps_per_core'] / 1000:.1f}k / core",
+                    xy=(p["cores"], p["ceiling_rps"]), xytext=(0, 9),
+                    textcoords="offset points", ha="center", fontsize=9, color=GREY)
+    _grid(ax)
+    ax.set_xticks(cores)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_fmt_k))
+    ax.set_xlabel("CPU cores allocated to one injector instance")
+    ax.set_ylabel("injection ceiling (requests / sec)")
+    ax.set_title("Injection per instance — best efficiency on few cores",
+                 fontweight="bold", fontsize=14)
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, loc="upper left")
+    save(fig, out_dir, "perf_inject_percore")
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
@@ -271,6 +381,10 @@ def main():
     sweep = load(args.data, "perf-sweep.json")
     scaling = load(args.data, "perf-scaling.json")
     result = load(args.data, "perf-result.json")
+    inject_ceiling = load(args.data, "inject-ceiling.json")
+    inject_ceiling_complex = load(args.data, "inject-ceiling-complex.json")
+    inject_percore = load(args.data, "inject-percore.json")
+    inject_scale = load(args.data, "inject-scale.json")
 
     if sweep:
         chart_knee(sweep, args.out)
@@ -283,8 +397,14 @@ def main():
         print("  (no perf-scaling.json — skipping matching-scaling chart)")
     if result:
         chart_http_vs_h2(result, args.out)
+    if inject_ceiling:
+        chart_inject_ceiling(inject_ceiling, args.out, inject_ceiling_complex)
+    if inject_percore:
+        chart_inject_percore(inject_percore, args.out)
+    if inject_scale:
+        chart_inject_scaling(inject_scale, args.out)
 
-    if not any([sweep, scaling, result]):
+    if not any([sweep, scaling, result, inject_ceiling, inject_percore, inject_scale]):
         print("ERROR: no data files found in", args.data, file=sys.stderr)
         sys.exit(1)
 

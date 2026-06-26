@@ -39,6 +39,14 @@ JLINK_HOME="${JAVA_HOME:-}"
 JMODS=""
 OUTPUT="target/bundles"
 DO_COMPRESS=true
+# Dashboard usage-analytics activation (baked into the launcher as -D system
+# properties). Empty by default → launcher is byte-identical to a no-analytics
+# build (forks / local runs / dry-run stay INERT). Populated only at release
+# time from the mockserver-release/dashboard-analytics secret via the calling
+# scripts (build-all-bundles.sh → release/components/binary.sh).
+ANALYTICS_ENDPOINT=""
+ANALYTICS_KEY=""
+ANALYTICS_DISTRIBUTION=""
 
 # Validated runtime module set (see the jlink spike: HTTP + HTTPS/BouncyCastle +
 # DNS all confirmed working). java.se is the runtime aggregator; the jdk.* extras
@@ -59,6 +67,9 @@ while [[ $# -gt 0 ]]; do
     --jmods)      JMODS="$2"; shift 2 ;;
     --modules)    MODULES="$2"; shift 2 ;;
     --output)     OUTPUT="$2"; shift 2 ;;
+    --analytics-endpoint)     ANALYTICS_ENDPOINT="$2"; shift 2 ;;
+    --analytics-key)          ANALYTICS_KEY="$2"; shift 2 ;;
+    --analytics-distribution) ANALYTICS_DISTRIBUTION="$2"; shift 2 ;;
     --no-compress) DO_COMPRESS=false; shift ;;
     -h|--help)    grep '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown argument: $1" ;;
@@ -146,7 +157,24 @@ log "runtime: $(du -sh "$STAGE/runtime" | cut -f1)"
 # ---- app jar + launcher ----------------------------------------------------
 cp "$JAR" "$STAGE/lib/mockserver.jar"
 
+# Build the dashboard-analytics -D system-property prefix that gets BAKED into
+# the generated launcher. Only when BOTH endpoint and key are non-empty (i.e.
+# the release scripts loaded them from the secret) do we inject anything; in
+# forks / local runs / dry-run they are empty, so this stays "" and the launcher
+# line is byte-identical to a no-analytics build (analytics INERT). The literal
+# values are expanded HERE (bundle-build time) and substituted into the launcher
+# as fixed text — they are NOT left as shell variables in the generated script.
+ANALYTICS_DPROPS=""        # POSIX form: -Dk=v -Dk=v -Dk=v
+ANALYTICS_DPROPS_BAT=""    # .bat form (identical flags; assembled separately for clarity)
+if [[ -n "$ANALYTICS_ENDPOINT" && -n "$ANALYTICS_KEY" ]]; then
+  ANALYTICS_DPROPS="-Dmockserver.dashboardAnalyticsEndpoint=${ANALYTICS_ENDPOINT} -Dmockserver.dashboardAnalyticsKey=${ANALYTICS_KEY} -Dmockserver.dashboardAnalyticsDistribution=${ANALYTICS_DISTRIBUTION}"
+  ANALYTICS_DPROPS_BAT="$ANALYTICS_DPROPS"
+fi
+
 if [[ "$OS" == "windows" ]]; then
+  # Header is literal (quoted heredoc); the final java line is written separately
+  # so $ANALYTICS_DPROPS_BAT EXPANDS (baked-in values) while %MOCKSERVER_JAVA_OPTS%
+  # and %* stay literal in the generated .bat.
   cat > "$STAGE/bin/mockserver.bat" <<'BAT'
 @echo off
 setlocal
@@ -154,9 +182,18 @@ set "DIR=%~dp0.."
 rem Tell MockServer it was started via this launcher so usage/help text reads
 rem "mockserver ..." instead of the "java -jar <jar>" form.
 if not defined MOCKSERVER_LAUNCHER set "MOCKSERVER_LAUNCHER=%~n0"
-"%DIR%\runtime\bin\java.exe" %MOCKSERVER_JAVA_OPTS% -jar "%DIR%\lib\mockserver.jar" %*
 BAT
+  if [[ -n "$ANALYTICS_DPROPS_BAT" ]]; then
+    printf '"%%DIR%%\\runtime\\bin\\java.exe" %s %%MOCKSERVER_JAVA_OPTS%% -jar "%%DIR%%\\lib\\mockserver.jar" %%*\n' \
+      "$ANALYTICS_DPROPS_BAT" >> "$STAGE/bin/mockserver.bat"
+  else
+    printf '"%%DIR%%\\runtime\\bin\\java.exe" %%MOCKSERVER_JAVA_OPTS%% -jar "%%DIR%%\\lib\\mockserver.jar" %%*\n' \
+      >> "$STAGE/bin/mockserver.bat"
+  fi
 else
+  # Header is literal (quoted heredoc); the final exec line is written separately
+  # so $ANALYTICS_DPROPS EXPANDS (baked-in values) while ${MOCKSERVER_JAVA_OPTS:-}
+  # and "$@" stay literal in the generated script.
   cat > "$STAGE/bin/mockserver" <<'SH'
 #!/bin/sh
 # MockServer self-contained launcher — runs on the bundled Java runtime,
@@ -166,8 +203,14 @@ DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # Tell MockServer it was started via this launcher so usage/help text reads
 # "mockserver ..." instead of the "java -jar <jar>" form.
 export MOCKSERVER_LAUNCHER="${MOCKSERVER_LAUNCHER:-$(basename -- "$0")}"
-exec "$DIR/runtime/bin/java" ${MOCKSERVER_JAVA_OPTS:-} -jar "$DIR/lib/mockserver.jar" "$@"
 SH
+  if [[ -n "$ANALYTICS_DPROPS" ]]; then
+    printf 'exec "$DIR/runtime/bin/java" %s ${MOCKSERVER_JAVA_OPTS:-} -jar "$DIR/lib/mockserver.jar" "$@"\n' \
+      "$ANALYTICS_DPROPS" >> "$STAGE/bin/mockserver"
+  else
+    printf 'exec "$DIR/runtime/bin/java" ${MOCKSERVER_JAVA_OPTS:-} -jar "$DIR/lib/mockserver.jar" "$@"\n' \
+      >> "$STAGE/bin/mockserver"
+  fi
   chmod +x "$STAGE/bin/mockserver"
 fi
 

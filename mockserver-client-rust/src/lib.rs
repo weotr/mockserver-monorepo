@@ -33,6 +33,7 @@ pub mod breakpoint;
 pub mod launcher;
 pub mod llm;
 pub mod mcp;
+pub mod a2a;
 
 pub use client::{ClientBuilder, MockServerClient, ForwardChainExpectation, Scenario};
 pub use error::{Error, Result};

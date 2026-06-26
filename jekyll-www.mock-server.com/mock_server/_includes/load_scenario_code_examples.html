@@ -214,7 +214,7 @@ var scenario = new LoadScenario
     Labels = new Dictionary&lt;string, string&gt; { ["team"] = "payments", ["env"] = "staging" },
     Profile = new LoadProfile
     {
-        Stages =
+        Stages = new List&lt;LoadStage&gt;
         {
             new LoadStage { Type = LoadStageType.RATE, StartRate = 5, EndRate = 50,
                             DurationMillis = 30000, Curve = RampCurve.LINEAR, MaxVus = 50 },
@@ -453,7 +453,7 @@ client.StopLoadScenarios("orders-ramp")</code></pre>
     Name = "orders-ramp",
     Profile = new LoadProfile
     {
-        Stages =
+        Stages = new List&lt;LoadStage&gt;
         {
             LoadStage.RampVus(1, 10, 30000, RampCurve.LINEAR),
             LoadStage.ConstantVus(10, 60000)
@@ -619,7 +619,7 @@ client.StopLoadScenarios("rate-soak")</code></pre>
     Name = "rate-soak",
     Profile = new LoadProfile
     {
-        Stages =
+        Stages = new List&lt;LoadStage&gt;
         {
             LoadStage.ConstantVus(2, 10000),
             LoadStage.Pause(5000),

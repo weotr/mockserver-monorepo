@@ -44,6 +44,14 @@ public sealed class Expectation
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HttpTemplate? HttpForwardTemplate { get; set; }
 
+    /// <summary>
+    /// Override-forwarded-request action: the matched request is forwarded after applying a
+    /// request override, while a response template produces the caller's response.
+    /// </summary>
+    [JsonPropertyName("httpOverrideForwardedRequest")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HttpOverrideForwardedRequest? HttpOverrideForwardedRequest { get; set; }
+
     [JsonPropertyName("httpError")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HttpError? HttpError { get; set; }

@@ -3,9 +3,10 @@ package com.mockserver.jetbrains
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.ActionUiKind
+import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.PlatformDataKeys
-import com.intellij.openapi.actionSystem.ex.ActionUtil
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
@@ -172,12 +173,24 @@ class MockServerToolWindowFactory : ToolWindowFactory {
      * and `e.getData(CommonDataKeys.EDITOR)` exactly as they do from the menu — the
      * action's own validation handles the "no editor open" case.
      *
-     * Note: this uses the data-context overload of [ActionUtil.invokeAction], which
-     * is deprecated on IntelliJ Platform 243. The non-deprecated replacement requires
-     * `ActionUiKind` (added in a later platform), so the migration is deferred until
-     * the plugin's minimum platform is raised — see A5 in the UX-polish review.
+     * The action is fired via the platform's most stable, non-deprecated primitives so
+     * the Plugin Verifier stays green across the whole supported IDE range: an
+     * [AnActionEvent] is built from the action and the [SimpleDataContext] with
+     * [AnActionEvent.createEvent] at place [ActionPlaces.TOOLWINDOW_CONTENT], the action's
+     * presentation is refreshed via [com.intellij.openapi.actionSystem.AnAction.update],
+     * and — only when it reports itself enabled and visible — it is run via
+     * [com.intellij.openapi.actionSystem.AnAction.actionPerformed]. The `ActionUtil`
+     * helpers are intentionally avoided: their event-based overloads are deprecated on
+     * 2025.2+ while their non-deprecated successors (`performAction`/`updateAction`) do
+     * not exist on the 2024.3 (243) compile target, so no single `ActionUtil` call is
+     * clean across all verified IDEs.
+     *
+     * Because [update] is called here directly on the EDT (it is not dispatched through
+     * the platform's `getActionUpdateThread()`), actions wired to a tool-window button via
+     * this helper MUST keep their `update()` cheap and EDT-safe — no PSI or index access,
+     * no `ActionUpdateThread.BGT` dependency. An action needing background-thread update
+     * should be added to the tool window with a direct `button { }` lambda instead.
      */
-    @Suppress("DEPRECATION")
     private fun actionButton(text: String, actionId: String, project: Project, icon: Icon?): JButton {
         val b = JButton(text)
         if (icon != null) b.icon = icon
@@ -190,7 +203,18 @@ class MockServerToolWindowFactory : ToolWindowFactory {
             if (editor != null) {
                 builder.add(CommonDataKeys.EDITOR, editor)
             }
-            ActionUtil.invokeAction(action, builder.build(), ActionPlaces.TOOLWINDOW_CONTENT, null, null)
+            val event = AnActionEvent.createEvent(
+                action,
+                builder.build(),
+                null,
+                ActionPlaces.TOOLWINDOW_CONTENT,
+                ActionUiKind.NONE,
+                null
+            )
+            action.update(event)
+            if (event.presentation.isEnabledAndVisible) {
+                action.actionPerformed(event)
+            }
         }
         return b
     }

@@ -29,7 +29,11 @@ public class HttpResponseTemplateActionHandlerTest {
     @Before
     public void setupMocks() {
         MockServerLogger mockLogFormatter = mock(MockServerLogger.class);
-        httpResponseTemplateActionHandler = new HttpResponseTemplateActionHandler(mockLogFormatter, new Configuration());
+        // javascriptTemplateExecutionTimeout(0L) disables the JS template watchdog (see PolyglotRunner):
+        // these tests exercise normal JS template execution, not the timeout feature, so they must not
+        // depend on wall-clock time. Under parallel CI load GraalJS runs interpreter-only and a first
+        // execute can exceed the production default, making this flaky. Production default is unchanged.
+        httpResponseTemplateActionHandler = new HttpResponseTemplateActionHandler(mockLogFormatter, new Configuration().javascriptTemplateExecutionTimeout(0L));
         openMocks(this);
     }
 

@@ -26,6 +26,10 @@
     },
     "maximumNumberOfRequestToReturnInVerificationFailure": {
       "type": "integer"
+    },
+    "timeout": {
+      "type": "integer",
+      "minimum": 0
     }
   },
   "oneOf": [

@@ -33,6 +33,10 @@ Before writing any code, read the surrounding context of files you're modifying 
 4. Run tests for affected modules: `./mvnw test -pl <module>`
 5. Return a summary of what was implemented, files changed, and test results
 
+## Telemetry
+
+For a significant unit, record your per-stage timing and routing rationale in the `.tmp/decisions/<id>.md` telemetry block per `[[decision-log]]` / `.opencode/rules/decision-log.md`: local-validation time broken down by check type (e.g. `stage.validate.unit_s`, `stage.validate.it_s`, `stage.build.docker_s`), `model`, and `rework_s`. Report these stage timings back to the orchestrator in your summary.
+
 ## Rules & Reference
 
 - Testing policy: `.opencode/rules/testing-policy.md`

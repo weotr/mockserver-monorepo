@@ -377,6 +377,14 @@ public class MockServerPropertyCustomizer implements ContextCustomizer {
                 config.socketConnectionTimeoutInMillis(Long.parseLong(value));
                 break;
 
+            // --- Long properties (property name matches setter name) ---
+            case "breakpointTimeoutMillis":
+                config.breakpointTimeoutMillis(Long.parseLong(value));
+                break;
+            case "javascriptTemplateExecutionTimeout":
+                config.javascriptTemplateExecutionTimeout(Long.parseLong(value));
+                break;
+
             // --- InetSocketAddress properties ---
             case "forwardHttpProxy":
                 config.forwardHttpProxy(parseInetSocketAddress(value, "mockserver.forwardHttpProxy"));

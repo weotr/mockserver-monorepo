@@ -225,6 +225,46 @@ public class A2aMockBuilderTest {
     }
 
     @Test
+    public void shouldPreserveAlreadyEscapedSlashInMessagePattern() {
+        // input chars: a, backslash, slash, b — the slash is already regex-escaped (\/).
+        Expectation[] expectations = a2aMock()
+            .onTaskSend()
+                .matchingMessage("a\\/b")
+                .respondingWith("found")
+                .and()
+            .build();
+
+        Expectation customHandler = expectations[1];
+        HttpRequest request = (HttpRequest) customHandler.getHttpRequest();
+        String body = request.getBody().toString();
+        // escaped pattern stays a\/b (one backslash) -> rendered as a\\/b in the JSON body;
+        // the already-escaped slash must NOT be doubled to a\\/b (two backslashes).
+        assertThat(body, containsString("a\\\\/b"));
+        assertThat(body, not(containsString("a\\\\\\\\/b")));
+    }
+
+    @Test
+    public void shouldNotAllowTrailingBackslashToEscapeRegexDelimiter() {
+        // input chars: a, b, c, backslash — a lone trailing backslash would otherwise escape the
+        // closing /)] delimiter and break out of the regex literal.
+        Expectation[] expectations = a2aMock()
+            .onTaskSend()
+                .matchingMessage("abc\\")
+                .respondingWith("found")
+                .and()
+            .build();
+
+        Expectation customHandler = expectations[1];
+        HttpRequest request = (HttpRequest) customHandler.getHttpRequest();
+        String body = request.getBody().toString();
+        // trailing backslash is doubled (escaped pattern abc\\, two backslashes) -> rendered as
+        // four backslashes in the JSON body, immediately followed by the UNESCAPED delimiter /)].
+        assertThat(body, containsString("abc\\\\\\\\/)]"));
+        // security assertion: the regex literal is balanced and the closing delimiter survives.
+        assertThat(body, containsString("/)]"));
+    }
+
+    @Test
     public void shouldEscapeBackslashAndNewlineInMessagePattern() {
         Expectation[] expectations = a2aMock()
             .onTaskSend()

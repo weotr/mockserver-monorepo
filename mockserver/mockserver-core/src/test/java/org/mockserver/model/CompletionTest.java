@@ -77,6 +77,41 @@ public class CompletionTest {
     }
 
     @Test
+    public void shouldBuildWithReasoningTextAndSignature() {
+        Completion c = completion()
+            .withReasoningText("thinking")
+            .withReasoningSignature("sig");
+        assertThat(c.getReasoningText(), is("thinking"));
+        assertThat(c.getReasoningSignature(), is("sig"));
+    }
+
+    @Test
+    public void shouldDefaultReasoningFieldsToNull() {
+        assertThat(completion().getReasoningText(), is(nullValue()));
+        assertThat(completion().getReasoningSignature(), is(nullValue()));
+    }
+
+    @Test
+    public void shouldNotBeEqualWhenDifferentReasoningText() {
+        assertThat(completion().withReasoningText("a"),
+            is(not(completion().withReasoningText("b"))));
+    }
+
+    @Test
+    public void shouldNotBeEqualWhenDifferentReasoningSignature() {
+        assertThat(completion().withReasoningText("a").withReasoningSignature("s1"),
+            is(not(completion().withReasoningText("a").withReasoningSignature("s2"))));
+    }
+
+    @Test
+    public void shouldBeEqualWithSameReasoningFields() {
+        Completion c1 = completion().withReasoningText("a").withReasoningSignature("s");
+        Completion c2 = completion().withReasoningText("a").withReasoningSignature("s");
+        assertThat(c1, is(c2));
+        assertThat(c1.hashCode(), is(c2.hashCode()));
+    }
+
+    @Test
     public void shouldAddSingleToolCall() {
         // given
         ToolUse tool1 = toolUse("tool1");

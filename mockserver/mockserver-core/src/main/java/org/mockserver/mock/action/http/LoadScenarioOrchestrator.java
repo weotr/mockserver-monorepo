@@ -1460,10 +1460,19 @@ public class LoadScenarioOrchestrator {
             }
             Histogram latencySnapshot = needLatencySnapshot ? latencyHistogram.copy() : null;
             boolean haveLatency = latencySnapshot != null && latencySnapshot.getTotalCount() > 0;
-            // Error rate is a fraction in [0,1]. requestsSent is incremented at dispatch and failed at
-            // completion, so a lock-free read can momentarily see more completed failures than the
-            // earlier-read dispatch count; clamp so the observed rate never exceeds 1.0.
-            double errorRate = Math.min(1.0, failed.get() / (double) Math.max(1L, sent));
+            // Error rate is a fraction of COMPLETED requests in [0,1]. requestsSent is incremented at
+            // dispatch but failed/succeeded only at completion, so dividing failures by requestsSent
+            // counts still-in-flight requests as if they were successes and understates the rate while
+            // any request is outstanding (e.g. 2 failed / 3 dispatched = 0.666 when the 3rd is in flight,
+            // even though every response is a 500). The denominator must therefore be the number of
+            // requests that have actually COMPLETED — succeeded + failed — so an in-flight request never
+            // dilutes the observed rate; the verdict only ever observes settled outcomes. succeeded is
+            // read before failed so the denominator can never lag the numerator; clamp to [0,1] as a
+            // final guard against any residual read skew across the two counters.
+            long succeededCount = succeeded.get();
+            long failedCount = failed.get();
+            long completed = succeededCount + failedCount;
+            double errorRate = completed <= 0 ? 0.0 : Math.min(1.0, failedCount / (double) completed);
             long elapsedMillis = Math.max(0L, now - startedAt);
             double throughputRps = sent / Math.max(0.001, elapsedMillis / 1000.0);
 

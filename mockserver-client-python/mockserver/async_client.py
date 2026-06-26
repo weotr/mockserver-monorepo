@@ -418,6 +418,64 @@ class AsyncMockServerClient:
             )
         return json.loads(response_body) if response_body else {}
 
+    async def verify_slo(self, criteria: dict) -> dict:
+        """Verify a service-level objective over a window of recorded SLI samples.
+
+        *criteria* is the SLO criteria dict (``name``, ``window``,
+        ``minimumSampleCount``, ``upstreamHosts``, ``objectives`` —
+        ``[{sli, comparator, threshold, scope}]``).
+
+        Returns the verdict dict with a ``result`` of ``PASS`` or ``INCONCLUSIVE``
+        (HTTP 200). A ``FAIL`` verdict (HTTP 406) raises
+        :class:`MockServerVerificationError` so a CI or chaos gate can assert on it
+        directly. SLO tracking is off by default — the server returns 400 (raised as
+        :class:`MockServerError`) until started with ``sloTrackingEnabled=true``.
+        """
+        body = json.dumps(criteria)
+        status, response_body = await self._request("PUT", "/mockserver/verifySLO", body)
+        if status == 406:
+            raise MockServerVerificationError(response_body or "SLO verdict: FAIL")
+        if status == 400:
+            raise MockServerError(
+                "Invalid SLO criteria (or SLO tracking disabled — set "
+                f"sloTrackingEnabled=true): {response_body}"
+            )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to verify SLO (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
+    async def start_chaos_experiment(self, experiment: dict) -> dict:
+        """Start a scheduled multi-stage chaos experiment.
+
+        The *experiment* is an ordered sequence of stages, each applying
+        service-scoped chaos profiles to one or more hosts for a duration; stages
+        progress automatically. Only one experiment may be active at a time;
+        starting a new one stops the previous one.
+
+        *experiment* is the definition dict (``name``, ``loop``, ``stages`` —
+        ``[{durationMillis, profiles{host: profile}}]``). Returns the started status
+        (``{"status": "started", "name": ...}``).
+
+        Raises :class:`MockServerError` if chaos experiments are disabled (HTTP 403)
+        or the definition is invalid (HTTP 400).
+        """
+        body = json.dumps(experiment)
+        status, response_body = await self._request(
+            "PUT", "/mockserver/chaosExperiment", body
+        )
+        if status == 403:
+            raise MockServerError(
+                "Failed to start chaos experiment: chaos experiments are disabled "
+                f"(status=403): {response_body}"
+            )
+        if status >= 400:
+            raise MockServerError(
+                f"Failed to start chaos experiment (status={status}): {response_body}"
+            )
+        return json.loads(response_body) if response_body else {}
+
     @staticmethod
     def _load_generation_disabled_error(action: str, response_body: str) -> MockServerError:
         return MockServerError(

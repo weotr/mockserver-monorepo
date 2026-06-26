@@ -1,0 +1,32 @@
+{
+  "proto": "http",
+  "target": "envoy-direct-response",
+  "_note": "laptop-scale validation (lean 2-core injectors on a 14-core contended Mac, short holds) — proves the DERIVED per-instance rate (lean probe -> floor(0.8*C)) yields a valid, throttle/error-free scaling run with ~linear efficiency, unlike build #66's hardcoded-30000 collapse (43% errors). CI produces the real lean-ceiling-derived numbers.",
+  "per_instance_offered_rps": 3936,
+  "series": [
+    {
+      "instances": 1,
+      "aggregate_rps": 3935,
+      "per_instance_rps": [
+        3935
+      ],
+      "error_rate": 0.00000,
+      "target_received_rps": 3939
+    },
+    {
+      "instances": 2,
+      "aggregate_rps": 7817,
+      "per_instance_rps": [
+        3895,
+        3939
+      ],
+      "error_rate": 0.00000,
+      "target_received_rps": 7882
+    }
+  ],
+  "scaling_efficiency": {
+    "ideal_at_max": 7872,
+    "actual_at_max": 7817,
+    "efficiency_pct": 99
+  }
+}

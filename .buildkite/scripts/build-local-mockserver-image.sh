@@ -62,7 +62,7 @@ else
     -- ./mvnw package -pl mockserver-netty-no-dependencies -am \
       -DskipTests -Djacoco.skip=true -Dmaven.javadoc.skip=true \
       -Dmaven.gitcommitid.skip=true -P '!build-ui' \
-      -q --batch-mode
+      -q --batch-mode --no-transfer-progress
   if ! SHADED_JAR=$(_find_shaded_jar); then
     echo "Error: Maven build completed but shaded JAR not found" >&2
     exit 1

@@ -1302,8 +1302,22 @@ export default function LoadScenarioPanel({ connectionParams }: LoadScenarioPane
 
   // Download a run's end-of-run report (JSON or JUnit-XML) by opening its URL in a new tab.
   const downloadReport = useCallback((name: string, format?: 'junit') => {
-    const url = loadScenarioReportUrl(connectionParams, name, format);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const reportUrl = loadScenarioReportUrl(connectionParams, name, format);
+    // The URL is assembled from user-configured connection params, so validate the scheme
+    // before handing it to window.open — only ever open an http(s) report URL (rules out
+    // javascript:/data: redirection should a connection value ever carry an unexpected scheme).
+    let parsed: URL;
+    try {
+      parsed = new URL(reportUrl, window.location.href);
+    } catch {
+      setActionError({ message: 'Could not build a valid report URL.' });
+      return;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      setActionError({ message: 'Report URL must use http or https.' });
+      return;
+    }
+    window.open(parsed.href, '_blank', 'noopener,noreferrer');
   }, [connectionParams]);
 
   // --- form field setters ---

@@ -105,6 +105,7 @@ public class OtelMetricsExporter {
         registerActiveServiceChaosGauge(meter);
         registerRequestDurationHistogram(meter);
         registerLoadMetrics(meter);
+        registerLlmOptimisationGauges(meter);
         return new OtelMetricsExporter(provider);
     }
 
@@ -266,6 +267,24 @@ public class OtelMetricsExporter {
                     m.record(count, Attributes.of(
                         AttributeKey.stringKey("scenario"), key.scenario,
                         AttributeKey.stringKey("run_id"), key.runId))));
+    }
+
+    /**
+     * Mirror the three single global LLM-optimisation gauges to OTLP (matching the Prometheus-side
+     * GaugeWithCallback registration), so OTLP-only consumers see the latest optimisation verdict
+     * without a Prometheus scrape. Each reads the cached snapshot at collection time. No labels —
+     * single global series — so there is no per-model cardinality.
+     */
+    private static void registerLlmOptimisationGauges(Meter meter) {
+        meter.gaugeBuilder("mock_server_llm_estimated_waste_usd")
+            .setDescription("Estimated recoverable LLM spend (USD) from the latest optimisation report")
+            .buildWithCallback(m -> m.record(Metrics.getLlmEstimatedWasteUsd()));
+        meter.gaugeBuilder("mock_server_llm_cache_hit_ratio")
+            .setDescription("Cache-hit ratio (0..1) from the latest LLM optimisation report")
+            .buildWithCallback(m -> m.record(Metrics.getLlmCacheHitRatio()));
+        meter.gaugeBuilder("mock_server_llm_one_shot_rate")
+            .setDescription("One-shot rate (0..1) from the latest LLM optimisation report")
+            .buildWithCallback(m -> m.record(Metrics.getLlmOneShotRate()));
     }
 
     /**

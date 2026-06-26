@@ -78,6 +78,18 @@ public class MockServerPropertyCustomizerConfigurationTest {
     }
 
     @Test
+    public void shouldApplyLongPropertiesWithMatchingNames() {
+        Configuration config = MockServerPropertyCustomizer.buildConfiguration(
+            Arrays.asList(
+                "mockserver.breakpointTimeoutMillis=45000",
+                "mockserver.javascriptTemplateExecutionTimeout=2500"
+            )
+        );
+        assertThat(config.breakpointTimeoutMillis(), is(45000L));
+        assertThat(config.javascriptTemplateExecutionTimeout(), is(2500L));
+    }
+
+    @Test
     public void shouldApplyLogLevel() {
         Configuration config = MockServerPropertyCustomizer.buildConfiguration(
             Collections.singletonList("mockserver.logLevel=WARN")

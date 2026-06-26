@@ -54,6 +54,40 @@ public class VerificationSequenceSerializerSchemaValidationTest {
     }
 
     @Test
+    public void shouldDeserializeObjectWithTimeout() {
+        // given
+        String requestBytes = "{" + NEW_LINE +
+            "  \"httpRequests\" : [ {" + NEW_LINE +
+            "    \"path\" : \"some_path_one\"" + NEW_LINE +
+            "  } ]," + NEW_LINE +
+            "  \"timeout\" : 5000" + NEW_LINE +
+            "}";
+
+        // when (schema accepts the additive timeout field)
+        VerificationSequence verificationSequence = new VerificationSequenceSerializer(new MockServerLogger()).deserialize(requestBytes);
+
+        // then
+        assertThat(verificationSequence.getHttpRequests(), is(Collections.singletonList(request("some_path_one"))));
+        assertThat(verificationSequence.getTimeout(), is(5000L));
+    }
+
+    @Test
+    public void shouldSerializeObjectWithTimeout() {
+        // given
+        VerificationSequence verificationSequence = new VerificationSequence()
+            .withRequests(request("some_path_one"))
+            .withTimeout(5000L);
+
+        // when
+        String json = new VerificationSequenceSerializer(new MockServerLogger()).serialize(verificationSequence);
+
+        // then (round-trips back through deserialize, proving the serialized JSON is schema-valid)
+        VerificationSequence roundTripped = new VerificationSequenceSerializer(new MockServerLogger()).deserialize(json);
+        assertThat(roundTripped.getHttpRequests(), is(Collections.singletonList(request("some_path_one"))));
+        assertThat(roundTripped.getTimeout(), is(5000L));
+    }
+
+    @Test
     public void shouldDeserializeCompleteObjectWithExpectationIds() {
         // given
         String requestBytes = "{" + NEW_LINE +

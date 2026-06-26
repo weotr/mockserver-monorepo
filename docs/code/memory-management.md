@@ -17,7 +17,8 @@ graph TB
         subgraph "Log Entry Storage"
             RB["LMAX Disruptor Ring Buffer
             Pre-allocated LogEntry slots
-            Size: nextPowerOfTwo(maxLogEntries)"]
+            Size: nextPowerOfTwo(ringBufferSize)
+            default min(maxLogEntries, 16384)"]
             EL["CircularConcurrentLinkedDeque
             Persistent event store
             Max size: maxLogEntries"]
@@ -62,7 +63,8 @@ maxExpectations  = min(heapAvailableInKB / 10, 15000)
 | Heap available probe | `ConfigurationProperties.java` | `heapAvailableInKB()` |
 | `maxLogEntries()` default | `ConfigurationProperties.java` | `maxLogEntries()` |
 | `maxExpectations()` default | `ConfigurationProperties.java` | `maxExpectations()` |
-| Ring buffer sizing | `Configuration.java` | `ringBufferSize()` |
+| Ring buffer sizing | `Configuration.java` | `ringBufferSize()` (resolves field → property → `min(maxLogEntries, 16384)`) |
+| Ring buffer default resolution | `ConfigurationProperties.java` | `resolveRingBufferSize(int)` |
 | Heap measurement | `MemoryMonitoring.java` | `getJVMMemory()` |
 
 ### Example: Default Limits by Heap Size
@@ -322,6 +324,7 @@ For workloads with very large request/response bodies (>10 KB), the automatic de
 | Property | System Property | Environment Variable | Default |
 |----------|----------------|---------------------|---------|
 | Max log entries | `mockserver.maxLogEntries` | `MOCKSERVER_MAX_LOG_ENTRIES` | `min(heapAvailableKB / 8, 100000)` |
+| Ring buffer size | `mockserver.ringBufferSize` | `MOCKSERVER_RING_BUFFER_SIZE` | `min(maxLogEntries, 16384)` (rounded up to a power of two) |
 | Max expectations | `mockserver.maxExpectations` | `MOCKSERVER_MAX_EXPECTATIONS` | `min(heapAvailableKB / 10, 15000)` |
 
 Properties are resolved in this order (first match wins):
@@ -399,16 +402,45 @@ This writes a `memoryUsage_YYYY-MM-DD.csv` file every 50 log or expectation upda
 
 ### Ring Buffer Sizing
 
-The LMAX Disruptor ring buffer size is computed as the next power of two greater than `maxLogEntries`:
+The LMAX Disruptor ring buffer is the **in-flight** buffer between the producing Netty I/O threads and
+the single consumer thread. It is **decoupled** from `maxLogEntries` (which bounds the separate retained
+event history in the `CircularConcurrentLinkedDeque`). The ring only needs to absorb short *bursts* of
+log events, not hold the full retained history, so it has its own knob, `ringBufferSize`.
 
-| maxLogEntries | Ring Buffer Size | Ring Buffer Memory (empty LogEntry shells) |
-|---------------|-----------------|-------------------------------------------|
-| 1,000 | 1,024 | ~115 KB |
-| 5,000 | 8,192 | ~920 KB |
-| 10,000 | 16,384 | ~1.8 MB |
-| 50,000 | 65,536 | ~7.4 MB |
-| 100,000 | 131,072 | ~14.7 MB |
+Its size is computed as the next power of two greater than the resolved `ringBufferSize`, which defaults
+to `min(maxLogEntries, 16384)`:
 
-The ring buffer pre-allocates `LogEntry` objects (just the shells, ~112 bytes each). These are reused via `translateTo()` / `cloneAndClear()` and do not hold persistent data. The ring buffer memory is a fixed overhead that does not grow with request volume.
+| maxLogEntries | Resolved ringBufferSize (default) | Ring Buffer Size (power of two) | Ring Buffer Memory (empty LogEntry shells) |
+|---------------|-----------------------------------|---------------------------------|-------------------------------------------|
+| 1,000 | 1,000 | 1,024 | ~115 KB |
+| 5,000 | 5,000 | 8,192 | ~920 KB |
+| 10,000 | 10,000 | 16,384 | ~1.8 MB |
+| 50,000 | 16,384 (capped) | 32,768 | ~3.7 MB |
+| 100,000 | 16,384 (capped) | 32,768 | ~3.7 MB |
 
-The `nextPowerOfTwo()` method in `Configuration.java` supports values up to `2^30 = 1,073,741,824`.
+Before this decoupling, `maxLogEntries=100000` forced a 131,072-slot ring (~14.7 MB of empty `LogEntry`
+shells) purely as a side effect of retention sizing; the default 16,384 ceiling caps that at ~3.7 MB
+while leaving small deployments (maxLogEntries ≤ 16,384) unchanged.
+
+The ring buffer pre-allocates `LogEntry` objects (just the shells, ~112 bytes each). These are reused via
+`translateTo()` / `cloneAndClear()` and do not hold persistent data. The ring buffer memory is a fixed
+overhead that does not grow with request volume.
+
+#### Why a separate `ringBufferSize` knob?
+
+The ring buffer absorbs the **rate gap** between producers and the single consumer thread — it must be
+large enough that bursts of concurrent log writes do not overflow it (an overflow drops the event and
+increments `mock_server_dropped_log_events`; see [event-system.md](event-system.md)). That gap is a
+function of *throughput*, not of *how long you retain history*. Slaving the ring to `maxLogEntries`
+therefore over-provisioned the ring for high-retention/low-burst deployments.
+
+- **Default `min(maxLogEntries, 16384)`** — small deployments keep their previous ring exactly; large
+  retention settings stop inflating the ring.
+- **Raise it** only if you observe dropped log events (`mock_server_dropped_log_events` non-zero and
+  growing) under sustained extreme load.
+- **Lower it** to shave fixed memory if you have a low-throughput, high-retention workload.
+
+Configure it via `mockserver.ringBufferSize`, the `MOCKSERVER_RING_BUFFER_SIZE` environment variable, or
+`Configuration.ringBufferSize(int)`. The value is rounded up to the next power of two (a Disruptor
+requirement). The `nextPowerOfTwo()` method in `Configuration.java` supports values up to
+`2^30 = 1,073,741,824`.

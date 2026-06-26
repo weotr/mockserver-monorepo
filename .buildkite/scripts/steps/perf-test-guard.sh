@@ -18,6 +18,40 @@ source "$SCRIPT_DIR/../lib/last-successful-commit.sh"
 
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
 
+# --- OPT-IN: load-injection ceiling + scaling sweep ---------------------------
+# The injection step (perf-test-inject.sh) is heavy (multi-instance compose +
+# Envoy + a per-N scale sweep, ~60m) and answers a DIFFERENT question from the
+# daily regression run — "how much load can MockServer GENERATE", not "how fast
+# does it SERVE". So it is NOT part of the standard daily dispatch. It runs only
+# when explicitly requested: the `PERF_INJECT` build env is truthy, or the build
+# message carries the `[perf-inject]` marker. This keeps the daily commit-gated
+# build lean while making the injection sweep one toggle away — and because it is
+# independent of the new-commit guard, it can be re-run on the SAME commit.
+maybe_dispatch_inject() {
+  local want=false
+  if [ "${PERF_INJECT:-}" = "true" ] || [ "${PERF_INJECT:-}" = "1" ] \
+     || [[ "${BUILDKITE_MESSAGE:-}" == *"[perf-inject]"* ]]; then
+    want=true
+  fi
+  if [ "$want" != true ]; then
+    echo "--- :zzz: load-injection sweep not requested (set PERF_INJECT=true or [perf-inject] to enable)"
+    return 0
+  fi
+  if ! command -v buildkite-agent >/dev/null 2>&1; then
+    echo "(local run) buildkite-agent unavailable — would dispatch inject sweep"
+    return 0
+  fi
+  echo "--- :rocket: load-injection requested (PERF_INJECT / [perf-inject]) — dispatching inject sweep"
+  buildkite-agent pipeline upload <<'YAML'
+steps:
+  - label: ":envoy: load injection — ceiling + scaling sweep"
+    command: ".buildkite/scripts/steps/perf-test-inject.sh"
+    timeout_in_minutes: 60
+    agents:
+      queue: "perf"
+YAML
+}
+
 # Forced/manual run: a UI ("New Build") build, or an API build whose message
 # carries the explicit `[perf-run]` marker, ALWAYS dispatches — even on the same
 # commit as the last run. This is the deliberate manual escape hatch. Scheduled
@@ -49,6 +83,9 @@ if [ "$NEW_COMMIT" = false ]; then
     printf '%s\n' ":zzz: **Perf regression skipped** — no commit on \`${BUILDKITE_BRANCH:-master}\` since the last successful run (\`${LAST:0:10}\`)." \
       | buildkite-agent annotate --style info --context perf-regression || true
   fi
+  # The injection sweep is independent of the new-commit guard — honour an
+  # explicit opt-in even when the daily regression run is skipped.
+  maybe_dispatch_inject
   exit 0
 fi
 
@@ -84,3 +121,6 @@ steps:
     agents:
       queue: "perf"
 YAML
+
+# Honour the load-injection opt-in alongside the standard regression dispatch.
+maybe_dispatch_inject

@@ -16,6 +16,9 @@ import static org.junit.Assert.assertTrue;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.JsonBody.json;
+import static org.mockserver.model.JsonSchemaBody.jsonSchema;
+import static org.mockserver.model.NottableSchemaString.schemaString;
+import static org.mockserver.model.XPathBody.xpath;
 
 public class PactExporterTest {
 
@@ -138,5 +141,138 @@ public class PactExporterTest {
 
         assertFalse(request.has("query"));
         assertFalse(request.has("headers"));
+    }
+
+    // ---- matchingRules ----
+
+    @Test
+    public void omitsMatchingRulesWhenAllMatchersAreLiteral() throws Exception {
+        Expectation literal = new Expectation(
+            request().withMethod("GET").withPath("/users")
+                .withQueryStringParameter("page", "1")
+                .withHeader("Accept", "application/json")
+        ).thenRespond(
+            response().withStatusCode(200).withHeader("Content-Type", "application/json")
+        );
+
+        JsonNode interaction = exportAndParse(Collections.singletonList(literal), "c", "p").at("/interactions/0");
+
+        // a purely literal interaction carries no matchingRules object at all
+        assertFalse(interaction.has("matchingRules"));
+    }
+
+    @Test
+    public void emitsRegexRuleForRegexPathQueryAndHeader() throws Exception {
+        Expectation e = new Expectation(
+            request().withMethod("GET").withPath("/users/\\d+")
+                .withQueryStringParameter("filter", "a|b")
+                .withHeader("X-Trace", "[0-9a-f]+")
+        ).thenRespond(response().withStatusCode(200));
+
+        JsonNode rules = exportAndParse(Collections.singletonList(e), "c", "p")
+            .at("/interactions/0/matchingRules/request");
+
+        // path category holds a single matchers array keyed directly under "path"
+        assertEquals("regex", rules.at("/path/matchers/0/match").asText());
+        assertEquals("/users/\\d+", rules.at("/path/matchers/0/regex").asText());
+
+        // query keyed by the JSON-path-ish $.name[index]
+        assertEquals("regex", rules.at("/query/$.filter[0]/matchers/0/match").asText());
+        assertEquals("a|b", rules.at("/query/$.filter[0]/matchers/0/regex").asText());
+
+        // header keyed by $['Name'][index]
+        assertEquals("regex", rules.at("/header/$['X-Trace'][0]/matchers/0/match").asText());
+        assertEquals("[0-9a-f]+", rules.at("/header/$['X-Trace'][0]/matchers/0/regex").asText());
+    }
+
+    @Test
+    public void emitsTypeRuleForSchemaStringParam() throws Exception {
+        Expectation e = new Expectation(
+            request().withMethod("GET").withPath("/items")
+                .withQueryStringParameter(
+                    org.mockserver.model.NottableString.string("count"),
+                    schemaString("{\"type\":\"integer\"}"))
+        ).thenRespond(response().withStatusCode(200));
+
+        JsonNode rules = exportAndParse(Collections.singletonList(e), "c", "p")
+            .at("/interactions/0/matchingRules/request");
+
+        // an integer-typed schema string maps to the Pact "integer" match kind
+        assertEquals("integer", rules.at("/query/$.count[0]/matchers/0/match").asText());
+    }
+
+    @Test
+    public void emitsTypeRuleForSchemaStringHeaderWithGenericType() throws Exception {
+        Expectation e = new Expectation(
+            request().withMethod("GET").withPath("/items")
+                .withHeader(
+                    org.mockserver.model.NottableString.string("X-Id"),
+                    schemaString("{\"type\":\"string\"}"))
+        ).thenRespond(response().withStatusCode(200));
+
+        JsonNode rules = exportAndParse(Collections.singletonList(e), "c", "p")
+            .at("/interactions/0/matchingRules/request");
+
+        // a string-typed schema maps to the generic "type" rule
+        assertEquals("type", rules.at("/header/$['X-Id'][0]/matchers/0/match").asText());
+    }
+
+    @Test
+    public void emitsPerPropertyTypeRulesForJsonSchemaBody() throws Exception {
+        Expectation e = new Expectation(
+            request().withMethod("POST").withPath("/users").withBody(jsonSchema(
+                "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"age\":{\"type\":\"integer\"}}}"))
+        ).thenRespond(response().withStatusCode(201));
+
+        JsonNode interaction = exportAndParse(Collections.singletonList(e), "c", "p").at("/interactions/0");
+        JsonNode bodyRules = interaction.at("/matchingRules/request/body");
+
+        assertEquals("type", bodyRules.at("/$.name/matchers/0/match").asText());
+        assertEquals("integer", bodyRules.at("/$.age/matchers/0/match").asText());
+        // the raw schema text must NOT leak into the body example field
+        assertFalse(interaction.at("/request").has("body"));
+    }
+
+    @Test
+    public void emitsSingleTypeRuleForScalarJsonSchemaBody() throws Exception {
+        Expectation e = new Expectation(
+            request().withMethod("POST").withPath("/count").withBody(jsonSchema("{\"type\":\"integer\"}"))
+        ).thenRespond(response().withStatusCode(200));
+
+        JsonNode bodyRules = exportAndParse(Collections.singletonList(e), "c", "p")
+            .at("/interactions/0/matchingRules/request/body");
+
+        // no properties -> single rule keyed at the document root "$"
+        assertEquals("integer", bodyRules.at("/$/matchers/0/match").asText());
+    }
+
+    @Test
+    public void emitsXmlBodyRegexRuleKeyedByXPath() throws Exception {
+        Expectation e = new Expectation(
+            request().withMethod("POST").withPath("/orders").withBody(xpath("/order/id"))
+        ).thenRespond(response().withStatusCode(200));
+
+        JsonNode interaction = exportAndParse(Collections.singletonList(e), "c", "p").at("/interactions/0");
+        JsonNode bodyRules = interaction.at("/matchingRules/request/body");
+
+        // the body rule is keyed by the literal XPath expression (which itself contains '/'), so
+        // navigate by field name rather than a JSON Pointer where '/' is the segment separator
+        JsonNode xpathRule = bodyRules.get("/order/id");
+        assertEquals("regex", xpathRule.at("/matchers/0/match").asText());
+        assertEquals("/order/id", xpathRule.at("/matchers/0/regex").asText());
+        // the XPath is not an example body
+        assertFalse(interaction.at("/request").has("body"));
+    }
+
+    @Test
+    public void emitsResponseHeaderRegexRule() throws Exception {
+        Expectation e = new Expectation(request().withMethod("GET").withPath("/x"))
+            .thenRespond(response().withStatusCode(200).withHeader("ETag", "W/\".+\""));
+
+        JsonNode rules = exportAndParse(Collections.singletonList(e), "c", "p")
+            .at("/interactions/0/matchingRules/response");
+
+        assertEquals("regex", rules.at("/header/$['ETag'][0]/matchers/0/match").asText());
+        assertEquals("W/\".+\"", rules.at("/header/$['ETag'][0]/matchers/0/regex").asText());
     }
 }

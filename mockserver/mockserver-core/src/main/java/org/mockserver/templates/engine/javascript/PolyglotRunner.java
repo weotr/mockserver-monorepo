@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.HostAccess;
+import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
 import org.mockserver.log.model.LogEntry;
@@ -18,6 +19,11 @@ import org.mockserver.templates.engine.model.HttpResponseTemplateObject;
 import org.mockserver.templates.engine.serializer.HttpTemplateOutputDeserializer;
 import org.slf4j.event.Level;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -32,6 +38,18 @@ import static org.mockserver.log.model.LogEntryMessages.TEMPLATE_GENERATED_MESSA
  */
 final class PolyglotRunner {
 
+    /**
+     * Shared single-thread daemon scheduler that runs the per-evaluation timeout watchdogs. A
+     * watchdog only ever calls {@link Context#close(boolean)} (which is thread-safe and cancels
+     * any guest code currently executing), so one scheduler thread is sufficient regardless of how
+     * many templates run concurrently. Daemon so it never blocks JVM shutdown.
+     */
+    private static final ScheduledExecutorService WATCHDOG = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "MockServer-JavaScriptTemplateTimeout");
+        thread.setDaemon(true);
+        return thread;
+    });
+
     private PolyglotRunner() {
     }
 
@@ -45,7 +63,8 @@ final class PolyglotRunner {
         ObjectMapper objectMapper,
         MockServerLogger mockServerLogger,
         HttpTemplateOutputDeserializer httpTemplateOutputDeserializer,
-        Class<? extends DTO<T>> dtoClass
+        Class<? extends DTO<T>> dtoClass,
+        long executionTimeoutMillis
     ) {
         String serialiseFunction = includeResponse
             ? " function serialise(request, response) { return JSON.stringify(handle(JSON.parse(request), JSON.parse(response)), null, 2); }"
@@ -56,11 +75,80 @@ final class PolyglotRunner {
         // The security boundary is allowHostClassLookup(classFilter), which gates which classes
         // templates can resolve via Java.type(...). HostAccess.EXPLICIT/CONSTRAINED would narrow
         // the attack surface further but require annotating template helper classes.
+        // Watchdog cancellation: a runaway/malicious template (e.g. an infinite loop) would
+        // otherwise pin this worker thread forever (GraalJS runs interpreter-only on stock
+        // OpenJDK, so it can't even be JIT-sped). When executionTimeoutMillis > 0 we schedule a
+        // watchdog that, on expiry, calls context.close(true) from the scheduler thread. That is
+        // thread-safe and cancels the guest code currently executing on this thread, which then
+        // throws a PolyglotException with isCancelled()==true — translated below into a clear,
+        // logged timeout error. A 0 (or negative) timeout disables the watchdog (unbounded
+        // behaviour). watchdogFired distinguishes "we cancelled it" from any other cancellation.
+        final AtomicBoolean watchdogFired = new AtomicBoolean(false);
+
         try (Context context = Context.newBuilder("js")
             .allowHostAccess(HostAccess.ALL)
             .allowHostClassLookup(classFilter)
             .build()) {
 
+            ScheduledFuture<?> watchdog = null;
+            if (executionTimeoutMillis > 0) {
+                watchdog = WATCHDOG.schedule(() -> {
+                    watchdogFired.set(true);
+                    try {
+                        // cancelIfExecuting=true: abort any guest code currently running in this context
+                        context.close(true);
+                    } catch (Throwable ignore) {
+                        // context may already be closing/closed on the worker thread — nothing to do
+                    }
+                }, executionTimeoutMillis, TimeUnit.MILLISECONDS);
+            }
+
+            try {
+                return evaluate(
+                    script, fullScript, includeResponse, request, response, iteration,
+                    objectMapper, mockServerLogger, httpTemplateOutputDeserializer, dtoClass, context
+                );
+            } catch (PolyglotException polyglotException) {
+                if (watchdogFired.get() && (polyglotException.isCancelled() || polyglotException.isInterrupted())) {
+                    String message = "JavaScript template execution exceeded the configured timeout of "
+                        + executionTimeoutMillis + "ms and was cancelled; "
+                        + "increase mockserver.javascriptTemplateExecutionTimeout or set it to 0 to disable the timeout";
+                    if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.WARN)
+                                .setHttpRequest(request)
+                                .setMessageFormat(message)
+                        );
+                    }
+                    throw new JavaScriptTemplateTimeoutException(message, polyglotException);
+                }
+                throw polyglotException;
+            } finally {
+                // Cancel the watchdog on the normal-completion path so it can't fire late and so it
+                // doesn't leak in the scheduler queue. mayInterruptIfRunning=false: if it has already
+                // started closing the context we let it finish cleanly.
+                if (watchdog != null) {
+                    watchdog.cancel(false);
+                }
+            }
+        }
+    }
+
+    private static <T> T evaluate(
+        String script,
+        String fullScript,
+        boolean includeResponse,
+        HttpRequest request,
+        HttpResponse response,
+        org.mockserver.load.IterationContext iteration,
+        ObjectMapper objectMapper,
+        MockServerLogger mockServerLogger,
+        HttpTemplateOutputDeserializer httpTemplateOutputDeserializer,
+        Class<? extends DTO<T>> dtoClass,
+        Context context
+    ) {
+        {
             // In GraalVM Polyglot, context.getBindings("js") returns the JavaScript global scope
             // (not a separate host bindings layer). Both putMember (to inject host values like
             // BUILT_IN_HELPERS) and getMember (to retrieve JS-defined functions after context.eval)

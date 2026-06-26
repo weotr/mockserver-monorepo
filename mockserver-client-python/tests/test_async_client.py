@@ -670,6 +670,69 @@ class TestGrpcDescriptors:
             await client.clear_grpc_descriptors()
 
 
+class TestAsyncVerifySlo:
+    @pytest.mark.asyncio
+    async def test_verify_slo_pass(self, mock_server):
+        MockHandler.response_status = 200
+        MockHandler.response_body = json.dumps({"name": "checkout", "result": "PASS"})
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        result = await client.verify_slo(
+            {
+                "name": "checkout",
+                "objectives": [{"sli": "errorRate", "comparator": "LESS_THAN", "threshold": 0.01}],
+            }
+        )
+        assert MockHandler.last_method == "PUT"
+        assert MockHandler.last_path == "/mockserver/verifySLO"
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent["name"] == "checkout"
+        assert result["result"] == "PASS"
+
+    @pytest.mark.asyncio
+    async def test_verify_slo_fail_raises(self, mock_server):
+        MockHandler.response_status = 406
+        MockHandler.response_body = json.dumps({"result": "FAIL"})
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        with pytest.raises(MockServerVerificationError):
+            await client.verify_slo({"name": "x"})
+
+    @pytest.mark.asyncio
+    async def test_verify_slo_disabled_raises(self, mock_server):
+        MockHandler.response_status = 400
+        MockHandler.response_body = "SLO tracking disabled"
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        with pytest.raises(MockServerError, match="SLO tracking disabled"):
+            await client.verify_slo({"name": "x"})
+
+
+class TestAsyncChaosExperiment:
+    @pytest.mark.asyncio
+    async def test_start_chaos_experiment(self, mock_server):
+        MockHandler.response_status = 200
+        MockHandler.response_body = json.dumps({"status": "started", "name": "latency"})
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        result = await client.start_chaos_experiment(
+            {
+                "name": "latency",
+                "stages": [{"durationMillis": 1000, "profiles": {"a.svc": {"latencyMs": 50}}}],
+            }
+        )
+        assert MockHandler.last_method == "PUT"
+        assert MockHandler.last_path == "/mockserver/chaosExperiment"
+        sent = json.loads(MockHandler.last_request_body)
+        assert sent["name"] == "latency"
+        assert sent["stages"][0]["durationMillis"] == 1000
+        assert result["status"] == "started"
+
+    @pytest.mark.asyncio
+    async def test_start_chaos_experiment_disabled_raises(self, mock_server):
+        MockHandler.response_status = 403
+        MockHandler.response_body = '{"error": "disabled"}'
+        client = AsyncMockServerClient("127.0.0.1", mock_server)
+        with pytest.raises(MockServerError, match="chaos experiments are disabled"):
+            await client.start_chaos_experiment({"name": "x", "stages": []})
+
+
 class TestAsyncLoadScenario:
     def _scenario(self) -> LoadScenario:
         return LoadScenario(

@@ -24,8 +24,9 @@ build status, and CI/CD health.
 
 - Get the build details and failed job logs
 - Extract error output from the failing step
-- Classify the failure: test failure, compilation error, Docker issue, agent timeout, infrastructure issue
+- Classify the failure: test failure, compilation error, Docker issue, agent timeout, infrastructure issue, or `FLAKY` (intermittent — timing/ordering/port/resource related)
 - Check if the failure is new or recurring (compare with recent builds)
+- If the failure looks timing/ordering/port/resource-related, re-run the single failing test (or check recent builds of the same commit) to confirm intermittency BEFORE classifying it real-vs-flaky (`FLAKY`)
 
 ### 3. Cross-Reference
 
@@ -33,7 +34,11 @@ build status, and CI/CD health.
 - Look for related failures across GitHub Actions workflows
 - Identify if a fix has already been pushed but not yet built
 
-### 4. Classify Impact
+### 4. Enumerate Competing Hypotheses
+
+- Before concluding a root cause, enumerate the competing hypotheses and the evidence that rules each out (correlation is not causation — a commit landing just before a failure is not proof it caused it)
+
+### 5. Classify Impact
 
 - Build failures → blocks validation and releases
 - Docker image build failures (GitHub Actions) → blocks container releases
@@ -44,24 +49,24 @@ build status, and CI/CD health.
 ```bash
 # List recent builds
 curl -sH "Authorization: Bearer $BUILDKITE_TOKEN" \
-  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver/builds?per_page=10" | jq '.[].{state,branch,message,created_at}'
+  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver-java/builds?per_page=10" | jq '.[].{state,branch,message,created_at}'
 
 # Get a specific build
 curl -sH "Authorization: Bearer $BUILDKITE_TOKEN" \
-  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver/builds/{build_number}"
+  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver-java/builds/{build_number}"
 
 # Get build log output for a job
 curl -sH "Authorization: Bearer $BUILDKITE_TOKEN" \
-  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver/builds/{build_number}/jobs/{job_id}/log"
+  "https://api.buildkite.com/v2/organizations/mockserver/pipelines/mockserver-java/builds/{build_number}/jobs/{job_id}/log"
 ```
 
 If the `bk` CLI is available:
 ```bash
 # List recent builds
-bk build list --org mockserver --pipeline mockserver
+bk build list --org mockserver --pipeline mockserver-java
 
 # Get build details
-bk build get --org mockserver --pipeline mockserver --number {build_number}
+bk build get --org mockserver --pipeline mockserver-java --number {build_number}
 ```
 
 ## GitHub Actions (secondary CI)
@@ -69,10 +74,10 @@ bk build get --org mockserver --pipeline mockserver --number {build_number}
 For Docker image builds and CodeQL scans, check GitHub Actions:
 ```bash
 # List recent workflow runs
-gh run list --repo mockserver/mockserver --limit 10
+gh run list --repo mock-server/mockserver-monorepo --limit 10
 
 # View a specific run
-gh run view {run_id} --repo mockserver/mockserver --log-failed
+gh run view {run_id} --repo mock-server/mockserver-monorepo --log-failed
 ```
 
 ## Pipeline Failure Patterns
@@ -88,6 +93,7 @@ gh run view {run_id} --repo mockserver/mockserver --log-failed
 | `SNAPSHOT` dependency errors | Maven dep issue | Check artifact repository availability |
 | Build stuck in `scheduled` | Agent not running | Check AWS ASG via `/aws-investigation` |
 | Agent did not connect | Agent infrastructure | Check AWS ASG via `/aws-investigation` |
+| Passes on re-run / intermittent across builds of same commit | `FLAKY` | Re-run to confirm; classify flaky-vs-real before reporting |
 
 ## Agent Infrastructure
 

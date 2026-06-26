@@ -3884,10 +3884,11 @@ public class McpToolRegistry {
         ObjectNode properties = schema.putObject("properties");
         ObjectNode formatProp = properties.putObject("format");
         formatProp.put("type", "string").put("description",
-            "Output format: 'markdown' for the copy-paste optimisation brief (default), or 'json' for the structured LlmOptimisationReport bundle.");
+            "Output format: 'markdown' for the copy-paste optimisation brief (default), 'json' for the structured LlmOptimisationReport bundle, or 'csv' for the per-call + totals spreadsheet export.");
         ArrayNode formatEnum = formatProp.putArray("enum");
         formatEnum.add("markdown");
         formatEnum.add("json");
+        formatEnum.add("csv");
         properties.putObject("session").put("type", "string").put("description",
             "Optional session/grouping key filter (e.g. 'host:api.openai.com'); default is all captured LLM traffic.");
         properties.putObject("host").put("type", "string").put("description",
@@ -3910,8 +3911,8 @@ public class McpToolRegistry {
     private JsonNode handleExportOptimisationReport(JsonNode params) {
         try {
             String format = params.path("format").asText("markdown");
-            if (!"markdown".equalsIgnoreCase(format) && !"json".equalsIgnoreCase(format)) {
-                return errorResult("'format' must be one of: markdown, json");
+            if (!"markdown".equalsIgnoreCase(format) && !"json".equalsIgnoreCase(format) && !"csv".equalsIgnoreCase(format)) {
+                return errorResult("'format' must be one of: markdown, json, csv");
             }
             org.mockserver.llm.analysis.LlmOptimisationReportService.Filter filter =
                 new org.mockserver.llm.analysis.LlmOptimisationReportService.Filter(
@@ -3928,6 +3929,12 @@ public class McpToolRegistry {
                 ObjectNode resultNode = objectMapper.createObjectNode();
                 resultNode.put("format", "json");
                 resultNode.set("report", objectMapper.valueToTree(result.getReport()));
+                return resultNode;
+            }
+            if ("csv".equalsIgnoreCase(format)) {
+                ObjectNode resultNode = objectMapper.createObjectNode();
+                resultNode.put("format", "csv");
+                resultNode.put("csv", service.renderCsv(result));
                 return resultNode;
             }
             ObjectNode resultNode = objectMapper.createObjectNode();

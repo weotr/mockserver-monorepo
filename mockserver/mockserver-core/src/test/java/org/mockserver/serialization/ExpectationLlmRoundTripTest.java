@@ -139,6 +139,67 @@ public class ExpectationLlmRoundTripTest {
     }
 
     @Test
+    public void shouldRoundTripCompletionWithReasoningTextAndSignature() {
+        // given — a completion carrying reasoning/"thinking" content plus an Anthropic signature
+        Expectation original = when(request().withPath("/v1/messages"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.ANTHROPIC)
+                    .withModel("claude-sonnet-4-20250514")
+                    .withCompletion(
+                        completion()
+                            .withReasoningText("Let me think step by step.")
+                            .withReasoningSignature("sig-xyz")
+                            .withText("The answer is 42.")
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — reasoning text + signature survive the schema-validated JSON round-trip
+        assertThat(deserialized.length, is(1));
+        Completion completion = deserialized[0].getHttpLlmResponse().getCompletion();
+        assertThat(completion.getReasoningText(), is("Let me think step by step."));
+        assertThat(completion.getReasoningSignature(), is("sig-xyz"));
+        assertThat(completion.getText(), is("The answer is 42."));
+    }
+
+    @Test
+    public void shouldRoundTripCachedAndReasoningUsageTokens() {
+        // given — usage carrying cached-input, cache-creation, and reasoning token counts
+        Expectation original = when(request().withPath("/v1/chat/completions"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.OPENAI)
+                    .withModel("gpt-4o")
+                    .withCompletion(
+                        completion()
+                            .withText("hi")
+                            .withUsage(usage()
+                                .withInputTokens(100).withOutputTokens(40)
+                                .withCachedInputTokens(64)
+                                .withCacheCreationTokens(8)
+                                .withReasoningTokens(30))
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — all optional usage fields survive the schema-validated JSON round-trip
+        assertThat(deserialized.length, is(1));
+        Usage usage = deserialized[0].getHttpLlmResponse().getCompletion().getUsage();
+        assertThat(usage.getInputTokens(), is(100));
+        assertThat(usage.getOutputTokens(), is(40));
+        assertThat(usage.getCachedInputTokens(), is(64));
+        assertThat(usage.getCacheCreationTokens(), is(8));
+        assertThat(usage.getReasoningTokens(), is(30));
+    }
+
+    @Test
     public void shouldRoundTripCompletionWithModel() {
         // given — a completion carrying a model identifier (set on the proxied/forwarded parse path)
         Expectation original = when(request().withPath("/v1/chat/completions"))

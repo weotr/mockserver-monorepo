@@ -1,0 +1,294 @@
+---
+title: Load Injection Performance
+shortTitle: Injection Performance
+description: "How MockServer's built-in load injection scales: one instance injects tens of thousands of requests per second, and running many instances in parallel scales near-linearly into the hundreds of thousands. Real, reproducible measurements against an Envoy direct-response sink, with the deployment pattern for fan-out injection."
+layout: page
+pageOrder: 2
+section: 'Performance Testing'
+subsection: true
+sitemap:
+  priority: 0.8
+  changefreq: 'monthly'
+  lastmod: 2026-06-25T00:00:00+00:00
+---
+
+<!--
+  The figures on this page are REAL measurements from the inject harness
+  (mockserver-performance-test/stack/inject/) on a pinned 16-vCPU CI box with the
+  keep-warm forward pool enabled (build #84): a per-instance ceiling of ~20k req/s
+  simple GET / ~13.5k req/s templated POST, near-linear aggregate scaling to N=4
+  (then bending at N=6 on one host). A single instance is DISPATCH-PATH-bound, not
+  CPU-bound — measured ~18-20k at 1, 2, 4 AND 8 cores while using only ~1-2 cores —
+  so MORE cores per instance do NOT raise its throughput; you scale by adding
+  INSTANCES (and, past one box's ~30k aggregate, more MACHINES). There is NO per-core
+  axis and NO per-core chart. Refresh the figures and the two charts
+  (/images/perf_inject_ceiling.png, /images/perf_inject_scaling.png) from the same
+  harness on a future run. Frame the SHAPE (per-instance dispatch ceiling; scale by
+  instances; near-linear until the host saturates) rather than a single hard peak
+  that moves between hardware.
+-->
+
+<p itemprop="headline">A single MockServer instance injects <strong>tens of thousands of requests per second</strong> of outbound load, and because injection is independent per instance you scale far beyond that by running <strong>N instances in parallel</strong> &mdash; aggregate injected throughput grows <strong>near-linearly</strong>, into the hundreds of thousands of requests/sec, by simply adding instances.</p>
+
+<p>This page is about MockServer as a <strong>load generator</strong> &mdash; how much outbound traffic its built-in <a href="/mock_server/load_injection.html">Load Scenarios</a> can <em>inject</em> into a target, and how to scale that injection. (For how much traffic a single instance can <em>serve</em> as a mock, see <a href="/mock_server/performance.html">Scalability &amp; Latency</a>.) A single instance is a self-contained, bounded load generator; to drive much more load you run many instances together and aggregate their metrics. Jump to <a href="#how_measured">how injection performance is measured</a> for the methodology, or reproduce it from the harness at <span class="inline_code">mockserver-performance-test/stack/inject/</span>.</p>
+
+<ul>
+    <li><strong>Per-instance ceiling:</strong> with its safety caps raised, one instance saturates at a per-instance injection ceiling &mdash; about <strong>20,000 simple requests/sec</strong> (a single GET) or <strong>13,500 templated requests/sec</strong> (a 1&nbsp;KB Velocity-templated POST with a feeder) on this box. Past that ceiling, offered arrival rate no longer translates into more injected throughput (see the <a href="#chart_ceiling">per-instance ceiling</a> chart).</li>
+    <li><strong>It is dispatch-bound, not CPU-bound &mdash; so size by instances:</strong> a single instance uses only about <strong>1&ndash;2 CPU cores</strong> at its ceiling and hit the same ~18&ndash;20k at 1, 2, 4 <em>and</em> 8 cores, so giving one instance more cores does not raise its throughput. Allocate <strong>modest cores per instance (~2)</strong> and add throughput by adding <strong>instances</strong> &mdash; see <a href="#sizing">how many instances you need</a>.</li>
+    <li><strong>Scales by adding instances:</strong> injection is independent per instance, so running <strong>N instances in parallel</strong> on the same scenario multiplies injected throughput <strong>near-linearly</strong> &mdash; close to <strong>N&times;</strong> the per-instance rate to about N=4 on one host, then bending as the host's cores, NIC and shared sink saturate (one box tops out around <strong>30,000 req/s</strong> aggregate). Spread injectors across machines or pods to reach the <strong>hundreds of thousands of requests/sec</strong> (see the <a href="#chart_scaling">aggregate scaling</a> chart).</li>
+    <li><strong>Aggregate + target metrics give the full picture:</strong> each instance exposes <code class="inline code">mock_server_load_*</code> Prometheus metrics; scrape them all and aggregate by <code class="inline code">run_id</code> for total injected RPS, and capture your <strong>system-under-test's</strong> metrics too so you can see what it actually absorbed (see <a href="#scaling_pattern">scaling load injection across many instances</a>).</li>
+</ul>
+
+<p><strong>Honest framing:</strong> there is <strong>no built-in cross-node coordinator</strong> &mdash; running many injectors in parallel is a <em>deployment pattern</em> you orchestrate (docker-compose, a Kubernetes <code class="inline code">Deployment</code> with <code class="inline code">replicaCount: N</code>, or a Job started together), not a turnkey feature. MockServer makes each instance a capable, observable injector; you fan out the launch and aggregate the metrics. See <a href="#caveats">caveats</a>.</p>
+
+<a id="at_a_glance" class="anchor" href="#at_a_glance">&nbsp;</a>
+
+<h2>Performance at a glance</h2>
+
+<a id="chart_ceiling" class="anchor" href="#chart_ceiling">&nbsp;</a>
+<p>As you raise the offered arrival rate on a single instance, achieved injected throughput tracks it until the instance hits its per-instance ceiling, then plateaus &mdash; offering more arrival rate beyond that point does not inject more traffic, it just queues. The two lines are a <strong>simple GET</strong>, which tracks offered load up to about <strong>20,000 req/s</strong>, and a heavier <strong>1&nbsp;KB templated POST</strong>, which does more work per request and so caps lower, at about <strong>13,500 req/s</strong>. The instance reaches these ceilings using only about <strong>1&ndash;2 CPU cores</strong> &mdash; the limit is its asynchronous dispatch path and the loopback to the sink, not whole-box CPU &mdash; which is why you scale by adding instances rather than cores. Those plateaus are the per-instance ceilings you scale out from:</p>
+<img class="ui_image" src="/images/perf_inject_ceiling.png" alt="Single MockServer instance injection ceiling: a simple GET plateaus near 20,000 req/s while a heavier 1 KB templated POST caps lower near 13,500 req/s, each tracking the offered arrival rate until the instance's dispatch path saturates">
+
+<a id="chart_scaling" class="anchor" href="#chart_scaling">&nbsp;</a>
+<p>Because each instance injects independently, aggregate injected throughput grows almost in step with the number of instances &mdash; the measured line tracks the ideal N&times; line closely up to <strong>four injectors (about 29,000 req/s, ~99% of linear)</strong>, then bends at six as the single host's cores, shared sink and loopback NIC saturate. On one box you add capacity by adding instances up to that point; past it, spread injectors across machines or pods:</p>
+<img class="ui_image" src="/images/perf_inject_scaling.png" alt="Aggregate injected throughput versus number of MockServer injector instances on one host: near-linear up to four instances around 29,000 req/s, then bending at six as the host saturates">
+
+<a id="scaling_pattern" class="anchor" href="#scaling_pattern">&nbsp;</a>
+
+<h2>Scaling load injection across many instances</h2>
+
+<p>The architecture is deliberately simple: <strong>N MockServer instances each run the same load scenario against the same target</strong>, started together, each injecting up to its own per-instance ceiling. A Prometheus server scrapes every instance, and you aggregate the per-instance <code class="inline code">mock_server_load_*</code> series into one total injected-RPS figure. The injectors do not talk to each other &mdash; there is no coordinator &mdash; so the only things you orchestrate are <strong>launch</strong> (start them together) and <strong>aggregation</strong> (sum their metrics). Four steps:</p>
+
+<h3>1. Raise the per-instance safety caps</h3>
+
+<p>A single instance is deliberately bounded by safety caps so the feature cannot self-DoS the server (see <a href="/mock_server/load_injection.html#safety_caps">Safety Caps</a>). To push injection throughput you <strong>raise them on purpose</strong> &mdash; the live caps that gate dispatch are the requests-per-second token bucket and the in-flight semaphore; the per-scenario caps gate validation:</p>
+
+<pre class="prettyprint code"><code class="code"># Raise the caps on every injector so one instance can push hard
+docker run -p 1080:1080 \
+  -e MOCKSERVER_LOAD_GENERATION_ENABLED=true \
+  -e MOCKSERVER_METRICS_ENABLED=true \
+  -e MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND=100000 \
+  -e MOCKSERVER_LOAD_GENERATION_MAX_RATE=100000 \
+  -e MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS=5000 \
+  -e MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS=2000 \
+  mockserver/mockserver</code></pre>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Environment variable</th>
+            <th>Default</th>
+            <th>Why raise it for injection</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND</code></td>
+            <td>500</td>
+            <td>Live token bucket at dispatch &mdash; the hard ceiling on injected RPS for the instance. Raise it above your target per-instance rate.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_RATE</code></td>
+            <td>5000</td>
+            <td>Maximum arrival rate (iterations/second) a <code class="inline code">RATE</code> stage may request &mdash; raise it so the open-model stage is allowed to ask for the throughput you want.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS</code></td>
+            <td>200</td>
+            <td>Live in-flight semaphore &mdash; raise it so concurrency is not the bottleneck before CPU is.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS</code></td>
+            <td>50</td>
+            <td>Maximum concurrent virtual users &mdash; raise it for higher-concurrency closed-model (<code class="inline code">VU</code>) injection.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>These caps are <strong>safety limits you are deliberately relaxing</strong>, not performance switches. With them raised, the instance's own dispatch path becomes the bottleneck &mdash; which is exactly the per-instance ceiling you then scale out from by adding instances.</p>
+
+<h3>2. Deploy N injectors</h3>
+
+<p><strong>Docker Compose</strong> &mdash; the inject harness at <span class="inline_code">mockserver-performance-test/stack/inject/</span> brings up the injectors, the Envoy sink, and Prometheus together; scale the injector service to N replicas:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># From mockserver-performance-test/stack/inject/
+docker compose up -d --scale injector=8 envoy prometheus</code></pre>
+
+<p><strong>Kubernetes / Helm</strong> &mdash; run the injectors as a Deployment with N replicas, the raised caps as configuration, and trigger them with a REST fan-out:</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># Deploy N injectors with raised caps (the MockServer Helm chart)
+helm install injectors mockserver/mockserver \
+  --set replicaCount=8 \
+  --set 'env[0].name=MOCKSERVER_LOAD_GENERATION_ENABLED' --set 'env[0].value=true' \
+  --set 'env[1].name=MOCKSERVER_METRICS_ENABLED' --set 'env[1].value=true' \
+  --set 'env[2].name=MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND' --set 'env[2].value=100000' \
+  --set 'env[3].name=MOCKSERVER_LOAD_GENERATION_MAX_RATE' --set 'env[3].value=100000' \
+  --set 'env[4].name=MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS' --set 'env[4].value=5000' \
+  --set 'env[5].name=MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS' --set 'env[5].value=2000'</code></pre>
+
+<h3>3. Load the scenario on every instance and trigger a synchronized start</h3>
+
+<p>Load (register) the same scenario on every injector, then <strong>trigger them all together</strong>. A small shared <code class="inline code">startDelayMillis</code> on the trigger means every instance begins its load at the same offset, absorbing the jitter of the fan-out so the injectors ramp as one. The scenario is an ordinary load scenario aimed at your target (or the Envoy sink for a calibration run):</p>
+
+<pre class="prettyprint lang-bash code"><code class="code"># Fan out the SAME scenario to every injector (replace with your instance addresses)
+INJECTORS="http://injector-0:1080 http://injector-1:1080 http://injector-2:1080"
+
+SCENARIO='{
+  "name": "inject-target",
+  "startDelayMillis": 2000,
+  "profile": { "stages": [ { "type": "RATE", "rate": 40000, "durationMillis": 120000 } ] },
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/api/orders/$iteration.index",
+        "headers": { "Host": ["target.svc:8080"] },
+        "socketAddress": { "host": "target.svc", "port": 8080, "scheme": "HTTP" }
+      }
+    }
+  ]
+}'
+
+# 1. LOAD (register) on every instance
+for url in $INJECTORS; do
+  curl -s -X PUT "$url/mockserver/loadScenario" \
+    -H "Content-Type: application/json" -d "$SCENARIO" >/dev/null
+done
+
+# 2. TRIGGER all instances together — the shared startDelayMillis aligns the start
+for url in $INJECTORS; do
+  curl -s -X PUT "$url/mockserver/loadScenario/start" \
+    -d '{ "name": "inject-target" }' >/dev/null &
+done
+wait</code></pre>
+
+<h3>4. Aggregate by <code class="inline code">run_id</code> in Prometheus, and capture the target too</h3>
+
+<p>Each instance exposes the <code class="inline code">mock_server_load_*</code> family on <code class="inline code">GET /mockserver/metrics</code> (needs <code class="inline code">metricsEnabled=true</code>). The <code class="inline code">run_id</code> label is a <strong>fresh UUID per trigger</strong>, so when Prometheus scrapes N instances together you can both <strong>distinguish</strong> each instance's run and <strong>aggregate</strong> across them. Total injected RPS for the scenario is the sum of the per-instance rates:</p>
+
+<pre class="prettyprint code"><code class="code"># Total injected requests/sec across ALL instances for one scenario
+sum(rate(mock_server_load_requests_total{scenario="inject-target"}[1m]))
+
+# Per-instance injected requests/sec — one series per instance via run_id
+sum by (run_id) (rate(mock_server_load_requests_total{scenario="inject-target"}[1m]))
+
+# Prove the injectors are not throttled (should be ~0 if caps are high enough)
+sum(rate(mock_server_load_throttled_total{scenario="inject-target"}[1m]))</code></pre>
+
+<p>Counters are exposed with a <code class="inline code">_total</code> suffix in Prometheus (so <code class="inline code">mock_server_load_requests</code> is queried as <code class="inline code">mock_server_load_requests_total</code>). Always capture metrics from the <strong>system under test</strong> alongside the injectors &mdash; injected RPS tells you what you sent, the target's own metrics tell you what it absorbed and how it behaved. See <a href="/mock_server/load_injection.html#observability">Observability &amp; Metrics</a> for the full metric catalogue and label set.</p>
+
+<a id="how_measured" class="anchor" href="#how_measured">&nbsp;</a>
+
+<h2>How injection performance is measured</h2>
+
+<p>The figures on this page are produced by an injection harness (<span class="inline_code">mockserver-performance-test/stack/inject/</span>) designed so that the <strong>injector is the provable bottleneck</strong> &mdash; otherwise you would be measuring the target, not the load generator. The principles:</p>
+
+<ul>
+    <li><strong>An absorbing sink.</strong> The injectors drive an <a target="_blank" href="https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/direct_response_filter" rel="noopener noreferrer">Envoy</a> <code class="inline code">direct_response</code> endpoint that returns <code class="inline code">200</code> immediately with no upstream call. The sink can absorb far more than the injectors produce, so any plateau in achieved throughput is the <em>injector</em> saturating, not the sink.</li>
+    <li><strong>Caps raised out of the way.</strong> Every injector runs with the RPS, rate, in-flight, and virtual-user caps raised well above the target rate (see <a href="#scaling_pattern">step 1</a>), so the measured ceiling is the instance's own dispatch path, not a deliberate safety limit.</li>
+    <li><strong>The ceiling is dispatch-bound, not CPU-bound.</strong> Pinning one injector to 1, 2, 4 and 8 cores gave the <em>same</em> ~18&ndash;20k req/s ceiling at every core count, with the injector using only ~1&ndash;2 cores. The limit is the asynchronous (effectively single-threaded) dispatch loop plus the loopback to the sink &mdash; not whole-box CPU &mdash; so more cores per instance do not raise its throughput; more <em>instances</em> do.</li>
+    <li><strong>Throttle and error assertions.</strong> A run is only valid if <code class="inline code">mock_server_load_throttled_total &asymp; 0</code> (the instance was not rate-limited or in-flight-capped) and <code class="inline code">mock_server_load_errors_total &asymp; 0</code> (no connection or timeout failures). A non-zero throttle count means a cap, not the dispatch path, was the bottleneck &mdash; the run is discarded.</li>
+    <li><strong>Envoy cross-check.</strong> The traffic Envoy reports receiving is cross-checked against the traffic the injectors report sending (<code class="inline code">mock_server_load_requests_total</code>); the two must agree, confirming the injected count is real and nothing was silently dropped.</li>
+    <li><strong>Scaling sweep.</strong> The aggregate-scaling chart is produced by repeating the single-instance calibration at 1, 2, 4, 8&hellip; instances against the same sink and plotting the summed injected RPS against the ideal N&times; line.</li>
+</ul>
+
+<p>The harness is reproducible &mdash; bring up the injectors, the Envoy sink, and Prometheus from <span class="inline_code">mockserver-performance-test/stack/inject/</span> and run the sweep yourself.</p>
+
+<p><strong>Measurement environment for the figures on this page:</strong> a single MockServer instance (current snapshot build) on a dedicated 16-vCPU CI host. To establish that injection is <strong>dispatch-path-bound</strong>, the per-instance ceiling was measured with one injector pinned to <strong>1, 2, 4 and 8 cores</strong> in turn &mdash; it reached the same ~18&ndash;20k req/s at every core count while using only ~1&ndash;2 cores (and the Envoy sink ~1.2 cores). The <strong>scaling sweep</strong> then runs N lean <strong>two-core injectors</strong> in parallel. Every injector runs with the load-generation caps raised well above the target rate and the <strong>keep-warm forward connection pool enabled</strong> (<code class="inline code">forwardConnectionPoolKeepAlive=true</code>) so connections to the sink are reused rather than churned. The target is an Envoy <code class="inline code">direct_response</code> sink (negligible latency, far more capacity than the injectors produce) so the injector is the provable bottleneck, and Prometheus aggregates each instance's metrics by the <code class="inline code">run_id</code> label. The run was clean through the ceiling &mdash; <strong>zero errors, zero throttle</strong>. Real-world throughput depends on your hardware, request complexity and target latency, so treat the <em>shape</em> (a per-instance dispatch ceiling, scale by adding instances, near-linear aggregate scaling until the host saturates) as the durable result and benchmark your own injectors on your own hardware.</p>
+
+<h2>Detailed results</h2>
+
+<a id="results_ceiling" class="anchor" href="#results_ceiling">&nbsp;</a>
+<h3>Single-instance injection ceiling</h3>
+<p>Offered arrival rate against achieved injected throughput for a single injector with caps raised, driving the Envoy sink. Achieved throughput tracks the offered rate until the instance's dispatch path saturates, then plateaus at the per-instance ceiling. The <strong>simple GET</strong> tracks offered load to a ceiling of about <strong>20,000 req/s</strong>; the heavier <strong>1&nbsp;KB templated POST</strong> does more work per request and so caps lower, at about <strong>13,500 req/s</strong>. Throughout, the injector uses only about <strong>1&ndash;2 CPU cores</strong> &mdash; and the ceiling was the same when the instance was pinned to 1, 2, 4 or 8 cores:</p>
+<table class="results">
+    <thead>
+    <tr><td>offered rate (req/s)</td><td>achieved injected (req/s)</td><td>injector cores used</td><td>throttled</td><td>errors</td></tr>
+    </thead>
+    <tbody>
+    <tr><td>2,000</td><td>2,000</td><td>~0.2</td><td>0</td><td>0%</td></tr>
+    <tr><td>4,000</td><td>4,000</td><td>~0.3</td><td>0</td><td>0%</td></tr>
+    <tr><td>8,000</td><td>8,300</td><td>~0.7</td><td>0</td><td>0%</td></tr>
+    <tr><td>12,000</td><td>13,400</td><td>~0.9</td><td>0</td><td>0%</td></tr>
+    <tr><td>16,000</td><td>18,000</td><td>~1.1</td><td>0</td><td>0%</td></tr>
+    <tr><td>18,000</td><td>20,000 (ceiling)</td><td>~1.3</td><td>0</td><td>0%</td></tr>
+    </tbody>
+</table>
+<p>Simple GET. The <strong>1&nbsp;KB templated POST</strong> traces the same shape against a lower ceiling &mdash; representative points (offered&rarr;achieved): 2k&rarr;2.0k, 4k&rarr;4.0k, 6k&rarr;6.0k, 8k&rarr;8.3k, 12k&rarr;13.4k &mdash; saturating at about <strong>13,500 req/s</strong> while still using only ~1&ndash;2 cores. Both runs held <strong>zero throttle and zero errors</strong> through the ceiling, so the plateau is the instance's dispatch path, not a cap, not whole-box CPU, and not a failing target. Because more cores per instance do <em>not</em> raise this ceiling, you scale by adding instances &mdash; see <a href="#sizing">how many instances you need</a>.</p>
+
+<a id="results_scaling" class="anchor" href="#results_scaling">&nbsp;</a>
+<h3>Aggregate scaling across instances</h3>
+<p>Summed injected throughput as the number of parallel injectors grows, each a lean <strong>two-core</strong> instance running the same simple-GET scenario against the same sink at a derived sustainable rate (about 7,300 req/s each), aggregated by <code class="inline code">run_id</code> with zero errors:</p>
+<table class="results">
+    <thead>
+    <tr><td>instances</td><td>aggregate injected (req/s)</td><td>per-instance (req/s)</td><td>vs ideal N&times;</td></tr>
+    </thead>
+    <tbody>
+    <tr><td>1</td><td>7,300</td><td>7,300</td><td>&mdash;</td></tr>
+    <tr><td>2</td><td>14,600</td><td>7,300</td><td>~100%</td></tr>
+    <tr><td>4</td><td>29,100</td><td>7,275</td><td>~99%</td></tr>
+    <tr><td>6</td><td>31,600</td><td>5,267</td><td>~72%</td></tr>
+    </tbody>
+</table>
+<p>Aggregate injected throughput grows near-linearly to <strong>four injectors (~29,100 req/s, ~99% of the ideal N&times; line)</strong>, then bends at six (~31,600 req/s, ~72% of linear) as this single 16-vCPU box runs out of cores and its injectors contend for the shared sink and loopback NIC. That bend is a property of packing many injectors onto <em>one host</em>, not of MockServer's injection &mdash; to go further, <strong>fan out across machines or pods</strong> (the deployment pattern above), where each host carries its own near-linear band and the aggregate reaches the hundreds of thousands of requests/sec.</p>
+
+<a id="sizing" class="anchor" href="#sizing">&nbsp;</a>
+
+<h2>How many instances do you need?</h2>
+
+<p>A single instance injects up to about <strong>20,000 req/s</strong> for a simple GET, or <strong>13,500 req/s</strong> for a 1&nbsp;KB templated POST &mdash; the peak on this hardware. Crucially, that ceiling is <strong>dispatch-path-bound, not CPU-bound</strong>: one instance reached the same ~18&ndash;20k at 1, 2, 4 <em>and</em> 8 cores while using only ~1&ndash;2 cores, so giving a single instance more cores does <em>not</em> raise its throughput. The unit you scale with is the <strong>instance</strong>: allocate <strong>modest cores per instance (~2)</strong> and add instances until you hit your target.</p>
+
+<p>Aggregate throughput then grows <strong>near-linearly with the number of instances</strong> &mdash; about 7k each in the scaling run, giving N=2&nbsp;=&nbsp;14.6k, N=4&nbsp;=&nbsp;29.1k (~99% of linear), N=6&nbsp;=&nbsp;31.6k (~72%) as one box's shared cores, sink and loopback NIC saturate. <strong>One 16-vCPU box tops out around 30,000 req/s aggregate.</strong> For more &mdash; the hundreds of thousands of requests/sec &mdash; <strong>fan out across machines or Kubernetes pods</strong> (the <a href="#scaling_pattern">deployment pattern above</a>), many boxes each carrying their own ~30k band.</p>
+
+<p>So size by counting instances, not cores:</p>
+
+<pre class="prettyprint code"><code class="code">instances &asymp; desired_rps / per_instance_rate</code></pre>
+
+<p>Per-instance throughput depends on contention: a lone instance peaks at ~18&ndash;20k, but packed alongside others on one host it settles lower &mdash; the scaling run sustained about <strong>7,000 req/s each</strong>. As a planning rule of thumb, <strong>budget ~7,000&ndash;10,000 req/s per instance for a simple request</strong> (less for a heavier or templated one), <strong>~1&ndash;2 cores each</strong>, then measure your fleet's aggregate and add instances until you hit the target:</p>
+
+<pre class="prettyprint code"><code class="code"># Total injected requests/sec across the whole fleet
+sum(rate(mock_server_load_requests_total{scenario="inject-target"}[1m]))</code></pre>
+
+<h3>Worked example &mdash; inject 100,000 req/s</h3>
+
+<p>For a simple request, plan roughly <strong>10&ndash;14 instances</strong> at ~7&ndash;10k req/s each (about <strong>20&ndash;28 cores total</strong> at ~2 cores per instance), spread across <strong>several machines</strong> &mdash; one 16-vCPU box saturates near 30k, so you need at least three or four boxes. Then verify empirically: watch the fleet aggregate (the query above) and add instances until it reaches 100,000. A <strong>heavier or templated workload injects less per instance</strong> (here ~13.5k peak versus ~20k for the simple GET), so it needs proportionally more instances for the same total &mdash; which is exactly why you size on <em>your</em> measured per-instance rate, not a headline number.</p>
+
+<h3>Measure your own scenario's per-instance rate</h3>
+
+<p>Our measurement is the <strong>simplest case</strong>. Real scenarios do more work per request &mdash; which lowers the per-instance rate and so raises the instance count you need. The things that push it down:</p>
+
+<ul>
+    <li>larger or multiple request bodies;</li>
+    <li>heavier templating (more Velocity logic, bigger rendered output);</li>
+    <li>multi-step iterations, and captures or feeders that read and bind data per request;</li>
+    <li>TLS to the target (encryption per connection and per request);</li>
+    <li>real upstream latency &mdash; this one is special: latency raises the number of <em>concurrent</em> in-flight connections (<code class="inline code">concurrency &asymp; rate &times; latency</code>), which drives memory and threads. Size the in-flight cap and heap for that concurrency as well as the instance count for the rate.</li>
+</ul>
+
+<p>So don't guess your per-instance rate &mdash; <strong>measure it</strong>. Run <em>your</em> scenario through the same harness (<span class="inline_code">mockserver-performance-test/stack/inject/</span>), read the achieved <code class="inline code">mock_server_load_requests_total</code> rate one instance sustains, and divide your target by it to get the instance count.</p>
+
+<h3>Keep the connection pool warm for high-rate injection</h3>
+
+<p>For high-rate injection, enable the <strong>keep-warm forward connection pool</strong> (<code class="inline code">forwardConnectionPoolKeepAlive=true</code>) so the injector reuses connections to the target instead of opening a fresh one per request. Without it, a single instance churns connections to a fast target and caps at roughly <strong>4,000 req/s</strong> &mdash; far below the dispatch ceiling &mdash; because connection setup, not request dispatch, becomes the bottleneck (the figures on this page were all measured with it on). The trade-off is more simultaneously open connections to the target, so size the target and any intermediaries accordingly; see <a href="/mock_server/configuration_properties.html">Configuration Properties</a> for the setting and its equivalent forms.</p>
+
+<a id="caveats" class="anchor" href="#caveats">&nbsp;</a>
+
+<h2>Caveats &amp; honest limits</h2>
+
+<ul>
+    <li><strong>The per-instance caps are deliberate safety limits.</strong> The defaults (<code class="inline code">loadGenerationMaxRequestsPerSecond=500</code>, <code class="inline code">loadGenerationMaxRate=5000</code>, <code class="inline code">loadGenerationMaxInFlightRequests=200</code>, <code class="inline code">loadGenerationMaxVirtualUsers=50</code>) exist so the load feature cannot accidentally self-DoS a server that is also mocking traffic. The throughput on this page assumes you have <strong>raised them on purpose</strong> on dedicated injector instances.</li>
+    <li><strong>There is no built-in cross-node coordinator.</strong> Running N injectors in parallel is a deployment pattern you orchestrate &mdash; MockServer does not elect a leader, shard the rate, or aggregate metrics for you. You start the instances together (docker-compose / a Kubernetes <code class="inline code">Deployment</code> with <code class="inline code">replicaCount: N</code> / a Job) and aggregate their <code class="inline code">mock_server_load_*</code> series yourself in Prometheus by <code class="inline code">run_id</code>.</li>
+    <li><strong>The target must out-scale the injectors, or you measure the target.</strong> The figures here use an Envoy <code class="inline code">direct_response</code> sink precisely so the sink is never the bottleneck. Against a real system under test, the limiting factor is usually the target, not MockServer &mdash; which is the point of a load test, but means injected RPS and the target's served RPS can diverge. Always read both.</li>
+    <li><strong>Figures are hardware- and scenario-dependent.</strong> The numbers on this page are measured on one pinned 16-vCPU CI box driving a local Envoy sink, for the <em>simplest</em> request shapes (a bare GET and a small templated POST). A single instance is dispatch-path-bound (more cores per instance do not raise its ceiling); aggregate throughput scales with the number of instances <em>and</em> with how well you spread them across hosts; and the per-instance rate falls as your requests get heavier (larger bodies, more templating, captures/feeders, TLS, real upstream latency). Treat the per-instance numbers as a starting point and <a href="#sizing">measure your own scenario's per-instance rate</a> before sizing a fleet.</li>
+</ul>
+
+<a id="related" class="anchor" href="#related">&nbsp;</a>
+
+<h2>Related Pages</h2>
+
+<ul>
+    <li><a href="/mock_server/load_injection.html">Load Injection (Load Scenarios)</a> &mdash; how to build, run, and observe the load scenarios that this page scales out</li>
+    <li><a href="/mock_server/performance.html">Scalability &amp; Latency</a> &mdash; how much traffic a single instance can <em>serve</em> as a mock (the other side of performance)</li>
+    <li><a href="/mock_server/centralized_deployment.html">Centralised Deployment</a> &mdash; running MockServer as a cluster behind a load balancer for serving scale and high availability</li>
+    <li><a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> &mdash; inject faults alongside load to verify resilience under stress</li>
+</ul>

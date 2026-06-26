@@ -76,7 +76,11 @@ public class NettyHttpClient {
         this.forwardProxyClient = forwardProxyClient;
         this.nettySslContextFactory = nettySslContextFactory;
         this.connectionPool = Boolean.TRUE.equals(configuration.forwardConnectionPoolEnabled())
-            ? new HttpForwardConnectionPool(configuration.forwardConnectionPoolMaxIdlePerKey(), configuration.forwardConnectionPoolIdleTimeoutMillis())
+            ? new HttpForwardConnectionPool(
+                configuration.forwardConnectionPoolMaxIdlePerKey(),
+                configuration.forwardConnectionPoolIdleTimeoutMillis(),
+                Boolean.TRUE.equals(configuration.forwardConnectionPoolKeepAlive()),
+                configuration.forwardConnectionPoolMaxTotalPerKey())
             : null;
     }
 
@@ -240,6 +244,7 @@ public class NettyHttpClient {
             .attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE, true)
             .attr(FIRST_BYTE_MILLIS, firstByteMillis)
             .handler(clientInitializer);
+        applyForwardSocketKeepAlive(bootstrap);
         if (disableStreaming) {
             bootstrap.attr(DISABLE_RESPONSE_STREAMING, true);
         }
@@ -266,6 +271,102 @@ public class NettyHttpClient {
             });
     }
 
+    /**
+     * Applies tuned TCP keepalive to a forward/proxy client bootstrap, when enabled (default on via
+     * {@code forwardSocketKeepAlive}). This is robustness hardening that COMPLEMENTS — not replaces —
+     * the pool's existing {@code isActive()}/{@code closeFuture}/idle-reaper defences: it lets the OS
+     * detect dead or half-open upstream connections faster (most valuable during active/long-lived or
+     * streaming requests, and for keep-warm users who raise {@code forwardConnectionPoolIdleTimeoutMillis}
+     * above the keepalive idle so the idle reaper no longer pre-empts NAT/firewall mapping drops) and
+     * keeps NAT/firewall mappings warm.
+     * <p>
+     * {@link ChannelOption#SO_KEEPALIVE} alone uses the OS default idle (~2h on Linux), which is useless
+     * for NAT, so when the native epoll transport is in use the per-connection keepalive timers are also
+     * tuned via {@code EpollChannelOption.TCP_KEEPIDLE}/{@code TCP_KEEPINTVL}/{@code TCP_KEEPCNT} (target
+     * ~1–2 min dead-peer detection). Epoll is detected by reusing the codebase's existing group-derived
+     * transport selection ({@link NettyTransport#socketChannelClassFor(EventLoopGroup)}), so it always
+     * matches the channel class the bootstrap actually uses — including graceful epoll→NIO fallback. On
+     * the NIO transport (macOS/Windows, or {@code useNativeTransport=false}) only SO_KEEPALIVE is set;
+     * interval tuning requires epoll. The epoll option classes are referenced only inside a guarded
+     * helper so this never hard-loads native classes on a non-epoll platform.
+     */
+    private void applyForwardSocketKeepAlive(Bootstrap bootstrap) {
+        applyForwardSocketKeepAlive(
+            bootstrap,
+            eventLoopGroup,
+            Boolean.TRUE.equals(configuration.forwardSocketKeepAlive()),
+            configuration.forwardSocketKeepAliveIdleSeconds(),
+            configuration.forwardSocketKeepAliveIntervalSeconds(),
+            configuration.forwardSocketKeepAliveCount(),
+            mockServerLogger
+        );
+    }
+
+    /**
+     * Package-private seam (so it can be unit-tested deterministically against a constructed
+     * {@link Bootstrap} on any platform). When {@code enabled}, sets {@link ChannelOption#SO_KEEPALIVE}
+     * and, only when the group selects the native epoll transport, the tuned epoll keepalive timers.
+     * Epoll is detected by reusing the codebase's group-derived selection
+     * ({@link NettyTransport#socketChannelClassFor(EventLoopGroup)}) so it always matches the channel
+     * class the bootstrap actually uses (including graceful epoll→NIO fallback). Values are clamped to
+     * at least 1. No-op when disabled, so the historical "no SO_KEEPALIVE" behaviour is exactly
+     * restored by {@code forwardSocketKeepAlive=false}.
+     */
+    static void applyForwardSocketKeepAlive(Bootstrap bootstrap, EventLoopGroup eventLoopGroup, boolean enabled, int idleSeconds, int intervalSeconds, int count, MockServerLogger mockServerLogger) {
+        if (!enabled) {
+            return;
+        }
+        bootstrap.option(ChannelOption.SO_KEEPALIVE, true);
+        // Tune the keepalive timers only on epoll (the only transport that exposes them). Detected by
+        // the same group-derived selection used to pick the channel class, so it can never desync.
+        if (isEpollChannelClass(NettyTransport.socketChannelClassFor(eventLoopGroup))) {
+            applyEpollKeepAliveOptions(
+                bootstrap,
+                Math.max(1, idleSeconds),
+                Math.max(1, intervalSeconds),
+                Math.max(1, count),
+                mockServerLogger
+            );
+        }
+    }
+
+    /**
+     * True when the selected channel class is the native epoll socket channel. Guarded against
+     * {@link NoClassDefFoundError} so it is safe on NIO-only platforms (macOS/Windows) where the epoll
+     * API classes may be absent — there it simply returns false.
+     */
+    private static boolean isEpollChannelClass(Class<? extends Channel> channelClass) {
+        try {
+            return channelClass == io.netty.channel.epoll.EpollSocketChannel.class;
+        } catch (NoClassDefFoundError e) {
+            return false;
+        }
+    }
+
+    /**
+     * Sets the epoll-specific keepalive timer options. Isolated into its own method (and guarded
+     * against {@link NoClassDefFoundError}) so the {@code EpollChannelOption} references are only
+     * resolved when epoll has already been selected — keeping the class loadable on NIO-only platforms.
+     */
+    private static void applyEpollKeepAliveOptions(Bootstrap bootstrap, int idleSeconds, int intervalSeconds, int count, MockServerLogger mockServerLogger) {
+        try {
+            bootstrap
+                .option(io.netty.channel.epoll.EpollChannelOption.TCP_KEEPIDLE, idleSeconds)
+                .option(io.netty.channel.epoll.EpollChannelOption.TCP_KEEPINTVL, intervalSeconds)
+                .option(io.netty.channel.epoll.EpollChannelOption.TCP_KEEPCNT, count);
+        } catch (NoClassDefFoundError | UnsatisfiedLinkError e) {
+            // epoll classes unexpectedly unavailable despite the channel-class match — SO_KEEPALIVE
+            // (already set) still applies with OS-default timers; nothing else to do.
+            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.DEBUG)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.DEBUG)
+                        .setMessageFormat("unable to set epoll TCP keepalive options, falling back to SO_KEEPALIVE with OS-default timers: " + e.getMessage())
+                );
+            }
+        }
+    }
+
     public CompletableFuture<BinaryMessage> sendRequest(final BinaryMessage binaryRequest, final boolean isSecure, InetSocketAddress remoteAddress, Long connectionTimeoutMillis) throws SocketConnectionException {
         if (!eventLoopGroup.isShuttingDown()) {
             if (proxyConfigurations != null && !isSecure && proxyConfigurations.containsKey(ProxyConfiguration.Type.HTTP)) {
@@ -277,7 +378,7 @@ public class NettyHttpClient {
             final CompletableFuture<BinaryMessage> binaryResponseFuture = new CompletableFuture<>();
             final CompletableFuture<Message> responseFuture = new CompletableFuture<>();
 
-            new Bootstrap()
+            Bootstrap binaryBootstrap = new Bootstrap()
                 .group(eventLoopGroup)
                 .channel(NettyTransport.socketChannelClassFor(eventLoopGroup))
                 .option(ChannelOption.AUTO_READ, true)
@@ -288,7 +389,9 @@ public class NettyHttpClient {
                 .attr(REMOTE_SOCKET, remoteAddress)
                 .attr(RESPONSE_FUTURE, responseFuture)
                 .attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE, !configuration.forwardBinaryRequestsWithoutWaitingForResponse())
-                .handler(new HttpClientInitializer(proxyConfigurations, mockServerLogger, forwardProxyClient, nettySslContextFactory, null))
+                .handler(new HttpClientInitializer(proxyConfigurations, mockServerLogger, forwardProxyClient, nettySslContextFactory, null));
+            applyForwardSocketKeepAlive(binaryBootstrap);
+            binaryBootstrap
                 .connect(remoteAddress)
                 .addListener((ChannelFutureListener) future -> {
                     if (future.isSuccess()) {

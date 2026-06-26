@@ -228,6 +228,34 @@ curl http://localhost:1080/mockserver/metrics</code></pre>
 <pre class="prettyprint lang-text code"><code class="code"># Example: total LLM cost rate per hour
 sum(rate(mock_server_llm_cost_usd_total[1h]))</code></pre>
 
+<p>
+    Three further gauges expose the headline verdict of the latest <a href="/mock_server/ai_optimisation.html">LLM optimisation report</a>.
+    They have no labels (single global gauges) and report the figures from the most recently built optimisation
+    report &mdash; <span class="inline_code">0</span> until a report has been built (and again after a server reset),
+    so build the report periodically (via the dashboard, the REST endpoint, or the
+    <span class="inline_code">export_optimisation_report</span> MCP tool) to keep them fresh.
+</p>
+
+<table class="table table-bordered table-striped">
+    <thead>
+        <tr><th>Metric</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="inline_code">mock_server_llm_estimated_waste_usd</span></td>
+            <td>Estimated recoverable LLM spend (USD) from the latest optimisation report</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">mock_server_llm_cache_hit_ratio</span></td>
+            <td>Cache-hit ratio (0&ndash;1) from the latest optimisation report</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">mock_server_llm_one_shot_rate</span></td>
+            <td>One-shot rate (0&ndash;1, fraction of non-retry calls) from the latest optimisation report</td>
+        </tr>
+    </tbody>
+</table>
+
 <a id="otel" class="anchor" href="#otel">&nbsp;</a>
 <h2>OpenTelemetry (OTLP) Export</h2>
 

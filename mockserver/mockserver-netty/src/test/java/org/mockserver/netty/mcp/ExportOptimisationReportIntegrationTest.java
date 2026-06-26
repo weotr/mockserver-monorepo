@@ -120,6 +120,24 @@ public class ExportOptimisationReportIntegrationTest {
     }
 
     @Test
+    public void exportsCsvWhenRequested() throws Exception {
+        seedOpenAiForward("hi", 100, 10);
+        seedOpenAiForward("hi again", 120, 12);
+        pollUntilTrue(this::recordedPairsVisible);
+
+        com.fasterxml.jackson.databind.node.ObjectNode params = objectMapper.createObjectNode();
+        params.put("format", "csv");
+        JsonNode result = toolRegistry.callTool("export_optimisation_report", params);
+        assertThat(result.path("format").asText(), is("csv"));
+        String csv = result.path("csv").asText();
+        assertThat(csv, containsString("index,provider,model,input_tokens"));
+        assertThat(csv, containsString("section,metric,value"));
+        assertThat(csv, containsString("totals,call_count,2"));
+        // secret never leaks into the export
+        assertThat(csv, not(containsString("sk-secret-key-98765")));
+    }
+
+    @Test
     public void emptyCaptureYieldsNoTrafficBrief() {
         JsonNode result = toolRegistry.callTool("export_optimisation_report", objectMapper.createObjectNode());
         assertThat(result.path("format").asText(), is("markdown"));

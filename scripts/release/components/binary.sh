@@ -76,6 +76,32 @@ fi
 [[ -n "$SHADED_JAR" && -f "$SHADED_JAR" ]] || { log_error "No shaded JAR available"; exit 1; }
 log_info "Using JAR: $SHADED_JAR"
 
+# --- Dashboard usage analytics (PostHog Cloud EU) ----------------------------
+# The official released binary launcher bundles activate cookieless usage
+# analytics by baking the project's PostHog Cloud EU endpoint + write-only public
+# ingest key into the generated launcher scripts as -D system properties (read by
+# the dashboard's activation gate), labelled with the `binary` distribution. The
+# values live ONLY in Secrets Manager (mockserver-release/dashboard-analytics,
+# keys: endpoint + key) — never in the source tree — so a fork building these
+# bundles directly ships analytics INERT. In dry-run we leave them empty so
+# locally-built test bundles also stay inert; a missing secret degrades to inert,
+# never a release failure. The distribution label is the non-secret constant
+# `binary`. Mirrors the analytics block in release/components/docker.sh.
+DASHBOARD_ANALYTICS_ENDPOINT=""
+DASHBOARD_ANALYTICS_KEY=""
+DASHBOARD_ANALYTICS_DISTRIBUTION="binary"
+if ! is_dry_run; then
+  DASHBOARD_ANALYTICS_ENDPOINT="$(load_secret "mockserver-release/dashboard-analytics" "endpoint" 2>/dev/null || echo "")"
+  DASHBOARD_ANALYTICS_KEY="$(load_secret "mockserver-release/dashboard-analytics" "key" 2>/dev/null || echo "")"
+  # A secret present but missing the field yields the jq literal "null"; normalise to empty so a
+  # misconfigured secret ships INERT rather than baking endpoint/key="null".
+  [[ "$DASHBOARD_ANALYTICS_ENDPOINT" == "null" ]] && DASHBOARD_ANALYTICS_ENDPOINT=""
+  [[ "$DASHBOARD_ANALYTICS_KEY" == "null" ]] && DASHBOARD_ANALYTICS_KEY=""
+  if [[ -z "$DASHBOARD_ANALYTICS_KEY" || -z "$DASHBOARD_ANALYTICS_ENDPOINT" ]]; then
+    log_info "WARNING: mockserver-release/dashboard-analytics not fully available — dashboard analytics will ship INERT in released binary bundles"
+  fi
+fi
+
 # ---- build all platform bundles ------------------------------------------
 BUNDLE_OUT="$REPO_ROOT/.tmp/bundles"
 rm -rf "$BUNDLE_OUT"
@@ -86,6 +112,9 @@ TARGETS_ARG=()
 JAVA_HOME="$JDK21_HOME" "$REPO_ROOT/scripts/build-all-bundles.sh" \
   --jar "$SHADED_JAR" --version "$RELEASE_VERSION" --jdk-version 21 \
   --cache "$REPO_ROOT/.tmp/jdks" --output "$BUNDLE_OUT" \
+  --analytics-endpoint "$DASHBOARD_ANALYTICS_ENDPOINT" \
+  --analytics-key "$DASHBOARD_ANALYTICS_KEY" \
+  --analytics-distribution "$DASHBOARD_ANALYTICS_DISTRIBUTION" \
   "${TARGETS_ARG[@]+"${TARGETS_ARG[@]}"}"
 
 # Collect assets as repo-root-relative paths (for the /build mount in in_docker).

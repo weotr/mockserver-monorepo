@@ -23,6 +23,7 @@ import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertThrows;
 import static org.mockserver.configuration.ConfigurationProperties.logLevel;
 
@@ -33,6 +34,31 @@ public class ConfigurationTest {
     @Before
     public void setupTest() {
         configuration = new Configuration();
+        // ensure no leaked ringBufferSize override (in the cache-first ConfigurationProperties cache)
+        // pollutes the default-resolution ring-buffer tests below
+        clearRingBufferSizeOverride();
+    }
+
+    private static void clearRingBufferSizeOverride() {
+        System.clearProperty("mockserver.ringBufferSize");
+        // ConfigurationProperties resolves cache-first, so clearing the system property alone is not
+        // enough — also drop the in-memory cache entry (mirror of the production clearProperty()).
+        try {
+            java.lang.reflect.Field cacheField = ConfigurationProperties.class.getDeclaredField("propertyCache");
+            cacheField.setAccessible(true);
+            Object cache = cacheField.get(null);
+            if (cache instanceof Map) {
+                ((Map<?, ?>) cache).remove("mockserver.ringBufferSize");
+            }
+            java.lang.reflect.Field keysField = ConfigurationProperties.class.getDeclaredField("programmaticallySetKeys");
+            keysField.setAccessible(true);
+            Object keys = keysField.get(null);
+            if (keys instanceof Set) {
+                ((Set<?>) keys).remove("mockserver.ringBufferSize");
+            }
+        } catch (Exception ignore) {
+            // best effort — if the internals change, the System property clear above still helps
+        }
     }
 
     private String tempFilePath() {
@@ -307,6 +333,32 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldSetAndGetDashboardAnalyticsDistribution() {
+        String original = ConfigurationProperties.dashboardAnalyticsDistribution();
+        try {
+            // then - default value
+            assertThat(configuration.dashboardAnalyticsDistribution(), equalTo(""));
+
+            // when - system property setter
+            ConfigurationProperties.dashboardAnalyticsDistribution("docker");
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.dashboardAnalyticsDistribution(), equalTo("docker"));
+            assertThat(System.getProperty("mockserver.dashboardAnalyticsDistribution"), equalTo("docker"));
+            assertThat(configuration.dashboardAnalyticsDistribution(), equalTo("docker"));
+            ConfigurationProperties.dashboardAnalyticsDistribution(original);
+
+            // when - setter
+            configuration.dashboardAnalyticsDistribution("helm");
+
+            // then - getter
+            assertThat(configuration.dashboardAnalyticsDistribution(), equalTo("helm"));
+        } finally {
+            ConfigurationProperties.dashboardAnalyticsDistribution(original);
+        }
+    }
+
+    @Test
     public void shouldSetAndGetChaosAutoHaltEnabled() {
         boolean original = ConfigurationProperties.chaosAutoHaltEnabled();
         try {
@@ -410,6 +462,9 @@ public class ConfigurationTest {
     public void shouldSetAndGetMaxLogEntries() {
         int original = ConfigurationProperties.maxLogEntries();
         try {
+            // no explicit ring-buffer override (cleared in @Before): ring size is derived from
+            // maxLogEntries (under the cap)
+
             // when - system property setter
             ConfigurationProperties.maxLogEntries(10);
 
@@ -418,7 +473,7 @@ public class ConfigurationTest {
             assertThat(System.getProperty("mockserver.maxLogEntries"), equalTo("10"));
             assertThat(configuration.maxLogEntries(), equalTo(10));
 
-            // when - setter
+            // when - setter (small retention: ring still derived from maxLogEntries, under the cap)
             configuration.maxLogEntries(20);
 
             // then - getters
@@ -438,6 +493,55 @@ public class ConfigurationTest {
             assertThat(configuration.ringBufferSize(), equalTo(1024));
         } finally {
             ConfigurationProperties.maxLogEntries(original);
+        }
+    }
+
+    @Test
+    public void shouldDecoupleRingBufferSizeFromMaxLogEntriesByDefault() {
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        try {
+            // when - large retention is requested
+            configuration.maxLogEntries(100000);
+
+            // then - the ring is NOT slaved to retention: default ceiling is min(maxLogEntries, 16384)
+            // rounded up to a power of two, so it no longer pre-allocates a 131072-slot ring
+            assertThat(configuration.ringBufferSize(), equalTo(32768));
+            assertThat(configuration.ringBufferSize(), not(equalTo(131072)));
+
+            // when - retention below the cap, the ring still follows maxLogEntries (the computed
+            // default is dynamic — not cached — so it re-resolves on each read)
+            configuration.maxLogEntries(8000);
+            assertThat(configuration.ringBufferSize(), equalTo(8192));
+        } finally {
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetRingBufferSize() {
+        int originalMaxLogEntries = ConfigurationProperties.maxLogEntries();
+        try {
+            configuration.maxLogEntries(100000);
+
+            // when - explicit ConfigurationProperties (system property) setter
+            ConfigurationProperties.ringBufferSize(1000);
+
+            // then - honoured and rounded up to the next power of two
+            assertThat(System.getProperty("mockserver.ringBufferSize"), equalTo("1000"));
+            assertThat(configuration.ringBufferSize(), equalTo(1024));
+
+            // when - explicit instance field setter (takes precedence over the property)
+            configuration.ringBufferSize(2000);
+
+            // then - honoured and rounded up to the next power of two, independent of maxLogEntries
+            assertThat(configuration.ringBufferSize(), equalTo(2048));
+
+            // when - field cleared, falls back to the property
+            configuration.ringBufferSize(null);
+            assertThat(configuration.ringBufferSize(), equalTo(1024));
+        } finally {
+            ConfigurationProperties.maxLogEntries(originalMaxLogEntries);
+            clearRingBufferSizeOverride();
         }
     }
 
@@ -722,6 +826,164 @@ public class ConfigurationTest {
             assertThat(configuration.forwardConnectionPoolIdleTimeoutMillis(), equalTo(15_000L));
         } finally {
             ConfigurationProperties.forwardConnectionPoolIdleTimeoutMillis(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardConnectionPoolKeepAlive() {
+        boolean original = ConfigurationProperties.forwardConnectionPoolKeepAlive();
+        try {
+            // then - default value (keep-warm retention is OFF by default: the pool's release-time
+            // close decision is byte-for-byte the historical behaviour unless this is opted in)
+            assertThat(configuration.forwardConnectionPoolKeepAlive(), equalTo(false));
+
+            // when - system property setter enables it (the opt-in)
+            ConfigurationProperties.forwardConnectionPoolKeepAlive(true);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardConnectionPoolKeepAlive(), equalTo(true));
+            assertThat(System.getProperty("mockserver.forwardConnectionPoolKeepAlive"), equalTo("true"));
+            assertThat(configuration.forwardConnectionPoolKeepAlive(), equalTo(true));
+            ConfigurationProperties.forwardConnectionPoolKeepAlive(original);
+
+            // when - setter
+            configuration.forwardConnectionPoolKeepAlive(true);
+
+            // then - getter
+            assertThat(configuration.forwardConnectionPoolKeepAlive(), equalTo(true));
+        } finally {
+            ConfigurationProperties.forwardConnectionPoolKeepAlive(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardConnectionPoolMaxTotalPerKey() {
+        int original = ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey();
+        try {
+            // then - default value
+            assertThat(configuration.forwardConnectionPoolMaxTotalPerKey(), equalTo(2000));
+
+            // when - system property setter
+            ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey(4000);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey(), equalTo(4000));
+            assertThat(System.getProperty("mockserver.forwardConnectionPoolMaxTotalPerKey"), equalTo("4000"));
+            assertThat(configuration.forwardConnectionPoolMaxTotalPerKey(), equalTo(4000));
+            ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey(original);
+
+            // when - setter
+            configuration.forwardConnectionPoolMaxTotalPerKey(500);
+
+            // then - getter
+            assertThat(configuration.forwardConnectionPoolMaxTotalPerKey(), equalTo(500));
+        } finally {
+            ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardSocketKeepAlive() {
+        boolean original = ConfigurationProperties.forwardSocketKeepAlive();
+        try {
+            // then - default value (keepalive hardening is ON by default: standard for production HTTP
+            // clients, negligible cost, improves half-open detection)
+            assertThat(configuration.forwardSocketKeepAlive(), equalTo(true));
+
+            // when - system property setter disables it (restores the historical no-SO_KEEPALIVE behaviour)
+            ConfigurationProperties.forwardSocketKeepAlive(false);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardSocketKeepAlive(), equalTo(false));
+            assertThat(System.getProperty("mockserver.forwardSocketKeepAlive"), equalTo("false"));
+            assertThat(configuration.forwardSocketKeepAlive(), equalTo(false));
+            ConfigurationProperties.forwardSocketKeepAlive(original);
+
+            // when - setter
+            configuration.forwardSocketKeepAlive(false);
+
+            // then - getter
+            assertThat(configuration.forwardSocketKeepAlive(), equalTo(false));
+        } finally {
+            ConfigurationProperties.forwardSocketKeepAlive(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardSocketKeepAliveIdleSeconds() {
+        int original = ConfigurationProperties.forwardSocketKeepAliveIdleSeconds();
+        try {
+            // then - default value
+            assertThat(configuration.forwardSocketKeepAliveIdleSeconds(), equalTo(60));
+
+            // when - system property setter
+            ConfigurationProperties.forwardSocketKeepAliveIdleSeconds(120);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardSocketKeepAliveIdleSeconds(), equalTo(120));
+            assertThat(System.getProperty("mockserver.forwardSocketKeepAliveIdleSeconds"), equalTo("120"));
+            assertThat(configuration.forwardSocketKeepAliveIdleSeconds(), equalTo(120));
+            ConfigurationProperties.forwardSocketKeepAliveIdleSeconds(original);
+
+            // when - setter
+            configuration.forwardSocketKeepAliveIdleSeconds(30);
+
+            // then - getter
+            assertThat(configuration.forwardSocketKeepAliveIdleSeconds(), equalTo(30));
+        } finally {
+            ConfigurationProperties.forwardSocketKeepAliveIdleSeconds(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardSocketKeepAliveIntervalSeconds() {
+        int original = ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds();
+        try {
+            // then - default value
+            assertThat(configuration.forwardSocketKeepAliveIntervalSeconds(), equalTo(15));
+
+            // when - system property setter
+            ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds(30);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds(), equalTo(30));
+            assertThat(System.getProperty("mockserver.forwardSocketKeepAliveIntervalSeconds"), equalTo("30"));
+            assertThat(configuration.forwardSocketKeepAliveIntervalSeconds(), equalTo(30));
+            ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds(original);
+
+            // when - setter
+            configuration.forwardSocketKeepAliveIntervalSeconds(5);
+
+            // then - getter
+            assertThat(configuration.forwardSocketKeepAliveIntervalSeconds(), equalTo(5));
+        } finally {
+            ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetForwardSocketKeepAliveCount() {
+        int original = ConfigurationProperties.forwardSocketKeepAliveCount();
+        try {
+            // then - default value
+            assertThat(configuration.forwardSocketKeepAliveCount(), equalTo(4));
+
+            // when - system property setter
+            ConfigurationProperties.forwardSocketKeepAliveCount(8);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.forwardSocketKeepAliveCount(), equalTo(8));
+            assertThat(System.getProperty("mockserver.forwardSocketKeepAliveCount"), equalTo("8"));
+            assertThat(configuration.forwardSocketKeepAliveCount(), equalTo(8));
+            ConfigurationProperties.forwardSocketKeepAliveCount(original);
+
+            // when - setter
+            configuration.forwardSocketKeepAliveCount(2);
+
+            // then - getter
+            assertThat(configuration.forwardSocketKeepAliveCount(), equalTo(2));
+        } finally {
+            ConfigurationProperties.forwardSocketKeepAliveCount(original);
         }
     }
 

@@ -1200,10 +1200,21 @@ Every public function only ever emits a value from a **closed set** — there is
 
 | PostHog event | Function | Properties |
 |---|---|---|
-| `app_open` | emitted by `initAnalytics` | `app_version`, `surface` (`browser`/`ide-embedded`), `theme` |
+| `app_open` | emitted by `initAnalytics` | `app_version`, `surface` (`browser`/`ide-embedded`), `theme`, `distribution` (see below) |
 | `view_change` | `trackView(view)` | `view` — the active tab name (e.g. `traffic`, `chaos`) |
 | `feature_used` | `trackFeature(feature, params?)` | `feature` from the `Feature` union type; optional `mode` (`quick`/`advanced`) |
 | `error_shown` | `trackError(category)` | `category` from the `ErrorCategory` union type |
+
+The `distribution` property on `app_open` identifies which official artefact produced the event. It is sourced from the `dashboardAnalyticsDistribution` configuration property and is normalised to a closed allow-list value before sending — values not on the list become `unknown`, and free-text is never forwarded:
+
+| Allow-list value | Set by |
+|---|---|
+| `docker-standard` | Standard Docker image (`mockserver/mockserver`) |
+| `docker-graaljs` | GraalJS Docker image |
+| `docker-clustered` | Clustered Docker image |
+| `helm` | Helm chart deployment |
+| `binary` | Official binary launcher bundles (per-OS/arch GitHub release assets) |
+| `unknown` | Any other value supplied by an operator |
 
 Both `feature` and `category` are runtime-guarded against non-enumerated values: values outside their `ReadonlySet` are dropped silently before any `posthog.capture` call.
 
@@ -1234,6 +1245,9 @@ ph.init(key, {
 | `dashboardAnalyticsEnabled` | `mockserver.dashboardAnalyticsEnabled` / `MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED` | `true` | Master kill switch. `false` ⇒ module never loads. |
 | `dashboardAnalyticsEndpoint` | `mockserver.dashboardAnalyticsEndpoint` / `MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT` | `""` | PostHog `api_host` URL. Blank ⇒ disabled. |
 | `dashboardAnalyticsKey` | `mockserver.dashboardAnalyticsKey` / `MOCKSERVER_DASHBOARD_ANALYTICS_KEY` | `""` | PostHog write-only project key. Blank ⇒ disabled. |
+| `dashboardAnalyticsDistribution` | `mockserver.dashboardAnalyticsDistribution` / `MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION` | `""` | Artefact label sent as `distribution` on `app_open`. Set automatically by official artefacts (`docker-standard`, `docker-graaljs`, `docker-clustered`, `helm`, `binary`). Out-of-list values become `unknown`. Most users should not set this. |
+
+Analytics is active in the official Docker images, Helm deployments, and the official per-OS/arch binary launcher bundles (which have the endpoint and key baked in via `-D` system properties by the release bundle build). The plain downloadable JAR and any embedded/library/dependency use have both endpoint and key empty, so analytics is always inactive there.
 
 ### Opt-out
 

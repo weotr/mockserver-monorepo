@@ -44,6 +44,7 @@ public class Configuration {
     private Boolean dashboardAnalyticsEnabled;
     private String dashboardAnalyticsEndpoint;
     private String dashboardAnalyticsKey;
+    private String dashboardAnalyticsDistribution;
     private Long slowRequestThresholdMillis;
     private Boolean metricsRequestDurationRouteLabels;
     private Boolean chaosAutoHaltEnabled;
@@ -107,6 +108,7 @@ public class Configuration {
     // memory usage
     private Integer maxExpectations;
     private Integer maxLogEntries;
+    private Integer ringBufferSize;
     private Integer maxWebSocketExpectations;
     private Boolean outputMemoryUsageCsv;
     private String memoryUsageCsvDirectory;
@@ -123,8 +125,15 @@ public class Configuration {
     private Boolean forwardConnectionPoolEnabled;
     private Integer forwardConnectionPoolMaxIdlePerKey;
     private Long forwardConnectionPoolIdleTimeoutMillis;
+    private Boolean forwardConnectionPoolKeepAlive;
+    private Integer forwardConnectionPoolMaxTotalPerKey;
+    private Boolean forwardSocketKeepAlive;
+    private Integer forwardSocketKeepAliveIdleSeconds;
+    private Integer forwardSocketKeepAliveIntervalSeconds;
+    private Integer forwardSocketKeepAliveCount;
     private Integer forwardProxyRetryCount;
     private Long forwardProxyRetryBackoffMillis;
+    private Boolean forwardProxyHttp2Enabled;
     private Boolean forwardProxyCircuitBreakerEnabled;
     private Integer forwardProxyCircuitBreakerFailureThreshold;
     private Long forwardProxyCircuitBreakerWindowMillis;
@@ -190,6 +199,7 @@ public class Configuration {
     // template restrictions
     private String javascriptDisallowedClasses;
     private String javascriptDisallowedText;
+    private Long javascriptTemplateExecutionTimeout;
     private Boolean velocityDisallowClassLoading;
     private String velocityDisallowedText;
     private String mustacheDisallowedText;
@@ -254,6 +264,16 @@ public class Configuration {
     private String proxyAuthenticationRealm;
     private String proxyAuthenticationUsername;
     private String proxyAuthenticationPassword;
+
+    // data plane (mocked endpoint) authentication — opt-in, default off
+    private Boolean dataPlaneAuthenticationRequired;
+    private String dataPlaneBasicAuthenticationUsername;
+    private String dataPlaneBasicAuthenticationPassword;
+    private String dataPlaneBasicAuthenticationRealm;
+    private String dataPlaneBearerAuthenticationToken;
+    private String dataPlaneApiKeyAuthenticationHeader;
+    private String dataPlaneApiKeyAuthenticationValue;
+
     private String noProxyHosts;
     // volatile: proxyRemoteHost/proxyRemotePort can be set at runtime via the
     // retrieve ?forwardUnmatchedTo= record-and-forward convenience (control-plane
@@ -520,6 +540,23 @@ public class Configuration {
      */
     public Configuration dashboardAnalyticsKey(String dashboardAnalyticsKey) {
         this.dashboardAnalyticsKey = dashboardAnalyticsKey;
+        return this;
+    }
+
+    public String dashboardAnalyticsDistribution() {
+        if (dashboardAnalyticsDistribution == null) {
+            return ConfigurationProperties.dashboardAnalyticsDistribution();
+        }
+        return dashboardAnalyticsDistribution;
+    }
+
+    /**
+     * Label identifying which MockServer distribution/artefact a dashboard analytics event came from, default is empty.
+     *
+     * @param dashboardAnalyticsDistribution analytics distribution label
+     */
+    public Configuration dashboardAnalyticsDistribution(String dashboardAnalyticsDistribution) {
+        this.dashboardAnalyticsDistribution = dashboardAnalyticsDistribution;
         return this;
     }
 
@@ -1510,6 +1547,25 @@ public class Configuration {
         return this;
     }
 
+    /**
+     * <p>
+     * Number of slots in the in-memory log event ring buffer (LMAX Disruptor) that buffers log events
+     * between the producing Netty I/O threads and the single consumer thread. Independent of
+     * {@link #maxLogEntries} (which bounds the retained event history) — the ring only needs to absorb
+     * short bursts, so it can be much smaller than the retained history.
+     * </p>
+     * <p>
+     * The value is rounded up to the next power of two (a Disruptor requirement). When unset the
+     * default is {@code min(maxLogEntries, 16384)}.
+     * </p>
+     *
+     * @param ringBufferSize number of slots in the log event ring buffer (rounded up to a power of two)
+     */
+    public Configuration ringBufferSize(Integer ringBufferSize) {
+        this.ringBufferSize = ringBufferSize;
+        return this;
+    }
+
     public Integer maxWebSocketExpectations() {
         if (maxWebSocketExpectations == null) {
             return ConfigurationProperties.maxWebSocketExpectations();
@@ -1785,6 +1841,125 @@ public class Configuration {
         return this;
     }
 
+    public Boolean forwardConnectionPoolKeepAlive() {
+        if (forwardConnectionPoolKeepAlive == null) {
+            return ConfigurationProperties.forwardConnectionPoolKeepAlive();
+        }
+        return forwardConnectionPoolKeepAlive;
+    }
+
+    /**
+     * If true, idle keep-alive upstream connections are retained (kept warm) up to
+     * {@code forwardConnectionPoolMaxTotalPerKey} per upstream instead of being closed back down to
+     * {@code forwardConnectionPoolMaxIdlePerKey}, eliminating connection churn under sustained
+     * high-rate, low-latency forwarding or load injection. Default false leaves the pool's
+     * release-time close decision byte-for-byte unchanged. Only relevant when
+     * {@code forwardConnectionPoolEnabled} is true.
+     *
+     * @param forwardConnectionPoolKeepAlive enable keep-warm retention of idle upstream connections
+     */
+    public Configuration forwardConnectionPoolKeepAlive(Boolean forwardConnectionPoolKeepAlive) {
+        this.forwardConnectionPoolKeepAlive = forwardConnectionPoolKeepAlive;
+        return this;
+    }
+
+    public Integer forwardConnectionPoolMaxTotalPerKey() {
+        if (forwardConnectionPoolMaxTotalPerKey == null) {
+            return ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey();
+        }
+        return forwardConnectionPoolMaxTotalPerKey;
+    }
+
+    /**
+     * Maximum number of warm (idle) keep-alive upstream connections retained per upstream when
+     * {@code forwardConnectionPoolKeepAlive} is true. Bounds the warm set so it cannot grow without
+     * limit. Has no effect unless keep-warm is enabled. Default 2000; the effective ceiling is never
+     * below {@code forwardConnectionPoolMaxIdlePerKey}.
+     *
+     * @param forwardConnectionPoolMaxTotalPerKey maximum warm idle connections retained per upstream
+     */
+    public Configuration forwardConnectionPoolMaxTotalPerKey(Integer forwardConnectionPoolMaxTotalPerKey) {
+        this.forwardConnectionPoolMaxTotalPerKey = forwardConnectionPoolMaxTotalPerKey;
+        return this;
+    }
+
+    public Boolean forwardSocketKeepAlive() {
+        if (forwardSocketKeepAlive == null) {
+            return ConfigurationProperties.forwardSocketKeepAlive();
+        }
+        return forwardSocketKeepAlive;
+    }
+
+    /**
+     * If true (the default) the forward/proxy HTTP client enables TCP keepalive on its upstream
+     * connections so dead/half-open connections are detected faster and NAT/firewall mappings stay
+     * warm. On epoll the keepalive timers are tuned via
+     * {@code forwardSocketKeepAliveIdleSeconds}/{@code IntervalSeconds}/{@code Count}; on NIO only
+     * SO_KEEPALIVE is set. Benign default-on hardening; set false to restore no socket keepalive.
+     *
+     * @param forwardSocketKeepAlive enable TCP keepalive on forward/proxy upstream connections
+     */
+    public Configuration forwardSocketKeepAlive(Boolean forwardSocketKeepAlive) {
+        this.forwardSocketKeepAlive = forwardSocketKeepAlive;
+        return this;
+    }
+
+    public Integer forwardSocketKeepAliveIdleSeconds() {
+        if (forwardSocketKeepAliveIdleSeconds == null) {
+            return ConfigurationProperties.forwardSocketKeepAliveIdleSeconds();
+        }
+        return forwardSocketKeepAliveIdleSeconds;
+    }
+
+    /**
+     * Seconds an upstream connection may sit idle before the first TCP keepalive probe (epoll
+     * {@code TCP_KEEPIDLE}); applied only on epoll when {@code forwardSocketKeepAlive} is true.
+     * Default 60.
+     *
+     * @param forwardSocketKeepAliveIdleSeconds idle seconds before the first keepalive probe
+     */
+    public Configuration forwardSocketKeepAliveIdleSeconds(Integer forwardSocketKeepAliveIdleSeconds) {
+        this.forwardSocketKeepAliveIdleSeconds = forwardSocketKeepAliveIdleSeconds;
+        return this;
+    }
+
+    public Integer forwardSocketKeepAliveIntervalSeconds() {
+        if (forwardSocketKeepAliveIntervalSeconds == null) {
+            return ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds();
+        }
+        return forwardSocketKeepAliveIntervalSeconds;
+    }
+
+    /**
+     * Seconds between successive TCP keepalive probes (epoll {@code TCP_KEEPINTVL}); applied only on
+     * epoll when {@code forwardSocketKeepAlive} is true. Default 15.
+     *
+     * @param forwardSocketKeepAliveIntervalSeconds interval seconds between keepalive probes
+     */
+    public Configuration forwardSocketKeepAliveIntervalSeconds(Integer forwardSocketKeepAliveIntervalSeconds) {
+        this.forwardSocketKeepAliveIntervalSeconds = forwardSocketKeepAliveIntervalSeconds;
+        return this;
+    }
+
+    public Integer forwardSocketKeepAliveCount() {
+        if (forwardSocketKeepAliveCount == null) {
+            return ConfigurationProperties.forwardSocketKeepAliveCount();
+        }
+        return forwardSocketKeepAliveCount;
+    }
+
+    /**
+     * Number of unacknowledged TCP keepalive probes before the upstream connection is dropped (epoll
+     * {@code TCP_KEEPCNT}); applied only on epoll when {@code forwardSocketKeepAlive} is true.
+     * Default 4.
+     *
+     * @param forwardSocketKeepAliveCount failed keepalive probes before the connection is dropped
+     */
+    public Configuration forwardSocketKeepAliveCount(Integer forwardSocketKeepAliveCount) {
+        this.forwardSocketKeepAliveCount = forwardSocketKeepAliveCount;
+        return this;
+    }
+
     public Integer forwardProxyRetryCount() {
         if (forwardProxyRetryCount == null) {
             return ConfigurationProperties.forwardProxyRetryCount();
@@ -1821,6 +1996,30 @@ public class Configuration {
      */
     public Configuration forwardProxyRetryBackoffMillis(Long forwardProxyRetryBackoffMillis) {
         this.forwardProxyRetryBackoffMillis = forwardProxyRetryBackoffMillis;
+        return this;
+    }
+
+    public Boolean forwardProxyHttp2Enabled() {
+        if (forwardProxyHttp2Enabled == null) {
+            return ConfigurationProperties.forwardProxyHttp2Enabled();
+        }
+        return forwardProxyHttp2Enabled;
+    }
+
+    /**
+     * If false (the default) every forwarded or proxied request is sent to its upstream over HTTP/1.1,
+     * matching the historical behaviour. If true the inbound request's protocol is preserved when
+     * forwarding, so an HTTP/2 inbound request is forwarded to the upstream as HTTP/2.
+     * <p>
+     * Limitations: HTTP/2 upstream forwarding only happens over TLS with ALPN negotiation (no h2c
+     * cleartext path — a non-secure HTTP/2 request is downgraded to HTTP/1.1). HTTP/2 forward
+     * connections are not pooled or multiplexed across forwards; the forward connection pool is
+     * HTTP/1.1-only.
+     *
+     * @param forwardProxyHttp2Enabled preserve the inbound request protocol (e.g. HTTP/2) when forwarding
+     */
+    public Configuration forwardProxyHttp2Enabled(Boolean forwardProxyHttp2Enabled) {
+        this.forwardProxyHttp2Enabled = forwardProxyHttp2Enabled;
         return this;
     }
 
@@ -2642,6 +2841,26 @@ public class Configuration {
      */
     public Configuration javascriptDisallowedText(String javascriptDisallowedText) {
         this.javascriptDisallowedText = javascriptDisallowedText;
+        return this;
+    }
+
+    public Long javascriptTemplateExecutionTimeout() {
+        if (javascriptTemplateExecutionTimeout == null) {
+            return ConfigurationProperties.javascriptTemplateExecutionTimeout();
+        }
+        return javascriptTemplateExecutionTimeout;
+    }
+
+    /**
+     * Maximum time in milliseconds a JavaScript response template is allowed to run before it is
+     * cancelled. Prevents a runaway or malicious template (for example an infinite loop) from
+     * pinning a data-plane worker thread indefinitely. Default is 5000 (5 seconds). Set to 0 (or a
+     * negative value) to disable the timeout and restore the previous unbounded behaviour.
+     *
+     * @param javascriptTemplateExecutionTimeout template execution timeout in milliseconds, 0 or negative to disable
+     */
+    public Configuration javascriptTemplateExecutionTimeout(Long javascriptTemplateExecutionTimeout) {
+        this.javascriptTemplateExecutionTimeout = javascriptTemplateExecutionTimeout;
         return this;
     }
 
@@ -3547,6 +3766,142 @@ public class Configuration {
      */
     public Configuration proxyAuthenticationPassword(String proxyAuthenticationPassword) {
         this.proxyAuthenticationPassword = proxyAuthenticationPassword;
+        return this;
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Data-plane (mocked endpoint) authentication — opt-in, default off.
+    // -----------------------------------------------------------------------------------------
+
+    public boolean dataPlaneAuthenticationRequired() {
+        if (dataPlaneAuthenticationRequired == null) {
+            return ConfigurationProperties.dataPlaneAuthenticationRequired();
+        }
+        return dataPlaneAuthenticationRequired;
+    }
+
+    /**
+     * <p>Enable authentication of data-plane (mocked endpoint) requests. When {@code true}, every
+     * request to a mocked endpoint must present credentials matching one of the configured
+     * data-plane schemes (Basic, Bearer and/or API-key); requests that do not are rejected with
+     * {@code 401 Unauthorized}. Control-plane ({@code /mockserver/*}) requests, health/status/ready
+     * probes and {@code CONNECT} proxy requests are NOT affected by this setting.</p>
+     * <p>If enabled but no scheme is configured the server fails closed (rejects every data-plane
+     * request) rather than allowing all traffic.</p>
+     * <p>The default is {@code false} (no data-plane authentication).</p>
+     *
+     * @param dataPlaneAuthenticationRequired whether data-plane authentication is required
+     */
+    public Configuration dataPlaneAuthenticationRequired(Boolean dataPlaneAuthenticationRequired) {
+        this.dataPlaneAuthenticationRequired = dataPlaneAuthenticationRequired;
+        return this;
+    }
+
+    public String dataPlaneBasicAuthenticationUsername() {
+        if (dataPlaneBasicAuthenticationUsername == null) {
+            return ConfigurationProperties.dataPlaneBasicAuthenticationUsername();
+        }
+        return dataPlaneBasicAuthenticationUsername;
+    }
+
+    /**
+     * The username required for data-plane HTTP Basic authentication. Basic is only active when both
+     * username and password are set. The default is "".
+     *
+     * @param dataPlaneBasicAuthenticationUsername the Basic username
+     */
+    public Configuration dataPlaneBasicAuthenticationUsername(String dataPlaneBasicAuthenticationUsername) {
+        this.dataPlaneBasicAuthenticationUsername = dataPlaneBasicAuthenticationUsername;
+        return this;
+    }
+
+    public String dataPlaneBasicAuthenticationPassword() {
+        if (dataPlaneBasicAuthenticationPassword == null) {
+            return ConfigurationProperties.dataPlaneBasicAuthenticationPassword();
+        }
+        return dataPlaneBasicAuthenticationPassword;
+    }
+
+    /**
+     * The password required for data-plane HTTP Basic authentication. Basic is only active when both
+     * username and password are set. The default is "".
+     *
+     * @param dataPlaneBasicAuthenticationPassword the Basic password
+     */
+    public Configuration dataPlaneBasicAuthenticationPassword(String dataPlaneBasicAuthenticationPassword) {
+        this.dataPlaneBasicAuthenticationPassword = dataPlaneBasicAuthenticationPassword;
+        return this;
+    }
+
+    public String dataPlaneBasicAuthenticationRealm() {
+        if (dataPlaneBasicAuthenticationRealm == null) {
+            return ConfigurationProperties.dataPlaneBasicAuthenticationRealm();
+        }
+        return dataPlaneBasicAuthenticationRealm;
+    }
+
+    /**
+     * The realm advertised in the {@code WWW-Authenticate: Basic realm="..."} challenge on a 401.
+     * The default is "MockServer".
+     *
+     * @param dataPlaneBasicAuthenticationRealm the Basic realm
+     */
+    public Configuration dataPlaneBasicAuthenticationRealm(String dataPlaneBasicAuthenticationRealm) {
+        this.dataPlaneBasicAuthenticationRealm = dataPlaneBasicAuthenticationRealm;
+        return this;
+    }
+
+    public String dataPlaneBearerAuthenticationToken() {
+        if (dataPlaneBearerAuthenticationToken == null) {
+            return ConfigurationProperties.dataPlaneBearerAuthenticationToken();
+        }
+        return dataPlaneBearerAuthenticationToken;
+    }
+
+    /**
+     * The token required for data-plane Bearer authentication ({@code Authorization: Bearer <token>}).
+     * Bearer is active when this value is set. The default is "".
+     *
+     * @param dataPlaneBearerAuthenticationToken the expected Bearer token
+     */
+    public Configuration dataPlaneBearerAuthenticationToken(String dataPlaneBearerAuthenticationToken) {
+        this.dataPlaneBearerAuthenticationToken = dataPlaneBearerAuthenticationToken;
+        return this;
+    }
+
+    public String dataPlaneApiKeyAuthenticationHeader() {
+        if (dataPlaneApiKeyAuthenticationHeader == null) {
+            return ConfigurationProperties.dataPlaneApiKeyAuthenticationHeader();
+        }
+        return dataPlaneApiKeyAuthenticationHeader;
+    }
+
+    /**
+     * The name of the header carrying the data-plane API key (e.g. {@code X-API-Key}). API-key auth
+     * is only active when both the header name and the value are set. The default is "".
+     *
+     * @param dataPlaneApiKeyAuthenticationHeader the API-key header name
+     */
+    public Configuration dataPlaneApiKeyAuthenticationHeader(String dataPlaneApiKeyAuthenticationHeader) {
+        this.dataPlaneApiKeyAuthenticationHeader = dataPlaneApiKeyAuthenticationHeader;
+        return this;
+    }
+
+    public String dataPlaneApiKeyAuthenticationValue() {
+        if (dataPlaneApiKeyAuthenticationValue == null) {
+            return ConfigurationProperties.dataPlaneApiKeyAuthenticationValue();
+        }
+        return dataPlaneApiKeyAuthenticationValue;
+    }
+
+    /**
+     * The expected value of the data-plane API-key header. API-key auth is only active when both the
+     * header name and the value are set. The default is "".
+     *
+     * @param dataPlaneApiKeyAuthenticationValue the expected API-key value
+     */
+    public Configuration dataPlaneApiKeyAuthenticationValue(String dataPlaneApiKeyAuthenticationValue) {
+        this.dataPlaneApiKeyAuthenticationValue = dataPlaneApiKeyAuthenticationValue;
         return this;
     }
 
@@ -4744,7 +5099,14 @@ public class Configuration {
     }
 
     public int ringBufferSize() {
-        return nextPowerOfTwo(maxLogEntries());
+        // Resolve the dedicated ring-buffer knob: instance field -> explicit mockserver.ringBufferSize
+        // property -> default min(this.maxLogEntries(), 16384). The default cap is based on THIS
+        // configuration's maxLogEntries (not the static/global one) so per-instance retention sizing is
+        // honoured. The disruptor requires a power-of-two size, so the resolved value is rounded up.
+        // This decouples the in-flight ring from maxLogEntries retention so a large retention setting
+        // no longer forces a large pre-allocated ring.
+        int size = ringBufferSize != null ? ringBufferSize : ConfigurationProperties.resolveRingBufferSize(maxLogEntries());
+        return nextPowerOfTwo(size);
     }
 
     private int nextPowerOfTwo(int value) {

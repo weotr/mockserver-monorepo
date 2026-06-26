@@ -1,0 +1,150 @@
+# Load-INJECTION measurement stack.
+#
+# N MockServer instances act as HTTP load *generators* (the built-in Load
+# Scenario feature) firing at a single Envoy `direct_response` sink, which
+# absorbs far more than the injectors produce. Prometheus scrapes both sides so
+# run-inject.sh can compute offered-vs-achieved injected rps, per-instance rps
+# (by `run_id`), throttle/error rates and the Envoy-received rate.
+#
+# How many injectors come up is selected by a compose PROFILE:
+#   --profile n1  -> injector-1
+#   --profile n2  -> injector-1,2
+#   --profile n4  -> injector-1,2,3,4
+#   --profile n6  -> injector-1..6
+# (envoy + prometheus carry every profile so they always come up.)
+#
+# Example:
+#   MOCKSERVER_IMAGE=mockserver/mockserver:mockserver-snapshot \
+#     docker compose -f docker-compose.inject.yml --profile n2 up -d
+#
+# cpuset pinning keeps Envoy and each injector on disjoint cores so they don't
+# steal cycles — the single biggest factor in number quality. The defaults below
+# suit a >=16-vCPU box; override the *_CPUS env on a smaller machine (or clear
+# them to disable pinning, e.g. ENVOY_CPUS= ).
+services:
+  # ---- the sink ---------------------------------------------------------------
+  envoy:
+    image: ${ENVOY_IMAGE:-envoyproxy/envoy:v1.31-latest}
+    profiles: ["n1", "n2", "n4", "n6"]
+    command: ["-c", "/etc/envoy/envoy.yaml", "--concurrency", "${ENVOY_CONCURRENCY:-2}"]
+    cpuset: "${ENVOY_CPUS-0-1}"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8000:8000"
+      - "9901:9901"
+    # NOTE: the official Envoy image is distroless (no curl/sh), so we cannot run
+    # an in-container HTTP healthcheck. Readiness is instead enforced by
+    # run-inject.sh, which polls the Envoy admin /ready and Prometheus `up`
+    # targets from the host before triggering any load. Dependents therefore wait
+    # only for `service_started` below.
+
+  # ---- the injectors ----------------------------------------------------------
+  # Shared definition. Caps are raised WELL above any scenario peak so the default
+  # 500 rps cap (which silently throttles) never binds — run-inject.sh asserts
+  # mock_server_load_throttled stays ~0 to prove this.
+  injector-1:
+    image: &injimg ${MOCKSERVER_IMAGE:-mockserver/mockserver:mockserver-snapshot}
+    profiles: ["n1", "n2", "n4", "n6"]
+    command: &injcmd -serverPort 1080
+    cpuset: "${I1_CPUS-2-3}"
+    # Publish each injector's control/metrics port on a distinct host port so
+    # run-inject.sh can register/trigger scenarios and `docker stats` from the
+    # host (the MockServer image is distroless — no in-container curl/sh).
+    ports:
+      - "1081:1080"
+    environment: &injenv
+      MOCKSERVER_LOAD_GENERATION_ENABLED: "true"
+      MOCKSERVER_LOAD_GENERATION_MAX_REQUESTS_PER_SECOND: "200000"
+      MOCKSERVER_LOAD_GENERATION_MAX_RATE: "200000"
+      MOCKSERVER_LOAD_GENERATION_MAX_IN_FLIGHT_REQUESTS: "20000"
+      MOCKSERVER_LOAD_GENERATION_MAX_VIRTUAL_USERS: "4000"
+      MOCKSERVER_LOAD_GENERATION_MAX_DURATION_MILLIS: "1800000"
+      MOCKSERVER_CLIENT_NIO_EVENT_LOOP_THREAD_COUNT: "8"
+      MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY: "256"
+      # Keep-warm pool: retain+reuse warm connections under sustained high-rate load so a
+      # single injector doesn't churn a fresh connection per sub-ms request (the ~4k cliff).
+      # Requires a mockserver image built from master >= the keep-warm feature commit.
+      MOCKSERVER_FORWARD_CONNECTION_POOL_KEEP_ALIVE: "true"
+      MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_TOTAL_PER_KEY: "4000"
+      MOCKSERVER_METRICS_ENABLED: "true"
+      MOCKSERVER_LOAD_GENERATION_SUPPRESS_EVENT_LOG: "true"
+      MOCKSERVER_LOG_LEVEL: "ERROR"
+      MOCKSERVER_DISABLE_SYSTEM_OUT: "true"
+    depends_on:
+      envoy:
+        condition: service_started
+
+  injector-2:
+    image: *injimg
+    profiles: ["n2", "n4", "n6"]
+    command: *injcmd
+    cpuset: "${I2_CPUS-4-5}"
+    ports:
+      - "1082:1080"
+    environment: *injenv
+    depends_on:
+      envoy:
+        condition: service_started
+
+  injector-3:
+    image: *injimg
+    profiles: ["n4", "n6"]
+    command: *injcmd
+    cpuset: "${I3_CPUS-6-7}"
+    ports:
+      - "1083:1080"
+    environment: *injenv
+    depends_on:
+      envoy:
+        condition: service_started
+
+  injector-4:
+    image: *injimg
+    profiles: ["n4", "n6"]
+    command: *injcmd
+    cpuset: "${I4_CPUS-8-9}"
+    ports:
+      - "1084:1080"
+    environment: *injenv
+    depends_on:
+      envoy:
+        condition: service_started
+
+  injector-5:
+    image: *injimg
+    profiles: ["n6"]
+    command: *injcmd
+    cpuset: "${I5_CPUS-10-11}"
+    ports:
+      - "1085:1080"
+    environment: *injenv
+    depends_on:
+      envoy:
+        condition: service_started
+
+  injector-6:
+    image: *injimg
+    profiles: ["n6"]
+    command: *injcmd
+    cpuset: "${I6_CPUS-12-13}"
+    ports:
+      - "1086:1080"
+    environment: *injenv
+    depends_on:
+      envoy:
+        condition: service_started
+
+  # ---- observability ----------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: ["n1", "n2", "n4", "n6"]
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./prometheus.inject.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      envoy:
+        condition: service_started

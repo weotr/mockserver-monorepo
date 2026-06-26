@@ -240,6 +240,27 @@ Example PromQL:
 sum(rate(mock_server_llm_cost_usd[1h]))
 ```
 
+### LLM Optimisation Verdict Gauges
+
+Three Prometheus `GaugeWithCallback` gauges expose the headline figures of the latest **LLM optimisation report** (see [llm-mocking.md → LLM Optimisation Export](llm-mocking.md#llm-optimisation-export)). They are registered once when `metricsEnabled` is `true`.
+
+| Metric Name | Type | Labels | Source |
+|-------------|------|--------|--------|
+| `mock_server_llm_estimated_waste_usd` | GaugeWithCallback | — | `report.verdict.totalEstimatedSavingUsd` |
+| `mock_server_llm_cache_hit_ratio` | GaugeWithCallback | — | `report.totals.cacheHitRatio` (0..1) |
+| `mock_server_llm_one_shot_rate` | GaugeWithCallback | — | `report.totals.oneShotRate` (0..1) |
+
+These are **single global gauges with no per-model labels** — deliberately, to avoid the unbounded label cardinality that a per-model breakdown would create (cf. the load-injection `run_id` series-leak lesson). The waste-USD figure reuses the deterministic Wave-1 verdict's `totalEstimatedSavingUsd` (clamped ≤ total spend); it is not re-derived.
+
+**Source of truth: cached snapshot, not a scrape-time rebuild.** The optimisation report is built on demand (REST endpoint / MCP tool) — building it retrieves the recorded request/response pairs from the event log and decodes each, which is too expensive to run on every Prometheus scrape, and the core `Metrics` gauge callback has no access to the netty-side log-retrieval path. So each time a report is built, `LlmOptimisationReportService.build(...)` pushes its three headline figures into a small `AtomicReference` snapshot on `Metrics` (`Metrics.updateLlmOptimisationSnapshot(...)`), and the gauge callbacks read that snapshot at scrape time. **Trade-off:** the gauges reflect the *most recently built* report, not a continuously-live computation — they read `0` until a report has ever been built (no traffic analysed yet) and are reset to `0` on `Metrics.clear()` (server reset). A dashboard/scheduled-export that builds the report periodically keeps the gauges fresh; if no one ever builds a report, the gauges stay at `0`. This is correct-and-cheap, versus building-at-scrape which would be scrape-time-correct but pay the full report cost (bounded by `llmOptimisationMaxCalls`, default 200) on every scrape.
+
+The three gauges are also mirrored to OTLP by `OtelMetricsExporter` (matching the load gauges, which are likewise mirrored), reading the same cached snapshot at collection time, so OTLP-only consumers see the verdict without a Prometheus scrape.
+
+Example PromQL alert (more than $5 of recoverable spend detected):
+```promql
+mock_server_llm_estimated_waste_usd > 5
+```
+
 ### LLM Cost Budget Circuit-Breaker
 
 `mock_server_llm_cost_budget_tripped` is a Prometheus `Counter` that increments each time the LLM cost-budget circuit-breaker triggers. The breaker is configured by `mockserver.llmCostBudgetUsd` (a cumulative USD budget); when the running cost total exceeds it, further LLM forwards are blocked with a 429 response. The budget is **enforced on all forward paths**: matched FORWARD actions (FORWARD, FORWARD_TEMPLATE, FORWARD_CLASS_CALLBACK, FORWARD_REPLACE, FORWARD_VALIDATE, FORWARD_WITH_FALLBACK), breakpoint-continuation forwards, unmatched proxy-pass forwards, and `proxyPassMappings` reverse-proxy routes. For matched FORWARD actions, the guard resolves the forward target host from the action (e.g. `HttpForward.getHost()`) so the sniffer checks the upstream host, not the inbound request host. The budget is tracked independently of the Prometheus counter (via `LlmCostBudgetMonitor`) so it works even when `metricsEnabled` is false. The breaker is deterministic and fail-open: a negative, unset, or malformed budget never blocks traffic. It resets on `HttpState.reset()`.

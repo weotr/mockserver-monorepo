@@ -1,0 +1,57 @@
+{
+  "proto": "http",
+  "target": "envoy-direct-response",
+  "per_instance_offered_rps": 7291,
+  "series": [
+    {
+      "instances": 1,
+      "aggregate_rps": 7291,
+      "per_instance_rps": [
+        7291
+      ],
+      "error_rate": 0.00000,
+      "target_received_rps": 7291
+    },
+    {
+      "instances": 2,
+      "aggregate_rps": 14582,
+      "per_instance_rps": [
+        7291,
+        7291
+      ],
+      "error_rate": 0.00000,
+      "target_received_rps": 14574
+    },
+    {
+      "instances": 4,
+      "aggregate_rps": 29131,
+      "per_instance_rps": [
+        7291,
+        7280,
+        7269,
+        7291
+      ],
+      "error_rate": 0.00000,
+      "target_received_rps": 29115
+    },
+    {
+      "instances": 6,
+      "aggregate_rps": 31606,
+      "per_instance_rps": [
+        5313,
+        5323,
+        5306,
+        5252,
+        5207,
+        5205
+      ],
+      "error_rate": 0.00000,
+      "target_received_rps": 31769
+    }
+  ],
+  "scaling_efficiency": {
+    "ideal_at_max": 43746,
+    "actual_at_max": 31606,
+    "efficiency_pct": 72
+  }
+}

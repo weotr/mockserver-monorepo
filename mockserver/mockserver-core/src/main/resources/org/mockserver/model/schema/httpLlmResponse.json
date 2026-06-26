@@ -62,6 +62,18 @@
             "outputTokens": {
               "type": "integer",
               "minimum": 0
+            },
+            "cachedInputTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cacheCreationTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reasoningTokens": {
+              "type": "integer",
+              "minimum": 0
             }
           }
         },
@@ -75,6 +87,12 @@
           "type": "boolean"
         },
         "toolChoice": {
+          "type": "string"
+        },
+        "reasoningText": {
+          "type": "string"
+        },
+        "reasoningSignature": {
           "type": "string"
         },
         "model": {

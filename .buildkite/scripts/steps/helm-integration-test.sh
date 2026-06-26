@@ -37,7 +37,7 @@ else
     -m 7g \
     -w /build/mockserver \
     -e "MAVEN_OPTS=-Xms2048m -Xmx6144m" \
-    -- ./mvnw -pl mockserver-netty -am package -DskipTests -q
+    -- ./mvnw -B --no-transfer-progress -pl mockserver-netty -am package -DskipTests -q
   JAR_NAME=$(ls "${JAR_DIR}"/mockserver-netty-*-jar-with-dependencies.jar 2>/dev/null | head -1 | xargs basename)
 fi
 

@@ -64,6 +64,23 @@ repository **should** also enable GitHub branch protection's
 that would introduce a merge commit). See `[[git-safety]]` for the
 destructive-command guardrails that interact with this.
 
+## Beyond the Filesystem — Shared State (§8.5)
+
+Worktree isolation covers the **filesystem only**. Where parallel work touches
+shared mutable resources *outside* the tree — databases, cloud infrastructure
+(AWS), CI (Buildkite), container registries (Docker Hub), Secrets Manager,
+ticket systems, message queues — those have **no worktree to isolate them**, so
+concurrent mutation can still corrupt shared state. Apply the same
+anti-concurrent-mutation discipline: **partition** the resource per session,
+**lock**/serialise mutations (as the rebase lock does for `master`, and as
+Terraform's DynamoDB state lock does), or target **dedicated non-production**
+instances. Identify such resources during decomposition ([[operating-model]]
+Decompose); their contention risk **feeds the dynamic concurrency limit**
+([[operating-model]] Parallelism Limits, §8.2); and their side effects must be
+**replay-safe** (idempotent or guarded — [[decision-log]] reproducibility). The
+serialisation this forces is recorded as a `serialisation.*` cause in telemetry
+([[metrics]] §18.7).
+
 ## When To Use This
 
 | Situation | Use worktree? |
@@ -197,6 +214,15 @@ timeout exceeded, fail with a clear error: *"Rebase lock held for >5m
 by another session — retry in a few minutes or check `lsof
 .git/agent-rebase.lock` for the holder."*
 
+**Re-verify the integrated result (spec §8.4).** If the rebase pulled in
+other units' commits (master advanced since this branch was cut), re-run the
+test gate (Gate 1) against the integrated tip **before** cleanup — defects can
+emerge from the *combination* even when each unit passed in isolation. A clean
+fast-forward (no intervening commits) needs no re-run. Record the lock wait as
+`serialisation.merge_lock_s` (and a conflicting rebase as
+`serialisation.contention_s`) in the unit's decision-log telemetry block
+([[decision-log]], §18.7).
+
 `flock` is POSIX, present by default on macOS and Linux. On older macOS
 without `flock`, fall back to `mkdir`-based mutex (atomic on POSIX):
 
@@ -231,6 +257,12 @@ rm -f .tmp/active-worktree
   rebases onto **updated** master (includes A's changes), pushes
 - If B's rebase finds conflicts with A's changes, B resolves them
   inside the worktree before pushing
+
+These are **serialisation-recording sites** for the parallelism metrics (§18.7,
+[[metrics]]): B's wait for the lock is `serialisation.merge_lock_s`, and a
+conflicting rebase is `serialisation.contention_s` — recorded in B's decision-log
+telemetry block ([[decision-log]]) so the dominant reason parallelism is lost can
+be ranked.
 
 ### Lock contention timeout
 

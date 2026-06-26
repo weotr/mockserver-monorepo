@@ -193,6 +193,34 @@ aws autoscaling describe-auto-scaling-groups \
 
 **Note:** `AZRebalance` is intentionally suspended to prevent killing running builds. Other suspended processes may indicate problems.
 
+### Step 8 (optional): Compare Against the Last Healthy Window
+
+A snapshot of the current state is hard to read without a baseline. When the
+symptom is "something changed / got worse", compare the current state against the
+last healthy window — e.g. a prior good scaling cycle or a metric baseline — so a
+deviation is visible rather than guessed:
+
+```bash
+# Scaling activities further back, to find the last cycle that launched and
+# served instances cleanly (the healthy baseline to compare the current one against)
+aws autoscaling describe-scaling-activities \
+  --auto-scaling-group-name "<ASG_NAME>" \
+  --region <REGION> --profile mockserver-build --max-items 40
+
+# CPU baseline vs now for the ASG (last good window vs the suspect window)
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/EC2 --metric-name CPUUtilization \
+  --dimensions Name=AutoScalingGroupName,Value=<ASG_NAME> \
+  --start-time $(python3 -c "import time; print(__import__('datetime').datetime.utcfromtimestamp(time.time()-86400).strftime('%Y-%m-%dT%H:%M:%S'))") \
+  --end-time $(python3 -c "print(__import__('datetime').datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S'))") \
+  --period 3600 --statistics Average Maximum \
+  --region <REGION> --profile mockserver-build
+```
+
+Report the deviation from baseline (e.g. the last good cycle reached healthy
+capacity quickly whereas this cycle has stayed `Pending` far longer) rather than
+the raw current numbers alone. If no baseline is available, say so.
+
 ## Failure Patterns
 
 | Symptom | Likely Cause | Investigation |
@@ -219,6 +247,15 @@ aws autoscaling set-desired-capacity \
 Choose a temporary capacity that does not exceed the ASG `MaxSize` from Step 2.
 
 **Warning:** The Lambda scaler may override this on its next invocation if it sees no pending jobs.
+
+## Enumerate Competing Hypotheses
+
+Before concluding a root cause, enumerate the competing hypotheses and the
+evidence that rules each out (correlation is not causation — a scaling event
+coinciding with the symptom is not proof it caused it; e.g. "Lambda not invoking"
+vs "Lambda invoking but Buildkite API auth failing" vs "launch template / capacity
+error" are distinct causes with distinct evidence). Record the survivors and the
+ruled-out alternatives in `root_cause.alternative_hypotheses`.
 
 ## Output — Structured Data Return
 
@@ -256,8 +293,13 @@ Return this structure in your final message:
     "summary": "<one-line description>",
     "detail": "<technical explanation>",
     "category": "<category from failure patterns>",
-    "evidence": "<relevant log lines or CLI output>"
+    "evidence": "<relevant log lines or CLI output>",
+    "alternative_hypotheses": [
+      { "hypothesis": "<competing explanation>", "ruled_out_by": "<evidence that excludes it>" }
+    ]
   },
+  "baseline_comparison": "<deviation from the last healthy window, or null if no baseline available>",
+  "commands_run": ["<exact aws / terraform command used to gather evidence>"],
   "recommended_fix": "<actionable steps>",
   "warnings": ["<deprecation notices, capacity concerns, etc.>"]
 }

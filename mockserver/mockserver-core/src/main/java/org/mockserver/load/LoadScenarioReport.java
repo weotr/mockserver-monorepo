@@ -35,12 +35,16 @@ public final class LoadScenarioReport {
     }
 
     /**
-     * Error rate for a run: {@code failed / max(1, requestsSent)} so a zero-request run reports 0
-     * rather than dividing by zero.
+     * Error rate for a run: failed requests as a fraction of the requests that have actually
+     * <em>completed</em> ({@code failed / max(1, succeeded + failed)}). The denominator is the completed
+     * count, not requestsSent, so an in-flight (dispatched-but-not-yet-completed) request — which can
+     * exist in a snapshot taken while the run is still draining — never dilutes the rate as if it were a
+     * success. A run with no completed request reports 0 rather than dividing by zero. This matches the
+     * ERROR_RATE threshold metric computed in {@code LoadScenarioOrchestrator.evaluateThresholds}.
      */
     public static double errorRate(LoadScenarioStatus status) {
-        long sent = Math.max(1L, status.requestsSent);
-        return (double) status.failed / (double) sent;
+        long completed = Math.max(1L, status.succeeded + status.failed);
+        return (double) status.failed / (double) completed;
     }
 
     /**

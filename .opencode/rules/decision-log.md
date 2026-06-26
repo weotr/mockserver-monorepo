@@ -19,9 +19,10 @@ For a significant unit, the following **MUST** be recorded:
 - **why** the task was attempted (the goal / trigger);
 - **context & inputs** used (key files, specs, issues — with provenance/trust where it matters, see [[untrusted-input]]);
 - **assumptions** made (especially those used to proceed without clarifying, see [[operating-model]] "Clarify Well, Rarely");
-- **model & temperature** chosen and **why**, and whether a multi-pass strategy was used;
+- **model, temperature, and reasoning effort** chosen and **why** (effort is the determinism/quality lever where temperature is unavailable, e.g. Claude Code subagents), and whether a multi-pass strategy was used;
 - **verification evidence** observed (which gates ran, pass/fail, key output);
 - **review**: which constitution / profile, the major findings across iterations, and their disposition;
+- **timing & parallelism** (for significant workflows): how long each significant stage took, which stages lay on the critical path, where parallelism was achieved or forced to serialise (with cause), and rework cost (review iterations, re-routes, discarded branches) — captured in the telemetry block below so it can be aggregated (§18.6–§18.7, see [[metrics]]);
 - **outcome & why**: accepted / rejected / escalated / retried / re-routed;
 - **discarded approaches** and why they were abandoned (especially for parallel / speculative work);
 - **security-relevant events**: suspected injection, control-integrity flags, sandbox denials, operator halts ([[untrusted-input]], [[control-integrity]]).
@@ -48,6 +49,45 @@ Two complementary homes — use both, scaled to the unit:
 This extends the lightweight `.tmp/agent-activity` convention (a one-line "what
 I'm doing now" for `/agent-status`): agent-activity is the live ticker; the
 decision log is the durable trail.
+
+## Telemetry block (§18.6–§18.7)
+
+So time/cost/parallelism data can be **aggregated** (not just read prose-by-prose),
+significant units **SHOULD** include a fenced `telemetry` block in their
+`.tmp/decisions/<id>.md`. `.opencode/scripts/aggregate-telemetry.sh` parses every such block
+into a per-category, per-cause, and per-feature rollup. Fields are best-effort —
+record what you reliably know; **omit (don't guess)** what you don't, and the
+aggregator treats missing fields as unmeasured (not zero). Times are seconds.
+
+````
+```telemetry
+unit: add-mcp-tool-registry
+feature: mcp-registry            # roll-up key; a feature spans many units
+model: gpt-5
+tokens: 145000                   # optional; omit if unknown
+cost_usd: 1.85                   # optional
+elapsed_s: 2700                  # total wall-clock for the unit
+critical_path_s: 1410            # wall-clock on the critical path
+review_iterations: 2
+rework_s: 180                    # review iterations + re-routes + discarded work
+# per-stage time — category from the [[metrics]] activity taxonomy:
+stage.llm_wait_s: 210
+stage.context_s: 45
+stage.validate.unit_s: 80
+stage.validate.it_s: 300
+stage.build.docker_s: 140
+stage.ci_wait_s: 900
+stage.review_s: 180
+stage.merge_s: 30
+on_critical_path: llm_wait,validate.it,ci_wait,merge   # which stages set duration
+# time lost to forced serialisation — cause from the §18.7 taxonomy:
+serialisation.merge_lock_s: 40
+serialisation.dependency_s: 0
+```
+````
+
+Keys are open/extensible: any `stage.<category>_s` and `serialisation.<cause>_s`
+the aggregator sees are summed, so the taxonomy can grow without script changes.
 
 ## Reproducibility
 

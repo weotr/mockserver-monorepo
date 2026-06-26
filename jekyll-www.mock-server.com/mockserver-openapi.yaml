@@ -4501,6 +4501,10 @@ components:
           $ref: "#/components/schemas/VerificationTimes"
         maximumNumberOfRequestToReturnInVerificationFailure:
           type: integer
+        timeout:
+          description: "optional server-side eventual-verification timeout in milliseconds; when set and the verification does not pass on the first evaluation the server waits (asynchronously) and re-evaluates until it passes or the timeout elapses (capped at 60000ms); null/absent/0 means single-shot"
+          type: integer
+          minimum: 0
       oneOf:
         - required:
             - expectationId
@@ -4543,6 +4547,10 @@ components:
             $ref: "#/components/schemas/HttpResponse"
         maximumNumberOfRequestToReturnInVerificationFailure:
           type: integer
+        timeout:
+          description: "optional server-side eventual-verification timeout in milliseconds; when set and the sequence does not pass on the first evaluation the server waits (asynchronously) and re-evaluates until it passes or the timeout elapses (capped at 60000ms); null/absent/0 means single-shot"
+          type: integer
+          minimum: 0
       oneOf:
         - required:
             - expectationIds

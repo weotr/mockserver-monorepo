@@ -1,6 +1,12 @@
 import '@testing-library/jest-dom/vitest';
 import { vi } from 'vitest';
 import { createElement } from 'react';
+import { ensureWebStorage } from './test-setup-storage';
+
+// jsdom does not always expose localStorage/sessionStorage (origin- and
+// build-dependent). Guarantee a working Storage so suites that clear/read it in
+// beforeEach are deterministic regardless of node_modules/jsdom install state.
+ensureWebStorage();
 
 // Monaco editor cannot run in jsdom (it needs real layout + clipboard/worker
 // APIs). Globally replace the @monaco-editor/react wrapper (and the bundled

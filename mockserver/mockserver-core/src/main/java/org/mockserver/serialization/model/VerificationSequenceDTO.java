@@ -14,6 +14,7 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
     private List<HttpResponseDTO> httpResponses = new ArrayList<>();
     private List<ExpectationId> expectationIds = new ArrayList<>();
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
+    private Long timeout;
 
     public VerificationSequenceDTO(VerificationSequence verification) {
         if (verification != null) {
@@ -29,6 +30,7 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
             }
             expectationIds.addAll(verification.getExpectationIds());
             maximumNumberOfRequestToReturnInVerificationFailure = verification.getMaximumNumberOfRequestToReturnInVerificationFailure();
+            timeout = verification.getTimeout();
         }
     }
 
@@ -48,7 +50,8 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
             .withRequests(httpRequests)
             .withResponses(httpResponses)
             .withExpectationIds(expectationIds)
-            .withMaximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
+            .withMaximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure)
+            .withTimeout(timeout);
     }
 
     public List<RequestDefinitionDTO> getHttpRequests() {
@@ -84,6 +87,15 @@ public class VerificationSequenceDTO extends ObjectWithReflectiveEqualsHashCodeT
 
     public VerificationSequenceDTO setMaximumNumberOfRequestToReturnInVerificationFailure(Integer maximumNumberOfRequestToReturnInVerificationFailure) {
         this.maximumNumberOfRequestToReturnInVerificationFailure = maximumNumberOfRequestToReturnInVerificationFailure;
+        return this;
+    }
+
+    public Long getTimeout() {
+        return timeout;
+    }
+
+    public VerificationSequenceDTO setTimeout(Long timeout) {
+        this.timeout = timeout;
         return this;
     }
 }

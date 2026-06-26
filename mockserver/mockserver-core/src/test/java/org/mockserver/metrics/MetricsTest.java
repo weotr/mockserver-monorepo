@@ -39,6 +39,8 @@ public class MetricsTest {
         ServiceChaosRegistry.getInstance().reset();
         Metrics.setActiveExpectationsSupplier(null);
         Metrics.setClusterMemberCountSupplier(null);
+        // Drop any optimisation snapshot pushed by a test so the next test starts clean.
+        Metrics.clear();
     }
 
     @Test
@@ -452,6 +454,68 @@ public class MetricsTest {
 
         Metrics.setClusterMemberCountSupplier(() -> 0);
         assertThat(scrapeGaugeValue("mock_server_cluster_members"), is(1.0));
+    }
+
+    // --- LLM optimisation gauge tests ---
+
+    @Test
+    public void registersLlmOptimisationGauges() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        assertThat(scrapeContains("mock_server_llm_estimated_waste_usd"), is(true));
+        assertThat(scrapeContains("mock_server_llm_cache_hit_ratio"), is(true));
+        assertThat(scrapeContains("mock_server_llm_one_shot_rate"), is(true));
+    }
+
+    @Test
+    public void llmOptimisationGaugesReadZeroBeforeAnyReportBuilt() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        // No report built yet (snapshot null) -> all three report 0.
+        assertThat(Metrics.getLlmEstimatedWasteUsd(), is(0.0));
+        assertThat(Metrics.getLlmCacheHitRatio(), is(0.0));
+        assertThat(Metrics.getLlmOneShotRate(), is(0.0));
+    }
+
+    @Test
+    public void llmOptimisationGaugesReflectLatestSnapshot() {
+        new Metrics(configuration().metricsEnabled(true));
+
+        // verdict.totalEstimatedSavingUsd, totals.cacheHitRatio, totals.oneShotRate.
+        // The gauge callbacks read the shared snapshot getters at scrape time, so assert the
+        // getters directly here — that is the value the GaugeWithCallback emits, and it avoids a
+        // cross-class scrape race when this class is also pulled into the parallel test phase by an
+        // explicit -Dtest filter (the snapshot is a process-global written by the service tests too).
+        Metrics.updateLlmOptimisationSnapshot(1.42, 0.5, 0.6667);
+        assertThat(Metrics.getLlmEstimatedWasteUsd(), is(1.42));
+        assertThat(Metrics.getLlmCacheHitRatio(), is(0.5));
+        assertThat(Metrics.getLlmOneShotRate(), is(0.6667));
+
+        // A subsequent build overwrites the snapshot (latest report wins).
+        Metrics.updateLlmOptimisationSnapshot(0.0, 1.0, 1.0);
+        assertThat(Metrics.getLlmEstimatedWasteUsd(), is(0.0));
+        assertThat(Metrics.getLlmCacheHitRatio(), is(1.0));
+        assertThat(Metrics.getLlmOneShotRate(), is(1.0));
+    }
+
+    @Test
+    public void clearDropsLlmOptimisationSnapshot() {
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.updateLlmOptimisationSnapshot(3.0, 0.4, 0.9);
+        assertThat(Metrics.getLlmEstimatedWasteUsd(), is(3.0));
+
+        Metrics.clear();
+
+        assertThat("snapshot dropped on reset", Metrics.getLlmEstimatedWasteUsd(), is(0.0));
+        assertThat(Metrics.getLlmCacheHitRatio(), is(0.0));
+        assertThat(Metrics.getLlmOneShotRate(), is(0.0));
+    }
+
+    @Test
+    public void updateLlmOptimisationSnapshotIsSafeWhenMetricsDisabled() {
+        // No Metrics constructed -> gauges not registered, but the snapshot setter/getters never throw.
+        Metrics.updateLlmOptimisationSnapshot(5.0, 0.2, 0.8);
+        assertThat(Metrics.getLlmEstimatedWasteUsd(), is(5.0));
     }
 
     private static double scrapeGaugeValue(String name) {

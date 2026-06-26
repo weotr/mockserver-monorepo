@@ -29,6 +29,7 @@ import org.mockserver.mock.HttpState;
 import org.mockserver.mock.action.http.HttpActionHandler;
 import org.mockserver.model.GrpcBidiResponse;
 import org.mockserver.model.HttpRequest;
+import org.mockserver.netty.DataPlaneAuthenticationGate;
 import org.mockserver.netty.mcp.JsonRpcMessage;
 import org.mockserver.netty.mcp.McpRequestProcessor;
 import org.mockserver.responsewriter.ResponseWriter;
@@ -253,6 +254,16 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
 
             // first, try control-plane handling (expectations CRUD, status, etc.)
             if (!httpState.handle(request, responseWriter, false)) {
+                // Data-plane authentication gate (opt-in, default off) — identical to the HTTP/1.1/HTTP/2
+                // path. The shared gate exempts control-plane (/mockserver/*) and the liveness probe path
+                // internally, which matters here because the HTTP/3 handler (unlike HttpRequestHandler)
+                // routes control-plane routes such as /mockserver/status and /ready into this same
+                // data-plane fall-through rather than servicing them in httpState.handle — so those stay
+                // reachable WITHOUT data-plane credentials. On failure the gate writes the 401 +
+                // WWW-Authenticate via the Http3ResponseWriter and we must NOT call processAction.
+                if (!DataPlaneAuthenticationGate.isAuthenticated(configuration, mockServerLogger, request, responseWriter)) {
+                    return;
+                }
                 // data-plane: match expectations, execute actions, proxy, etc.
                 try {
                     httpActionHandler.processAction(
@@ -471,6 +482,13 @@ public class Http3MockServerHandler extends Http3RequestStreamInboundHandler {
         ResponseWriter responseWriter
     ) {
         if (!httpState.handle(request, responseWriter, false)) {
+            // Data-plane authentication gate (opt-in, default off) — same as the non-gRPC HTTP/3 path
+            // and the HTTP/1.1/HTTP/2 path. This is the gRPC-over-HTTP/3 data-plane dispatch; gRPC
+            // requests carry the same HTTP Authorization / api-key headers, so they are gated too. On
+            // failure the gate writes the 401 via the (gRPC) ResponseWriter and we must NOT proceed.
+            if (!DataPlaneAuthenticationGate.isAuthenticated(configuration, mockServerLogger, request, responseWriter)) {
+                return;
+            }
             try {
                 httpActionHandler.processAction(
                     request,

@@ -468,6 +468,75 @@ export interface HttpChaosProfile {
   degradationRampMillis?: number;
 }
 
+/** The service-level indicator a single SLO objective is evaluated over. */
+export type SloIndicator = "LATENCY_P50" | "LATENCY_P95" | "LATENCY_P99" | "ERROR_RATE";
+
+/** How an observed SLI value is compared against an objective threshold. */
+export type SloComparator = "LESS_THAN" | "LESS_THAN_OR_EQUAL" | "GREATER_THAN" | "GREATER_THAN_OR_EQUAL";
+
+/** Which sample set an SLO objective is evaluated over. */
+export type SloScope = "FORWARD" | "INBOUND";
+
+/** A single service-level objective over the recorded SLI samples. */
+export interface SloObjective {
+  sli: SloIndicator;
+  comparator: SloComparator;
+  /** Threshold value (ms for latency, 0.0-1.0 for ERROR_RATE). */
+  threshold: number;
+  /** Sample scope (default "FORWARD"). */
+  scope?: SloScope;
+}
+
+/** The time window an SloCriteria is evaluated over. */
+export interface SloWindow {
+  type?: "LOOKBACK" | "EXPLICIT";
+  lookbackMillis?: number;
+  fromEpochMillis?: number;
+  toEpochMillis?: number;
+}
+
+/** A named set of service-level objectives over a time window. */
+export interface SloCriteria {
+  name?: string;
+  window?: SloWindow;
+  minimumSampleCount?: number;
+  upstreamHosts?: string[];
+  objectives: SloObjective[];
+}
+
+/** The evaluated result of a single SLO objective. */
+export interface SloObjectiveResult {
+  sli?: SloIndicator;
+  comparator?: SloComparator;
+  threshold?: number;
+  observedValue?: number;
+  result?: "PASS" | "FAIL" | "INCONCLUSIVE";
+  detail?: string;
+}
+
+/** The overall verdict of an SLO evaluation (the AND of all objectives). */
+export interface SloVerdict {
+  name?: string;
+  result?: "PASS" | "FAIL" | "INCONCLUSIVE";
+  windowFromEpochMillis?: number;
+  windowToEpochMillis?: number;
+  sampleCount?: number;
+  objectiveResults?: SloObjectiveResult[];
+}
+
+/** A single stage of a chaos experiment: host -> chaos profiles for a duration. */
+export interface ChaosExperimentStage {
+  durationMillis: number;
+  profiles: { [host: string]: HttpChaosProfile };
+}
+
+/** A scheduled multi-stage chaos experiment definition. */
+export interface ChaosExperiment {
+  name?: string;
+  loop?: boolean;
+  stages: ChaosExperimentStage[];
+}
+
 /**
  * The kind of a {@link LoadStage} in a {@link LoadProfile}.
  *

@@ -183,6 +183,66 @@ MockServer::MCP.mcp_mock('/mcp')
 
 `build` returns the raw expectation Hashes if you prefer to register them yourself.
 
+## A2A Mocking
+
+`MockServer::A2A.a2a_mock` builds the set of expectations needed to emulate an
+A2A (Agent-to-Agent) agent: an agent card served at `/.well-known/agent.json`
+plus JSON-RPC 2.0 `tasks/send`, `tasks/get`, and `tasks/cancel` over `POST
+<path>`. It optionally adds SSE streaming, push-notification config + delivery,
+per-message custom task handlers, and advertised skills.
+
+```ruby
+MockServer::A2A.a2a_mock('/a2a')
+               .with_agent_name('WeatherAgent')
+               .with_agent_description('Forecasts the weather')
+               .with_skill('weather')
+                 .with_name('Weather lookup')
+                 .with_tag('forecast')
+                 .with_example('What is the weather in Paris?')
+               .and_then
+               .with_streaming
+               .with_push_notifications('http://localhost:1234/a2a/callback')
+               .on_task_send
+                 .matching_message('forecast')
+                 .responding_with('Sunny, 25C')
+               .and_then
+               .apply_to(client)
+```
+
+When push notifications are configured, each `tasks/send` both returns the
+JSON-RPC task response to the caller *and* POSTs the completed task to the
+webhook URL. As with MCP mocking, `build` returns the raw expectation Hashes if
+you prefer to register them yourself.
+
+## SRE Control Plane (SLO + Chaos)
+
+Verify service-level objectives and drive scheduled chaos experiments against
+the running MockServer:
+
+```ruby
+# Evaluate SLOs over a window. Returns the verdict Hash on PASS/INCONCLUSIVE;
+# raises MockServer::VerificationError on FAIL (HTTP 406).
+verdict = client.verify_slo(
+  'name' => 'checkout-latency',
+  'window' => 'PT5M',
+  'minimumSampleCount' => 100,
+  'objectives' => [
+    { 'sli' => 'p99_latency_ms', 'comparator' => 'LESS_THAN', 'threshold' => 250 }
+  ]
+)
+
+# Start a scheduled multi-stage chaos experiment (only one may be active).
+client.start_chaos_experiment(
+  'name' => 'payments-brownout',
+  'stages' => [
+    { 'durationMillis' => 60_000, 'profiles' => { 'payments.svc' => 'LATENCY' } }
+  ]
+)
+```
+
+SLO tracking must be enabled on the server (`sloTrackingEnabled=true`) or
+`verify_slo` raises `MockServer::Error` on HTTP 400.
+
 ## Interactive Breakpoints
 
 The client supports matcher-driven interactive breakpoints over the callback WebSocket. Register a breakpoint matcher to pause forwarded/proxied exchanges at specific phases and inspect/modify/continue them via callback handlers.

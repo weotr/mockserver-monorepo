@@ -10,7 +10,11 @@ type Expectation struct {
 	HttpResponseTemplate *HttpTemplate   `json:"httpResponseTemplate,omitempty"`
 	HttpForward          *HttpForward    `json:"httpForward,omitempty"`
 	HttpForwardTemplate  *HttpTemplate   `json:"httpForwardTemplate,omitempty"`
-	HttpError            *HttpError      `json:"httpError,omitempty"`
+	// HttpOverrideForwardedRequest forwards the matched request to an overridden
+	// target (RequestOverride) while shaping the caller's response via
+	// ResponseOverride or ResponseTemplate.
+	HttpOverrideForwardedRequest *HttpOverrideForwardedRequest `json:"httpOverrideForwardedRequest,omitempty"`
+	HttpError                    *HttpError                    `json:"httpError,omitempty"`
 	// Class callbacks reference a server-side class (REST-only, no WebSocket).
 	HttpResponseClassCallback *HttpClassCallback `json:"httpResponseClassCallback,omitempty"`
 	HttpForwardClassCallback  *HttpClassCallback `json:"httpForwardClassCallback,omitempty"`

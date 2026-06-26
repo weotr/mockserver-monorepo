@@ -418,6 +418,19 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
 
                 } else {
 
+                    // Data-plane authentication gate (opt-in, default off). Reaching this branch means
+                    // the request is NOT control-plane (/mockserver/*), NOT a health/status/ready probe
+                    // and NOT a CONNECT — those are all handled in the earlier else-if branches above —
+                    // so it is a genuine data-plane (mocked endpoint) request. The default-off path is a
+                    // single boolean read, so behaviour is byte-identical to a server with no data-plane
+                    // auth. The shared gate invokes the core DataPlaneAuthenticator (fail-closed +
+                    // constant-time compare) and, on failure, writes the 401 + WWW-Authenticate via the
+                    // ResponseWriter and audits — the SAME gate the HTTP/3 handler uses, so all transports
+                    // (HTTP/1.1, HTTP/2, gRPC-over-h2, HTTP/3) enforce it identically.
+                    if (!DataPlaneAuthenticationGate.isAuthenticated(configuration, mockServerLogger, request, responseWriter)) {
+                        return;
+                    }
+
                     if (configuration.tlsMutualAuthenticationRequired() && !isSslEnabledUpstream(ctx.channel())) {
                         HttpResponse upgradeResponse = response()
                             .withStatusCode(426)
@@ -486,8 +499,8 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
             if (format == null || format.isEmpty()) {
                 format = "json";
             }
-            if (!"json".equalsIgnoreCase(format) && !"markdown".equalsIgnoreCase(format)) {
-                responseWriter.writeResponse(request, BAD_REQUEST, "format must be one of: json, markdown", MediaType.create("text", "plain").toString());
+            if (!"json".equalsIgnoreCase(format) && !"markdown".equalsIgnoreCase(format) && !"csv".equalsIgnoreCase(format)) {
+                responseWriter.writeResponse(request, BAD_REQUEST, "format must be one of: json, markdown, csv", MediaType.create("text", "plain").toString());
                 return;
             }
 
@@ -504,6 +517,8 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
 
             if ("markdown".equalsIgnoreCase(format)) {
                 responseWriter.writeResponse(request, OK, service.renderBrief(result), "text/markdown; charset=utf-8");
+            } else if ("csv".equalsIgnoreCase(format)) {
+                responseWriter.writeResponse(request, OK, service.renderCsv(result), "text/csv; charset=utf-8");
             } else {
                 String json = ObjectMapperFactory.createObjectMapper()
                     .writerWithDefaultPrettyPrinter().writeValueAsString(result.getReport());

@@ -7,3 +7,23 @@ steps:
     command: ".buildkite/scripts/steps/jetbrains-test.sh"
     timeout_in_minutes: 20
     soft_fail: true
+
+  # Plugin Verifier — blocking gate. Fails the build on internal / deprecated /
+  # incompatible IntelliJ Platform API usages (failureLevel configured in
+  # mockserver-jetbrains/build.gradle.kts) before such a plugin can be uploaded and
+  # rejected by the JetBrains Marketplace. Longer timeout because it downloads the
+  # recommended IDE set from the JetBrains CDN. Auto-retry only on agent-lost (Spot
+  # reclamation); a real verification failure exits non-zero and is NOT retried.
+  - label: ":intellij: JetBrains plugin verify"
+    command: ".buildkite/scripts/steps/jetbrains-verify.sh"
+    timeout_in_minutes: 45
+    # Upload the per-IDE verifier report (HTML + Markdown) so a failure is
+    # diagnosable from the build page without re-running. Uploaded even on failure.
+    artifact_paths:
+      - "mockserver-jetbrains/build/reports/pluginVerifier/**/*"
+    retry:
+      automatic:
+        - exit_status: -1   # agent lost (e.g. Spot reclamation)
+          limit: 2
+        - exit_status: 255  # agent forced shutdown
+          limit: 2

@@ -105,9 +105,48 @@ describe('analytics activation gates', () => {
       'app_open',
       expect.objectContaining({ app_version: expect.any(String), surface: 'browser', theme: 'dark' }),
     );
-    // app_open must NOT carry any unexpected keys.
+    // app_open must NOT carry any unexpected keys. `distribution` is always
+    // present (normalised to `unknown` when no config value is supplied).
     const appOpenProps = captureMock.mock.calls.find((c) => c[0] === 'app_open')![1] as Record<string, unknown>;
-    expect(Object.keys(appOpenProps).sort()).toEqual(['app_version', 'surface', 'theme']);
+    expect(Object.keys(appOpenProps).sort()).toEqual(['app_version', 'distribution', 'surface', 'theme']);
+    // Absent config value normalises to `unknown` — never raw/free-text.
+    expect(appOpenProps.distribution).toBe('unknown');
+  });
+
+  it('sends a valid distribution value on app_open', async () => {
+    initAnalytics({ ...ACTIVE_CONFIG, dashboardAnalyticsDistribution: 'docker-graaljs' }, INIT_OPTIONS);
+    await flushMicrotasks();
+    const appOpenProps = captureMock.mock.calls.find((c) => c[0] === 'app_open')![1] as Record<string, unknown>;
+    expect(appOpenProps.distribution).toBe('docker-graaljs');
+  });
+
+  it('normalises an out-of-allow-list distribution to unknown (privacy invariant)', async () => {
+    // A free-text / unexpected value must NEVER be forwarded raw.
+    initAnalytics(
+      { ...ACTIVE_CONFIG, dashboardAnalyticsDistribution: 'GET https://api.internal/secret' },
+      INIT_OPTIONS,
+    );
+    await flushMicrotasks();
+    const appOpenProps = captureMock.mock.calls.find((c) => c[0] === 'app_open')![1] as Record<string, unknown>;
+    expect(appOpenProps.distribution).toBe('unknown');
+    // The raw value must not appear anywhere in the captured params.
+    expect(JSON.stringify(appOpenProps)).not.toContain('api.internal');
+  });
+
+  it('normalises a blank distribution to unknown', async () => {
+    initAnalytics({ ...ACTIVE_CONFIG, dashboardAnalyticsDistribution: '' }, INIT_OPTIONS);
+    await flushMicrotasks();
+    const appOpenProps = captureMock.mock.calls.find((c) => c[0] === 'app_open')![1] as Record<string, unknown>;
+    expect(appOpenProps.distribution).toBe('unknown');
+  });
+
+  it('activates normally when the distribution config value is absent', async () => {
+    // Absence of dashboardAnalyticsDistribution must not change activation behaviour.
+    initAnalytics(ACTIVE_CONFIG, INIT_OPTIONS);
+    await flushMicrotasks();
+    expect(isAnalyticsActive()).toBe(true);
+    const appOpenProps = captureMock.mock.calls.find((c) => c[0] === 'app_open')![1] as Record<string, unknown>;
+    expect(appOpenProps.distribution).toBe('unknown');
   });
 
   it('does NOT activate when the master switch is off', async () => {

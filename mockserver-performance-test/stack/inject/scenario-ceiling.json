@@ -1,0 +1,29 @@
+{
+  "name": "inject-ceiling",
+  "templateType": "VELOCITY",
+  "profile": {
+    "stages": [
+      { "type": "RATE", "rate": 2000,  "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 4000,  "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 6000,  "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 8000,  "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 10000, "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 12000, "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 14000, "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 16000, "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 18000, "durationMillis": 25000, "maxVus": 4000 },
+      { "type": "RATE", "rate": 20000, "durationMillis": 25000, "maxVus": 4000 }
+    ]
+  },
+  "steps": [
+    {
+      "name": "sink",
+      "request": {
+        "method": "GET",
+        "path": "/sink/$iteration.index",
+        "headers": { "Host": ["envoy:8000"] },
+        "socketAddress": { "host": "envoy", "port": 8000, "scheme": "HTTP" }
+      }
+    }
+  ]
+}

@@ -51,8 +51,17 @@ public abstract class HttpForwardAction {
         boolean circuitBreakerEnabled = configuration != null
             && Boolean.TRUE.equals(configuration.forwardProxyCircuitBreakerEnabled());
         try {
-            // TODO(jamesdbloom) support proxying via HTTP2, for now always force into HTTP1
-            HttpRequest toSend = hopByHopHeaderFilter.onRequest(request).withProtocol(null);
+            // By default force the forwarded request into HTTP/1.1 (protocol nulled => NettyHttpClient
+            // defaults to HTTP/1.1). When forwardProxyHttp2Enabled is set the inbound request's protocol
+            // is preserved instead, so an HTTP/2 inbound is forwarded upstream as HTTP/2. HTTP/2 only
+            // actually flows over TLS+ALPN: NettyHttpClient downgrades a non-secure HTTP/2 request to
+            // HTTP/1.1, so cleartext (h2c) is never attempted. HTTP/2 forwards are not pooled.
+            boolean forwardProxyHttp2Enabled = configuration != null
+                && Boolean.TRUE.equals(configuration.forwardProxyHttp2Enabled());
+            HttpRequest filtered = hopByHopHeaderFilter.onRequest(request);
+            HttpRequest toSend = forwardProxyHttp2Enabled
+                ? filtered.withProtocol(request.getProtocol())
+                : filtered.withProtocol(null);
 
             // Per-upstream circuit breaker (default off): when the breaker for this upstream is
             // open, fail fast with a 503 instead of attempting the forward. Resolve the key from the

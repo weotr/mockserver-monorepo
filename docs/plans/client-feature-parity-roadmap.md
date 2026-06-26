@@ -2,11 +2,16 @@
 
 ## Outcome / Decision
 
-The 8 MockServer client libraries are **not** at feature parity with the Java client / core
-model. The **stateful-scenario** gap has now been closed (typed scenario APIs in every client +
+> **Status (2026-06-24): core parity ACHIEVED.** Every substantive gap this roadmap tracked is now
+> closed — stateful scenarios, control-plane auth + TLS/mTLS, editor JSON-schema sync, and the last
+> real gap (**callbacks**, `e55ccedb3`). Only **optional consistency follow-ups** and **doc-nav
+> polish** (both below) remain — nice-to-haves, no functional client gap.
+
+The 8 MockServer client libraries were **not** at feature parity with the Java client / core
+model. The **stateful-scenario** gap was closed first (typed scenario APIs in every client +
 a Docker validation harness + runnable examples + docs — see the Stateful Scenarios work). This
-roadmap tracks the **remaining** parity gaps, sized into later waves, each to be validated through
-the new `examples/validate/run.sh` Docker harness.
+roadmap tracked the **remaining** parity gaps, each validated through the
+`examples/validate/run.sh` Docker harness; all are now delivered (see below).
 
 ## What was just delivered (scenarios — DONE)
 
@@ -41,15 +46,15 @@ A precise, file:line re-verification of every claimed gap found **most were alre
   carry `crossProtocolScenarios`/`responseWeights`/`switchAfter`/`rateLimit`/full `responseMode`);
   fixed the generator's reference-file list (`rateLimit`, `conditionalRequestDefinition`, `recoverAfter`).
 
-## The ONE real remaining gap: callbacks
+## The ONE real remaining gap: callbacks — ✅ DONE (`e55ccedb3`)
 
-| Capability | Missing in | Effort | Validation |
-|------------|-----------|--------|-----------|
-| **Class callbacks** (`httpResponseClassCallback`/`httpForwardClassCallback` — declarative, REST-only) | Go, .NET, Rust, PHP, Node; Python has model not builder | S per client (model + builder; server accepts it) | harness: assert the server accepts the expectation |
-| **Object/closure callbacks** (`httpObjectCallback` over the callback WebSocket — write the response in your language) | Go, .NET, Rust (reuse their existing breakpoint WS client + clientId handshake + request/response envelope); Python has WS, needs builders | M-L per client | harness end-to-end: register a closure, send a request, assert the dynamic response |
-| Object/closure callbacks in PHP | — | **infeasible** (REST-only, no WS) — document the limitation | — |
+Callbacks across the clients (class + object/closure) shipped in `e55ccedb3`
+(*"feat(clients): callbacks across the clients (class + object/closure)"*). Class callbacks
+(declarative, REST-only) and object/closure callbacks (over the callback WebSocket) were added to
+the clients that lacked them; PHP remains documented as object/closure-infeasible (REST-only, no WS),
+as designed. The parity roadmap's headline gap is closed.
 
-Callback wire contract (from `httpClassCallback.json` / `httpObjectCallback.json` + `CallbackWebSocketServerHandler`): class = `{callbackClass, delay?, primary?}`; object = `{clientId, responseCallback, delay?, primary?}`; the WS registers a clientId, the server sends `{type:"org.mockserver.model.HttpRequest", value}` and the client replies `{type:"org.mockserver.model.HttpResponse", value}` carrying a `WebSocketCorrelationId` header. Reference: Node `webSocketClient.js`, Java `BreakpointWebSocketClient`.
+Callback wire contract (retained for reference, from `httpClassCallback.json` / `httpObjectCallback.json` + `CallbackWebSocketServerHandler`): class = `{callbackClass, delay?, primary?}`; object = `{clientId, responseCallback, delay?, primary?}`; the WS registers a clientId, the server sends `{type:"org.mockserver.model.HttpRequest", value}` and the client replies `{type:"org.mockserver.model.HttpResponse", value}` carrying a `WebSocketCorrelationId` header. Reference: Node `webSocketClient.js`, Java `BreakpointWebSocketClient`.
 
 ## Optional consistency follow-up
 

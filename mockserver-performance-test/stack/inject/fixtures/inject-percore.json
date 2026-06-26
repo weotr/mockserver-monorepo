@@ -1,0 +1,24 @@
+{
+  "proto": "http",
+  "target": "envoy-direct-response",
+  "request": "simple-GET",
+  "_note": "laptop-scale validation (14-core contended Mac; injector cores start at 2, Envoy disjoint 8-13/conc6; SHORT 4-stage stair topping at 8000, C in {1,2} only). PROVES THE LOGIC: per-C cpuset pinning works, the clean-gate + reuse assertion run per C, Envoy stays unsaturated (14% / 9% — well under its 6-core budget), and rps_per_core is computed and FALLS as C grows. Absolute numbers are NOT meaningful here — the short stair + a contended laptop make the per-C ceilings nearly identical (both ~2000, capped by the stair top, not by cores), so the apparent rps/core drop is dominated by clean-gate point selection, not a true curve. The real diminishing-returns curve (C=1 ~5k, C=2 ~9k, C=4 ~15k, C=8 ~20k with rps/core falling) needs the CI box: idle 16 vCPU, full 20k stair, C in {1,2,4,8}. Replace with a fresh CI run.",
+  "points": [
+    {
+      "cores": 1,
+      "ceiling_rps": 1997,
+      "injector_cpu_pct": 13,
+      "envoy_cpu_pct": 14,
+      "reqs_per_connection": 2000,
+      "rps_per_core": 1997
+    },
+    {
+      "cores": 2,
+      "ceiling_rps": 1999,
+      "injector_cpu_pct": 16,
+      "envoy_cpu_pct": 9,
+      "reqs_per_connection": 750,
+      "rps_per_core": 1000
+    }
+  ]
+}

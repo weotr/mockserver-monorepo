@@ -801,6 +801,14 @@ Schema → example values"]
 
 `OpenAPIConverter` creates one `Expectation` per operation, with an `OpenAPIDefinition` matcher and an example `HttpResponse` built from the spec's response schemas, headers, and examples. Both path operations and webhook operations (OAS 3.1 `webhooks` top-level key) are included.
 
+`OpenAPIConverter.buildExampleRequests(...)` is a separate, additive entry point that returns, per operation, a concrete example `HttpRequest` (keyed by `operationId`) with example `path`, `query`, `header`, and `cookie` parameter values plus a request body where the operation declares one. Unlike `buildExpectations(...)` — whose request side is always an `OpenAPIDefinition` matcher that carries no concrete parameter values — these realised example requests are intended for documentation, preview, replay seeding, and client/contract-test scaffolding. The parameter example-value logic (parameter `example`/`examples` → schema `default` → schema `enum` → generated sample → `"example"` fallback for required parameters) lives in the shared `OpenApiParameterExamples` helper, reused by the converter and the `OpenApiContractTest`/`OpenApiResiliencyTest` harnesses.
+
+### Request Validation
+
+`OpenAPIRequestValidator.validate(...)` validates a request against the matched operation. It checks both the request **body** (against the operation's `requestBody` schema) and the request **parameters**: for every declared `path`, `query`, `header`, and `cookie` parameter it enforces `required` presence in the matching `in` location and validates each supplied value against the parameter's `schema` using the same `JsonSchemaValidator.cachedJsonSchemaValidator` mechanism as the body. Path-parameter values are extracted by mapping the concrete request path back onto the matched path template (`OpenApiTrafficValidator` threads the already-resolved template through so it is not re-derived). This validator backs `OpenApiTrafficValidator` and the contract/traffic-validation surfaces (including the `verify_traffic` MCP tool).
+
+`array`/`object`-typed parameters are only schema-validated when the supplied value is already JSON-shaped; a value serialised in a non-JSON `style`/`explode` form (the OpenAPI default `form`/`explode`, or `simple` — e.g. `available,pending`) skips the schema check rather than false-positiving a valid request (`required`-presence is still enforced). **Deferred follow-up:** decode `style`/`explode`-serialised array/object parameter values before schema validation so they can be checked too.
+
 ### OpenAPI 3.1 Support
 
 MockServer fully supports OpenAPI 3.1 specifications. The swagger-parser library (2.1.x with swagger-models 2.2.x) handles both 3.0.x and 3.1 specs transparently. Three 3.1-specific constructs are explicitly handled:

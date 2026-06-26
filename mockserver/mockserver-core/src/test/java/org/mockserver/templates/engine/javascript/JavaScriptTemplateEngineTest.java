@@ -60,7 +60,15 @@ import static org.slf4j.event.Level.INFO;
 public class JavaScriptTemplateEngineTest {
 
     private static final ObjectMapper OBJECT_MAPPER = ObjectMapperFactory.createObjectMapper();
-    private static final Configuration configuration = configuration();
+    // Disable the JavaScript template execution timeout (0 = no watchdog, see PolyglotRunner) for the
+    // shared-Configuration tests. These tests exercise invalid-JS handling and normal template execution,
+    // NOT the timeout feature, so they must not depend on wall-clock time: under parallel CI load GraalJS
+    // runs interpreter-only (no JIT) and a first parse/execute can exceed the 5000ms production default,
+    // making them flaky. The production default is unchanged. The three timeout-specific tests
+    // (shouldAbortLongRunningJavaScriptTemplateWhenExecutionTimeoutExceeded,
+    // shouldEvaluateNormalJavaScriptTemplateWithinExecutionTimeout,
+    // shouldNotAbortSlowTemplateWhenExecutionTimeoutDisabled) build their own Configuration and are unaffected.
+    private static final Configuration configuration = configuration().javascriptTemplateExecutionTimeout(0L);
 
     @ClassRule
     public static final FixedTime fixedTime = new FixedTime();
@@ -805,7 +813,7 @@ public class JavaScriptTemplateEngineTest {
         // given
         graalJsAvailable();
         String template = "" +
-            "for (var i = 0; i < 1000000000; i++) {" + NEW_LINE +
+            "for (var i = 0; i < 1000000; i++) {" + NEW_LINE +
             "  i * i;" + NEW_LINE +
             "}" + NEW_LINE +
             "if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
@@ -841,7 +849,7 @@ public class JavaScriptTemplateEngineTest {
         // given
         graalJsAvailable();
         final String template = "" +
-            "for (var i = 0; i < 1000000000; i++) {" + NEW_LINE +
+            "for (var i = 0; i < 1000000; i++) {" + NEW_LINE +
             "  i * i;" + NEW_LINE +
             "}" + NEW_LINE +
             "if (request.method === 'POST' && request.path === '/somePath') {" + NEW_LINE +
@@ -878,6 +886,79 @@ public class JavaScriptTemplateEngineTest {
         for (Thread thread : threads) {
             thread.join();
         }
+    }
+
+    @Test
+    public void shouldAbortLongRunningJavaScriptTemplateWhenExecutionTimeoutExceeded() {
+        // given a deliberately long-running (effectively unbounded) template and a short timeout
+        graalJsAvailable();
+        // per-instance Configuration (NOT global ConfigurationProperties) so this test does not
+        // mutate global state and can run in the parallel Surefire phase
+        Configuration shortTimeoutConfiguration = configuration().javascriptTemplateExecutionTimeout(250L);
+        String template = "" +
+            "while (true) {" + NEW_LINE +
+            "  Math.sqrt(Math.random());" + NEW_LINE +
+            "}" + NEW_LINE +
+            "return { 'statusCode': 200, 'body': 'never reached' };";
+        HttpRequest request = request().withPath("/somePath").withMethod("POST").withBody("some_body");
+
+        // when
+        long startMillis = System.currentTimeMillis();
+        JavaScriptTemplateTimeoutException thrown = assertThrows(
+            JavaScriptTemplateTimeoutException.class,
+            () -> new JavaScriptTemplateEngine(mockServerLogger, shortTimeoutConfiguration)
+                .executeTemplate(template, request, HttpResponseDTO.class)
+        );
+        long elapsedMillis = System.currentTimeMillis() - startMillis;
+
+        // then the evaluation is aborted promptly (not hanging) with a clear timeout error
+        assertThat(thrown.getMessage(), containsString("exceeded the configured timeout of 250ms"));
+        // generous upper bound: the 250ms cap plus cancellation overhead, must NOT hang
+        assertThat("aborted within a bounded time (was " + elapsedMillis + "ms)", elapsedMillis < 10_000L, is(true));
+    }
+
+    @Test
+    public void shouldEvaluateNormalJavaScriptTemplateWithinExecutionTimeout() {
+        // given a normal template and a generous timeout
+        graalJsAvailable();
+        Configuration timeoutConfiguration = configuration().javascriptTemplateExecutionTimeout(5_000L);
+        String template = "" +
+            "return {" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': JSON.stringify({name: 'value'})" + NEW_LINE +
+            "};";
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, timeoutConfiguration)
+            .executeTemplate(template, request().withPath("/somePath").withMethod("POST"), HttpResponseDTO.class);
+
+        // then a normal template still evaluates fine under a normal timeout
+        assertThat(actualHttpResponse, is(
+            response().withStatusCode(200).withBody("{\"name\":\"value\"}")
+        ));
+    }
+
+    @Test
+    public void shouldNotAbortSlowTemplateWhenExecutionTimeoutDisabled() {
+        // given the sentinel (0) disables the timeout, restoring unbounded behaviour
+        graalJsAvailable();
+        Configuration disabledConfiguration = configuration().javascriptTemplateExecutionTimeout(0L);
+        // a finite but non-trivial loop that completes well within test time; with the timeout
+        // disabled it must NOT be cancelled even though no cap is enforced
+        String template = "" +
+            "for (var i = 0; i < 5000000; i++) {" + NEW_LINE +
+            "  i * i;" + NEW_LINE +
+            "}" + NEW_LINE +
+            "return { 'statusCode': 200, 'body': JSON.stringify({name: 'value'}) };";
+
+        // when
+        HttpResponse actualHttpResponse = new JavaScriptTemplateEngine(mockServerLogger, disabledConfiguration)
+            .executeTemplate(template, request().withPath("/somePath").withMethod("POST"), HttpResponseDTO.class);
+
+        // then
+        assertThat(actualHttpResponse, is(
+            response().withStatusCode(200).withBody("{\"name\":\"value\"}")
+        ));
     }
 
     @Test

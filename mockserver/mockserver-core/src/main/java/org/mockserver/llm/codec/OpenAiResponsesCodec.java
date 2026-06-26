@@ -54,6 +54,21 @@ public class OpenAiResponsesCodec implements ProviderCodec {
 
         ArrayNode output = root.putArray("output");
 
+        // Reasoning output item (prepended before the text message) when reasoning is set.
+        // The Responses API surfaces extended-thinking as a leading
+        // {"type":"reasoning","summary":[{"type":"summary_text","text":"..."}]} output item.
+        // Additive — absent unless Completion.reasoningText is set.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            ObjectNode reasoningItem = output.addObject();
+            reasoningItem.put("type", "reasoning");
+            reasoningItem.put("id", "rs_" + randomId(24));
+            ArrayNode summary = reasoningItem.putArray("summary");
+            ObjectNode summaryPart = summary.addObject();
+            summaryPart.put("type", "summary_text");
+            summaryPart.put("text", reasoningText);
+        }
+
         // Text message output item
         String text = completion.getText();
         boolean hasText = text != null && !text.isEmpty();
@@ -89,6 +104,19 @@ public class OpenAiResponsesCodec implements ProviderCodec {
         usage.put("input_tokens", inputTokens);
         usage.put("output_tokens", outputTokens);
         usage.put("total_tokens", inputTokens + outputTokens);
+        // Cached-input and reasoning token details — the Responses API nests these under
+        // input_tokens_details / output_tokens_details (distinct from Chat Completions'
+        // prompt_/completion_ names). Emitted only when set so existing fixtures stay byte-identical.
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                usage.putObject("input_tokens_details").put("cached_tokens", cachedInputTokens);
+            }
+            Integer reasoningTokens = completionUsage.getReasoningTokens();
+            if (reasoningTokens != null && reasoningTokens != 0) {
+                usage.putObject("output_tokens_details").put("reasoning_tokens", reasoningTokens);
+            }
+        }
 
         try {
             String json = OBJECT_MAPPER.writeValueAsString(root);
@@ -124,6 +152,40 @@ public class OpenAiResponsesCodec implements ProviderCodec {
         events.add(sseEvent().withEvent("response.in_progress").withData(inProgressData));
 
         int outputIndex = 0;
+
+        // 2b. Reasoning output item (before text) when reasoning is set. Mirrors the non-streaming
+        // reasoning item via the Responses reasoning-summary streaming events. Additive.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            String rsId = "rs_" + randomId(24);
+
+            String rsAddedData = "{\"type\":\"response.output_item.added\",\"output_index\":" + outputIndex +
+                ",\"item\":{\"type\":\"reasoning\",\"id\":\"" + rsId + "\",\"summary\":[]}}";
+            events.add(sseEvent().withEvent("response.output_item.added").withData(rsAddedData));
+
+            String partAddedData = "{\"type\":\"response.reasoning_summary_part.added\",\"item_id\":\"" + rsId +
+                "\",\"output_index\":" + outputIndex + ",\"summary_index\":0,\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}";
+            events.add(sseEvent().withEvent("response.reasoning_summary_part.added").withData(partAddedData));
+
+            String summaryDeltaData = "{\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"" + rsId +
+                "\",\"output_index\":" + outputIndex + ",\"summary_index\":0,\"delta\":\"" + escapeJson(reasoningText) + "\"}";
+            events.add(sseEvent().withEvent("response.reasoning_summary_text.delta").withData(summaryDeltaData));
+
+            String summaryDoneData = "{\"type\":\"response.reasoning_summary_text.done\",\"item_id\":\"" + rsId +
+                "\",\"output_index\":" + outputIndex + ",\"summary_index\":0,\"text\":\"" + escapeJson(reasoningText) + "\"}";
+            events.add(sseEvent().withEvent("response.reasoning_summary_text.done").withData(summaryDoneData));
+
+            String partDoneData = "{\"type\":\"response.reasoning_summary_part.done\",\"item_id\":\"" + rsId +
+                "\",\"output_index\":" + outputIndex + ",\"summary_index\":0,\"part\":{\"type\":\"summary_text\",\"text\":\"" +
+                escapeJson(reasoningText) + "\"}}";
+            events.add(sseEvent().withEvent("response.reasoning_summary_part.done").withData(partDoneData));
+
+            String rsDoneData = "{\"type\":\"response.output_item.done\",\"output_index\":" + outputIndex +
+                ",\"item\":{\"type\":\"reasoning\",\"id\":\"" + rsId + "\"}}";
+            events.add(sseEvent().withEvent("response.output_item.done").withData(rsDoneData));
+
+            outputIndex++;
+        }
 
         // 3. Text content
         String text = completion.getText();
@@ -186,11 +248,27 @@ public class OpenAiResponsesCodec implements ProviderCodec {
             }
         }
 
-        // 5. response.completed
+        // 5. response.completed — mirror cached/reasoning token details into the completed usage
+        // when set (non-null, non-zero), matching the non-streaming encode(). Omitted when unset so
+        // existing streaming fixtures stay byte-identical.
+        StringBuilder completedUsage = new StringBuilder();
+        completedUsage.append("{\"input_tokens\":").append(inputTokens)
+            .append(",\"output_tokens\":").append(outputTokens)
+            .append(",\"total_tokens\":").append(inputTokens + outputTokens);
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                completedUsage.append(",\"input_tokens_details\":{\"cached_tokens\":").append(cachedInputTokens).append("}");
+            }
+            Integer reasoningTokens = completionUsage.getReasoningTokens();
+            if (reasoningTokens != null && reasoningTokens != 0) {
+                completedUsage.append(",\"output_tokens_details\":{\"reasoning_tokens\":").append(reasoningTokens).append("}");
+            }
+        }
+        completedUsage.append("}");
         String completedData = "{\"type\":\"response.completed\",\"response\":{\"id\":\"" + responseId +
             "\",\"object\":\"response\",\"status\":\"completed\",\"model\":\"" + escapeJson(modelName) +
-            "\",\"usage\":{\"input_tokens\":" + inputTokens + ",\"output_tokens\":" + outputTokens +
-            ",\"total_tokens\":" + (inputTokens + outputTokens) + "}}}";
+            "\",\"usage\":" + completedUsage + "}}";
         events.add(sseEvent().withEvent("response.completed").withData(completedData));
 
         return StreamingPhysicsExpander.applyPhysics(events, physics);

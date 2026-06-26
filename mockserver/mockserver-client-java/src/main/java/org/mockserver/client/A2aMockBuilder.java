@@ -305,14 +305,49 @@ public class A2aMockBuilder {
     }
 
     private Expectation buildCustomTaskHandler(A2aTaskHandler handler) {
-        String escapedPattern = handler.messagePattern.replace("/", "\\/");
-        escapedPattern = escapedPattern.replace("\n", "\\n").replace("\r", "\\r").replace("\0", "");
+        String escapedPattern = escapeMessagePattern(handler.messagePattern);
         String jsonPathBody = "$[?(@.method == 'tasks/send' && @.params.message.parts[0].text =~ /" + escapedPattern + "/)]";
         String resultJson = buildTaskResultJson(handler.responseText, handler.isError);
 
         return Expectation.when(
             request().withMethod("POST").withPath(path).withBody(new JsonPathBody(jsonPathBody))
         ).thenRespond(template(VELOCITY, velocityJsonRpcResponse(resultJson)));
+    }
+
+    /**
+     * Escapes a user-supplied regular-expression {@code messagePattern} for safe embedding between
+     * the {@code /.../} delimiters of a JsonPath {@code =~} regex literal. A single-pass scan
+     * preserves existing regex escape sequences (e.g. {@code \d}, {@code \/}, {@code \\}) so that
+     * normal patterns are emitted byte-for-byte unchanged, while neutralizing the breakout cases:
+     * a lone trailing backslash (which would otherwise escape the closing delimiter) is doubled,
+     * any bare {@code /} is escaped to {@code \/}, newline/CR are turned into their two-character
+     * escapes, and NUL is stripped.
+     */
+    private static String escapeMessagePattern(String pattern) {
+        StringBuilder out = new StringBuilder(pattern.length());
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            if (c == '\\') {
+                if (i + 1 < pattern.length()) {
+                    // preserve the escape sequence verbatim (e.g. \d, \/, \\)
+                    out.append('\\').append(pattern.charAt(++i));
+                } else {
+                    // lone trailing backslash — double it so it cannot escape the closing delimiter
+                    out.append("\\\\");
+                }
+            } else if (c == '/') {
+                out.append("\\/");
+            } else if (c == '\n') {
+                out.append("\\n");
+            } else if (c == '\r') {
+                out.append("\\r");
+            } else if (c == '\0') {
+                // strip NUL
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     private String buildTaskResultJson(String responseText, boolean isError) {

@@ -1,0 +1,9 @@
+# run-inject.sh writes its results to this dir root; canonical samples live in fixtures/
+/inject-ceiling.json
+/inject-ceiling-complex.json
+/inject-percore.json
+/inject-scale.json
+# generated at runtime by run-inject.sh (scale scenario with the derived rate)
+/.scenario-scale.generated.json
+# scratch stdout/stderr captures from local smoke runs (never committed)
+*.out

@@ -69,6 +69,44 @@ const ERROR_CATEGORIES: ReadonlySet<string> = new Set<ErrorCategory>([
 type FeatureMode = 'quick' | 'advanced';
 const FEATURE_MODES: ReadonlySet<string> = new Set<FeatureMode>(['quick', 'advanced']);
 
+/**
+ * Closed set of MockServer artefacts ("distributions") the dashboard can be
+ * served from. Reported once per session on `app_open` so we can tell which
+ * artefact the data came from. Any value outside this set — including a blank
+ * or absent config value — is normalised to `unknown`, so the privacy contract
+ * (no free-text ever reaches the backend) holds even if the server sends an
+ * unexpected string.
+ */
+export type Distribution =
+  | 'docker-standard'
+  | 'docker-graaljs'
+  | 'docker-clustered'
+  | 'helm'
+  | 'binary'
+  | 'jar'
+  | 'unknown';
+
+const DISTRIBUTIONS: ReadonlySet<string> = new Set<Distribution>([
+  'docker-standard',
+  'docker-graaljs',
+  'docker-clustered',
+  'helm',
+  'binary',
+  'jar',
+  'unknown',
+]);
+
+/**
+ * Normalise the server-supplied `dashboardAnalyticsDistribution` to a value in
+ * the closed allow-list. Any other/empty/non-string value becomes `unknown`,
+ * guaranteeing no free-text is ever forwarded (same shape as the Feature /
+ * ErrorCategory guards).
+ */
+function normaliseDistribution(value: unknown): Distribution {
+  if (typeof value === 'string' && DISTRIBUTIONS.has(value)) return value as Distribution;
+  return 'unknown';
+}
+
 type Surface = 'browser' | 'ide-embedded';
 
 // Minimal structural type for the subset of the posthog-js API we use, so this
@@ -278,6 +316,9 @@ export function initAnalytics(config: Configuration, options?: InitAnalyticsOpti
     const endpoint = (config['dashboardAnalyticsEndpoint'] as string).trim();
     const key = (config['dashboardAnalyticsKey'] as string).trim();
     const surface = detectSurface();
+    // Session-constant artefact identity, normalised to the closed allow-list
+    // (never free-text). Emitted on `app_open` only.
+    const distribution = normaliseDistribution(config['dashboardAnalyticsDistribution']);
 
     // Dynamic import: posthog-js becomes a separate lazy chunk that is never
     // fetched unless we reach this point (i.e. analytics is active).
@@ -299,6 +340,7 @@ export function initAnalytics(config: Configuration, options?: InitAnalyticsOpti
           ph.capture('app_open', {
             app_version: appVersion(),
             surface,
+            distribution,
             ...(currentTheme() ? { theme: currentTheme() } : {}),
           });
           // MINOR-1: emit the initial view exactly once now that we are active.

@@ -12,6 +12,7 @@
     module.exports = {
         mockServerClient: require('./mockServerClient').mockServerClient,
         llm: require('./llm'),
-        mcpMock: require('./mcpMockBuilder').mcpMock
+        mcpMock: require('./mcpMockBuilder').mcpMock,
+        a2aMock: require('./a2aMockBuilder').a2aMock
     };
 })();

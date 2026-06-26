@@ -91,6 +91,19 @@ public class OpenAiChatCompletionsCodec implements ProviderCodec {
         usage.put("prompt_tokens", promptTokens);
         usage.put("completion_tokens", completionTokens);
         usage.put("total_tokens", promptTokens + completionTokens);
+        // Cached-input and reasoning token details are emitted only when set (non-null, non-zero),
+        // under OpenAI's native nested-details keys, so existing fixtures stay byte-identical when
+        // these optional fields are unset.
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                usage.putObject("prompt_tokens_details").put("cached_tokens", cachedInputTokens);
+            }
+            Integer reasoningTokens = completionUsage.getReasoningTokens();
+            if (reasoningTokens != null && reasoningTokens != 0) {
+                usage.putObject("completion_tokens_details").put("reasoning_tokens", reasoningTokens);
+            }
+        }
 
         try {
             String json = OBJECT_MAPPER.writeValueAsString(root);

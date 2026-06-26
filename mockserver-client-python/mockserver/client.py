@@ -239,6 +239,23 @@ class MockServerClient:
         """Query the current service-scoped chaos registrations."""
         return self._run(self._async_client.service_chaos_status())
 
+    def verify_slo(self, criteria: dict) -> dict:
+        """Verify a service-level objective over recorded SLI samples.
+
+        Returns the verdict dict (``result`` PASS or INCONCLUSIVE). A FAIL verdict
+        (HTTP 406) raises :class:`MockServerVerificationError`. SLO tracking is off
+        by default (HTTP 400 until ``sloTrackingEnabled=true``).
+        """
+        return self._run(self._async_client.verify_slo(criteria))
+
+    def start_chaos_experiment(self, experiment: dict) -> dict:
+        """Start a scheduled multi-stage chaos experiment.
+
+        Only one experiment may be active at a time; starting a new one stops the
+        previous one. Returns the started status (``{"status": "started", "name"}``).
+        """
+        return self._run(self._async_client.start_chaos_experiment(experiment))
+
     def load_scenario(self, scenario: LoadScenario | dict) -> dict:
         """Register (load) a load-injection scenario in the server-side registry.
 

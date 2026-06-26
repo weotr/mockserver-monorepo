@@ -55,7 +55,7 @@ exec "$SCRIPT_DIR/../run-in-docker.sh" \
   -w /build/mockserver \
   -e "SONATYPE_USERNAME=$SONATYPE_USERNAME" \
   -e "SONATYPE_PASSWORD=$SONATYPE_PASSWORD" \
-  -- ./mvnw -T 1C deploy -DskipTests \
+  -- ./mvnw -B --no-transfer-progress -T 1C deploy -DskipTests \
     -Dmaven.javadoc.skip=true \
     -Dmaven.source.skip=true \
     -Dgpg.skip=true \

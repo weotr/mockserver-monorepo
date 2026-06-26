@@ -26,7 +26,9 @@ public class LoadThreshold extends ObjectWithJsonToString {
      *   <li>{@link #LATENCY_P50}/{@link #LATENCY_P95}/{@link #LATENCY_P99}/{@link #LATENCY_P999} —
      *       coordinated-omission-corrected latency percentiles in <b>milliseconds</b>, read from the
      *       run's HDR histogram.</li>
-     *   <li>{@link #ERROR_RATE} — failed requests as a <b>fraction</b> of requests sent (0..1).</li>
+     *   <li>{@link #ERROR_RATE} — failed requests as a <b>fraction</b> of <em>completed</em> requests
+     *       (succeeded + failed), in (0..1). In-flight (dispatched-but-not-yet-completed) requests are
+     *       excluded so the rate is never diluted by requests whose outcome is not yet known.</li>
      *   <li>{@link #THROUGHPUT_RPS} — requests sent per second over the run's elapsed time.</li>
      * </ul>
      */

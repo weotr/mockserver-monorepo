@@ -134,6 +134,8 @@ HttpRequest[] requests = client.retrieveRecordedRequests(
 | `pactImport(String pactJson)` | Import a Pact v3 consumer contract as expectations. Wraps `PUT /mockserver/pact/import`. |
 | `pactExport(String consumer, String provider)` | Export active expectations as a Pact v3 contract. Wraps `PUT /mockserver/pact`. |
 | `pactVerify(String pactJson)` | Verify a Pact v3 contract against active expectations. Wraps `PUT /mockserver/pact/verify`. |
+| `verifySLO(SloCriteria criteria)` | Verify recorded samples against SLO criteria; returns the `SloVerdict` on PASS/INCONCLUSIVE, throws `SloVerdictAssertionError` (an `AssertionError` carrying the verdict) on FAIL. Wraps `PUT /mockserver/verifySLO`. |
+| `startChaosExperiment(String experimentJson)` | Start a chaos experiment from its JSON definition; returns the started-status JSON. Wraps `PUT /mockserver/chaosExperiment`. |
 
 `ContractReport` is a `record` on `MockServerClient` with fields: `int total`, `int passed` (count), `int failed`, `boolean allPassed`, `List<ContractResult> results`. Each `ContractResult` carries `operationId`, `method`, `path`, `matchedOperation`, `int statusCode`, `boolean passed`, `List<String> requestErrors`, `List<String> responseErrors`. These types and methods are defined in `mockserver/mockserver-client-java/src/main/java/org/mockserver/client/MockServerClient.java` (around line 3340).
 

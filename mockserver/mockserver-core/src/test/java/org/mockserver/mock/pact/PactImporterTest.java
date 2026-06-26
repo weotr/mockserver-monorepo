@@ -9,6 +9,7 @@ import org.mockserver.model.HttpResponse;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -176,6 +177,45 @@ public class PactImporterTest {
         assertEquals(Integer.valueOf(200), res(roundTripped).getStatusCode());
         assertEquals("application/json", res(roundTripped).getFirstHeader("Content-Type"));
         assertTrue(res(roundTripped).getBodyAsString().contains("\"users\""));
+    }
+
+    @Test
+    public void regexAndSchemaMatchersRoundTripThroughExportThenImport() {
+        // a regex path, a regex header, and an integer-typed schema query parameter all carry
+        // matching semantics that must survive export -> import (rather than degrading to literals)
+        Expectation original = new Expectation(
+            request().withMethod("GET").withPath("/users/\\d+")
+                .withQueryStringParameter(
+                    org.mockserver.model.NottableString.string("count"),
+                    org.mockserver.model.NottableSchemaString.schemaString("{\"type\":\"integer\"}"))
+                .withHeader("X-Trace", "[0-9a-f]+")
+        ).withId("getUser").thenRespond(response().withStatusCode(200));
+
+        String pact = new PactExporter().export(List.of(original), "c", "p");
+        Expectation roundTripped = importer.importExpectations(pact, ImportRedaction.Options.disabled()).get(0);
+
+        // the regex path survives verbatim ...
+        assertEquals("/users/\\d+", req(roundTripped).getPath().getValue());
+        // ... and is applied as a regex (not an exact string) by the real matcher
+        org.mockserver.matchers.HttpRequestPropertiesMatcher matcher =
+            new org.mockserver.matchers.HttpRequestPropertiesMatcher(
+                org.mockserver.configuration.Configuration.configuration(),
+                new org.mockserver.logging.MockServerLogger());
+        matcher.update(roundTripped);
+        assertTrue("regex path should match a concrete numeric id", matcher.matches(null,
+            request().withMethod("GET").withPath("/users/42")
+                .withQueryStringParameter("count", "7")
+                .withHeader("X-Trace", "deadbeef")));
+        assertFalse("regex path should not match a non-numeric id", matcher.matches(null,
+            request().withMethod("GET").withPath("/users/abc")
+                .withQueryStringParameter("count", "7")
+                .withHeader("X-Trace", "deadbeef")));
+
+        // the regex header survives verbatim
+        assertEquals("[0-9a-f]+", req(roundTripped).getFirstHeader("X-Trace"));
+
+        // the integer-typed schema query relaxes (on import) to a presence regex (any non-empty value)
+        assertEquals(".+", req(roundTripped).getFirstQueryStringParameter("count"));
     }
 
     @Test

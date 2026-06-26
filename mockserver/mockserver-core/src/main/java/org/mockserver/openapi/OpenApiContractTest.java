@@ -5,7 +5,6 @@ import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
 import io.swagger.v3.oas.models.media.MediaType;
 import io.swagger.v3.oas.models.media.Schema;
-import io.swagger.v3.oas.models.parameters.Parameter;
 import io.swagger.v3.oas.models.parameters.RequestBody;
 import org.apache.commons.lang3.tuple.Pair;
 import org.mockserver.logging.MockServerLogger;
@@ -14,7 +13,6 @@ import org.mockserver.model.HttpResponse;
 import org.mockserver.openapi.examples.ExampleBuilder;
 import org.mockserver.openapi.examples.JsonNodeExampleSerializer;
 import org.mockserver.openapi.examples.models.Example;
-import org.mockserver.openapi.examples.models.StringExample;
 import org.mockserver.serialization.ObjectMapperFactory;
 
 import java.util.*;
@@ -113,29 +111,15 @@ public class OpenApiContractTest {
      * query parameters, required headers, and a request body.
      */
     HttpRequest buildExampleRequest(OpenAPI openAPI, String method, String pathTemplate, Operation operation) {
-        // Resolve path parameters
-        String resolvedPath = resolvePath(pathTemplate, operation, openAPI);
+        // Resolve path parameters (shared with OpenAPIConverter via OpenApiParameterExamples)
+        String resolvedPath = OpenApiParameterExamples.resolvePath(pathTemplate, operation, openAPI);
 
         HttpRequest httpRequest = request()
             .withMethod(method)
             .withPath(resolvedPath);
 
-        // Add query parameters
-        if (operation.getParameters() != null) {
-            for (Parameter param : operation.getParameters()) {
-                if ("query".equals(param.getIn())) {
-                    String exampleValue = getParameterExampleValue(param, openAPI);
-                    if (exampleValue != null) {
-                        httpRequest.withQueryStringParameter(param.getName(), exampleValue);
-                    }
-                } else if ("header".equals(param.getIn())) {
-                    String exampleValue = getParameterExampleValue(param, openAPI);
-                    if (exampleValue != null) {
-                        httpRequest.withHeader(param.getName(), exampleValue);
-                    }
-                }
-            }
-        }
+        // Add query/header/cookie example parameters
+        OpenApiParameterExamples.applyExampleParameters(httpRequest, operation, openAPI, null);
 
         // Add request body
         RequestBody requestBody = operation.getRequestBody();
@@ -159,66 +143,6 @@ public class OpenApiContractTest {
         }
 
         return httpRequest;
-    }
-
-    private String resolvePath(String pathTemplate, Operation operation, OpenAPI openAPI) {
-        String resolved = pathTemplate;
-        if (operation.getParameters() != null) {
-            for (Parameter param : operation.getParameters()) {
-                if ("path".equals(param.getIn())) {
-                    String exampleValue = getParameterExampleValue(param, openAPI);
-                    if (exampleValue == null) {
-                        exampleValue = "example";
-                    }
-                    resolved = resolved.replace("{" + param.getName() + "}", exampleValue);
-                }
-            }
-        }
-        // Handle any unresolved path parameters
-        resolved = resolved.replaceAll("\\{[^}]+}", "example");
-        return resolved;
-    }
-
-    @SuppressWarnings("rawtypes")
-    private String getParameterExampleValue(Parameter param, OpenAPI openAPI) {
-        // 1. Check explicit example on the parameter
-        if (param.getExample() != null) {
-            return String.valueOf(param.getExample());
-        }
-        // 2. Check examples map
-        if (param.getExamples() != null && !param.getExamples().isEmpty()) {
-            io.swagger.v3.oas.models.examples.Example example = param.getExamples().values().iterator().next();
-            if (example != null && example.getValue() != null) {
-                return String.valueOf(example.getValue());
-            }
-        }
-        // 3. Generate from schema
-        if (param.getSchema() != null) {
-            Schema schema = param.getSchema();
-            // Check schema default
-            if (schema.getDefault() != null) {
-                return String.valueOf(schema.getDefault());
-            }
-            // Check schema enum
-            if (schema.getEnum() != null && !schema.getEnum().isEmpty()) {
-                return String.valueOf(schema.getEnum().get(0));
-            }
-            // Generate from type
-            Example generatedExample = ExampleBuilder.fromSchema(
-                schema,
-                openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null
-            );
-            if (generatedExample instanceof StringExample) {
-                return ((StringExample) generatedExample).getValue();
-            } else if (generatedExample != null) {
-                return serialise(generatedExample);
-            }
-        }
-        // 4. Only return a value for required parameters
-        if (param.getRequired() != null && param.getRequired()) {
-            return "example";
-        }
-        return null;
     }
 
     @SuppressWarnings("rawtypes")

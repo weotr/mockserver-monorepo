@@ -15,6 +15,7 @@ import org.mockserver.matchers.MatcherBuilder;
 import org.mockserver.metrics.Metrics;
 import org.mockserver.mock.Expectation;
 import org.mockserver.mock.listeners.MockServerEventLogNotifier;
+import org.mockserver.mock.listeners.MockServerLogListener;
 import org.mockserver.model.ExpectationId;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
@@ -36,6 +37,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.TimeoutException;
@@ -63,6 +67,17 @@ import static org.mockserver.model.HttpRequest.request;
 public class MockServerEventLog extends MockServerEventLogNotifier {
 
     private static final Logger logger = LoggerFactory.getLogger(MockServerEventLog.class);
+    /**
+     * Hard upper bound (60s) on a server-side eventual-verification {@code timeout}. A client-supplied
+     * {@link Verification#getTimeout()} / {@link VerificationSequence#getTimeout()} larger than this is
+     * silently clamped to this value so a single verify request can never pin server resources (a
+     * scheduled deadline task plus a transient log listener) for an unbounded period. 60s comfortably
+     * covers realistic async-application settle times (the Java client's own client-side poll defaults
+     * are in the single-digit seconds) while bounding worst-case resource hold. The wait itself never
+     * holds a Netty I/O thread — completion is delivered asynchronously through the existing result
+     * consumer + scheduler, never via a blocking sleep on the request thread.
+     */
+    static final long MAX_VERIFY_TIMEOUT_MILLIS = 60_000L;
     private static final Predicate<LogEntry> allPredicate = input
         -> true;
     private static final Predicate<LogEntry> notDeletedPredicate = input
@@ -274,6 +289,10 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
     public void stop() {
         try {
             notifyListeners(this, true);
+            // cancel any pending coalesced (debounced) listener notification so the scheduled
+            // task does not outlive the log — the synchronous notifyListeners above already
+            // flushed the final state to every listener.
+            stopNotifications();
             eventLog.clear();
             disruptor.shutdown(2, SECONDS);
         } catch (Throwable throwable) {
@@ -723,19 +742,27 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                         .setArguments(verification)
                 );
             }
-            if (verification.getHttpResponse() != null) {
-                // response-aware verification: count recorded request-response pairs
-                verifyResponse(verification, logCorrelationId, resultConsumer);
-            } else {
-                // original request-only verification
-                verifyRequest(verification, logCorrelationId, resultConsumer);
-            }
+            // A single evaluation of this verification against the current event log; it always calls
+            // the supplied consumer exactly once with "" (pass) or a non-empty failure message. The
+            // logResult flag controls whether this evaluation writes its VERIFICATION_PASSED/FAILED
+            // outcome to the event log — suppressed for intermediate eventual-wait re-evaluations so a
+            // failing-and-waiting verify does not flood the log with one VERIFICATION_FAILED per retry.
+            final SingleVerificationEvaluation singleEvaluation = (logResult, consumer) -> {
+                if (verification.getHttpResponse() != null) {
+                    // response-aware verification: count recorded request-response pairs
+                    verifyResponse(verification, logCorrelationId, logResult, consumer);
+                } else {
+                    // original request-only verification
+                    verifyRequest(verification, logCorrelationId, logResult, consumer);
+                }
+            };
+            eventuallyVerify(verification.getTimeout(), singleEvaluation, resultConsumer);
         } else {
             resultConsumer.accept("");
         }
     }
 
-    private void verifyRequest(Verification verification, String logCorrelationId, Consumer<String> resultConsumer) {
+    private void verifyRequest(Verification verification, String logCorrelationId, boolean logResult, Consumer<String> resultConsumer) {
         retrieveRequests(verification, logCorrelationId, httpRequests -> {
             try {
                 if (!verification.getTimes().matches(httpRequests.size())) {
@@ -758,7 +785,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                             }
                         }
                         final Object[] arguments = new Object[]{verification.getHttpRequest(), allRequests.size() == 1 ? allRequests.get(0) : allRequests};
-                        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                        if (logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                             mockServerLogger.logEvent(
                                 new LogEntry()
                                     .setType(VERIFICATION_FAILED)
@@ -772,7 +799,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                         resultConsumer.accept(failureMessage);
                     });
                 } else {
-                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    if (logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                         mockServerLogger.logEvent(
                             new LogEntry()
                                 .setType(VERIFICATION_PASSED)
@@ -799,7 +826,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         });
     }
 
-    private void verifyResponse(Verification verification, String logCorrelationId, Consumer<String> resultConsumer) {
+    private void verifyResponse(Verification verification, String logCorrelationId, boolean logResult, Consumer<String> resultConsumer) {
         RequestDefinition requestFilter = verification.getHttpRequest() != null
             ? verification.getHttpRequest().withLogCorrelationId(logCorrelationId)
             : null;
@@ -845,7 +872,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                             failureMessage += diffSummary;
                         }
                     }
-                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    if (logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                         mockServerLogger.logEvent(
                             new LogEntry()
                                 .setType(VERIFICATION_FAILED)
@@ -858,7 +885,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                     }
                     resultConsumer.accept(failureMessage);
                 } else {
-                    if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                    if (logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                         mockServerLogger.logEvent(
                             new LogEntry()
                                 .setType(VERIFICATION_PASSED)
@@ -885,6 +912,121 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         });
     }
 
+    /**
+     * Runs one verification evaluation against the current event log, invoking its consumer once with
+     * "" (pass) or a non-empty failure message. The {@code logResult} flag decides whether this
+     * evaluation writes its {@code VERIFICATION_PASSED}/{@code VERIFICATION_FAILED} outcome to the event
+     * log — set {@code false} for intermediate eventual-wait re-evaluations so they don't pollute the log.
+     */
+    @FunctionalInterface
+    private interface SingleVerificationEvaluation {
+        void evaluate(boolean logResult, Consumer<String> resultConsumer);
+    }
+
+    /**
+     * Server-side eventual-verification harness shared by request, response and sequence verification.
+     *
+     * <p>When {@code timeoutMillis} is {@code null} or {@code <= 0} this runs the supplied
+     * single-evaluation exactly once <em>with logging on</em> and forwards its result verbatim —
+     * byte-identical to the original single-shot behaviour (no listener, no scheduling, one
+     * {@code VERIFICATION_PASSED}/{@code VERIFICATION_FAILED} log entry exactly as before).</p>
+     *
+     * <p>When {@code timeoutMillis > 0} (clamped to {@link #MAX_VERIFY_TIMEOUT_MILLIS}): it runs the
+     * single evaluation with logging <em>suppressed</em>; if it PASSES it completes immediately. If it
+     * FAILS it registers a transient {@link MockServerLogListener} on this event log and arms a deadline
+     * on the scheduler's executor. On each coalesced {@code updated(...)} notification it re-runs the
+     * evaluation (still logging-suppressed) until it passes, and the deadline fires otherwise. The
+     * winning path — first passing re-evaluation OR the deadline — runs one FINAL evaluation with
+     * logging ON so exactly one outcome (passed or failed) is logged for the whole wait, instead of one
+     * {@code VERIFICATION_FAILED} per retry. A single {@link AtomicBoolean} completion guard ensures the
+     * result consumer is invoked exactly once whichever fires first, and the transient listener and
+     * deadline future are always cleaned up so neither leaks. The wait never blocks a Netty I/O thread —
+     * re-evaluation and deadline both run on the scheduler, completion is delivered through the async
+     * result consumer.</p>
+     *
+     * <p>If no scheduled executor is available (synchronous {@code Scheduler}, e.g. WAR/servlet) the
+     * eventual path cannot be armed, so it degrades to the logging-on single-shot result.</p>
+     */
+    private void eventuallyVerify(Long timeoutMillis, SingleVerificationEvaluation singleEvaluation, Consumer<String> resultConsumer) {
+        final long effectiveTimeout = timeoutMillis == null ? 0L : Math.min(timeoutMillis, MAX_VERIFY_TIMEOUT_MILLIS);
+        final ScheduledExecutorService executor = getScheduler().getExecutorService();
+        if (effectiveTimeout <= 0 || executor == null || executor.isShutdown()) {
+            // single-shot: original behaviour, logging on, no listener and no scheduling
+            singleEvaluation.evaluate(true, resultConsumer);
+            return;
+        }
+        // first evaluation with logging suppressed: complete immediately on pass (logging the single
+        // PASSED outcome via a final logging-on evaluation), only arm the eventual path on failure
+        singleEvaluation.evaluate(false, firstFailureMessage -> {
+            if (isBlank(firstFailureMessage)) {
+                // re-evaluate once with logging on to emit the single PASSED outcome and complete
+                singleEvaluation.evaluate(true, resultConsumer);
+            } else {
+                armEventualVerification(effectiveTimeout, executor, singleEvaluation, resultConsumer);
+            }
+        });
+    }
+
+    private void armEventualVerification(long effectiveTimeout, ScheduledExecutorService executor, SingleVerificationEvaluation singleEvaluation, Consumer<String> resultConsumer) {
+        final AtomicBoolean completed = new AtomicBoolean(false);
+        // holder so the listener can unregister itself and the deadline can be cancelled on completion
+        final MockServerLogListener[] listenerHolder = new MockServerLogListener[1];
+        final ScheduledFuture<?>[] deadlineHolder = new ScheduledFuture<?>[1];
+
+        final Runnable cleanup = () -> {
+            if (listenerHolder[0] != null) {
+                unregisterListener(listenerHolder[0]);
+            }
+            if (deadlineHolder[0] != null) {
+                deadlineHolder[0].cancel(false);
+            }
+        };
+        // Claims completion exactly once, then runs ONE final logging-on evaluation so the single
+        // PASSED/FAILED outcome is logged and the real result (re-derived now, including any request
+        // that arrived right at the deadline) is forwarded to the caller. Cleanup happens first so the
+        // listener/deadline are gone before the final evaluation runs.
+        final Runnable completeOnce = () -> {
+            if (completed.compareAndSet(false, true)) {
+                cleanup.run();
+                singleEvaluation.evaluate(true, resultConsumer);
+            }
+        };
+
+        final MockServerLogListener listener = mockServerLog -> {
+            if (completed.get()) {
+                return;
+            }
+            // re-run the evaluation (logging suppressed) on each coalesced log change; only a pass
+            // triggers completion — a continued failure just keeps waiting for the deadline
+            singleEvaluation.evaluate(false, message -> {
+                if (isBlank(message)) {
+                    completeOnce.run();
+                }
+            });
+        };
+        listenerHolder[0] = listener;
+        registerListener(listener);
+
+        try {
+            deadlineHolder[0] = executor.schedule(completeOnce, effectiveTimeout, TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            // executor shutting down between the isShutdown() check and schedule() — complete now so the
+            // caller never hangs, and clean up the just-registered listener
+            completeOnce.run();
+            return;
+        }
+        // If a notification already completed the verification while the deadline was being scheduled,
+        // cleanup ran before deadlineHolder was assigned — cancel the now-assigned future so it never
+        // fires (it would be a harmless no-op via the guard, but cancelling avoids a lingering timer).
+        if (completed.get()) {
+            deadlineHolder[0].cancel(false);
+        }
+
+        // A passing event may have arrived between the first evaluation and the listener registration.
+        // Re-run once more now so we don't miss it while waiting for the next (coalesced) notification.
+        listener.updated(this);
+    }
+
     public Future<String> verify(VerificationSequence verification) {
         CompletableFuture<String> result = new CompletableFuture<>();
         verify(verification, result::complete);
@@ -906,6 +1048,18 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                         .setArguments(verificationSequence)
                 );
             }
+            eventuallyVerify(
+                verificationSequence.getTimeout(),
+                (logResult, consumer) -> verifySequenceOnce(verificationSequence, logCorrelationId, logResult, consumer),
+                resultConsumer
+            );
+        } else {
+            resultConsumer.accept("");
+        }
+    }
+
+    private void verifySequenceOnce(VerificationSequence verificationSequence, String logCorrelationId, boolean logResult, Consumer<String> resultConsumer) {
+        {
             boolean hasExpectationIds = verificationSequence.getExpectationIds() != null && !verificationSequence.getExpectationIds().isEmpty();
             boolean hasRequests = verificationSequence.getHttpRequests() != null && !verificationSequence.getHttpRequests().isEmpty();
             boolean hasResponses = verificationSequence.getHttpResponses() != null && !verificationSequence.getHttpResponses().isEmpty();
@@ -934,12 +1088,12 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                                     // expectation-ID sequence steps match by recorded expectation id, not by
                                     // request fields, so there is no per-field template to diff against — pass
                                     // null so no closest-match diff is appended for this path
-                                    failureMessage = verificationSequenceFailureMessage(verificationSequence, logCorrelationId, requestDefinitions, null);
+                                    failureMessage = verificationSequenceFailureMessage(verificationSequence, logCorrelationId, logResult, requestDefinitions, null);
                                     break;
                                 }
                             }
                         }
-                        verificationSequenceSuccessMessage(verificationSequence, resultConsumer, logCorrelationId, failureMessage);
+                        verificationSequenceSuccessMessage(verificationSequence, resultConsumer, logCorrelationId, logResult, failureMessage);
 
                     } catch (Throwable throwable) {
                         verificationSequenceExceptionHandler(verificationSequence, resultConsumer, logCorrelationId, throwable, "exception:{} while processing verification sequence:{}", "exception while processing verification sequence");
@@ -997,11 +1151,11 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                                 List<HttpResponse> recordedResponses = allPairs.stream()
                                     .map(LogEventRequestAndResponse::getHttpResponse)
                                     .collect(Collectors.toList());
-                                failureMessage = verificationResponseSequenceFailureMessage(verificationSequence, logCorrelationId, recordedResponses, verificationHttpRequest, verificationHttpResponse);
+                                failureMessage = verificationResponseSequenceFailureMessage(verificationSequence, logCorrelationId, logResult, recordedResponses, verificationHttpRequest, verificationHttpResponse);
                                 break;
                             }
                         }
-                        verificationSequenceSuccessMessage(verificationSequence, resultConsumer, logCorrelationId, failureMessage);
+                        verificationSequenceSuccessMessage(verificationSequence, resultConsumer, logCorrelationId, logResult, failureMessage);
                     } catch (Throwable throwable) {
                         verificationSequenceExceptionHandler(verificationSequence, resultConsumer, logCorrelationId, throwable, "exception:{} while processing verification sequence:{}", "exception while processing verification sequence");
                     }
@@ -1023,20 +1177,18 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                                     }
                                 }
                                 if (!foundRequest) {
-                                    failureMessage = verificationSequenceFailureMessage(verificationSequence, logCorrelationId, allRequests, verificationHttpRequest);
+                                    failureMessage = verificationSequenceFailureMessage(verificationSequence, logCorrelationId, logResult, allRequests, verificationHttpRequest);
                                     break;
                                 }
                             }
                         }
-                        verificationSequenceSuccessMessage(verificationSequence, resultConsumer, logCorrelationId, failureMessage);
+                        verificationSequenceSuccessMessage(verificationSequence, resultConsumer, logCorrelationId, logResult, failureMessage);
 
                     } catch (Throwable throwable) {
                         verificationSequenceExceptionHandler(verificationSequence, resultConsumer, logCorrelationId, throwable, "exception:{} while processing verification sequence:{}", "exception while processing verification sequence");
                     }
                 });
             }
-        } else {
-            resultConsumer.accept("");
         }
     }
 
@@ -1140,8 +1292,8 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         return "";
     }
 
-    private void verificationSequenceSuccessMessage(VerificationSequence verificationSequence, Consumer<String> resultConsumer, String logCorrelationId, String failureMessage) {
-        if (isBlank(failureMessage) && mockServerLogger.isEnabledForInstance(Level.INFO)) {
+    private void verificationSequenceSuccessMessage(VerificationSequence verificationSequence, Consumer<String> resultConsumer, String logCorrelationId, boolean logResult, String failureMessage) {
+        if (isBlank(failureMessage) && logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
                     .setType(VERIFICATION_PASSED)
@@ -1154,7 +1306,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         resultConsumer.accept(failureMessage);
     }
 
-    private String verificationSequenceFailureMessage(VerificationSequence verificationSequence, String logCorrelationId, List<RequestDefinition> allRequests, RequestDefinition unmatchedStepRequest) {
+    private String verificationSequenceFailureMessage(VerificationSequence verificationSequence, String logCorrelationId, boolean logResult, List<RequestDefinition> allRequests, RequestDefinition unmatchedStepRequest) {
         String failureMessage;
         String serializedRequestToBeVerified = requestDefinitionSerializer.serialize(true, verificationSequence.getHttpRequests());
         Integer maximumNumberOfRequestToReturnInVerificationFailure = verificationSequence.getMaximumNumberOfRequestToReturnInVerificationFailure() != null ? verificationSequence.getMaximumNumberOfRequestToReturnInVerificationFailure() : configuration.maximumNumberOfRequestToReturnInVerificationFailure();
@@ -1176,7 +1328,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
             }
         }
         final Object[] arguments = new Object[]{verificationSequence.getHttpRequests(), allRequests.size() == 1 ? allRequests.get(0) : allRequests};
-        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+        if (logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
                     .setType(VERIFICATION_FAILED)
@@ -1190,7 +1342,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         return failureMessage;
     }
 
-    private String verificationResponseSequenceFailureMessage(VerificationSequence verificationSequence, String logCorrelationId, List<HttpResponse> recordedResponses, RequestDefinition unmatchedStepRequest, HttpResponse unmatchedStepResponse) {
+    private String verificationResponseSequenceFailureMessage(VerificationSequence verificationSequence, String logCorrelationId, boolean logResult, List<HttpResponse> recordedResponses, RequestDefinition unmatchedStepRequest, HttpResponse unmatchedStepResponse) {
         // for a response-aware sequence the meaningful "expected" and "actual" are the RESPONSES,
         // not the requests — serialize the expected response sequence and the recorded responses
         HttpResponseSerializer httpResponseSerializer = new HttpResponseSerializer(mockServerLogger);
@@ -1226,7 +1378,7 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
                 }
             }
         }
-        if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+        if (logResult && mockServerLogger.isEnabledForInstance(Level.INFO)) {
             mockServerLogger.logEvent(
                 new LogEntry()
                     .setType(VERIFICATION_FAILED)

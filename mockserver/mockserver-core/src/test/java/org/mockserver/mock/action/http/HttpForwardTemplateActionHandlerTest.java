@@ -38,7 +38,11 @@ public class HttpForwardTemplateActionHandlerTest {
     public void setupMocks() {
         mockHttpClient = mock(NettyHttpClient.class);
         MockServerLogger mockLogFormatter = mock(MockServerLogger.class);
-        httpForwardTemplateActionHandler = new HttpForwardTemplateActionHandler(mockLogFormatter, new Configuration(), mockHttpClient);
+        // javascriptTemplateExecutionTimeout(0L) disables the JS template watchdog (see PolyglotRunner):
+        // these tests exercise normal JS template execution, not the timeout feature, so they must not
+        // depend on wall-clock time. Under parallel CI load GraalJS runs interpreter-only and a first
+        // execute can exceed the production default, making this flaky. Production default is unchanged.
+        httpForwardTemplateActionHandler = new HttpForwardTemplateActionHandler(mockLogFormatter, new Configuration().javascriptTemplateExecutionTimeout(0L), mockHttpClient);
         openMocks(this);
     }
 

@@ -159,6 +159,13 @@ scripts/ci/bk-pipeline-status.sh -p mockserver-java -b {number} --json
 | `1` | `connected`/`disconnected` | Build/test failure — investigate logs |
 | `-1` | `lost` | Agent died (spot termination, OOM) — infrastructure issue, no code fix needed |
 | `0` with failed state | any | Unusual — check pipeline config |
+| `1`, passes on re-run / intermittent | `connected` | `FLAKY` — timing/ordering/port/resource related, not a deterministic code failure |
+
+**Confirm flaky-vs-real before fixing:** if the failure looks
+timing/ordering/port/resource-related, re-run the single failing test (or check
+recent builds of the same commit) to confirm intermittency BEFORE classifying it
+real-vs-flaky. If it passes on re-run, classify it `FLAKY` and do not push a
+speculative code fix — log it as flaky and surface it.
 
 **b. For build/test failures (exit_status=1):**
 
@@ -317,6 +324,7 @@ Current pipeline status: {passing|failing|running}
 | `exit_status: -1` + agent `lost` | Infrastructure | Rebuild (spot termination) |
 | `Timeout` | Hanging test | Add test timeouts or fix deadlock |
 | `Connection refused` | Port conflict | Fix parallel test isolation |
+| Passes on re-run / intermittent across builds of same commit | `FLAKY` | Confirm by re-run; do not push a speculative code fix — log and surface |
 
 ## Important Rules
 

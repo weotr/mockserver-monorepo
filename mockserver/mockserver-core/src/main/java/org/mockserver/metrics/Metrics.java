@@ -100,6 +100,15 @@ public class Metrics {
     // OTel histogram for OTLP export. Set by OtelMetricsExporter when enabled; null otherwise.
     private static volatile io.opentelemetry.api.metrics.DoubleHistogram otelRequestDurationHistogram;
 
+    // Latest LLM optimisation verdict/totals snapshot, backing the three single global
+    // optimisation gauges (estimated waste USD, cache-hit ratio, one-shot rate). The report is
+    // built on demand (REST / MCP), so rather than rebuild it (and re-retrieve the event log) at
+    // every scrape, LlmOptimisationReportService.build() pushes the headline figures here and the
+    // callback gauges read this snapshot. Null until a report has ever been built — the gauges then
+    // read 0 (no traffic analysed yet). These are single global gauges with NO per-model labels, so
+    // there is no unbounded label cardinality (cf. the load run_id series leak). Cleared on reset.
+    private static final AtomicReference<LlmOptimisationSnapshot> llmOptimisationSnapshot = new AtomicReference<>();
+
     // --- Load-injection (load scenario) metric family. ADDITIVE to the forward family: the
     // mock_server_load_* metrics give load runs their own scenario/run/step/route dimension so a
     // load injector can be charted next to its system-under-test. All null until metrics are
@@ -259,6 +268,25 @@ public class Metrics {
                         .name("mock_server_upstream_circuit_open")
                         .help("Number of upstreams whose forward/proxy circuit breaker is currently open")
                         .callback(callback -> callback.call(getOpenUpstreamCircuitCount()))
+                        .register();
+                    // Callback gauges: the latest LLM optimisation verdict/totals. Single global
+                    // gauges (no per-model labels) reading the most-recently-built report's headline
+                    // figures from the snapshot at scrape time. They report 0 until a report has been
+                    // built (no LLM traffic analysed yet). See LlmOptimisationReportService.build().
+                    GaugeWithCallback.builder()
+                        .name("mock_server_llm_estimated_waste_usd")
+                        .help("Estimated recoverable LLM spend (USD) from the latest optimisation report")
+                        .callback(callback -> callback.call(getLlmEstimatedWasteUsd()))
+                        .register();
+                    GaugeWithCallback.builder()
+                        .name("mock_server_llm_cache_hit_ratio")
+                        .help("Cache-hit ratio (0..1) from the latest LLM optimisation report")
+                        .callback(callback -> callback.call(getLlmCacheHitRatio()))
+                        .register();
+                    GaugeWithCallback.builder()
+                        .name("mock_server_llm_one_shot_rate")
+                        .help("One-shot rate (0..1, fraction of non-retry calls) from the latest LLM optimisation report")
+                        .callback(callback -> callback.call(getLlmOneShotRate()))
                         .register();
                     if (Boolean.TRUE.equals(configuration.metricsRequestDurationRouteLabels())) {
                         requestDurationByMethodSeconds = Histogram.builder()
@@ -428,6 +456,7 @@ public class Metrics {
             loadInflightReader.set(null);
             activeExpectationsSupplier.set(null);
             clusterMemberCountSupplier.set(null);
+            llmOptimisationSnapshot.set(null);
             metrics.clear();
             PrometheusRegistry.defaultRegistry.clear();
         }
@@ -435,6 +464,9 @@ public class Metrics {
 
     public static void clear() {
         metrics.forEach((name, gauge) -> gauge.set(0));
+        // Drop the stale optimisation snapshot so the gauges read 0 after a reset
+        // until a fresh report is built (mirrors the cost-budget/chaos reset convention).
+        llmOptimisationSnapshot.set(null);
     }
 
     public static void clear(Name name) {
@@ -991,6 +1023,56 @@ public class Metrics {
         } catch (Exception ignored) {
             return 0;
         }
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // LLM optimisation report gauges.
+    // ----------------------------------------------------------------------------------------
+
+    /** Immutable headline figures from the most-recently-built LLM optimisation report. */
+    private static final class LlmOptimisationSnapshot {
+        final double estimatedWasteUsd;
+        final double cacheHitRatio;
+        final double oneShotRate;
+
+        LlmOptimisationSnapshot(double estimatedWasteUsd, double cacheHitRatio, double oneShotRate) {
+            this.estimatedWasteUsd = estimatedWasteUsd;
+            this.cacheHitRatio = cacheHitRatio;
+            this.oneShotRate = oneShotRate;
+        }
+    }
+
+    /**
+     * Record the headline figures from a freshly-built LLM optimisation report so the optimisation
+     * gauges ({@code mock_server_llm_estimated_waste_usd}, {@code mock_server_llm_cache_hit_ratio},
+     * {@code mock_server_llm_one_shot_rate}) report scrape-time-correct values without rebuilding the
+     * report on each scrape. Called by {@code LlmOptimisationReportService.build(...)} on every build
+     * (REST endpoint, MCP tool). Always safe to call — independent of whether metrics are enabled.
+     *
+     * @param estimatedWasteUsd the verdict's total estimated recoverable spend in USD
+     * @param cacheHitRatio     the totals' cache-hit ratio (0..1)
+     * @param oneShotRate       the totals' one-shot rate (0..1)
+     */
+    public static void updateLlmOptimisationSnapshot(double estimatedWasteUsd, double cacheHitRatio, double oneShotRate) {
+        llmOptimisationSnapshot.set(new LlmOptimisationSnapshot(estimatedWasteUsd, cacheHitRatio, oneShotRate));
+    }
+
+    /** Estimated recoverable LLM spend (USD) from the latest report, or 0 if none built. */
+    public static double getLlmEstimatedWasteUsd() {
+        LlmOptimisationSnapshot snapshot = llmOptimisationSnapshot.get();
+        return snapshot != null ? snapshot.estimatedWasteUsd : 0.0;
+    }
+
+    /** Cache-hit ratio (0..1) from the latest report, or 0 if none built. */
+    public static double getLlmCacheHitRatio() {
+        LlmOptimisationSnapshot snapshot = llmOptimisationSnapshot.get();
+        return snapshot != null ? snapshot.cacheHitRatio : 0.0;
+    }
+
+    /** One-shot rate (0..1) from the latest report, or 0 if none built. */
+    public static double getLlmOneShotRate() {
+        LlmOptimisationSnapshot snapshot = llmOptimisationSnapshot.get();
+        return snapshot != null ? snapshot.oneShotRate : 0.0;
     }
 
     // ----------------------------------------------------------------------------------------

@@ -165,6 +165,40 @@ public class OtelMetricsExporterTest {
     }
 
     @Test
+    public void exportsLlmOptimisationGauges() {
+        // given — a known optimisation snapshot (as a built report would push)
+        Metrics.resetAdditionalMetricsForTesting();
+        new Metrics(configuration().metricsEnabled(true));
+        Metrics.updateLlmOptimisationSnapshot(1.42, 0.5, 0.6667);
+
+        InMemoryMetricReader reader = InMemoryMetricReader.create();
+        OtelMetricsExporter exporter = OtelMetricsExporter.startWithReader(reader);
+        try {
+            Collection<MetricData> collected = reader.collectAllMetrics();
+            Set<String> names = collected.stream().map(MetricData::getName).collect(Collectors.toSet());
+
+            assertThat(names, hasItem("mock_server_llm_estimated_waste_usd"));
+            assertThat(names, hasItem("mock_server_llm_cache_hit_ratio"));
+            assertThat(names, hasItem("mock_server_llm_one_shot_rate"));
+
+            assertThat(doubleGaugeValue(collected, "mock_server_llm_estimated_waste_usd"), is(1.42));
+            assertThat(doubleGaugeValue(collected, "mock_server_llm_cache_hit_ratio"), is(0.5));
+            assertThat(doubleGaugeValue(collected, "mock_server_llm_one_shot_rate"), is(0.6667));
+        } finally {
+            exporter.stop();
+            Metrics.clear();
+        }
+    }
+
+    private static double doubleGaugeValue(Collection<MetricData> collected, String name) {
+        MetricData metric = collected.stream()
+            .filter(m -> m.getName().equals(name))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError(name + " not exported"));
+        return metric.getDoubleGaugeData().getPoints().iterator().next().getValue();
+    }
+
+    @Test
     public void exportsRequestDurationHistogram() {
         InMemoryMetricReader reader = InMemoryMetricReader.create();
         OtelMetricsExporter exporter = OtelMetricsExporter.startWithReader(reader);

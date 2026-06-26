@@ -56,6 +56,82 @@ public class OpenAPIConverter {
         return buildExpectations(specUrlOrPayload, operationsAndResponses, null);
     }
 
+    /**
+     * Builds a concrete example {@link org.mockserver.model.HttpRequest} for each path operation in
+     * the spec, populating example {@code path}, {@code query}, {@code header}, and {@code cookie}
+     * parameter values (and a request body where the operation declares one) via the shared
+     * {@link OpenApiParameterExamples} helper.
+     * <p>
+     * This is additive and independent of {@link #buildExpectations}: that method emits an
+     * {@link OpenAPIDefinition} matcher (which carries no concrete parameter values), whereas this
+     * method produces realised example requests for documentation, preview, replay seeding, and
+     * client/contract-test scaffolding. Webhook operations are excluded because they are not directly
+     * callable as path requests.
+     *
+     * @return a map of {@code operationId} to its example {@link org.mockserver.model.HttpRequest}
+     */
+    public Map<String, org.mockserver.model.HttpRequest> buildExampleRequests(String specUrlOrPayload) {
+        return buildExampleRequests(specUrlOrPayload, null);
+    }
+
+    public Map<String, org.mockserver.model.HttpRequest> buildExampleRequests(String specUrlOrPayload, Map<String, Object> operationsAndResponses) {
+        OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, mockServerLogger);
+        GenerationOptions generationOptions = GenerationOptions.fromOperationsMap(operationsAndResponses);
+        Map<String, org.mockserver.model.HttpRequest> exampleRequests = new LinkedHashMap<>();
+        if (openAPI.getPaths() == null) {
+            return exampleRequests;
+        }
+        for (Map.Entry<String, io.swagger.v3.oas.models.PathItem> pathEntry : openAPI.getPaths().entrySet()) {
+            String pathTemplate = pathEntry.getKey();
+            for (org.apache.commons.lang3.tuple.Pair<String, io.swagger.v3.oas.models.Operation> methodOp : org.mockserver.openapi.OpenAPIParser.mapOperations(pathEntry.getValue())) {
+                String method = methodOp.getLeft();
+                io.swagger.v3.oas.models.Operation operation = methodOp.getRight();
+                if (operationsAndResponses != null && !operationsAndResponses.containsKey(operation.getOperationId())) {
+                    continue;
+                }
+                try {
+                    exampleRequests.put(operation.getOperationId(), buildExampleRequest(openAPI, method, pathTemplate, operation, generationOptions));
+                } catch (Exception e) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setLogLevel(WARN)
+                            .setMessageFormat("failed to build example request for {} {} - {}")
+                            .setArguments(method, pathTemplate, e.getMessage())
+                    );
+                }
+            }
+        }
+        return exampleRequests;
+    }
+
+    private org.mockserver.model.HttpRequest buildExampleRequest(OpenAPI openAPI, String method, String pathTemplate, io.swagger.v3.oas.models.Operation operation, GenerationOptions generationOptions) {
+        String resolvedPath = OpenApiParameterExamples.resolvePath(pathTemplate, operation, openAPI, generationOptions);
+        org.mockserver.model.HttpRequest httpRequest = org.mockserver.model.HttpRequest.request()
+            .withMethod(method)
+            .withPath(resolvedPath);
+        OpenApiParameterExamples.applyExampleParameters(httpRequest, operation, openAPI, generationOptions);
+
+        io.swagger.v3.oas.models.parameters.RequestBody requestBody = operation.getRequestBody();
+        if (requestBody != null && requestBody.getContent() != null && !requestBody.getContent().isEmpty()) {
+            Map.Entry<String, MediaType> contentEntry = requestBody.getContent().containsKey("application/json")
+                ? new AbstractMap.SimpleEntry<>("application/json", requestBody.getContent().get("application/json"))
+                : requestBody.getContent().entrySet().iterator().next();
+            httpRequest.withHeader("content-type", contentEntry.getKey());
+            MediaType mediaType = contentEntry.getValue();
+            if (mediaType != null && mediaType.getSchema() != null) {
+                org.mockserver.openapi.examples.models.Example example = ExampleBuilder.fromSchema(
+                    mediaType.getSchema(),
+                    openAPI.getComponents() != null ? openAPI.getComponents().getSchemas() : null,
+                    generationOptions
+                );
+                if (example != null) {
+                    httpRequest.withBody(serialise(example));
+                }
+            }
+        }
+        return httpRequest;
+    }
+
     public List<Expectation> buildExpectations(String specUrlOrPayload, Map<String, Object> operationsAndResponses, String contextPathPrefix) {
         OpenAPI openAPI = buildOpenAPI(specUrlOrPayload, mockServerLogger);
         String specKey = deriveSpecKey(openAPI, specUrlOrPayload);

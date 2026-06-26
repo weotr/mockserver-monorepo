@@ -1,0 +1,21 @@
+{
+  "name": "inject-scale",
+  "templateType": "VELOCITY",
+  "_comment": "rate is a PLACEHOLDER. run-inject.sh probes the lean 2-core ceiling C and rewrites rate to floor(0.8*C) before registering this scenario — do NOT hardcode a value here. The 0 below is overridden at runtime.",
+  "profile": {
+    "stages": [
+      { "type": "RATE", "rate": 0, "durationMillis": 90000, "maxVus": 4000 }
+    ]
+  },
+  "steps": [
+    {
+      "name": "sink",
+      "request": {
+        "method": "GET",
+        "path": "/sink/$iteration.index",
+        "headers": { "Host": ["envoy:8000"] },
+        "socketAddress": { "host": "envoy", "port": 8000, "scheme": "HTTP" }
+      }
+    }
+  ]
+}

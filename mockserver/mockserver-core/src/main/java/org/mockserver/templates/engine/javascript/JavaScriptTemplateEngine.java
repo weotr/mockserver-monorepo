@@ -113,6 +113,7 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
                 // org.graalvm.polyglot.* references inside PolyglotRunner when this branch is
                 // taken, so the standard distribution (no GraalVM on classpath) loads this class
                 // and degrades gracefully via the else branch instead of failing with NoClassDefFoundError.
+                Long executionTimeout = configuration.javascriptTemplateExecutionTimeout();
                 return PolyglotRunner.run(
                     script,
                     includeResponse,
@@ -123,7 +124,8 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
                     objectMapper,
                     mockServerLogger,
                     httpTemplateOutputDeserializer,
-                    dtoClass
+                    dtoClass,
+                    executionTimeout == null ? 0L : executionTimeout
                 );
             } else {
                 mockServerLogger.logEvent(
@@ -139,6 +141,10 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
                 );
                 return null;
             }
+        } catch (JavaScriptTemplateTimeoutException e) {
+            // Surface the timeout as-is (with its clear, already-logged message) rather than wrapping
+            // it in the generic transform-failure message, so callers/tests can recognise the cap firing.
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException(formatLogMessage("Exception:{}transforming template:{}for request:{}", isNotBlank(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName(), template, request), e);
         }

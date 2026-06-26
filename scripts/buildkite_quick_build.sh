@@ -29,7 +29,11 @@ fi
 log_debug "Starting Maven build (foreground)..."
 set +e
 # -Djava.security.egd is supplied via .mvn/maven.config (file:/dev/./urandom)
-./mvnw -T 1C clean install ${1:-} -Dmockserver.testOutput=quiet -DredirectTestOutputToFile=true -Dmockserver.testLogLevel=INFO "-Dmockserver.testArgLine=-Dmockserver.maxLogEntries=10000 -Dmockserver.maxExpectations=5000"
+# -B --no-transfer-progress: CI runs on a non-TTY log; without batch mode Maven's
+# interactive transfer-progress monitor emits one dot per line, flooding the build
+# log. These flags are applied here (CI-scoped) rather than in .mvn/maven.config so
+# local developer `./mvnw` keeps its live download progress.
+./mvnw -B --no-transfer-progress -T 1C clean install ${1:-} -Dmockserver.testOutput=quiet -DredirectTestOutputToFile=true -Dmockserver.testLogLevel=INFO "-Dmockserver.testArgLine=-Dmockserver.maxLogEntries=10000 -Dmockserver.maxExpectations=5000"
 MVN_EXIT=$?
 log_debug "Maven exited with code=$MVN_EXIT"
 set -e

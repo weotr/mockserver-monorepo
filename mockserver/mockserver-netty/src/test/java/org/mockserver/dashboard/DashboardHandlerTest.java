@@ -6,6 +6,8 @@ import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockserver.model.HttpResponse;
 
+import java.nio.charset.StandardCharsets;
+
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_LENGTH;
 import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -14,6 +16,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -43,16 +46,42 @@ public class DashboardHandlerTest {
         String body = response.getBodyAsString();
         assertThat(body, is(notNullValue()));
 
-        // and - the fixture genuinely exercises the multi-byte path: its UTF-8 byte
-        // length exceeds its char count, so a charset mismatch would be observable
+        // and - the fixture genuinely exercises the multi-byte path. We need the byte
+        // length under UTF-8 to differ from the byte length under a single-byte legacy
+        // charset (ISO-8859-1, the family of windows-1252 that was the JVM default on the
+        // platforms where #2347 manifested). If these two lengths were equal the asset
+        // would not distinguish a UTF-8 encode from a legacy-charset encode and the guard
+        // below could not detect the regression on a non-UTF-8 host.
         int utf8ByteLength = body.getBytes(UTF_8).length;
-        assertThat(utf8ByteLength, is(greaterThan(body.length())));
+        int legacyByteLength = body.getBytes(StandardCharsets.ISO_8859_1).length;
+        assertThat(
+            "fixture must contain genuine multi-byte UTF-8 characters so the UTF-8 byte length "
+                + "differs from a single-byte legacy charset (got utf8=" + utf8ByteLength
+                + ", iso-8859-1=" + legacyByteLength + ")",
+            utf8ByteLength, is(greaterThan(legacyByteLength)));
 
-        // and - the declared Content-Length equals the number of bytes actually written
-        // to the wire (UTF-8), independent of the JVM default charset. This is the exact
-        // invariant that was violated on non-UTF-8 platforms before the #2347 fix.
+        // and - the declared Content-Length equals the number of bytes actually written to
+        // the wire (UTF-8), and is specifically NOT the byte count that a legacy
+        // default-charset encode would have produced.
+        //
+        // This is the exact invariant violated by #2347: before the fix the header was
+        // computed with content.getBytes() (the JVM DEFAULT charset). On a non-UTF-8 host
+        // (e.g. windows-1252) a revert to that code would declare legacyByteLength, so the
+        // inequality assertion below would fail and the regression IS caught in CI.
+        //
+        // HONEST LIMITATION: on a UTF-8-default JVM (this CI host, and any Java 18+ JVM per
+        // JEP 400 regardless of platform) content.getBytes() also yields the UTF-8 length,
+        // so a default-charset revert produces an identical value and CANNOT be detected by
+        // a pure value assertion without changing production to expose the encode charset.
+        // The inequality-vs-legacy assertion is therefore the strongest host-independent
+        // guard achievable here: it converts the bug into a deterministic CI failure on
+        // exactly the platforms (non-UTF-8 default charset) where #2347 actually occurs.
         long declaredContentLength = Long.parseLong(response.getFirstHeader(CONTENT_LENGTH.toString()));
         assertThat(declaredContentLength, is((long) utf8ByteLength));
+        assertThat(
+            "Content-Length must be the UTF-8 byte count actually written to the wire, not the "
+                + "byte count of a legacy default-charset encode (#2347)",
+            declaredContentLength, is(not((long) legacyByteLength)));
     }
 
     /**

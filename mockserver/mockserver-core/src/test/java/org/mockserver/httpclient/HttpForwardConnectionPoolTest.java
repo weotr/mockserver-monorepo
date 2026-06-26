@@ -1,5 +1,6 @@
 package org.mockserver.httpclient;
 
+import io.netty.channel.Channel;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.util.concurrent.ScheduledFuture;
 import org.junit.After;
@@ -359,5 +360,117 @@ public class HttpForwardConnectionPoolTest {
         assertFalse("null key cannot be released", pool.release(null, newChannel()));
         assertFalse("null channel cannot be released", pool.release(KEY, null));
         assertThat("null key acquire returns null", pool.acquire(null), is(nullValue()));
+    }
+
+    // ---- keep-warm retention (opt-in; default OFF) ---------------------------------------------
+
+    @Test
+    public void shouldCloseSurplusAtMaxIdleWhenKeepAliveOff() {
+        // OFF-PATH PROOF: with keep-warm off the release close decision is the historical one -- the
+        // idle set caps at maxIdlePerKey and any surplus is rejected (caller closes it). Identical
+        // outcome to the two-arg constructor / shouldReturnFalseFromReleaseWhenKeyIsSaturated.
+        HttpForwardConnectionPool pool = new HttpForwardConnectionPool(2, IDLE_TIMEOUT_MILLIS, false, 2000);
+
+        assertTrue("1st within the idle cap", pool.release(KEY, newChannel()));
+        assertTrue("2nd within the idle cap", pool.release(KEY, newChannel()));
+
+        EmbeddedChannel surplus = newChannel();
+        assertFalse("with keep-warm OFF the 3rd is over maxIdle -> rejected exactly as today", pool.release(KEY, surplus));
+        assertTrue("rejected surplus channel is NOT closed by the pool (caller owns it)", surplus.isActive());
+    }
+
+    @Test
+    public void shouldRetainBeyondMaxIdleUpToMaxTotalWhenKeepAliveOn() {
+        // ON-PATH: keep-warm raises the per-key idle ceiling from maxIdle (2) to maxTotal (5) so
+        // channels that would have been closed are instead RETAINED and reused -> no churn.
+        HttpForwardConnectionPool pool = new HttpForwardConnectionPool(2, IDLE_TIMEOUT_MILLIS, true, 5);
+
+        for (int i = 0; i < 5; i++) {
+            assertTrue("channel " + i + " retained (would have been closed at maxIdle=2 with keep-warm off)",
+                pool.release(KEY, newChannel()));
+        }
+
+        // the 6th exceeds maxTotal -> rejected so the warm set stays bounded (no unbounded growth)
+        EmbeddedChannel overCap = newChannel();
+        assertFalse("over maxTotal=5 the warm set is bounded -> surplus rejected", pool.release(KEY, overCap));
+        assertTrue("rejected surplus is left for the caller to close", overCap.isActive());
+
+        // all five retained channels are reusable (warm set serves the burst with zero fresh connects)
+        for (int i = 0; i < 5; i++) {
+            assertThat("retained warm channel " + i + " is reused", pool.acquire(KEY), is(notNullValue()));
+        }
+        assertThat("warm set fully drained after five reuses", pool.acquire(KEY), is(nullValue()));
+    }
+
+    @Test
+    public void shouldSimulateFastTurnoverReusingWarmSetWithoutChurnWhenKeepAliveOn() {
+        // Simulate the diagnosed fast-turnover dispatch: a burst of concurrency-N requests where
+        // releases lag (channels released back only after the burst). With keep-warm ON the released
+        // channels are RETAINED, so subsequent bursts reuse them instead of churning.
+        final int concurrency = 16;
+        HttpForwardConnectionPool pool = new HttpForwardConnectionPool(2, IDLE_TIMEOUT_MILLIS, true, 2000);
+
+        // First burst: every acquire misses (cold pool) -> N fresh channels created and dispatched.
+        EmbeddedChannel[] inflight = new EmbeddedChannel[concurrency];
+        for (int i = 0; i < concurrency; i++) {
+            assertThat("cold pool: every acquire misses", pool.acquire(KEY), is(nullValue()));
+            inflight[i] = newChannel();
+        }
+        // Burst completes: all N channels released. Keep-warm retains all of them (maxIdle=2 would
+        // have closed 14 of 16 -> the churn).
+        for (int i = 0; i < concurrency; i++) {
+            assertTrue("keep-warm retains the released channel instead of closing it", pool.release(KEY, inflight[i]));
+        }
+
+        // Subsequent sustained bursts: every acquire now HITS the warm set -> zero fresh connects.
+        int freshConnects = concurrency; // the initial cold-start connects
+        int totalRequests = concurrency;
+        for (int round = 0; round < 50; round++) {
+            EmbeddedChannel[] leased = new EmbeddedChannel[concurrency];
+            for (int i = 0; i < concurrency; i++) {
+                totalRequests++;
+                Channel acquired = pool.acquire(KEY);
+                if (acquired != null) {
+                    leased[i] = (EmbeddedChannel) acquired; // reused warm connection
+                } else {
+                    leased[i] = newChannel(); // would be a fresh connect
+                    freshConnects++;
+                }
+            }
+            for (int i = 0; i < concurrency; i++) {
+                pool.release(KEY, leased[i]);
+            }
+        }
+
+        // No churn: the only fresh connections were the cold-start N; every steady-state request
+        // reused a warm connection, so requests-per-connection is high.
+        assertThat("steady state opens NO new connections -- only the cold-start set", freshConnects, is(concurrency));
+        double requestsPerConnection = (double) totalRequests / freshConnects;
+        assertThat("requests-per-connection is high (no per-request churn)", requestsPerConnection, greaterThan(40.0));
+    }
+
+    @Test
+    public void shouldEvictWarmRetainedChannelsAfterIdleTimeoutWhenLoadStops() {
+        // LEAK GUARD: warm-retained channels are still subject to the idle-timeout reaper, so a
+        // keep-warm pool drains to empty once load stops (no unbounded retention / no leak).
+        HttpForwardConnectionPool pool = new HttpForwardConnectionPool(2, IDLE_TIMEOUT_MILLIS, true, 2000);
+
+        // retain a warm set well beyond maxIdle=2
+        EmbeddedChannel[] warm = new EmbeddedChannel[6];
+        for (int i = 0; i < 6; i++) {
+            warm[i] = newChannel();
+            assertTrue(pool.release(KEY, warm[i]));
+        }
+
+        // load stops: advance every channel's clock past the idle timeout and fire the reaper
+        for (EmbeddedChannel channel : warm) {
+            channel.advanceTimeBy(IDLE_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            channel.runScheduledPendingTasks();
+        }
+
+        for (int i = 0; i < 6; i++) {
+            assertFalse("warm channel " + i + " is reaped by the idle timeout once load stops", warm[i].isActive());
+        }
+        assertThat("the keep-warm pool drains to empty -- no leak", pool.acquire(KEY), is(nullValue()));
     }
 }

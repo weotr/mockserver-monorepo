@@ -25,6 +25,12 @@ JDK_VERSION="21"
 CACHE=".tmp/jdks"
 OUTPUT="target/bundles"
 TARGETS=(linux/x86_64 linux/aarch64 darwin/x86_64 darwin/aarch64 windows/x86_64)
+# Dashboard usage-analytics activation, forwarded verbatim to each
+# build-binary-bundle.sh. Empty by default → bundles ship analytics INERT;
+# populated only at release time by release/components/binary.sh from the secret.
+ANALYTICS_ENDPOINT=""
+ANALYTICS_KEY=""
+ANALYTICS_DISTRIBUTION=""
 
 log() { printf '\033[1;36m[all-bundles]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m[all-bundles] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -36,6 +42,9 @@ while [[ $# -gt 0 ]]; do
     --jdk-version) JDK_VERSION="$2"; shift 2 ;;
     --cache)       CACHE="$2"; shift 2 ;;
     --output)      OUTPUT="$2"; shift 2 ;;
+    --analytics-endpoint)     ANALYTICS_ENDPOINT="$2"; shift 2 ;;
+    --analytics-key)          ANALYTICS_KEY="$2"; shift 2 ;;
+    --analytics-distribution) ANALYTICS_DISTRIBUTION="$2"; shift 2 ;;
     --targets)     read -r -a TARGETS <<< "$2"; shift 2 ;;
     -h|--help)     grep '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Unknown argument: $1" ;;
@@ -101,6 +110,9 @@ for target in "${TARGETS[@]}"; do
   log "Building bundle for $OS/$ARCH ..."
   "$BUILD" --jar "$JAR" --version "$VERSION" --os "$OS" --arch "$ARCH" \
            --jlink-home "$(dirname "$(dirname "$HOST_JLINK")")" --jmods "$JMODS" \
+           --analytics-endpoint "$ANALYTICS_ENDPOINT" \
+           --analytics-key "$ANALYTICS_KEY" \
+           --analytics-distribution "$ANALYTICS_DISTRIBUTION" \
            --output "$OUTPUT" >/dev/null
   BUILT+=("$OS/$ARCH")
 done

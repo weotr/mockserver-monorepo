@@ -8,6 +8,7 @@ import org.mockserver.scheduler.Scheduler;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -29,6 +30,26 @@ public class MockServerEventLogNotifierTest {
         void fireNotification(MockServerEventLog notifier, boolean synchronous) {
             notifyListeners(notifier, synchronous);
         }
+
+        void stop() {
+            stopNotifications();
+        }
+    }
+
+    /**
+     * Counting listener for the async coalescing tests.
+     */
+    private static class CountingLogListener implements MockServerLogListener {
+        final AtomicInteger updateCount = new AtomicInteger(0);
+
+        @Override
+        public void updated(MockServerEventLog mockServerLog) {
+            updateCount.incrementAndGet();
+        }
+    }
+
+    private TestableEventLogNotifier createAsyncNotifier(Scheduler scheduler) {
+        return new TestableEventLogNotifier(scheduler);
     }
 
     /**
@@ -125,5 +146,73 @@ public class MockServerEventLogNotifierTest {
         notifier.fireNotification(null, true);
 
         assertThat(listener.getReceivedLogs(), hasSize(3));
+    }
+
+    @Test
+    public void shouldCoalesceRapidAsynchronousNotifications() throws InterruptedException {
+        // async Scheduler so notifyListeners(..., false) goes through the debounce path
+        Scheduler scheduler = new Scheduler(Configuration.configuration(), new MockServerLogger(), false);
+        try {
+            TestableEventLogNotifier notifier = createAsyncNotifier(scheduler);
+            CountingLogListener listener = new CountingLogListener();
+            notifier.registerListener(listener);
+
+            // when - a rapid burst of async notifications (simulating many log adds within one window)
+            for (int i = 0; i < 1000; i++) {
+                notifier.fireNotification(null, false);
+            }
+
+            // then - they coalesce into at most one updated(...) within the debounce window.
+            // Wait beyond one window (250ms) plus scheduling slack, then assert exactly one fired.
+            Thread.sleep(1500);
+            assertThat("rapid async adds should coalesce to a single notification",
+                listener.updateCount.get(), is(1));
+        } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    public void shouldFireSynchronousNotificationsImmediatelyWithoutCoalescing() {
+        // even with an async Scheduler, synchronous=true must fire immediately and per-call
+        Scheduler scheduler = new Scheduler(Configuration.configuration(), new MockServerLogger(), false);
+        try {
+            TestableEventLogNotifier notifier = createAsyncNotifier(scheduler);
+            CountingLogListener listener = new CountingLogListener();
+            notifier.registerListener(listener);
+
+            notifier.fireNotification(null, true);
+            notifier.fireNotification(null, true);
+            notifier.fireNotification(null, true);
+
+            // immediate, no waiting required, no coalescing
+            assertThat(listener.updateCount.get(), is(3));
+        } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    public void shouldNotLeakCoalescingTaskAfterStop() throws InterruptedException {
+        Scheduler scheduler = new Scheduler(Configuration.configuration(), new MockServerLogger(), false);
+        try {
+            TestableEventLogNotifier notifier = createAsyncNotifier(scheduler);
+            CountingLogListener listener = new CountingLogListener();
+            notifier.registerListener(listener);
+
+            // schedule a pending coalesced notification then immediately stop
+            notifier.fireNotification(null, false);
+            notifier.stop();
+
+            // any further async notifications after stop must not be scheduled/dispatched
+            notifier.fireNotification(null, false);
+
+            // wait well beyond the debounce window: the cancelled task must never fire
+            Thread.sleep(1500);
+            assertThat("coalescing task must be cancelled on stop and not fire afterwards",
+                listener.updateCount.get(), is(0));
+        } finally {
+            scheduler.shutdown();
+        }
     }
 }

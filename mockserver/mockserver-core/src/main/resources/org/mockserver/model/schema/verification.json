@@ -18,6 +18,10 @@
     "maximumNumberOfRequestToReturnInVerificationFailure": {
       "type": "integer"
     },
+    "timeout": {
+      "type": "integer",
+      "minimum": 0
+    },
     "disposition": {
       "enum": [
         "MOCKED",

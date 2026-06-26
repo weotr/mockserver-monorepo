@@ -88,6 +88,21 @@ ENTRYPOINT ["java", "-Dfile.encoding=UTF-8", "-XX:MaxRAMPercentage=75.0", "-cp",
 
 ENV SERVER_PORT 1080
 
+# Dashboard usage analytics (PostHog Cloud EU, cookieless). EMPTY by default so a plain
+# `docker build` — i.e. forks / self-hosters building this Dockerfile directly — ships analytics
+# INERT (the dashboard's activation gate requires a non-empty endpoint AND key). Only the
+# project's official release build injects the real values via --build-arg
+# (scripts/release/components/docker.sh). The key is a write-only public ingest key, safe to
+# expose. A user can always override at runtime with `-e MOCKSERVER_DASHBOARD_ANALYTICS_*`.
+ARG DASHBOARD_ANALYTICS_ENDPOINT=
+ARG DASHBOARD_ANALYTICS_KEY=
+ENV MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT=${DASHBOARD_ANALYTICS_ENDPOINT}
+ENV MOCKSERVER_DASHBOARD_ANALYTICS_KEY=${DASHBOARD_ANALYTICS_KEY}
+# Labels analytics events by the artefact they came from. A plain, non-secret constant — safe to
+# commit directly: it is only ever sent when analytics is already active (which still requires the
+# injected endpoint+key above), so forks building this Dockerfile directly stay inert.
+ENV MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION=docker-clustered
+
 HEALTHCHECK --interval=10s --timeout=5s --start-period=120s --retries=3 \
   CMD ["java", "-cp", "/mockserver-netty-jar-with-dependencies.jar:/libs/*", "org.mockserver.cli.HealthCheck"]
 

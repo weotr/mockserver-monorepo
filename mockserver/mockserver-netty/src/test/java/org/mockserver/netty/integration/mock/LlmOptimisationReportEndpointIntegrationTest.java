@@ -76,9 +76,23 @@ public class LlmOptimisationReportEndpointIntegrationTest {
     }
 
     @Test
-    public void invalidFormatReturnsBadRequest() throws Exception {
+    public void csvFormatReturnsCsvWithCsvContentType() throws Exception {
+        HttpResponse<String> response = get("?format=csv");
+        assertThat(response.statusCode(), is(200));
+        assertThat(response.headers().firstValue("content-type").orElse(""), containsString("text/csv"));
+        // Per-call header row is always present (header-only on an empty capture).
+        assertThat(response.body(), containsString("index,provider,model,input_tokens"));
+        // Totals/summary section is always present.
+        assertThat(response.body(), containsString("section,metric,value"));
+        assertThat(response.body(), containsString("totals,call_count,0"));
+        assertThat(response.body(), containsString("verdict,grade,A"));
+    }
+
+    @Test
+    public void invalidFormatReturnsBadRequestWithWidenedMessage() throws Exception {
         HttpResponse<String> response = get("?format=xml");
         assertThat(response.statusCode(), is(400));
+        assertThat(response.body(), containsString("format must be one of: json, markdown, csv"));
     }
 
     @Test

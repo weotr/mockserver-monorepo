@@ -1,0 +1,141 @@
+{
+  "proto": "http",
+  "target": "envoy-direct-response",
+  "scenario": "inject-ceiling",
+  "caps": {
+    "max_requests_per_second": 200000,
+    "max_in_flight_requests": 20000,
+    "client_nio_threads": 8
+  },
+  "points": [
+    {
+      "offered_rps": 2000,
+      "achieved_rps": 2000,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 15,
+      "envoy_cpu_pct": 14,
+      "max_inflight": 0,
+      "target_received_rps": 2000,
+      "reqs_per_connection": 258.1,
+      "target_cx_rps": 7.75
+    },
+    {
+      "offered_rps": 4000,
+      "achieved_rps": 4000,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 26,
+      "envoy_cpu_pct": 25,
+      "max_inflight": 0,
+      "target_received_rps": 4000,
+      "reqs_per_connection": 5090.9,
+      "target_cx_rps": 0.79
+    },
+    {
+      "offered_rps": 6000,
+      "achieved_rps": 6000,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 56,
+      "envoy_cpu_pct": 50,
+      "max_inflight": 0,
+      "target_received_rps": 6000,
+      "reqs_per_connection": 42000.0,
+      "target_cx_rps": 0.14
+    },
+    {
+      "offered_rps": 8000,
+      "achieved_rps": 8300,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 65,
+      "envoy_cpu_pct": 64,
+      "max_inflight": 0,
+      "target_received_rps": 8333,
+      "reqs_per_connection": 694.4,
+      "target_cx_rps": 12.00
+    },
+    {
+      "offered_rps": 10000,
+      "achieved_rps": 10957,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 78,
+      "envoy_cpu_pct": 78,
+      "max_inflight": 0,
+      "target_received_rps": 10986,
+      "reqs_per_connection": 943.6,
+      "target_cx_rps": 11.64
+    },
+    {
+      "offered_rps": 12000,
+      "achieved_rps": 13371,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 90,
+      "envoy_cpu_pct": 88,
+      "max_inflight": 0,
+      "target_received_rps": 13400,
+      "reqs_per_connection": 924.1,
+      "target_cx_rps": 14.50
+    },
+    {
+      "offered_rps": 14000,
+      "achieved_rps": 16000,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 102,
+      "envoy_cpu_pct": 103,
+      "max_inflight": 0,
+      "target_received_rps": 16000,
+      "reqs_per_connection": 3310.3,
+      "target_cx_rps": 4.83
+    },
+    {
+      "offered_rps": 16000,
+      "achieved_rps": 18000,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 112,
+      "envoy_cpu_pct": 119,
+      "max_inflight": 0,
+      "target_received_rps": 18000,
+      "reqs_per_connection": 16800.0,
+      "target_cx_rps": 1.07
+    },
+    {
+      "offered_rps": 18000,
+      "achieved_rps": 20000,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 132,
+      "envoy_cpu_pct": 85,
+      "max_inflight": 0,
+      "target_received_rps": 20000,
+      "reqs_per_connection": 16470.6,
+      "target_cx_rps": 1.21
+    },
+    {
+      "offered_rps": 20000,
+      "achieved_rps": 0,
+      "throttled_rps": 0,
+      "error_rate": 0.00000,
+      "injector_cpu_pct": 14,
+      "envoy_cpu_pct": 0,
+      "max_inflight": 0,
+      "target_received_rps": 0,
+      "reqs_per_connection": 0.0,
+      "target_cx_rps": 0.00
+    }
+  ],
+  "ceiling_rps": 20000,
+  "ceiling_evidence": {
+    "injector_cpu_pct": 132,
+    "envoy_cpu_pct": 85,
+    "throttled_rps": 0,
+    "error_rate": 0.00000,
+    "reqs_per_connection": 16470.6,
+    "inflight_below_cap": true
+  }
+}

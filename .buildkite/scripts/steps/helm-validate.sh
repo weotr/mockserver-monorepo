@@ -42,6 +42,31 @@ exec "$SCRIPT_DIR/../run-in-docker.sh" \
       --set app.persistence.existingClaimName=my-existing-pvc \
       > /dev/null || errors=$((errors + 1))
 
+    # ASSERTING render: rendering to /dev/null only catches parse failures, not a
+    # silently-dropped field. The pod-level securityContext is gated behind a
+    # {{- with .Values.podSecurityContext }} block in deployment.yaml; a refactor
+    # that drops that block renders cleanly but emits NO securityContext (issue
+    # #2320, fix d2fb9a8cf). Set podSecurityContext.fsGroup and assert the rendered
+    # Deployment actually contains it, so the regression fails the build.
+    echo "--- Asserting podSecurityContext.fsGroup renders into the Deployment (issue #2320)"
+    rendered_pod_sc=$(helm template test-release helm/mockserver \
+      --set podSecurityContext.fsGroup=2000 2>/dev/null) || {
+        echo "FAILED: helm template with podSecurityContext.fsGroup failed to render"
+        errors=$((errors + 1))
+        rendered_pod_sc=""
+      }
+    # fsGroup is a pod-level field rendered ONLY from the podSecurityContext block
+    # (the container-level securityContext uses runAsUser/capabilities, never
+    # fsGroup), so a single grep for it is the sole, sufficient discriminator —
+    # drop the block and this line vanishes. (A separate securityContext: grep
+    # would be inert: the container securityContext always renders it.)
+    if echo "$rendered_pod_sc" | grep -qE "^[[:space:]]+fsGroup:[[:space:]]+2000[[:space:]]*$"; then
+      echo "PASS: podSecurityContext.fsGroup: 2000 present in rendered Deployment"
+    else
+      echo "FAILED: podSecurityContext.fsGroup: 2000 NOT rendered into the Deployment securityContext (issue #2320 regression)"
+      errors=$((errors + 1))
+    fi
+
     if [ "$errors" -eq 0 ]; then
       echo "All Helm validations passed"
     else

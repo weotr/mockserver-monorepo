@@ -219,6 +219,10 @@ var mockServerClient;
         // mcpMockBuilder.js.
         var _mcpMock = (typeof require !== 'undefined') ? require('./mcpMockBuilder').mcpMock : (typeof window !== 'undefined' ? (window.mockServerMcp && window.mockServerMcp.mcpMock) : undefined);
 
+        // A2A (Agent-to-Agent) mock builder factory (browser-safe): in Node use
+        // require, in the browser fall back to the global set by a2aMockBuilder.js.
+        var _a2aMock = (typeof require !== 'undefined') ? require('./a2aMockBuilder').a2aMock : (typeof window !== 'undefined' ? (window.mockServerA2a && window.mockServerA2a.a2aMock) : undefined);
+
         // Resolve the control-plane bearer token (static or supplier) for the
         // browser (XMLHttpRequest) transport path. The Node transport resolves
         // it per-request inside sendRequest.js.
@@ -1987,6 +1991,98 @@ var mockServerClient;
                 }
             };
         };
+        /**
+         * Evaluate a set of service-level objectives (SLOs) over a window of the
+         * recorded SLI samples (PUT /mockserver/verifySLO). The server encodes
+         * the verdict in the HTTP status: 200 for PASS or INCONCLUSIVE, 406 for
+         * FAIL, 400 for malformed criteria or when SLO tracking is disabled
+         * (sloTrackingEnabled=false).
+         *
+         * The returned promise RESOLVES with the parsed SloVerdict object
+         * (result PASS or INCONCLUSIVE) on 200, and REJECTS on FAIL (406) — the
+         * rejection value is a string carrying the verdict body so callers can
+         * inspect the per-objective results. A 400 disabled/invalid response
+         * rejects with a clear message explaining how to enable SLO tracking.
+         *
+         * @param criteria the SLO criteria ({name, window, minimumSampleCount,
+         *        upstreamHosts, objectives:[{sli, comparator, threshold, scope}]})
+         * @return promise resolving to the parsed SloVerdict
+         *         ({name, result, sampleCount, objectiveResults, ...})
+         */
+        var verifySLO = function (criteria) {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/verifySLO", criteria)
+                        .then(function (result) {
+                            // 2xx -> PASS or INCONCLUSIVE verdict.
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (!error) {
+                                return;
+                            }
+                            // The transport rejects on any >= 400 with the response
+                            // body string. A FAIL verdict (406) carries a SloVerdict
+                            // JSON body with result:"FAIL"; a disabled/invalid
+                            // request (400) carries a plain error message.
+                            var body = (typeof err === "string") ? err : "";
+                            var parsed = null;
+                            try {
+                                parsed = JSON.parse(body);
+                            } catch (e) {
+                                parsed = null;
+                            }
+                            if (parsed && parsed.result === "FAIL") {
+                                error("SLO verdict FAIL: " + body);
+                            } else if (parsed && (parsed.result === "PASS" || parsed.result === "INCONCLUSIVE")) {
+                                // Defensive: some transports surface non-2xx verdicts
+                                // through the error path; treat a PASS/INCONCLUSIVE
+                                // verdict body as success.
+                                if (sucess) {
+                                    sucess(parsed);
+                                }
+                            } else {
+                                error("invalid SLO criteria (or SLO tracking disabled - set sloTrackingEnabled=true): " + body);
+                            }
+                        });
+                }
+            };
+        };
+
+        // -------------------------------------------------------------------
+        // Scheduled chaos experiments
+        // -------------------------------------------------------------------
+
+        /**
+         * Start a scheduled multi-stage chaos experiment
+         * (PUT /mockserver/chaosExperiment). The experiment is an ordered
+         * sequence of stages, each applying service-scoped chaos profiles to one
+         * or more hosts for a fixed duration; stages progress automatically.
+         * Only one experiment may be active at a time; starting a new one stops
+         * the previous one.
+         *
+         * @param experiment the experiment definition
+         *        ({name, loop, stages:[{durationMillis, profiles:{host: profile}}]})
+         * @return promise resolving to the parsed status JSON
+         *         ({status: "started", name}), or the raw response when empty
+         */
+        var startChaosExperiment = function (experiment) {
+            return {
+                then: function (sucess, error) {
+                    makeRequest(host, port, "/mockserver/chaosExperiment", experiment)
+                        .then(function (result) {
+                            if (sucess) {
+                                sucess(result.body ? JSON.parse(result.body) : result);
+                            }
+                        }, function (err) {
+                            if (error) {
+                                error(err);
+                            }
+                        });
+                }
+            };
+        };
 
         // -------------------------------------------------------------------
         // Load scenario (load injection) management
@@ -2603,6 +2699,41 @@ var mockServerClient;
             return builder;
         };
 
+        /**
+         * Start building a mock A2A (Agent-to-Agent) agent: a static agent-card
+         * document served over GET plus JSON-RPC 2.0 task methods (tasks/send,
+         * tasks/get, tasks/cancel) over POST, with optional SSE streaming and
+         * push-notification config + delivery. Returns a fluent builder; call
+         * .applyTo() (with no arguments — this client is used) to register the
+         * generated expectations, or .build() to obtain the raw expectation
+         * array. Mirrors the Java client A2aMockBuilder.
+         *
+         * for example:
+         *
+         *   client.a2aMock("/a2a")
+         *       .withAgentName("MyAgent")
+         *       .withSkill("translate")
+         *           .withName("Translation")
+         *           .withExample("Translate hello to Spanish")
+         *       .and()
+         *       .onTaskSend()
+         *           .matchingMessage("translate.*")
+         *           .respondingWith("Hola")
+         *       .and()
+         *       .applyTo();
+         *
+         * @param path the HTTP path the A2A agent is mounted on (default "/a2a")
+         */
+        var a2aMock = function (path) {
+            var builder = _a2aMock(path);
+            var applyTo = builder.applyTo;
+            // Default applyTo() to this client when none is supplied.
+            builder.applyTo = function (client) {
+                return applyTo(client || _this);
+            };
+            return builder;
+        };
+
         /* jshint -W003 */
         var _this = {
             openAPIExpectation: openAPIExpectation,
@@ -2641,6 +2772,8 @@ var mockServerClient;
             removeServiceChaos: removeServiceChaos,
             clearServiceChaos: clearServiceChaos,
             serviceChaosStatus: serviceChaosStatus,
+            verifySLO: verifySLO,
+            startChaosExperiment: startChaosExperiment,
             loadScenario: loadScenario,
             scenario: scenario,
             scenarios: scenarios,
@@ -2672,7 +2805,8 @@ var mockServerClient;
             uploadGrpcDescriptor: uploadGrpcDescriptor,
             retrieveGrpcServices: retrieveGrpcServices,
             clearGrpcDescriptors: clearGrpcDescriptors,
-            mcpMock: mcpMock
+            mcpMock: mcpMock,
+            a2aMock: a2aMock
         };
         // Explicit resource management support (TC39 `using`/`await using`).
         // Calling `await using client = mockServerClient(...)` will reset the
@@ -2708,6 +2842,7 @@ var mockServerClient;
             mockServerClient: mockServerClient,
             llm: require('./llm'),
             mcpMock: require('./mcpMockBuilder').mcpMock,
+            a2aMock: require('./a2aMockBuilder').a2aMock,
             routeBreakpointMessage: _routeBreakpointMessage,
             extractBreakpointHeaders: _extractBreakpointHeaders
         };

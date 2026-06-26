@@ -100,6 +100,12 @@ from mockserver.mcp import (
     McpToolBuilder,
     mcp_mock,
 )
+from mockserver.a2a import (
+    A2aMockBuilder,
+    A2aSkillBuilder,
+    A2aTaskHandlerBuilder,
+    a2a_mock,
+)
 from mockserver.async_client import AsyncMockServerClient
 from mockserver.launcher import (
     MockServerProcess,
@@ -187,6 +193,10 @@ __all__ = [
     "McpResourceBuilder",
     "McpToolBuilder",
     "mcp_mock",
+    "A2aMockBuilder",
+    "A2aSkillBuilder",
+    "A2aTaskHandlerBuilder",
+    "a2a_mock",
     "MockServerCallbackError",
     "MockServerClient",
     "MockServerConnectionError",

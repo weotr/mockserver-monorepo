@@ -63,9 +63,36 @@ public class NoDependenciesJarRunner {
      * {@link #READY_TIMEOUT}).
      */
     public static NoDependenciesJarRunner startServerUsingNoDependenciesJar(int mockServerPort) {
+        return startServerUsingNoDependenciesJar(mockServerPort, null);
+    }
+
+    /**
+     * As {@link #startServerUsingNoDependenciesJar(int)}, but additionally points
+     * the forked JVM at {@code propertyFile} via {@code -Dmockserver.propertyFile=&lt;path&gt;}
+     * — the exact system property {@code ConfigurationProperties} honours to locate
+     * a populated {@code mockserver.properties}.
+     *
+     * <p>This drives the shaded jar through its property-file-read path during
+     * {@code ConfigurationProperties} static initialisation, which is what surfaced
+     * the {@code ExceptionInInitializerError}/{@code NoClassDefFoundError} in issues
+     * #2344 and #2338 — the sensitive-value redaction path runs while a populated
+     * file is read, and a transitive class reachable only there could be missing
+     * from the uber jar without this guard catching it.
+     *
+     * @param propertyFile absolute path to a {@code mockserver.properties} file, or
+     *                     {@code null} to boot without one
+     */
+    public static NoDependenciesJarRunner startServerUsingNoDependenciesJar(int mockServerPort, File propertyFile) {
         File jarFile = locateShadedJar();
         List<String> arguments = new ArrayList<>(Collections.singletonList(getJavaBin()));
         arguments.add("-Dfile.encoding=UTF-8");
+        if (propertyFile != null) {
+            // ConfigurationProperties first tries the classpath via getResourceAsStream,
+            // then falls back to new FileInputStream(propertyFile()). The forked JVM's
+            // classpath is the jar only, so the absolute path resolves via that filesystem
+            // fallback — exercising the populated-property-file read at static-init time.
+            arguments.add("-Dmockserver.propertyFile=" + propertyFile.getAbsolutePath());
+        }
         if (DEBUG) {
             arguments.add("-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005");
         }

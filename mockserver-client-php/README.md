@@ -360,6 +360,45 @@ Every builder also exposes `build()` to obtain the raw `Expectation`
 object(s) without registering them (a single `Expectation` for `llmMock`,
 or an array of `Expectation` for conversations, failover and MCP).
 
+## Mocking A2A Agents
+
+`MockServer\A2a\A2aMockBuilder` emulates an A2A (Agent-to-Agent) agent speaking
+JSON-RPC 2.0 over HTTP. It generates the agent card (`GET /.well-known/agent.json`
+by default) plus the `tasks/send`, `tasks/get` and `tasks/cancel` JSON-RPC
+methods, and optionally streaming (SSE) and push-notification delivery. A2A is
+purely declarative (request matchers plus templated/literal responses), so it is
+fully supported by the REST-only PHP client.
+
+```php
+<?php
+
+use MockServer\A2a\A2aMockBuilder;
+
+A2aMockBuilder::a2aMock('/a2a')
+    ->withAgentName('WeatherAgent')
+    ->withAgentDescription('Provides weather forecasts')
+    ->withSkill('forecast')
+        ->withName('Forecast')
+        ->withDescription('Weather forecasting')
+        ->withTag('weather')
+        ->withExample('What is the weather in London?')
+    ->and()
+    ->onTaskSend()
+        ->matchingMessage('.*weather.*')
+        ->respondingWith('72F and sunny')
+    ->and()
+    ->withStreaming()                                  // advertise + mock message/stream (SSE)
+    ->withPushNotifications('http://localhost:1234/a2a/callback')
+    ->applyTo($client);
+```
+
+When `withPushNotifications(...)` is set, each `tasks/send` returns the JSON-RPC
+task response to the caller **and** POSTs the completed task to the webhook URL,
+and the agent card advertises `capabilities.pushNotifications: true`. Custom
+`onTaskSend()` handlers are matched by a regular expression against
+`params.message.parts[0].text`. Like the MCP builder, `build()` returns the raw
+array of `Expectation` objects without registering them.
+
 ## Start / Launch MockServer
 
 The PHP client does not include a binary launcher (PHP lacks the native WebSocket and subprocess management required for embedded launch). To start MockServer, use one of the following approaches:

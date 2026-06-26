@@ -232,6 +232,42 @@ McpMockBuilder.McpMock("/mcp")
 Each builder also exposes `Build()` returning the raw `List<Expectation>` if you want to
 inspect or register them yourself.
 
+## Mocking an A2A agent
+
+The `MockServer.Client.A2a` namespace builds the expectation set needed to emulate an
+A2A (Agent2Agent) server. It serves a GET agent-card document at `/.well-known/agent.json`
+plus JSON-RPC 2.0 `tasks/send`, `tasks/get`, and `tasks/cancel` handlers, and can optionally
+advertise and mock streaming (SSE) and push notifications.
+
+```csharp
+using MockServer.Client.A2a;
+
+A2aMockBuilder.A2aMock("/a2a")
+    .WithAgentName("WeatherAgent")
+    .WithAgentDescription("Knows the weather")
+    .WithSkill("get_weather")
+        .WithName("Get Weather")
+        .WithDescription("Returns the weather for a city")
+        .WithTag("weather")
+        .WithExample("What is the weather in London?")
+    .And()
+    .OnTaskSend()
+        .MatchingMessage("hello.*")
+        .RespondingWith("Hi there!")
+    .And()
+    .WithStreaming()
+    .WithPushNotifications("http://localhost:1234/a2a/callback")
+    .ApplyTo(client);
+```
+
+When streaming is enabled the agent card reports `capabilities.streaming: true` and the
+streaming method (default `message/stream`) returns an SSE stream of `status-update` and
+`artifact-update` events. When push notifications are configured the agent card reports
+`capabilities.pushNotifications: true`, `tasks/pushNotificationConfig/set` echoes the
+registered config, and each `tasks/send` both returns the JSON-RPC response to the caller
+and POSTs the completed task to the configured webhook. As with the MCP builder, `Build()`
+returns the raw `List<Expectation>` if you want to inspect or register them yourself.
+
 ## Start / Launch MockServer
 
 The .NET client can download and launch a local MockServer instance directly -- no Java installation and no Docker required. The launcher downloads a self-contained platform bundle (`mockserver-<version>-<os>-<arch>`) from the GitHub Release, verifies its SHA-256, caches it per-user, and starts it.

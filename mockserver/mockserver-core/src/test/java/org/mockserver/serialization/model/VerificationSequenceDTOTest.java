@@ -7,6 +7,7 @@ import org.mockserver.verify.VerificationSequence;
 import java.util.Arrays;
 import java.util.Collections;
 
+import static org.hamcrest.CoreMatchers.nullValue;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
 import static org.mockserver.model.HttpRequest.request;
@@ -129,6 +130,58 @@ public class VerificationSequenceDTOTest {
 
         // then
         assertThat(builtVerification.getHttpResponses(), is(Arrays.asList(response1, response2)));
+    }
+
+    @Test
+    public void shouldReturnTimeoutSetInConstructor() {
+        // given
+        VerificationSequence verification = new VerificationSequence()
+            .withRequests(request("one"))
+            .withTimeout(5000L);
+
+        // when
+        VerificationSequenceDTO verificationSequenceDTO = new VerificationSequenceDTO(verification);
+
+        // then
+        assertThat(verificationSequenceDTO.getTimeout(), is(5000L));
+    }
+
+    @Test
+    public void shouldBuildObjectWithTimeout() {
+        // given
+        VerificationSequence verification = new VerificationSequence()
+            .withRequests(request("one"))
+            .withTimeout(2500L);
+
+        // when
+        VerificationSequence builtVerification = new VerificationSequenceDTO(verification).buildObject();
+
+        // then
+        assertThat(builtVerification.getTimeout(), is(2500L));
+    }
+
+    @Test
+    public void shouldReturnTimeoutSetInSetter() {
+        // given
+        VerificationSequenceDTO verificationSequenceDTO = new VerificationSequenceDTO(new VerificationSequence());
+
+        // when
+        verificationSequenceDTO.setTimeout(1000L);
+
+        // then
+        assertThat(verificationSequenceDTO.getTimeout(), is(1000L));
+    }
+
+    @Test
+    public void shouldBuildObjectWithNullTimeout() {
+        // given
+        VerificationSequence verification = new VerificationSequence().withRequests(request("one"));
+
+        // when
+        VerificationSequence builtVerification = new VerificationSequenceDTO(verification).buildObject();
+
+        // then
+        assertThat(builtVerification.getTimeout(), nullValue());
     }
 
     @Test

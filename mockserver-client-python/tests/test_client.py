@@ -521,6 +521,85 @@ class TestSyncServiceChaos:
             assert result["services"]["payments.svc"]["errorStatus"] == 503
 
 
+class TestSyncVerifySlo:
+    def test_verify_slo_pass(self, sync_mock_server):
+        SyncMockHandler.response_status = 200
+        SyncMockHandler.response_body = json.dumps({"name": "checkout", "result": "PASS"})
+        criteria = {
+            "name": "checkout",
+            "objectives": [
+                {"sli": "errorRate", "comparator": "LESS_THAN", "threshold": 0.01}
+            ],
+        }
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.verify_slo(criteria)
+            assert SyncMockHandler.last_path == "/mockserver/verifySLO"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["name"] == "checkout"
+            assert sent["objectives"][0]["sli"] == "errorRate"
+            assert result["result"] == "PASS"
+
+    def test_verify_slo_inconclusive_returns_verdict(self, sync_mock_server):
+        SyncMockHandler.response_status = 200
+        SyncMockHandler.response_body = json.dumps({"result": "INCONCLUSIVE", "sampleCount": 2})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.verify_slo({"name": "x"})
+            assert result["result"] == "INCONCLUSIVE"
+
+    def test_verify_slo_fail_raises_verification_error(self, sync_mock_server):
+        SyncMockHandler.response_status = 406
+        SyncMockHandler.response_body = json.dumps({"result": "FAIL"})
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerVerificationError):
+                client.verify_slo({"name": "x"})
+
+    def test_verify_slo_disabled_raises_error(self, sync_mock_server):
+        SyncMockHandler.response_status = 400
+        SyncMockHandler.response_body = "SLO tracking disabled"
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="SLO tracking disabled"):
+                client.verify_slo({"name": "x"})
+
+
+class TestSyncChaosExperiment:
+    def test_start_chaos_experiment(self, sync_mock_server):
+        SyncMockHandler.response_status = 200
+        SyncMockHandler.response_body = json.dumps({"status": "started", "name": "latency-injection"})
+        experiment = {
+            "name": "latency-injection",
+            "loop": False,
+            "stages": [
+                {
+                    "durationMillis": 60000,
+                    "profiles": {"payments.svc": {"latencyMs": 500}},
+                }
+            ],
+        }
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            result = client.start_chaos_experiment(experiment)
+            assert SyncMockHandler.last_path == "/mockserver/chaosExperiment"
+            assert SyncMockHandler.last_method == "PUT"
+            sent = json.loads(SyncMockHandler.last_request_body)
+            assert sent["name"] == "latency-injection"
+            assert sent["stages"][0]["durationMillis"] == 60000
+            assert result["status"] == "started"
+
+    def test_start_chaos_experiment_disabled_raises(self, sync_mock_server):
+        SyncMockHandler.response_status = 403
+        SyncMockHandler.response_body = '{"error": "disabled"}'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="chaos experiments are disabled"):
+                client.start_chaos_experiment({"name": "x", "stages": []})
+
+    def test_start_chaos_experiment_invalid_raises(self, sync_mock_server):
+        SyncMockHandler.response_status = 400
+        SyncMockHandler.response_body = '{"error": "invalid"}'
+        with MockServerClient("127.0.0.1", sync_mock_server) as client:
+            with pytest.raises(MockServerError, match="Failed to start chaos experiment"):
+                client.start_chaos_experiment({"name": "x"})
+
+
 class TestSyncLoadScenario:
     def _scenario(self) -> LoadScenario:
         return LoadScenario(

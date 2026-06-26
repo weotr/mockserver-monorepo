@@ -94,7 +94,13 @@ mockserver.enableCORSForAllResponses=false</code></pre>
             <td><span class="inline_code">maxLogEntries</span></td>
             <td><span class="inline_code">MOCKSERVER_MAX_LOG_ENTRIES</span></td>
             <td><span class="this_value">heap-based (up to 100,000)</span></td>
-            <td>Lower for high-throughput or large-body workloads; each HTTP request generates 2–3 log entries</td>
+            <td>How many log entries are retained in memory before the oldest are overwritten. Lower for high-throughput or large-body workloads; each HTTP request generates 2–3 log entries</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">ringBufferSize</span></td>
+            <td><span class="inline_code">MOCKSERVER_RING_BUFFER_SIZE</span></td>
+            <td><span class="this_value">min(maxLogEntries, 16,384)</span></td>
+            <td>Size of the in-flight log event buffer (separate from <span class="inline_code">maxLogEntries</span> retention). You rarely need to change this — raise it only if you see dropped log events under sustained extreme load; lower it to save memory on a high-retention, low-throughput workload. Rounded up to a power of 2</td>
         </tr>
         <tr>
             <td><span class="inline_code">maxSocketTimeout</span></td>
@@ -300,7 +306,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <p>Maximum number of log entries to hold in memory, this includes recorded requests, expectation match failures and other log entries. Log entries are stored in a circular queue so once this limit is reached the oldest entries are overwritten. The lower the log level the more log entries will be captured, particularly at TRACE level logging.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">minimum of (free heap space in KB / 8) and 100000</span></p>
     <p>The default is calculated automatically based on available JVM heap memory. Each log entry typically uses 4-10 KB of heap for small request/response bodies, but log entries for large responses are proportionally larger (e.g., a 100 KB response body produces log entries of ~100+ KB each). Each HTTP request generates 2-3 log entries (request recording, expectation match, and response) that are always stored regardless of log level. With a 256 MB heap the default of approximately 20,000 entries covers around 7,000-10,000 HTTP requests before the oldest entries are evicted. For high-throughput use cases or large response bodies, reduce this value to limit memory usage and GC pressure. See <a href="/mock_server/performance.html#troubleshooting_performance">troubleshooting performance</a> for detailed guidance.</p>
-    <p><strong>Power-of-2 sizing:</strong> the log ring buffer is implemented on top of the LMAX Disruptor, which rounds the configured size up to the next power of 2. Setting <span class="inline_code">maxLogEntries=10000</span> allocates 16,384 slots; setting <span class="inline_code">maxLogEntries=20000</span> allocates 32,768 slots. To minimise wasted heap, pick a power-of-2 value yourself: 4,096 (~32&nbsp;MB) / 16,384 (~131&nbsp;MB) / 65,536 (~524&nbsp;MB) are good starting points.</p>
+    <p><strong>Independent of the ring buffer:</strong> <span class="inline_code">maxLogEntries</span> controls how much history is <em>retained</em>, not the size of the in-flight log event ring buffer. The ring buffer is a separate, smaller buffer sized by <span class="inline_code">ringBufferSize</span> (default <span class="this_value">min(maxLogEntries, 16,384)</span>), so raising <span class="inline_code">maxLogEntries</span> for more retention no longer inflates the ring buffer's fixed memory. You can set <span class="inline_code">maxLogEntries</span> to any value — it does not need to be a power of 2.</p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxLogEntries(int count)</code></pre>
     <p>System Property:</p>
@@ -311,6 +317,24 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.maxLogEntries=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxLogEntries="20000"</code></pre>
+</div>
+
+<button id="button_configuration_ring_buffer_size" class="accordion title"><strong>Log Event Ring Buffer Size</strong></button>
+<div class="panel title">
+    <p>Number of slots in the in-memory log event ring buffer. This buffer holds log events briefly while they are passed from the threads handling requests to the single thread that writes them to the log — it is <strong>not</strong> the retained log history (that is controlled separately by <span class="inline_code">maxLogEntries</span>). The ring buffer only needs to absorb short bursts of log events, so it can be much smaller than the retained history.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">minimum of maxLogEntries and 16,384</span> (rounded up to the next power of 2)</p>
+    <p>You rarely need to change this. Raise it only if MockServer reports dropped log events (the <span class="inline_code">mock_server_dropped_log_events</span> metric is non-zero and growing) under sustained extreme load. Lower it to save a little memory on a workload that retains a lot of history but receives requests slowly. The value is rounded up to the next power of 2 because the underlying LMAX Disruptor requires it.</p>
+    <p>Previously the ring buffer was sized from <span class="inline_code">maxLogEntries</span>, so a large retention setting (e.g. <span class="inline_code">maxLogEntries=100000</span>) forced a 131,072-slot ring (~14.7&nbsp;MB of pre-allocated, mostly-empty slots). The default 16,384 ceiling caps that overhead while leaving small deployments unchanged.</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.ringBufferSize(int size)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.ringBufferSize=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_RING_BUFFER_SIZE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.ringBufferSize=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.ringBufferSize="8192"</code></pre>
 </div>
 
 <button id="button_configuration_max_web_socket_expectations" class="accordion title"><strong>Maximum WebSockets For Object Callback Expectations</strong></button>
@@ -1010,6 +1034,124 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolIdleTimeoutMillis="60000"</code></pre>
 </div>
 
+<button id="button_configuration_forward_connection_pool_keep_alive" class="accordion title"><strong>Keep Pooled Connections Warm Under Sustained Load</strong></button>
+<div class="panel title">
+    <p>By default, when a burst of forwarded or proxied requests finishes, the pool keeps only up to <span class="inline_code">forwardConnectionPoolMaxIdlePerKey</span> idle connections per upstream and closes the rest. Under very high request rates against a fast upstream (responses returning in well under a millisecond) this can cause connection churn: requests are dispatched faster than earlier connections are returned to the pool, so each opens a fresh connection and the surplus is then closed &mdash; capping throughput on connection setup rather than on real work.</p>
+    <p>Enable this setting to keep those connections <em>warm</em> instead of closing them: idle keep-alive connections are retained on release up to <span class="inline_code">forwardConnectionPoolMaxTotalPerKey</span> per upstream, so the warm pool grows to match the offered concurrency and is then reused, eliminating the churn. Warm connections are still closed and evicted once they have been idle for <span class="inline_code">forwardConnectionPoolIdleTimeoutMillis</span>, so the pool drains back down when load stops.</p>
+    <p>The default (off) leaves the pool's behaviour exactly as before. Enable it for sustained high-throughput forwarding or load injection against a fast upstream. Only relevant when <span class="inline_code">forwardConnectionPoolEnabled</span> is true.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardConnectionPoolKeepAlive(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolKeepAlive=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_CONNECTION_POOL_KEEP_ALIVE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardConnectionPoolKeepAlive=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolKeepAlive="true"</code></pre>
+</div>
+
+<button id="button_configuration_forward_connection_pool_max_total_per_key" class="accordion title"><strong>Maximum Warm Pooled Connections Per Upstream</strong></button>
+<div class="panel title">
+    <p>The maximum number of warm (idle) keep-alive upstream connections retained per upstream (host, port and scheme) when <span class="inline_code">forwardConnectionPoolKeepAlive</span> is enabled. This bounds the warm pool so it cannot grow without limit; connections offered beyond this ceiling are closed. The effective ceiling is never below <span class="inline_code">forwardConnectionPoolMaxIdlePerKey</span> (keeping connections warm only ever raises retention, never lowers it). Has no effect unless both <span class="inline_code">forwardConnectionPoolEnabled</span> and <span class="inline_code">forwardConnectionPoolKeepAlive</span> are true.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">2000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardConnectionPoolMaxTotalPerKey(int maxTotalPerKey)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolMaxTotalPerKey=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_TOTAL_PER_KEY=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardConnectionPoolMaxTotalPerKey=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardConnectionPoolMaxTotalPerKey="4000"</code></pre>
+</div>
+
+<button id="button_configuration_forward_socket_keep_alive" class="accordion title"><strong>Forward Upstream TCP Keepalive</strong></button>
+<div class="panel title">
+    <p>Enables TCP keepalive (<span class="inline_code">SO_KEEPALIVE</span>) on the connections the forward / proxy client opens to upstream servers. Keepalive lets the operating system detect dead or half-open upstream connections faster (most useful during long-lived or streaming requests) and keeps NAT and firewall connection mappings warm so they are not silently dropped while a pooled connection sits idle. It complements &mdash; it does not replace &mdash; the connection pool's own liveness checks and idle eviction.</p>
+    <p>On Linux with the native epoll transport the keepalive timers are tuned (see the idle / interval / count settings below) so a dead peer is detected in about a minute or two rather than the operating-system default of around two hours. On other platforms (macOS, Windows) or when native transport is disabled, only <span class="inline_code">SO_KEEPALIVE</span> is enabled and the operating-system default timers apply.</p>
+    <p>This is on by default. It is a small, benign change from older versions (which set no keepalive): it is standard for production HTTP clients, costs only an occasional probe packet on otherwise-idle connections, and improves detection of broken upstream connections. Set to false to restore the previous behaviour of no socket keepalive. If you enable keep-warm pooling against a real upstream, also keep <span class="inline_code">forwardConnectionPoolIdleTimeoutMillis</span> below the upstream/NAT idle window so idle connections are reaped before they are silently dropped; keepalive helps detect any that slip through as half-open.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardSocketKeepAlive(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAlive=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardSocketKeepAlive=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAlive="false"</code></pre>
+</div>
+
+<button id="button_configuration_forward_socket_keep_alive_idle_seconds" class="accordion title"><strong>Forward Upstream TCP Keepalive Idle Seconds</strong></button>
+<div class="panel title">
+    <p>How long (in seconds) an upstream connection may sit idle before the first TCP keepalive probe is sent. Only applied on the native epoll transport (Linux) when <span class="inline_code">forwardSocketKeepAlive</span> is enabled. Values below 1 are treated as 1.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">60</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardSocketKeepAliveIdleSeconds(int idleSeconds)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAliveIdleSeconds=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_IDLE_SECONDS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardSocketKeepAliveIdleSeconds=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAliveIdleSeconds="120"</code></pre>
+</div>
+
+<button id="button_configuration_forward_socket_keep_alive_interval_seconds" class="accordion title"><strong>Forward Upstream TCP Keepalive Interval Seconds</strong></button>
+<div class="panel title">
+    <p>How long (in seconds) between successive TCP keepalive probes once probing has started. Only applied on the native epoll transport (Linux) when <span class="inline_code">forwardSocketKeepAlive</span> is enabled. Values below 1 are treated as 1.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">15</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardSocketKeepAliveIntervalSeconds(int intervalSeconds)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAliveIntervalSeconds=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_INTERVAL_SECONDS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardSocketKeepAliveIntervalSeconds=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAliveIntervalSeconds="30"</code></pre>
+</div>
+
+<button id="button_configuration_forward_socket_keep_alive_count" class="accordion title"><strong>Forward Upstream TCP Keepalive Probe Count</strong></button>
+<div class="panel title">
+    <p>The number of unacknowledged TCP keepalive probes after which an upstream connection is considered dead and closed. Only applied on the native epoll transport (Linux) when <span class="inline_code">forwardSocketKeepAlive</span> is enabled. Values below 1 are treated as 1. With the defaults (idle 60s, interval 15s, count 4) a dead peer is detected roughly 60&nbsp;+&nbsp;4&times;15&nbsp;=&nbsp;120 seconds after it goes idle.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">4</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardSocketKeepAliveCount(int count)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAliveCount=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_COUNT=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardSocketKeepAliveCount=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardSocketKeepAliveCount="6"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_http2_enabled" class="accordion title"><strong>Forward Upstream Requests Using HTTP/2</strong></button>
+<div class="panel title">
+    <p>By default every forwarded request is sent to its upstream over HTTP/1.1, regardless of the protocol the incoming request used. Enable this setting to preserve the incoming request's protocol when forwarding, so a request that arrived over HTTP/2 is forwarded to the upstream over HTTP/2 as well.</p>
+    <p>HTTP/2 forwarding only happens over TLS using ALPN negotiation. A non-secure (plain HTTP) request is always forwarded over HTTP/1.1 even when this setting is enabled, because HTTP/2 without TLS (h2c) is not supported for forwarding. HTTP/2 upstream connections are also not reused across requests &mdash; the upstream connection pool only applies to HTTP/1.1 &mdash; so enable this only when your upstream needs to receive HTTP/2.</p>
+    <p>The default (off) is unchanged from previous behaviour: all forwarded requests use HTTP/1.1.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyHttp2Enabled(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyHttp2Enabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyHttp2Enabled=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyHttp2Enabled="true"</code></pre>
+</div>
+
 <button id="button_configuration_forward_proxy_retry_count" class="accordion title"><strong>Retry Forwarded Requests On Transient Failure</strong></button>
 <div class="panel title">
     <p>The maximum number of times MockServer retries a forwarded or proxied request to an upstream after a transient failure — a connection error (refused/reset), a timeout, or an upstream response of 502, 503 or 504. Retries reduce flakiness when the real upstream is briefly unavailable.</p>
@@ -1329,6 +1471,128 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.proxyRemotePort=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.proxyRemotePort="443"</code></pre>
+</div>
+
+<a id="data_plane_authentication_configuration" class="anchor" href="#data_plane_authentication_configuration">&nbsp;</a>
+
+<h2>Data Plane Authentication Configuration:</h2>
+
+<p>These properties optionally require authentication on the <strong>mocked endpoints</strong> (the data plane), separate from the control plane (<span class="inline_code">/mockserver/*</span>) and the HTTP <span class="inline_code">CONNECT</span> proxy. The feature is <strong>opt-in and off by default</strong> — when disabled (the default) MockServer behaves exactly as before and mocked endpoints are open.</p>
+
+<p>When enabled, configure one or more schemes (HTTP Basic, Bearer token and/or API key). A request is accepted if it satisfies <strong>any one</strong> of the configured schemes. Requests with missing or wrong credentials receive <span class="inline_code">401 Unauthorized</span> before the request reaches expectation matching. The control plane and the health/status/ready probes are <strong>not</strong> affected, so you can still administer a server whose data plane is locked down.</p>
+
+<p><strong>Fail-closed:</strong> if you set <span class="inline_code">dataPlaneAuthenticationRequired=true</span> but configure no scheme, every mocked request is rejected (rather than allowed) — this prevents a misconfiguration from silently leaving the data plane open.</p>
+
+<button id="button_configuration_data_plane_authentication_required" class="accordion title"><strong>Require Authentication On Mocked Endpoints</strong></button>
+<div class="panel title">
+    <p>Enable authentication of data-plane (mocked endpoint) requests. When <span class="inline_code">true</span>, every request to a mocked endpoint must present credentials matching one of the configured data-plane schemes; requests that do not are rejected with <span class="inline_code">401 Unauthorized</span>. Control-plane requests, health/status/ready probes and <span class="inline_code">CONNECT</span> proxy requests are not affected.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneAuthenticationRequired(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneAuthenticationRequired=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_AUTHENTICATION_REQUIRED=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneAuthenticationRequired=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneAuthenticationRequired=true</code></pre>
+</div>
+
+<button id="button_configuration_data_plane_basic_authentication_username" class="accordion title"><strong>Data Plane Basic Authentication Username</strong></button>
+<div class="panel title">
+    <p>The username required for data-plane HTTP Basic authentication. Basic is only active when both the username and password are set.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value"></span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneBasicAuthenticationUsername(String dataPlaneBasicAuthenticationUsername)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBasicAuthenticationUsername=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_USERNAME=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneBasicAuthenticationUsername=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBasicAuthenticationUsername=john.doe</code></pre>
+</div>
+
+<button id="button_configuration_data_plane_basic_authentication_password" class="accordion title"><strong>Data Plane Basic Authentication Password</strong></button>
+<div class="panel title">
+    <p>The password required for data-plane HTTP Basic authentication. Basic is only active when both the username and password are set.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value"></span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneBasicAuthenticationPassword(String dataPlaneBasicAuthenticationPassword)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBasicAuthenticationPassword=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_PASSWORD=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneBasicAuthenticationPassword=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBasicAuthenticationPassword="p@ssw0rd"</code></pre>
+</div>
+
+<button id="button_configuration_data_plane_basic_authentication_realm" class="accordion title"><strong>Data Plane Basic Authentication Realm</strong></button>
+<div class="panel title">
+    <p>The realm advertised in the <span class="inline_code">WWW-Authenticate: Basic realm="..."</span> challenge returned on a 401 when Basic is configured.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">MockServer</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneBasicAuthenticationRealm(String dataPlaneBasicAuthenticationRealm)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBasicAuthenticationRealm=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_REALM=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneBasicAuthenticationRealm=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBasicAuthenticationRealm="My Mocked API"</code></pre>
+</div>
+
+<button id="button_configuration_data_plane_bearer_authentication_token" class="accordion title"><strong>Data Plane Bearer Authentication Token</strong></button>
+<div class="panel title">
+    <p>The token required for data-plane Bearer authentication (<span class="inline_code">Authorization: Bearer &lt;token&gt;</span>). Bearer is active when this value is set.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value"></span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneBearerAuthenticationToken(String dataPlaneBearerAuthenticationToken)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBearerAuthenticationToken=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_BEARER_AUTHENTICATION_TOKEN=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneBearerAuthenticationToken=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneBearerAuthenticationToken="eyJhbGciOi..."</code></pre>
+</div>
+
+<button id="button_configuration_data_plane_api_key_authentication_header" class="accordion title"><strong>Data Plane API Key Header Name</strong></button>
+<div class="panel title">
+    <p>The name of the header carrying the data-plane API key (e.g. <span class="inline_code">X-API-Key</span>). API-key authentication is only active when both the header name and the value are set.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value"></span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneApiKeyAuthenticationHeader(String dataPlaneApiKeyAuthenticationHeader)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneApiKeyAuthenticationHeader=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_HEADER=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneApiKeyAuthenticationHeader=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneApiKeyAuthenticationHeader="X-API-Key"</code></pre>
+</div>
+
+<button id="button_configuration_data_plane_api_key_authentication_value" class="accordion title"><strong>Data Plane API Key Value</strong></button>
+<div class="panel title">
+    <p>The expected value of the data-plane API-key header. API-key authentication is only active when both the header name and the value are set.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value"></span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.dataPlaneApiKeyAuthenticationValue(String dataPlaneApiKeyAuthenticationValue)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneApiKeyAuthenticationValue=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_VALUE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.dataPlaneApiKeyAuthenticationValue=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dataPlaneApiKeyAuthenticationValue="super-secret-key"</code></pre>
 </div>
 
 <a id="streaming_proxy_configuration" class="anchor" href="#streaming_proxy_configuration">&nbsp;</a>
@@ -2008,6 +2272,27 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DASHBOARD_ANALYTICS_KEY=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsKey="phc_xxxxxxxxxxxxxxxxxxxx"</code></pre>
+</div>
+
+<button id="button_configuration_dashboard_analytics_distribution" class="accordion title"><strong>Dashboard Analytics Distribution</strong></button>
+<div class="panel title">
+    <p>A label that identifies which MockServer artefact produced an analytics event. It is sent as the <span class="inline_code">distribution</span> property on every <span class="inline_code">app_open</span> event and is chosen from a closed allow-list; any value not on the list is normalised to <span class="inline_code">unknown</span> before sending.</p>
+    <p>The official MockServer artefacts set this automatically — you do not need to configure it yourself:</p>
+    <ul>
+        <li>Standard Docker image: <span class="inline_code">docker-standard</span></li>
+        <li>GraalJS Docker image: <span class="inline_code">docker-graaljs</span></li>
+        <li>Clustered Docker image: <span class="inline_code">docker-clustered</span></li>
+        <li>Helm chart deployment: <span class="inline_code">helm</span></li>
+        <li>Official binary launcher bundles: <span class="inline_code">binary</span></li>
+    </ul>
+    <p>The plain downloadable JAR and embedded / library use leave this property empty and send no analytics at all. Most users will never need to set this property.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (unset)</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsDistribution=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.dashboardAnalyticsDistribution="binary"</code></pre>
 </div>
 
 <button id="button_configuration_otel" class="accordion title"><strong>OpenTelemetry (Metrics, GenAI Spans &amp; Trace Context)</strong></button>

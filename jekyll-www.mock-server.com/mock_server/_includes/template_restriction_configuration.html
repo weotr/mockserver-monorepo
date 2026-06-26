@@ -33,7 +33,24 @@
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.javascriptDisallowedText="getRuntime().exec"</code></pre>
 </div>
-    
+
+<button id="button_configuration_javascript_template_execution_timeout" class="accordion title"><strong>JavaScript template execution timeout</strong></button>
+<div class="panel title">
+    <p>Maximum time in milliseconds a JavaScript response template is allowed to run before it is cancelled. A runaway or malicious template (for example one containing an infinite loop) would otherwise pin the worker thread handling that request indefinitely; this cap aborts the evaluation with a clear timeout error instead, so the request fails fast and the thread is freed.</p>
+    <p>The default of <code>5000</code> (5 seconds) is far longer than any legitimate template needs &mdash; a normal template evaluates in well under a second &mdash; so it will not affect real templates. Increase it only if you run unusually heavy templates, or set it to <code>0</code> (or a negative value) to disable the timeout entirely and restore the previous unbounded behaviour.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">5000</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.javascriptTemplateExecutionTimeout(long millis)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.javascriptTemplateExecutionTimeout=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_JAVASCRIPT_TEMPLATE_EXECUTION_TIMEOUT=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.javascriptTemplateExecutionTimeout=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.javascriptTemplateExecutionTimeout="2000"</code></pre>
+</div>
+
 <button id="button_configuration_disable_class_loading_in_velocity_templates" class="accordion title"><strong>Disable class loading in velocity templates</strong></button>
 <div class="panel title">
     <p>If true class loading is not allowed in velocity templates</p>

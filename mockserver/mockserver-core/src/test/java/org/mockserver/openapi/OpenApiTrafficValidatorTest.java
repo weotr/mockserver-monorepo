@@ -155,8 +155,11 @@ public class OpenApiTrafficValidatorTest {
 
     @Test
     public void shouldMatchPathWithTemplateParameters() {
-        // given
-        HttpRequest request = request("/pets/123").withMethod("GET");
+        // given - showPetById declares a required X-Request-ID header; supply it so the request is
+        // valid and this test asserts template-path matching rather than parameter validation
+        HttpRequest request = request("/pets/123")
+            .withMethod("GET")
+            .withHeader("X-Request-ID", "3fa85f64-5717-4562-b3fc-2c963f66afa6");
         HttpResponse validResponse = response()
             .withStatusCode(200)
             .withHeader("content-type", "application/json")

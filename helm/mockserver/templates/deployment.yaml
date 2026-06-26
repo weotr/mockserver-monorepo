@@ -120,6 +120,11 @@ spec:
             successThreshold: 1
             failureThreshold: 10
           env:
+            # Override the image's baked-in analytics distribution label (docker-standard) so
+            # events from Helm deployments are attributed to "helm". Inert unless analytics is
+            # already active (which still requires the endpoint+key baked into the image).
+            - name: MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION
+              value: helm
             - name: MOCKSERVER_LIVENESS_HTTP_GET_PATH
               value: /liveness/probe
             - name: MOCKSERVER_LOG_LEVEL

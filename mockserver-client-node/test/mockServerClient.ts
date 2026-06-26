@@ -1,6 +1,6 @@
-import {mockServerClient, ClockStatus, GrpcService, MockServerClient, ScenarioHandle, ScenarioList, ScenarioState, llm as llmFactory, mcpMock} from '../index';
+import {mockServerClient, ClockStatus, GrpcService, MockServerClient, ScenarioHandle, ScenarioList, ScenarioState, llm as llmFactory, mcpMock, a2aMock} from '../index';
 import {RequestResponse} from '../mockServerClient';
-import {CrossProtocolScenario, Expectation, ExpectationStep, GenerateLoadScenarioFromOpenAPIRequest, GenerateLoadScenarioFromRecordingRequest, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, LoadScenario, LoadScenarioEntry, LoadScenarioGenerationResult, LoadScenarioList, LoadScenarioRegistration, LoadScenarioReport, LoadScenarioStartResult, LoadScenarioStopResult, RequestDefinition} from '../mockServer';
+import {ChaosExperiment, CrossProtocolScenario, Expectation, ExpectationStep, GenerateLoadScenarioFromOpenAPIRequest, GenerateLoadScenarioFromRecordingRequest, HttpChaosProfile, HttpOverrideForwardedRequest, HttpRequest, HttpResponse, LoadScenario, LoadScenarioEntry, LoadScenarioGenerationResult, LoadScenarioList, LoadScenarioRegistration, LoadScenarioReport, LoadScenarioStartResult, LoadScenarioStopResult, RequestDefinition, SloCriteria, SloVerdict} from '../mockServer';
 
 const client: MockServerClient = mockServerClient('mockhttp', 1080);
 
@@ -313,6 +313,29 @@ async function test() {
     requestResponse = await client.clearServiceChaos();
     let serviceChaos: { services: { [host: string]: HttpChaosProfile } } = await client.serviceChaosStatus();
 
+    // SLO verdict
+    const sloCriteria: SloCriteria = {
+        name: "checkout-slo",
+        window: {type: "LOOKBACK", lookbackMillis: 60000},
+        minimumSampleCount: 10,
+        upstreamHosts: ["api.example.com"],
+        objectives: [
+            {sli: "LATENCY_P95", comparator: "LESS_THAN", threshold: 250, scope: "FORWARD"},
+            {sli: "ERROR_RATE", comparator: "LESS_THAN_OR_EQUAL", threshold: 0.01}
+        ]
+    };
+    const sloVerdict: SloVerdict = await client.verifySLO(sloCriteria);
+
+    // scheduled chaos experiment
+    const chaosExperiment: ChaosExperiment = {
+        name: "rolling-brownout",
+        loop: false,
+        stages: [
+            {durationMillis: 30000, profiles: {"api.example.com": chaosProfile}}
+        ]
+    };
+    const chaosStarted: { status?: string; name?: string } = await client.startChaosExperiment(chaosExperiment);
+
     // load scenario (load injection)
     const loadScenarioDefinition: LoadScenario = {
         name: "load-test",
@@ -495,4 +518,31 @@ async function test() {
         .build();
     requestResponse = await client.mcpMock('/mcp').withToolsCapability().applyTo();
     requestResponse = await mcpMock('/other-mcp').withResourcesCapability().applyTo(client);
+
+    // A2A (Agent-to-Agent) mock builder
+    const a2aExpectations: Expectation[] = client.a2aMock('/a2a')
+        .withAgentName('MyAgent')
+        .withAgentDescription('A mock agent')
+        .withAgentVersion('2.0.0')
+        .withAgentUrl('http://localhost:8080/a2a')
+        .withSkill('translate')
+        .withName('Translation')
+        .withDescription('Translates text')
+        .withTag('i18n')
+        .withExample('Translate hello to Spanish')
+        .and()
+        .withStreaming()
+        .withPushNotifications('http://localhost:1234/callback')
+        .withDefaultTaskResponse('Done')
+        .onTaskSend()
+        .matchingMessage('translate.*')
+        .respondingWith('Hola')
+        .and()
+        .onTaskSend()
+        .matchingMessage('fail.*')
+        .respondingWith('boom', true)
+        .and()
+        .build();
+    requestResponse = await client.a2aMock('/a2a').withStreamingMethod('tasks/sendSubscribe').applyTo();
+    requestResponse = await a2aMock('/other-a2a').withAgentCardPath('/card').applyTo(client);
 }

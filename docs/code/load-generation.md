@@ -712,7 +712,9 @@ load test the moment a metric breaches its budget.
   `GREATER_THAN_OR_EQUAL`). The verdict is **PASS iff every threshold holds, FAIL if any breaches**.
 - **Per-run evaluation, not the global SLO store** — thresholds are computed on each control tick from
   *this run's own* data: latency percentiles from a `copy()` of the run's HDR `latencyHistogram`,
-  `ERROR_RATE = failed / max(1, requestsSent)`, and `THROUGHPUT_RPS = requestsSent /
+  `ERROR_RATE = failed / max(1, succeeded + failed)` (a fraction of *completed* requests — in-flight
+  dispatched-but-not-yet-completed requests are excluded so the rate is never diluted by requests whose
+  outcome is not yet known), and `THROUGHPUT_RPS = requestsSent /
   max(0.001s, elapsed/1000)`. This deliberately does **not** read `SloSampleStore`, which aggregates
   *all* forward traffic rather than this one run. The verdict stays `null` until at least one request
   has completed (a run is never failed on zero samples), and is always `null` for a scenario with no
@@ -744,7 +746,8 @@ Two renderings of the same data:
 - **JSON** (default) — `{ scenario, runId, state, verdict, abortedByThreshold, timing:{
   startedAtEpochMillis, endedAtEpochMillis, durationMillis }, counts:{ requestsSent, succeeded, failed,
   droppedIterations, errorRate }, latencyMillis:{ p50, p95, p99, p999 }, thresholdResults:[ { metric,
-  comparator, threshold, observed, satisfied } ] }`. `errorRate = failed / max(1, requestsSent)`.
+  comparator, threshold, observed, satisfied } ] }`. `errorRate = failed / max(1, succeeded + failed)`
+  (failures as a fraction of *completed* requests; in-flight requests are excluded).
 - **JUnit XML** (`?format=junit`, `application/xml`) — a `<testsuite name="load:{scenario}" tests=…
   failures=… time={durationSeconds}>` with one `<testcase name="threshold: {metric} {comparator}
   {threshold}">` per threshold (a breach adds a `<failure>`), plus a `<testcase name="run completed">`

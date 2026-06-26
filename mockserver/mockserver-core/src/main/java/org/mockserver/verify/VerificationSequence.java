@@ -17,6 +17,7 @@ public class VerificationSequence extends ObjectWithJsonToString {
     private List<HttpResponse> httpResponses = new ArrayList<>();
     private List<ExpectationId> expectationIds = new ArrayList<>();
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
+    private Long timeout;
 
     public static VerificationSequence verificationSequence() {
         return new VerificationSequence();
@@ -70,6 +71,28 @@ public class VerificationSequence extends ObjectWithJsonToString {
 
     public VerificationSequence withMaximumNumberOfRequestToReturnInVerificationFailure(Integer maximumNumberOfRequestToReturnInVerificationFailure) {
         this.maximumNumberOfRequestToReturnInVerificationFailure = maximumNumberOfRequestToReturnInVerificationFailure;
+        return this;
+    }
+
+    public Long getTimeout() {
+        return timeout;
+    }
+
+    /**
+     * Enable server-side eventual sequence verification: when set to a positive number of
+     * milliseconds the server waits (asynchronously) and re-evaluates this sequence verification until
+     * it passes or the timeout elapses, rather than evaluating the event log once. The server returns
+     * success as soon as the sequence is satisfied, or the last failure message when the timeout
+     * elapses. {@code null}, absent, or {@code 0} preserves the original single-shot behaviour. The
+     * accepted value is capped server-side (see {@code MockServerEventLog.MAX_VERIFY_TIMEOUT_MILLIS}).
+     * The wait is fully asynchronous and never holds a Netty I/O thread.
+     *
+     * @param timeout the maximum time, in milliseconds, to wait for the sequence verification to
+     *                pass, or {@code null}/{@code 0} for the original single-shot behaviour
+     * @return this verification sequence for chaining
+     */
+    public VerificationSequence withTimeout(Long timeout) {
+        this.timeout = timeout;
         return this;
     }
 }

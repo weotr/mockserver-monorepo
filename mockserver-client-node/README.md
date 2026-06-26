@@ -193,6 +193,75 @@ client.respondWithGrpcStream('/my.Service/StreamItems', {
 });
 ```
 
+### AI Agent Mock Builders (MCP & A2A)
+
+Declarative builders generate the full set of expectations needed to mock an AI
+agent endpoint. `client.mcpMock(path)` mocks an [MCP](https://modelcontextprotocol.io)
+(Model Context Protocol) server, and `client.a2aMock(path)` mocks an
+[A2A](https://a2a-protocol.org) (Agent-to-Agent) agent. Both return a fluent
+builder; call `.applyTo()` to register the generated expectations, or `.build()`
+to obtain the raw expectation array. They are also exported as standalone
+factories (`require('mockserver-client').a2aMock`).
+
+```javascript
+// Mock an A2A agent: a static agent-card document over GET plus JSON-RPC 2.0
+// tasks/send, tasks/get and tasks/cancel over POST.
+client.a2aMock('/a2a')
+    .withAgentName('TranslatorAgent')
+    .withAgentDescription('Translates text between languages')
+    .withSkill('translate')
+        .withName('Translation')
+        .withDescription('Translates text')
+        .withTag('i18n')
+        .withExample('Translate hello to Spanish')
+    .and()
+    // optional SSE streaming (advertises capabilities.streaming and streams
+    // status-update / artifact-update events):
+    .withStreaming()
+    // optional push notifications (echoes the config and POSTs each completed
+    // task to the webhook while still replying to the caller):
+    .withPushNotifications('http://localhost:1234/callback')
+    // custom handler matched by a regex over the inbound message text:
+    .onTaskSend()
+        .matchingMessage('translate.*')
+        .respondingWith('Hola')
+    .and()
+    .applyTo();   // returns a promise; omit the client arg to use this client
+```
+
+### SRE Helpers (SLO verdicts & chaos experiments)
+
+`verifySLO(criteria)` evaluates service-level objectives over the recorded SLI
+samples and resolves the verdict (PASS / INCONCLUSIVE); it rejects on a FAIL
+verdict, and on a disabled/invalid request (start MockServer with
+`sloTrackingEnabled=true`). `startChaosExperiment(experiment)` runs a scheduled
+multi-stage chaos experiment (only one experiment is active at a time).
+
+```javascript
+// Evaluate SLOs over the last 60s of forwarded traffic
+client.verifySLO({
+    name: 'checkout-slo',
+    window: { type: 'LOOKBACK', lookbackMillis: 60000 },
+    minimumSampleCount: 10,
+    objectives: [
+        { sli: 'LATENCY_P95', comparator: 'LESS_THAN', threshold: 250 },
+        { sli: 'ERROR_RATE', comparator: 'LESS_THAN_OR_EQUAL', threshold: 0.01 }
+    ]
+}).then(
+    function (verdict) { /* verdict.result === 'PASS' | 'INCONCLUSIVE' */ },
+    function (failure) { /* FAIL verdict body, or enablement guidance */ }
+);
+
+// Run a two-stage chaos experiment against an upstream host
+client.startChaosExperiment({
+    name: 'rolling-brownout',
+    stages: [
+        { durationMillis: 30000, profiles: { 'api.example.com': { errorStatus: 503, errorProbability: 0.25 } } },
+        { durationMillis: 30000, profiles: { 'api.example.com': { latency: { value: 500, timeUnit: 'MILLISECONDS' } } } }
+    ]
+});
+```
+
 ## Verify Requests
 
 It is also possible to verify that request were made:

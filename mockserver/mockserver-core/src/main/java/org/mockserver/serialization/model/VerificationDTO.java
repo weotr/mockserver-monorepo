@@ -20,6 +20,7 @@ public class VerificationDTO extends ObjectWithJsonToString implements DTO<Verif
     private VerificationTimesDTO times;
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Disposition disposition;
+    private Long timeout;
 
     public VerificationDTO(Verification verification) {
         if (verification != null) {
@@ -33,6 +34,7 @@ public class VerificationDTO extends ObjectWithJsonToString implements DTO<Verif
             times = new VerificationTimesDTO(verification.getTimes());
             maximumNumberOfRequestToReturnInVerificationFailure = verification.getMaximumNumberOfRequestToReturnInVerificationFailure();
             disposition = verification.getDisposition();
+            timeout = verification.getTimeout();
         }
     }
 
@@ -46,7 +48,8 @@ public class VerificationDTO extends ObjectWithJsonToString implements DTO<Verif
             .withExpectationId(expectationId)
             .withTimes((times != null ? times.buildObject() : once()))
             .withMaximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure)
-            .withDisposition(disposition);
+            .withDisposition(disposition)
+            .withTimeout(timeout);
     }
 
     public RequestDefinitionDTO getHttpRequest() {
@@ -100,6 +103,15 @@ public class VerificationDTO extends ObjectWithJsonToString implements DTO<Verif
 
     public VerificationDTO setDisposition(Disposition disposition) {
         this.disposition = disposition;
+        return this;
+    }
+
+    public Long getTimeout() {
+        return timeout;
+    }
+
+    public VerificationDTO setTimeout(Long timeout) {
+        this.timeout = timeout;
         return this;
     }
 }

@@ -1,0 +1,27 @@
+global:
+  # Tight 2s scrape so a ~25-30s held stage yields plenty of points for a
+  # rate() over a 15s window and so scrape-and-diff sampling stays accurate.
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  # All six possible injectors. Injectors not started under the chosen profile
+  # simply show as `down` targets and are ignored by run-inject.sh (it sums over
+  # the run_ids that actually report).
+  - job_name: injectors
+    metrics_path: /mockserver/metrics
+    static_configs:
+      - targets:
+          - "injector-1:1080"
+          - "injector-2:1080"
+          - "injector-3:1080"
+          - "injector-4:1080"
+          - "injector-5:1080"
+          - "injector-6:1080"
+
+  # The Envoy sink — received-request counters live on the admin port's
+  # Prometheus endpoint.
+  - job_name: envoy
+    metrics_path: /stats/prometheus
+    static_configs:
+      - targets: ["envoy:9901"]

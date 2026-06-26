@@ -1,5 +1,7 @@
 package org.mockserver.serialization;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import org.mockserver.log.model.LogEntry;
@@ -31,6 +33,10 @@ public class SloCriteriaSerializer {
     private final MockServerLogger mockServerLogger;
     private ObjectWriter objectWriter = ObjectMapperFactory.createObjectMapper(true, false);
     private ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+    // SloVerdict / SloObjectiveResult are plain beans with fluent withX mutators (no setX),
+    // so deserialize via field access rather than setters.
+    private ObjectMapper verdictObjectMapper = ObjectMapperFactory.createObjectMapper()
+        .setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
 
     public SloCriteriaSerializer(MockServerLogger mockServerLogger) {
         this.mockServerLogger = mockServerLogger;
@@ -69,6 +75,51 @@ public class SloCriteriaSerializer {
                     .setThrowable(e)
             );
             throw new RuntimeException("Exception while serializing sloVerdict to JSON with value " + sloVerdict, e);
+        }
+    }
+
+    /**
+     * Serialize an {@link SloCriteria} to the JSON body submitted to
+     * {@code PUT /mockserver/verifySLO}. Round-trips with {@link #deserialize(String)}
+     * via {@link SloCriteriaDTO}.
+     */
+    public String serialize(SloCriteria sloCriteria) {
+        try {
+            return objectWriter.writeValueAsString(new SloCriteriaDTO(sloCriteria));
+        } catch (Exception e) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setMessageFormat("exception while serializing sloCriteria to JSON with value " + sloCriteria)
+                    .setThrowable(e)
+            );
+            throw new RuntimeException("Exception while serializing sloCriteria to JSON with value " + sloCriteria, e);
+        }
+    }
+
+    /**
+     * Parse a {@link SloVerdict} response body (as written by {@link #serialize(SloVerdict)}
+     * / returned by {@code PUT /mockserver/verifySLO}) back into the model. Because
+     * {@link SloVerdict} is a plain bean it deserializes directly with no DTO.
+     */
+    public SloVerdict deserializeVerdict(String jsonSloVerdict) {
+        if (isBlank(jsonSloVerdict)) {
+            throw new IllegalArgumentException(
+                "1 error:" + NEW_LINE +
+                    " - an SLO verdict is required but value was \"" + jsonSloVerdict + "\""
+            );
+        }
+        try {
+            return verdictObjectMapper.readValue(jsonSloVerdict, SloVerdict.class);
+        } catch (Throwable throwable) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setMessageFormat("exception while parsing{}for SloVerdict " + throwable.getMessage())
+                    .setArguments(jsonSloVerdict)
+                    .setThrowable(throwable)
+            );
+            throw new IllegalArgumentException("exception while parsing [" + jsonSloVerdict + "] for SloVerdict", throwable);
         }
     }
 

@@ -52,6 +52,15 @@ public class GeminiCodec implements ProviderCodec {
         ObjectNode content = candidate.putObject("content");
         ArrayNode parts = content.putArray("parts");
 
+        // Thought part (before the text part) when reasoning is set. Gemini flags reasoning content
+        // with a {"text":"...","thought":true} part. Additive — absent unless reasoningText is set.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            ObjectNode thoughtPart = parts.addObject();
+            thoughtPart.put("text", reasoningText);
+            thoughtPart.put("thought", true);
+        }
+
         // Text part
         String text = completion.getText();
         boolean hasText = text != null && !text.isEmpty();
@@ -103,6 +112,18 @@ public class GeminiCodec implements ProviderCodec {
         usageMetadata.put("promptTokenCount", promptTokens);
         usageMetadata.put("candidatesTokenCount", candidatesTokens);
         usageMetadata.put("totalTokenCount", promptTokens + candidatesTokens);
+        // Cached-content and reasoning ("thoughts") token counts, emitted only when set (non-null,
+        // non-zero) under Gemini's native usageMetadata keys, so existing fixtures stay byte-identical.
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                usageMetadata.put("cachedContentTokenCount", cachedInputTokens);
+            }
+            Integer reasoningTokens = completionUsage.getReasoningTokens();
+            if (reasoningTokens != null && reasoningTokens != 0) {
+                usageMetadata.put("thoughtsTokenCount", reasoningTokens);
+            }
+        }
 
         root.put("modelVersion", model != null ? model : "unknown");
 
@@ -129,6 +150,15 @@ public class GeminiCodec implements ProviderCodec {
         String text = completion.getText();
         List<ToolUse> toolCalls = completion.getToolCalls();
         boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
+
+        // Thought chunk (before text) when reasoning is set — a single part flagged thought:true.
+        // Additive — absent unless reasoningText is set.
+        String reasoningText = completion.getReasoningText();
+        if (reasoningText != null && !reasoningText.isEmpty()) {
+            String thoughtData = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"" + escapeJson(reasoningText) +
+                "\",\"thought\":true}],\"role\":\"model\"},\"index\":0}],\"modelVersion\":\"" + escapeJson(modelName) + "\"}";
+            events.add(sseEvent().withData(thoughtData));
+        }
 
         // Text delta chunks
         if (text != null && !text.isEmpty()) {
@@ -167,12 +197,28 @@ public class GeminiCodec implements ProviderCodec {
             }
         }
 
-        // Final chunk with finishReason and usage
+        // Final chunk with finishReason and usage — mirror cached/thoughts token counts into the
+        // final usageMetadata when set (non-null, non-zero), matching the non-streaming encode().
+        // Omitted when unset so existing streaming fixtures stay byte-identical.
         String finishReason = mapFinishReason(completion.getStopReason(), hasToolCalls);
+        StringBuilder finalUsage = new StringBuilder();
+        finalUsage.append("{\"promptTokenCount\":").append(promptTokens)
+            .append(",\"candidatesTokenCount\":").append(candidatesTokens)
+            .append(",\"totalTokenCount\":").append(promptTokens + candidatesTokens);
+        if (completionUsage != null) {
+            Integer cachedInputTokens = completionUsage.getCachedInputTokens();
+            if (cachedInputTokens != null && cachedInputTokens != 0) {
+                finalUsage.append(",\"cachedContentTokenCount\":").append(cachedInputTokens);
+            }
+            Integer reasoningTokens = completionUsage.getReasoningTokens();
+            if (reasoningTokens != null && reasoningTokens != 0) {
+                finalUsage.append(",\"thoughtsTokenCount\":").append(reasoningTokens);
+            }
+        }
+        finalUsage.append("}");
         String finalData = "{\"candidates\":[{\"content\":{\"parts\":[],\"role\":\"model\"},\"finishReason\":\"" +
-            escapeJson(finishReason) + "\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":" + promptTokens +
-            ",\"candidatesTokenCount\":" + candidatesTokens + ",\"totalTokenCount\":" + (promptTokens + candidatesTokens) +
-            "},\"modelVersion\":\"" + escapeJson(modelName) + "\"}";
+            escapeJson(finishReason) + "\",\"index\":0}],\"usageMetadata\":" + finalUsage +
+            ",\"modelVersion\":\"" + escapeJson(modelName) + "\"}";
         events.add(sseEvent().withData(finalData));
 
         return StreamingPhysicsExpander.applyPhysics(events, physics);

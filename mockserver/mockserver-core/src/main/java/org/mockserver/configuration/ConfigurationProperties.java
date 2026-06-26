@@ -61,6 +61,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_DASHBOARD_ANALYTICS_ENABLED = "mockserver.dashboardAnalyticsEnabled";
     private static final String MOCKSERVER_DASHBOARD_ANALYTICS_ENDPOINT = "mockserver.dashboardAnalyticsEndpoint";
     private static final String MOCKSERVER_DASHBOARD_ANALYTICS_KEY = "mockserver.dashboardAnalyticsKey";
+    private static final String MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION = "mockserver.dashboardAnalyticsDistribution";
     private static final String MOCKSERVER_SLOW_REQUEST_THRESHOLD_MILLIS = "mockserver.slowRequestThresholdMillis";
     private static final String MOCKSERVER_METRICS_REQUEST_DURATION_ROUTE_LABELS = "mockserver.metricsRequestDurationRouteLabels";
     private static final String MOCKSERVER_CHAOS_AUTO_HALT_ENABLED = "mockserver.chaosAutoHaltEnabled";
@@ -100,6 +101,15 @@ public class ConfigurationProperties {
     // memory usage
     private static final String MOCKSERVER_MAX_EXPECTATIONS = "mockserver.maxExpectations";
     private static final String MOCKSERVER_MAX_LOG_ENTRIES = "mockserver.maxLogEntries";
+    private static final String MOCKSERVER_RING_BUFFER_SIZE = "mockserver.ringBufferSize";
+    // Default ceiling for the in-flight disruptor ring buffer, decoupling it from maxLogEntries
+    // retention. The ring only has to absorb event bursts between the producer (Netty I/O threads)
+    // and the single consumer thread — it is NOT the retained history (that is the separate
+    // CircularConcurrentLinkedDeque sized at maxLogEntries). 16384 slots (rounded up to the next
+    // power of two by Configuration.ringBufferSize) comfortably absorbs realistic bursts while
+    // capping the fixed pre-allocated-shell overhead. Without this cap, maxLogEntries=100000 forced a
+    // 131072-slot ring (~14.7MB of empty LogEntry shells) purely as a side effect of retention sizing.
+    static final int DEFAULT_MAX_RING_BUFFER_SIZE = 16384;
     private static final String MOCKSERVER_MAX_WEB_SOCKET_EXPECTATIONS = "mockserver.maxWebSocketExpectations";
     private static final String MOCKSERVER_OUTPUT_MEMORY_USAGE_CSV = "mockserver.outputMemoryUsageCsv";
     private static final String MOCKSERVER_MEMORY_USAGE_CSV_DIRECTORY = "mockserver.memoryUsageCsvDirectory";
@@ -116,8 +126,15 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED = "mockserver.forwardConnectionPoolEnabled";
     private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_IDLE_PER_KEY = "mockserver.forwardConnectionPoolMaxIdlePerKey";
     private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS = "mockserver.forwardConnectionPoolIdleTimeoutMillis";
+    private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_KEEP_ALIVE = "mockserver.forwardConnectionPoolKeepAlive";
+    private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_TOTAL_PER_KEY = "mockserver.forwardConnectionPoolMaxTotalPerKey";
+    private static final String MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE = "mockserver.forwardSocketKeepAlive";
+    private static final String MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_IDLE_SECONDS = "mockserver.forwardSocketKeepAliveIdleSeconds";
+    private static final String MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_INTERVAL_SECONDS = "mockserver.forwardSocketKeepAliveIntervalSeconds";
+    private static final String MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_COUNT = "mockserver.forwardSocketKeepAliveCount";
     private static final String MOCKSERVER_FORWARD_PROXY_RETRY_COUNT = "mockserver.forwardProxyRetryCount";
     private static final String MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS = "mockserver.forwardProxyRetryBackoffMillis";
+    private static final String MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED = "mockserver.forwardProxyHttp2Enabled";
     private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED = "mockserver.forwardProxyCircuitBreakerEnabled";
     private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD = "mockserver.forwardProxyCircuitBreakerFailureThreshold";
     private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS = "mockserver.forwardProxyCircuitBreakerWindowMillis";
@@ -229,6 +246,7 @@ public class ConfigurationProperties {
     // template restrictions
     private static final String MOCKSERVER_JAVASCRIPT_DISALLOWED_CLASSES = "mockserver.javascriptDisallowedClasses";
     private static final String MOCKSERVER_JAVASCRIPT_DISALLOWED_TEXT = "mockserver.javascriptDisallowedText";
+    private static final String MOCKSERVER_JAVASCRIPT_TEMPLATE_EXECUTION_TIMEOUT = "mockserver.javascriptTemplateExecutionTimeout";
     private static final String MOCKSERVER_VELOCITY_DISALLOW_CLASS_LOADING = "mockserver.velocityDisallowClassLoading";
     private static final String MOCKSERVER_VELOCITY_DISALLOWED_TEXT = "mockserver.velocityDisallowedText";
     private static final String MOCKSERVER_MUSTACHE_DISALLOWED_TEXT = "mockserver.mustacheDisallowedText";
@@ -290,6 +308,14 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_PROXY_SERVER_REALM = "mockserver.proxyAuthenticationRealm";
     private static final String MOCKSERVER_PROXY_AUTHENTICATION_USERNAME = "mockserver.proxyAuthenticationUsername";
     private static final String MOCKSERVER_PROXY_AUTHENTICATION_PASSWORD = "mockserver.proxyAuthenticationPassword";
+    // data plane (mocked endpoint) authentication — opt-in, default off
+    private static final String MOCKSERVER_DATA_PLANE_AUTHENTICATION_REQUIRED = "mockserver.dataPlaneAuthenticationRequired";
+    private static final String MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_USERNAME = "mockserver.dataPlaneBasicAuthenticationUsername";
+    private static final String MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_PASSWORD = "mockserver.dataPlaneBasicAuthenticationPassword";
+    private static final String MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_REALM = "mockserver.dataPlaneBasicAuthenticationRealm";
+    private static final String MOCKSERVER_DATA_PLANE_BEARER_AUTHENTICATION_TOKEN = "mockserver.dataPlaneBearerAuthenticationToken";
+    private static final String MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_HEADER = "mockserver.dataPlaneApiKeyAuthenticationHeader";
+    private static final String MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_VALUE = "mockserver.dataPlaneApiKeyAuthenticationValue";
     private static final String MOCKSERVER_NO_PROXY_HOSTS = "mockserver.noProxyHosts";
     private static final String MOCKSERVER_PROXY_REMOTE_HOST = "mockserver.proxyRemoteHost";
     private static final String MOCKSERVER_PROXY_REMOTE_PORT = "mockserver.proxyRemotePort";
@@ -685,6 +711,20 @@ public class ConfigurationProperties {
      */
     public static void dashboardAnalyticsKey(String key) {
         setProperty(MOCKSERVER_DASHBOARD_ANALYTICS_KEY, key);
+    }
+
+    public static String dashboardAnalyticsDistribution() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION, "MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION", "");
+    }
+
+    /**
+     * Label identifying which MockServer distribution/artefact a dashboard analytics event came from.
+     * Default is empty.
+     *
+     * @param distribution analytics distribution label
+     */
+    public static void dashboardAnalyticsDistribution(String distribution) {
+        setProperty(MOCKSERVER_DASHBOARD_ANALYTICS_DISTRIBUTION, distribution);
     }
 
     public static long slowRequestThresholdMillis() {
@@ -1629,6 +1669,81 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_MAX_LOG_ENTRIES, "" + count);
     }
 
+    public static int ringBufferSize() {
+        return resolveRingBufferSize(maxLogEntries());
+    }
+
+    /**
+     * Resolve the ring-buffer size, defaulting (when no explicit {@code mockserver.ringBufferSize}
+     * override is present) to {@code min(maxLogEntriesForDefault, 16384)}. The caller supplies
+     * {@code maxLogEntriesForDefault} so an instance {@link Configuration} can base the default on its
+     * OWN maxLogEntries rather than the global/static value. Decoupled from maxLogEntries retention:
+     * the in-flight disruptor ring only needs to absorb event bursts, not hold the full retained
+     * history, so large-retention deployments (e.g. maxLogEntries=100000) no longer pre-allocate a
+     * 131072-slot ring. {@link Configuration#ringBufferSize()} rounds the result up to the next power
+     * of two as the disruptor requires.
+     */
+    public static int resolveRingBufferSize(int maxLogEntriesForDefault) {
+        // Only an EXPLICIT override (programmatic cache / system property / env var) is honoured; the
+        // computed default is NOT cached under the property key. This keeps the default dynamic — it
+        // tracks the supplied maxLogEntries on every call — rather than freezing the first computed
+        // value (as readIntegerProperty would by caching it), which would otherwise leak a stale
+        // default to later readers of this global property.
+        String explicit = explicitProperty(MOCKSERVER_RING_BUFFER_SIZE, "MOCKSERVER_RING_BUFFER_SIZE");
+        if (explicit != null) {
+            try {
+                return Integer.parseInt(explicit);
+            } catch (NumberFormatException nfe) {
+                LoggerHolder.LOGGER.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setMessageFormat("NumberFormatException converting " + MOCKSERVER_RING_BUFFER_SIZE + " with value [" + explicit + "]")
+                        .setThrowable(nfe)
+                );
+            }
+        }
+        return Math.min(maxLogEntriesForDefault, DEFAULT_MAX_RING_BUFFER_SIZE);
+    }
+
+    /**
+     * Returns the value of a property if it is EXPLICITLY set — via the programmatic cache, a JVM
+     * system property, the {@code mockserver.properties} file, or an environment variable — or
+     * {@code null} when only a computed default would apply. Unlike {@link #readPropertyHierarchically}
+     * this never injects (nor caches) a default, so callers can compute a dynamic default without
+     * polluting the property cache.
+     */
+    private static String explicitProperty(String systemPropertyKey, String environmentVariableKey) {
+        String cached = getPropertyCache().get(systemPropertyKey);
+        if (cached != null) {
+            return cached;
+        }
+        String systemOrFile = System.getProperty(systemPropertyKey, PROPERTIES != null ? PROPERTIES.getProperty(systemPropertyKey) : null);
+        if (systemOrFile != null) {
+            return systemOrFile;
+        }
+        String env = System.getenv(environmentVariableKey);
+        return isNotBlank(env) ? env : null;
+    }
+
+    /**
+     * <p>
+     * Number of slots in the in-memory log event ring buffer (LMAX Disruptor) that buffers log events
+     * between the producing Netty I/O threads and the single consumer thread. This is independent of
+     * {@code maxLogEntries} (which bounds the retained event history). The ring only needs to absorb
+     * short bursts of log events, so it can be much smaller than the retained history.
+     * </p>
+     * <p>
+     * The value is rounded up to the next power of two (a Disruptor requirement). The default is
+     * {@code min(maxLogEntries, 16384)}. Increase it only if you see dropped log events under sustained
+     * extreme load (see the {@code mock_server_dropped_log_events} metric); decrease it to save memory.
+     * </p>
+     *
+     * @param size number of slots in the log event ring buffer (rounded up to a power of two)
+     */
+    public static void ringBufferSize(int size) {
+        setProperty(MOCKSERVER_RING_BUFFER_SIZE, "" + size);
+    }
+
     public static int maxWebSocketExpectations() {
         return readIntegerProperty(MOCKSERVER_MAX_WEB_SOCKET_EXPECTATIONS, "MOCKSERVER_MAX_WEB_SOCKET_EXPECTATIONS", 1500);
     }
@@ -1871,6 +1986,119 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_IDLE_TIMEOUT_MILLIS, "" + idleTimeoutMillis);
     }
 
+    public static boolean forwardConnectionPoolKeepAlive() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_CONNECTION_POOL_KEEP_ALIVE, "MOCKSERVER_FORWARD_CONNECTION_POOL_KEEP_ALIVE", "" + false));
+    }
+
+    /**
+     * If true, idle keep-alive upstream connections are RETAINED on release (kept warm) up to
+     * {@code forwardConnectionPoolMaxTotalPerKey} per upstream, instead of being closed back down to
+     * {@code forwardConnectionPoolMaxIdlePerKey}. This eliminates the connection churn that otherwise
+     * caps a single instance's throughput under sustained high-rate, low-latency forwarding or load
+     * injection: under fast turnover a burst of concurrent requests would otherwise each open a fresh
+     * connection (because releases lag the dispatch) and the surplus would be closed back to the idle
+     * cap, collapsing requests-per-connection. With keep-warm on, the warm set grows to match the
+     * offered concurrency and is then reused. Truly idle warm connections are still reaped by the
+     * {@code forwardConnectionPoolIdleTimeoutMillis} reaper, so the pool drains when load stops.
+     * <p>
+     * If false (the default) the pool's release-time close decision is byte-for-byte unchanged from
+     * the historical behaviour (surplus over {@code forwardConnectionPoolMaxIdlePerKey} is closed).
+     * Only relevant when {@code forwardConnectionPoolEnabled} is true.
+     *
+     * @param enable enable keep-warm retention of idle upstream connections under sustained load
+     */
+    public static void forwardConnectionPoolKeepAlive(boolean enable) {
+        setProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_KEEP_ALIVE, "" + enable);
+    }
+
+    public static int forwardConnectionPoolMaxTotalPerKey() {
+        return Math.max(1, readIntegerProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_TOTAL_PER_KEY, "MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_TOTAL_PER_KEY", 2000));
+    }
+
+    /**
+     * Maximum number of warm (idle) keep-alive upstream connections retained per upstream (host,
+     * port, scheme) when {@code forwardConnectionPoolKeepAlive} is true. This bounds the warm set so
+     * it cannot grow without limit; connections offered beyond this ceiling are closed. Has no effect
+     * unless BOTH {@code forwardConnectionPoolEnabled} and {@code forwardConnectionPoolKeepAlive} are
+     * true (it is never consulted when keep-warm is off, so the default-off path is unaffected).
+     * <p>
+     * Default is 2000. The effective ceiling is never below {@code forwardConnectionPoolMaxIdlePerKey}
+     * (keep-warm only ever raises retention, never lowers it).
+     *
+     * @param maxTotalPerKey maximum warm idle connections retained per upstream under keep-warm
+     */
+    public static void forwardConnectionPoolMaxTotalPerKey(int maxTotalPerKey) {
+        setProperty(MOCKSERVER_FORWARD_CONNECTION_POOL_MAX_TOTAL_PER_KEY, "" + maxTotalPerKey);
+    }
+
+    public static boolean forwardSocketKeepAlive() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE, "MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE", "" + true));
+    }
+
+    /**
+     * If true (the default) the forward/proxy HTTP client enables TCP keepalive (SO_KEEPALIVE) on its
+     * upstream connections, so the OS can detect dead or half-open upstream connections faster and keep
+     * NAT/firewall mappings warm. On the native epoll transport the keepalive timers are tuned (see
+     * {@code forwardSocketKeepAliveIdleSeconds}/{@code IntervalSeconds}/{@code Count}); on NIO only
+     * SO_KEEPALIVE is enabled (timer tuning requires epoll).
+     * <p>
+     * This is a benign default behaviour change from older versions (which set no SO_KEEPALIVE): it is
+     * the standard for production HTTP clients, costs only an occasional probe packet on otherwise-idle
+     * connections, and complements (does not replace) the connection pool's existing liveness checks.
+     * Set to false to restore the historical behaviour of no socket keepalive.
+     *
+     * @param enable enable TCP keepalive on forward/proxy upstream connections
+     */
+    public static void forwardSocketKeepAlive(boolean enable) {
+        setProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE, "" + enable);
+    }
+
+    public static int forwardSocketKeepAliveIdleSeconds() {
+        return Math.max(1, readIntegerProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_IDLE_SECONDS, "MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_IDLE_SECONDS", 60));
+    }
+
+    /**
+     * Seconds a forward/proxy upstream connection may sit idle before the first TCP keepalive probe is
+     * sent (epoll {@code TCP_KEEPIDLE}). Only applied on the native epoll transport when
+     * {@code forwardSocketKeepAlive} is true. Default 60.
+     *
+     * @param idleSeconds idle time in seconds before the first keepalive probe
+     */
+    public static void forwardSocketKeepAliveIdleSeconds(int idleSeconds) {
+        setProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_IDLE_SECONDS, "" + idleSeconds);
+    }
+
+    public static int forwardSocketKeepAliveIntervalSeconds() {
+        return Math.max(1, readIntegerProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_INTERVAL_SECONDS, "MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_INTERVAL_SECONDS", 15));
+    }
+
+    /**
+     * Seconds between successive TCP keepalive probes once probing has started (epoll
+     * {@code TCP_KEEPINTVL}). Only applied on the native epoll transport when
+     * {@code forwardSocketKeepAlive} is true. Default 15.
+     *
+     * @param intervalSeconds interval in seconds between keepalive probes
+     */
+    public static void forwardSocketKeepAliveIntervalSeconds(int intervalSeconds) {
+        setProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_INTERVAL_SECONDS, "" + intervalSeconds);
+    }
+
+    public static int forwardSocketKeepAliveCount() {
+        return Math.max(1, readIntegerProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_COUNT, "MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_COUNT", 4));
+    }
+
+    /**
+     * Number of unacknowledged TCP keepalive probes after which the upstream connection is considered
+     * dead and closed (epoll {@code TCP_KEEPCNT}). Only applied on the native epoll transport when
+     * {@code forwardSocketKeepAlive} is true. Default 4. With the defaults (idle 60s, interval 15s,
+     * count 4) a dead peer is detected roughly 60 + 4&times;15 = 120s after it goes idle.
+     *
+     * @param count number of failed keepalive probes before the connection is dropped
+     */
+    public static void forwardSocketKeepAliveCount(int count) {
+        setProperty(MOCKSERVER_FORWARD_SOCKET_KEEP_ALIVE_COUNT, "" + count);
+    }
+
     public static int forwardProxyRetryCount() {
         return Math.max(0, readIntegerProperty(MOCKSERVER_FORWARD_PROXY_RETRY_COUNT, "MOCKSERVER_FORWARD_PROXY_RETRY_COUNT", 0));
     }
@@ -1908,6 +2136,27 @@ public class ConfigurationProperties {
      */
     public static void forwardProxyRetryBackoffMillis(long backoffMillis) {
         setProperty(MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS, "" + backoffMillis);
+    }
+
+    public static boolean forwardProxyHttp2Enabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED, "MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED", "" + false));
+    }
+
+    /**
+     * If false (the default) every forwarded or proxied request is sent to its upstream over HTTP/1.1,
+     * regardless of the protocol the inbound request used, matching the historical behaviour. If true
+     * the inbound request's protocol is preserved when forwarding, so an HTTP/2 inbound request is
+     * forwarded to the upstream as HTTP/2.
+     * <p>
+     * Limitations: HTTP/2 upstream forwarding only happens over TLS with ALPN negotiation (there is no
+     * h2c prior-knowledge / cleartext path — a non-secure HTTP/2 request is automatically downgraded to
+     * HTTP/1.1). HTTP/2 forward connections are not pooled or multiplexed across forwards; the forward
+     * connection pool remains HTTP/1.1-only.
+     *
+     * @param enable preserve the inbound request protocol (e.g. HTTP/2) when forwarding upstream
+     */
+    public static void forwardProxyHttp2Enabled(boolean enable) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED, "" + enable);
     }
 
     public static boolean forwardProxyCircuitBreakerEnabled() {
@@ -3063,6 +3312,24 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_JAVASCRIPT_DISALLOWED_TEXT, javascriptDisallowedText);
     }
 
+    public static long javascriptTemplateExecutionTimeout() {
+        return readLongProperty(MOCKSERVER_JAVASCRIPT_TEMPLATE_EXECUTION_TIMEOUT, "MOCKSERVER_JAVASCRIPT_TEMPLATE_EXECUTION_TIMEOUT", 5_000L);
+    }
+
+    /**
+     * Maximum time in milliseconds a JavaScript response template is allowed to run before it is
+     * cancelled. A runaway or malicious template (for example one containing an infinite loop) would
+     * otherwise pin the data-plane worker thread indefinitely; this cap aborts the evaluation with a
+     * timeout error instead. Default is 5000 (5 seconds), which is far longer than any legitimate
+     * template needs. Set to 0 (or a negative value) to disable the timeout and restore the previous
+     * unbounded behaviour.
+     *
+     * @param millis template execution timeout in milliseconds, 0 or negative to disable
+     */
+    public static void javascriptTemplateExecutionTimeout(long millis) {
+        setProperty(MOCKSERVER_JAVASCRIPT_TEMPLATE_EXECUTION_TIMEOUT, "" + millis);
+    }
+
 
     public static boolean velocityDisallowClassLoading() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_VELOCITY_DISALLOW_CLASS_LOADING, "MOCKSERVER_VELOCITY_DISALLOW_CLASS_LOADING", "" + false));
@@ -3780,6 +4047,115 @@ public class ConfigurationProperties {
 
     public static String proxyAuthenticationPassword() {
         return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROXY_AUTHENTICATION_PASSWORD, "MOCKSERVER_PROXY_AUTHENTICATION_PASSWORD", "");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Data-plane (mocked endpoint) authentication — opt-in, default off. Mirrors the proxy /
+    // control-plane authentication naming so all auth properties read consistently.
+    // -----------------------------------------------------------------------------------------
+
+    public static boolean dataPlaneAuthenticationRequired() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_AUTHENTICATION_REQUIRED, "MOCKSERVER_DATA_PLANE_AUTHENTICATION_REQUIRED", "false"));
+    }
+
+    /**
+     * <p>Enable authentication of data-plane (mocked endpoint) requests. When {@code true}, every
+     * request to a mocked endpoint must present credentials matching one of the configured
+     * data-plane schemes (Basic, Bearer and/or API-key); requests that do not are rejected with
+     * {@code 401 Unauthorized}. Control-plane ({@code /mockserver/*}) requests, health/status/ready
+     * probes and {@code CONNECT} proxy requests are NOT affected by this setting.</p>
+     * <p>If enabled but no scheme is configured the server fails closed (rejects every data-plane
+     * request) rather than allowing all traffic.</p>
+     * <p>The default is {@code false} (no data-plane authentication).</p>
+     *
+     * @param enable whether data-plane authentication is required
+     */
+    public static void dataPlaneAuthenticationRequired(boolean enable) {
+        setProperty(MOCKSERVER_DATA_PLANE_AUTHENTICATION_REQUIRED, "" + enable);
+    }
+
+    public static String dataPlaneBasicAuthenticationUsername() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_USERNAME, "MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_USERNAME", "");
+    }
+
+    /**
+     * The username required for data-plane HTTP Basic authentication. Basic is only active when both
+     * username and password are set. The default is "".
+     *
+     * @param dataPlaneBasicAuthenticationUsername the Basic username
+     */
+    public static void dataPlaneBasicAuthenticationUsername(String dataPlaneBasicAuthenticationUsername) {
+        setProperty(MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_USERNAME, dataPlaneBasicAuthenticationUsername);
+    }
+
+    public static String dataPlaneBasicAuthenticationPassword() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_PASSWORD, "MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_PASSWORD", "");
+    }
+
+    /**
+     * The password required for data-plane HTTP Basic authentication. Basic is only active when both
+     * username and password are set. The default is "".
+     *
+     * @param dataPlaneBasicAuthenticationPassword the Basic password
+     */
+    public static void dataPlaneBasicAuthenticationPassword(String dataPlaneBasicAuthenticationPassword) {
+        setProperty(MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_PASSWORD, dataPlaneBasicAuthenticationPassword);
+    }
+
+    public static String dataPlaneBasicAuthenticationRealm() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_REALM, "MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_REALM", "MockServer");
+    }
+
+    /**
+     * The realm advertised in the {@code WWW-Authenticate: Basic realm="..."} challenge on a 401.
+     * The default is "MockServer".
+     *
+     * @param dataPlaneBasicAuthenticationRealm the Basic realm
+     */
+    public static void dataPlaneBasicAuthenticationRealm(String dataPlaneBasicAuthenticationRealm) {
+        setProperty(MOCKSERVER_DATA_PLANE_BASIC_AUTHENTICATION_REALM, dataPlaneBasicAuthenticationRealm);
+    }
+
+    public static String dataPlaneBearerAuthenticationToken() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_BEARER_AUTHENTICATION_TOKEN, "MOCKSERVER_DATA_PLANE_BEARER_AUTHENTICATION_TOKEN", "");
+    }
+
+    /**
+     * The token required for data-plane Bearer authentication ({@code Authorization: Bearer <token>}).
+     * Bearer is active when this value is set. The default is "".
+     *
+     * @param dataPlaneBearerAuthenticationToken the expected Bearer token
+     */
+    public static void dataPlaneBearerAuthenticationToken(String dataPlaneBearerAuthenticationToken) {
+        setProperty(MOCKSERVER_DATA_PLANE_BEARER_AUTHENTICATION_TOKEN, dataPlaneBearerAuthenticationToken);
+    }
+
+    public static String dataPlaneApiKeyAuthenticationHeader() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_HEADER, "MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_HEADER", "");
+    }
+
+    /**
+     * The name of the header carrying the data-plane API key (e.g. {@code X-API-Key}). API-key auth
+     * is only active when both the header name and the value are set. The default is "".
+     *
+     * @param dataPlaneApiKeyAuthenticationHeader the API-key header name
+     */
+    public static void dataPlaneApiKeyAuthenticationHeader(String dataPlaneApiKeyAuthenticationHeader) {
+        setProperty(MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_HEADER, dataPlaneApiKeyAuthenticationHeader);
+    }
+
+    public static String dataPlaneApiKeyAuthenticationValue() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_VALUE, "MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_VALUE", "");
+    }
+
+    /**
+     * The expected value of the data-plane API-key header. API-key auth is only active when both the
+     * header name and the value are set. The default is "".
+     *
+     * @param dataPlaneApiKeyAuthenticationValue the expected API-key value
+     */
+    public static void dataPlaneApiKeyAuthenticationValue(String dataPlaneApiKeyAuthenticationValue) {
+        setProperty(MOCKSERVER_DATA_PLANE_API_KEY_AUTHENTICATION_VALUE, dataPlaneApiKeyAuthenticationValue);
     }
 
     /**

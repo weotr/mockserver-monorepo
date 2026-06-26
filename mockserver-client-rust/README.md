@@ -35,11 +35,12 @@ fn main() -> mockserver_client::Result<()> {
 }
 ```
 
-## LLM and MCP mocking
+## LLM, MCP, and A2A mocking
 
-The [`llm`](src/llm.rs) and [`mcp`](src/mcp.rs) modules provide fluent builders that
-produce the same expectation wire JSON as the Java, Node, and Python clients, so a
-mock scripted from Rust behaves identically to one scripted from any other client.
+The [`llm`](src/llm.rs), [`mcp`](src/mcp.rs), and [`a2a`](src/a2a.rs) modules provide
+fluent builders that produce the same expectation wire JSON as the Java, Node, and
+Python clients, so a mock scripted from Rust behaves identically to one scripted from
+any other client.
 
 ### LLM completions, embeddings, conversations, and failover
 
@@ -121,6 +122,43 @@ mcp_mock("/mcp")
 Use `mcp_mock_default()` for the default `/mcp` path. `build()` returns the ordered
 `Vec<serde_json::Value>` of expectations.
 
+### A2A (Agent-to-Agent) agents
+
+`a2a_mock` builds the expectations needed to emulate an A2A agent: a discoverable
+agent card on `GET /.well-known/agent.json` plus a JSON-RPC 2.0 task endpoint
+(`tasks/send`, `tasks/get`, `tasks/cancel`). Task responses use Velocity templates
+that echo the inbound JSON-RPC id. Optional `with_streaming()` advertises and mocks
+SSE streaming (status/artifact updates), and `with_push_notifications(url)` advertises
+push notifications, echoes `tasks/pushNotificationConfig/set`, and POSTs each completed
+task to the webhook via an override-forwarded request while still returning the
+JSON-RPC response to the caller.
+
+```rust
+use mockserver_client::a2a::a2a_mock;
+
+a2a_mock("/agent")
+    .with_agent_name("TranslatorAgent")
+    .with_agent_version("2.0.0")
+    .with_skill("translate")
+        .with_name("Translation")
+        .with_description("Translates text between languages")
+        .with_tag("i18n")
+        .with_example("Translate hello to French")
+        .and()
+    .with_default_task_response("Default done")
+    .on_task_send()
+        .matching_message("translate.*")
+        .responding_with("Bonjour", false) // second arg = is_error
+        .and()
+    .with_streaming()                                   // optional SSE streaming
+    .with_push_notifications("http://localhost:1234/cb") // optional webhook delivery
+    .apply_to(&client)?;
+```
+
+Use `a2a_mock_default()` for the default `/a2a` path. `build()` returns the ordered
+`Vec<serde_json::Value>` of expectations (`try_build()` is the fallible variant that
+surfaces an invalid push-notification webhook URL instead of panicking).
+
 ## Features
 
 - **Fluent builder API** — `client.when(request).respond(response)`
@@ -129,7 +167,7 @@ Use `mcp_mock_default()` for the default `/mcp` path. `build()` returns the orde
 - **Retrieve** — recorded requests, active expectations, recorded expectations, logs
 - **Clear / Reset** — by request matcher, by expectation ID, or full reset
 - **Status / Bind** — query ports, bind additional ports
-- **LLM and MCP builders** — fluent `llm` / `mcp` mock builders, wire-identical to the other clients
+- **LLM, MCP, and A2A builders** — fluent `llm` / `mcp` / `a2a` mock builders, wire-identical to the other clients
 - **Blocking (synchronous)** — uses `reqwest` blocking client; no async runtime needed
 - **TLS support** — optional HTTPS with configurable certificate verification
 - **Secured control plane** — `control_plane_bearer_token(..)` (JWT auth), `ca_cert_pem_path(..)` / `ca_cert_pem(..)` (trust a server CA), and `client_cert_pem(cert, key)` (mTLS)

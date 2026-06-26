@@ -107,6 +107,17 @@ All control-plane requests go through `controlPlaneRequestAuthenticated()` which
 
 `PUT /mockserver/pact` (with optional `?consumer=NAME&provider=NAME` query parameters) exports the currently active response expectations as a Pact v3 consumer contract JSON. Implementation is in `PactExporter` (`mockserver-core/.../mock/pact/`). Only expectations with a concrete `HttpRequest` matcher and an `HttpResponse` (or `HttpResponses`) action are included; expectations with notted method/path matchers are skipped; notted header and query-parameter values are dropped from the exported interaction. JSON bodies are embedded as structured nodes. The `consumer` and `provider` parameters default to `"consumer"` and `"provider"` when not supplied. Returns 200 with the Pact JSON.
 
+Non-literal matchers are translated into a Pact v3 interaction-level `matchingRules` object, split across `matchingRules.request` / `matchingRules.response` and keyed by category — `path` / `query` (`$.name[i]`) / `header` (`$['Name'][i]`) / `body`. The `path`/`query`/`header` categories are the inverse of the `PactImporter` mapping, so those rules round-trip back into matchers on import; `body`-category rules (`jsonSchema`/`xpath`) are exported for external Pact consumers but the importer rebuilds the body matcher from the example body only (it does not re-read body rules):
+
+| MockServer matcher | Pact rule |
+|--------------------|-----------|
+| path/query/header value MockServer treats as a regex (contains a regex metacharacter) | `{"match":"regex","regex":"<value>"}` |
+| `schemaString(...)` (`NottableSchemaString`) param/header | `{"match":"type"}` (or `integer`/`number`/`boolean` per the schema `type`) |
+| `jsonSchema(...)` body (`JsonSchemaBody`) | one `{"match":"type"}` per top-level schema property keyed `$.field` (a single `$` rule for a scalar schema); the schema text is not written to the `body` example field |
+| `xpath(...)` body (`XPathBody`) | body-category `{"match":"regex"}` keyed by the XPath expression; no `body` example field |
+
+The mapping is additive: an interaction whose matchers are all literal emits no `matchingRules` object and exports byte-identically to before. Optional and blank matcher values yield no rule (the example value is kept as-is).
+
 #### Pact Contract Verification
 
 `PUT /mockserver/pact/verify` takes a Pact v3 contract JSON as the request body and verifies that MockServer's currently-active expectations satisfy each interaction. Implementation is in `PactVerifier` (`mockserver-core/.../mock/pact/`). For each interaction, the verifier builds an `HttpRequest` from the interaction's request fields, finds matching expectations via `RequestMatchers.retrieveExpectationsMatchingRequest()` (read-only forward matching — no side effects on times/scenarios), and compares the matched expectation's response against the interaction's expected response: status code must be equal, headers use subset matching (each Pact header must be present but extra MockServer headers are allowed), and bodies are compared structurally as JSON when both parse as JSON, otherwise as strings. Only expectations with a static `HttpResponse` (or first of `HttpResponses`) action are verifiable; forward/callback/template actions fail with reason "unverifiable (non-static action)". Returns 202 with `{"verified":true,...}` when all interactions pass, 406 with `{"verified":false,...}` when any fail, or 400 on malformed/empty input.
@@ -495,6 +506,15 @@ flowchart TD
 - **Circuit breaker** (`ForwardCircuitBreaker`, config `forwardProxyCircuitBreakerEnabled` + threshold/window): a process-wide singleton keyed by upstream `host:port`. After `forwardProxyCircuitBreakerFailureThreshold` consecutive failures the breaker trips **open** and `sendRequest` fails fast with a 503 (no upstream attempt) for `forwardProxyCircuitBreakerWindowMillis`; then **half-open** admits a single trial request — a success closes it, a failure re-opens it. The retry policy and breaker compose: a request's final outcome (after any retries) feeds `recordSuccess`/`recordFailure`. The open-upstream count is exported as the `mock_server_upstream_circuit_open` gauge (see [metrics.md](metrics.md)) and reset on `HttpState.reset()`.
 
 The unmatched speculative-proxy path (`HttpActionHandler`, which calls `NettyHttpClient` directly) is intentionally **not** wrapped by these controls; they apply to matched forward expectations. Self-loopback relay and the HTTP/2/HTTP/3 forward paths are unaffected (the breaker only keys on a resolvable host, and retry only engages for idempotent methods when explicitly configured).
+
+### Forward Upstream Protocol Selection (HTTP/1.1 vs HTTP/2)
+
+`HttpForwardAction.sendRequest(...)` chooses the protocol used for the **upstream** forward connection:
+
+- **Default (`forwardProxyHttp2Enabled=false`)** — the forwarded request's protocol is nulled, so `NettyHttpClient` uses HTTP/1.1 for every forward regardless of the inbound request's protocol. This is the historical behaviour and is byte-identical to before the property existed.
+- **Opt-in (`forwardProxyHttp2Enabled=true`)** — the **inbound request's protocol is preserved** on the forwarded request. An HTTP/2 inbound request is therefore forwarded to the upstream as HTTP/2; an inbound request with no protocol marker still forwards as HTTP/1.1.
+
+HTTP/2 upstream forwarding relies on the existing HTTP/2 client stack: `NettyHttpClient` only flows HTTP/2 over **TLS with ALPN** (via `HttpClientInitializer` / `HttpOrHttp2Initializer`). A non-secure HTTP/2 forward is automatically **downgraded to HTTP/1.1** by `NettyHttpClient`, so there is no h2c (cleartext / prior-knowledge) forward path. **Limitations:** HTTP/2 forward connections are **not pooled or multiplexed** across forwards — the forward connection pool (`HttpForwardConnectionPool`) is HTTP/1.1-only, so each HTTP/2 forward opens (and closes) its own connection.
 
 ### Host Header Auto-Adjustment
 

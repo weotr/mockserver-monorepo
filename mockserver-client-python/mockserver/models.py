@@ -1453,6 +1453,7 @@ class DnsResponse:
 class HttpOverrideForwardedRequest:
     http_request: HttpRequest | None = None
     http_response: HttpResponse | None = None
+    response_template: HttpTemplate | None = None
     delay: Delay | None = None
     request_modifier: dict | None = None
     response_modifier: dict | None = None
@@ -1462,6 +1463,7 @@ class HttpOverrideForwardedRequest:
         return _strip_none({
             "httpRequest": self.http_request.to_dict() if self.http_request else None,
             "httpResponse": self.http_response.to_dict() if self.http_response else None,
+            "responseTemplate": self.response_template.to_dict() if self.response_template else None,
             "delay": self.delay.to_dict() if self.delay else None,
             "requestModifier": self.request_modifier,
             "responseModifier": self.response_modifier,
@@ -1475,6 +1477,7 @@ class HttpOverrideForwardedRequest:
         return cls(
             http_request=HttpRequest.from_dict(data.get("httpRequest")),
             http_response=HttpResponse.from_dict(data.get("httpResponse")),
+            response_template=HttpTemplate.from_dict(data.get("responseTemplate")),
             delay=Delay.from_dict(data.get("delay")),
             request_modifier=data.get("requestModifier"),
             response_modifier=data.get("responseModifier"),

@@ -987,6 +987,32 @@ public class HttpLlmResponseActionHandlerTest {
         assertThat(sharedCompletion.getUsage(), is(nullValue()));
     }
 
+    @Test
+    public void shouldPreserveReasoningContentThroughUsageInferenceCopy() {
+        // given — inference opted in (which makes a per-request shallow copy of the completion);
+        // the completion declares reasoning content but no usage
+        org.mockserver.configuration.ConfigurationProperties.llmInferUsageEnabled(true);
+        HttpLlmResponseActionHandler handler = new HttpLlmResponseActionHandler(new MockServerLogger());
+        HttpLlmResponse llmResponse = llmResponse()
+            .withProvider(Provider.ANTHROPIC)
+            .withModel("claude-sonnet-4-20250514")
+            .withCompletion(completion()
+                .withReasoningText("Let me think.")
+                .withReasoningSignature("sig-1")
+                .withText("Paris."));
+        HttpRequest request = request().withPath("/v1/messages")
+            .withBody("{\"model\":\"claude-sonnet-4-20250514\",\"messages\":[{\"role\":\"user\",\"content\":\"capital of France?\"}]}");
+
+        // when
+        HttpResponse response = handler.handle(llmResponse, request);
+
+        // then — the shallow copy carried the reasoning fields, so the thinking block is still encoded
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), containsString("\"type\":\"thinking\""));
+        assertThat(response.getBodyAsString(), containsString("Let me think."));
+        assertThat(response.getBodyAsString(), containsString("sig-1"));
+    }
+
     private static int extractIntField(String json, String field) {
         java.util.regex.Matcher matcher =
             java.util.regex.Pattern.compile("\"" + field + "\":(\\d+)").matcher(json);

@@ -17,6 +17,8 @@ public class Completion extends ObjectWithJsonToString {
     private Boolean enforceOutputSchema;
     private String model;
     private String toolChoice;
+    private String reasoningText;
+    private String reasoningSignature;
 
     public static Completion completion() {
         return new Completion();
@@ -225,6 +227,41 @@ public class Completion extends ObjectWithJsonToString {
         return toolChoice;
     }
 
+    /**
+     * Optional reasoning/"thinking" text — the model's chain-of-thought that providers surface
+     * separately from the visible answer. When set, the provider codec prepends a provider-correct
+     * reasoning content block before the text block (Anthropic {@code thinking} block, OpenAI
+     * Responses {@code reasoning} summary item, Gemini {@code thought} part, Ollama
+     * {@code message.thinking}). Additive: absent unless set, so existing expectations are
+     * unchanged. The request matcher is unaffected — this only influences response encoding.
+     */
+    public Completion withReasoningText(String reasoningText) {
+        this.reasoningText = reasoningText;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getReasoningText() {
+        return reasoningText;
+    }
+
+    /**
+     * Optional cryptographic signature accompanying {@link #getReasoningText() reasoning text},
+     * used by Anthropic to sign (and later verify/redact) a thinking block. Emitted as the
+     * {@code signature} field of the Anthropic {@code thinking} content block (and the
+     * {@code signature_delta} streaming event) only when both reasoning text and a signature are
+     * set. Ignored by providers that have no signed-reasoning concept.
+     */
+    public Completion withReasoningSignature(String reasoningSignature) {
+        this.reasoningSignature = reasoningSignature;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public String getReasoningSignature() {
+        return reasoningSignature;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -246,13 +283,15 @@ public class Completion extends ObjectWithJsonToString {
             Objects.equals(outputSchema, that.outputSchema) &&
             Objects.equals(enforceOutputSchema, that.enforceOutputSchema) &&
             Objects.equals(model, that.model) &&
-            Objects.equals(toolChoice, that.toolChoice);
+            Objects.equals(toolChoice, that.toolChoice) &&
+            Objects.equals(reasoningText, that.reasoningText) &&
+            Objects.equals(reasoningSignature, that.reasoningSignature);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(text, toolCalls, stopReason, usage, streaming, streamingPhysics, outputSchema, enforceOutputSchema, model, toolChoice);
+            hashCode = Objects.hash(text, toolCalls, stopReason, usage, streaming, streamingPhysics, outputSchema, enforceOutputSchema, model, toolChoice, reasoningText, reasoningSignature);
         }
         return hashCode;
     }

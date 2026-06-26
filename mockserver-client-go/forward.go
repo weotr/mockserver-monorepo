@@ -8,6 +8,18 @@ type HttpForward struct {
 	Delay  *Delay `json:"delay,omitempty"`
 }
 
+// HttpOverrideForwardedRequest forwards the matched request to an overridden
+// target while shaping the caller's response. RequestOverride replaces the
+// outbound (forwarded) request; ResponseOverride or ResponseTemplate shape the
+// response returned to the caller. The wire field names mirror the MockServer
+// HttpOverrideForwardedRequestDTO.
+type HttpOverrideForwardedRequest struct {
+	RequestOverride  *HttpRequest  `json:"requestOverride,omitempty"`
+	ResponseOverride *HttpResponse `json:"responseOverride,omitempty"`
+	ResponseTemplate *HttpTemplate `json:"responseTemplate,omitempty"`
+	Delay            *Delay        `json:"delay,omitempty"`
+}
+
 // HttpError represents an HTTP error action for MockServer.
 type HttpError struct {
 	DropConnection *bool  `json:"dropConnection,omitempty"`

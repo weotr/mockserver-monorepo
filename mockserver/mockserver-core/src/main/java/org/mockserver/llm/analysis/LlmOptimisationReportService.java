@@ -28,6 +28,7 @@ public class LlmOptimisationReportService {
 
     private final LlmOptimisationReportBuilder builder = new LlmOptimisationReportBuilder();
     private final LlmOptimisationBriefRenderer renderer = new LlmOptimisationBriefRenderer();
+    private final LlmOptimisationCsvRenderer csvRenderer = new LlmOptimisationCsvRenderer();
 
     /** Optional filters; null/blank means "no filter". */
     public static final class Filter {
@@ -150,6 +151,15 @@ public class LlmOptimisationReportService {
 
         LlmOptimisationReport report = builder.build(exchanges, groupingKey,
             LlmOptimisationReport.GroupingBasis.PROXY_HOST, redactedHeaders, redactedBodyFields);
+        // Cache the latest verdict/totals figures so the optimisation Prometheus
+        // gauges can read scrape-time-correct values without re-building the
+        // (potentially large, log-retrieving) report on every scrape. Updated on
+        // every build — REST, MCP, or an explicit refresh — so the gauge always
+        // reflects the most recent report a caller produced.
+        org.mockserver.metrics.Metrics.updateLlmOptimisationSnapshot(
+            report.getVerdict() != null ? report.getVerdict().getTotalEstimatedSavingUsd() : 0.0,
+            report.getTotals() != null ? report.getTotals().getCacheHitRatio() : 0.0,
+            report.getTotals() != null ? report.getTotals().getOneShotRate() : 0.0);
         return new Result(report, exchanges);
     }
 
@@ -157,6 +167,11 @@ public class LlmOptimisationReportService {
     public String renderBrief(Result result) {
         FixtureRedactor redactor = redactor();
         return renderer.render(result.getReport(), result.getIncludedExchanges(), redactor);
+    }
+
+    /** Render the CSV export (per-call rows + totals/verdict summary) for a previously built result. */
+    public String renderCsv(Result result) {
+        return csvRenderer.render(result.getReport());
     }
 
     private FixtureRedactor redactor() {

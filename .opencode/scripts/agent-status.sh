@@ -12,6 +12,11 @@
 # Companion to `/worktree` and `/worktree-merge`. See
 # `.opencode/rules/worktree-workflow.md` for the broader workflow.
 #
+# Side effect: after rendering the table, appends one concurrency-over-time
+# sample to `.tmp/parallelism-samples.csv` (timestamp,active_worktree_count,
+# lock_held) for the §18.7 P1 parallelism telemetry. The append is best-effort
+# and never fails the script.
+#
 # Usage:
 #   .opencode/scripts/agent-status.sh
 #
@@ -49,7 +54,9 @@ fi
 # as "not held".
 LOCK_HOLDER_PID=""
 if [ -e "${LOCK_FILE}" ] && command -v lsof >/dev/null 2>&1; then
-    LOCK_HOLDER_PID="$(lsof "${LOCK_FILE}" 2>/dev/null | awk 'NR>1 {print $2; exit}')"
+    # Tolerate a non-zero lsof exit (no process holds the file) under
+    # `set -o pipefail`/`errexit`; absence of a holder is not an error.
+    LOCK_HOLDER_PID="$(lsof "${LOCK_FILE}" 2>/dev/null | awk 'NR>1 {print $2; exit}' || true)"
 fi
 
 now_epoch="$(date +%s)"
@@ -102,3 +109,18 @@ if [ -n "${LOCK_HOLDER_PID}" ]; then
     echo
     echo "Rebase lock currently held by PID ${LOCK_HOLDER_PID}."
 fi
+
+# §18.7 P1 parallelism telemetry: append one concurrency-over-time sample
+# (timestamp,active_worktree_count,lock_held). Reuses the active count and
+# lock state already computed above. Best-effort — guarded so it can never
+# fail the script under `set -euo pipefail`.
+{
+    # lock_held mirrors the table's lock signal: a live holder PID means the
+    # rebase lock is actually held (a stale lock file with no holder is not).
+    lock_held=0
+    [ -n "${LOCK_HOLDER_PID}" ] && lock_held=1
+    samples_file="${REPO_ROOT}/.tmp/parallelism-samples.csv"
+    mkdir -p "${REPO_ROOT}/.tmp" \
+        && printf '%s,%s,%s\n' "${now_epoch}" "${#WORKTREE_DIRS[@]}" "${lock_held}" \
+            >> "${samples_file}"
+} || true

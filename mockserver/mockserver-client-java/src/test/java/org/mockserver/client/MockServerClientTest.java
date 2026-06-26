@@ -21,6 +21,10 @@ import org.mockserver.mock.Expectation;
 import org.mockserver.model.*;
 import org.mockserver.serialization.*;
 import org.mockserver.serialization.model.*;
+import org.mockserver.slo.SloCriteria;
+import org.mockserver.slo.SloObjective;
+import org.mockserver.slo.SloVerdict;
+import org.mockserver.slo.SloWindow;
 import org.mockserver.verify.Verification;
 import org.mockserver.verify.VerificationSequence;
 import org.mockserver.verify.VerificationTimes;
@@ -36,11 +40,14 @@ import static io.netty.handler.codec.http.HttpResponseStatus.BAD_REQUEST;
 import static io.netty.handler.codec.http.HttpResponseStatus.CONFLICT;
 import static io.netty.handler.codec.http.HttpResponseStatus.CREATED;
 import static io.netty.handler.codec.http.HttpResponseStatus.FORBIDDEN;
+import static io.netty.handler.codec.http.HttpResponseStatus.NOT_ACCEPTABLE;
 import static io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
+import static io.netty.handler.codec.http.HttpResponseStatus.OK;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.hamcrest.CoreMatchers.*;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.collection.IsArrayWithSize.arrayWithSize;
+import static org.hamcrest.collection.IsCollectionWithSize.hasSize;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.*;
@@ -2403,6 +2410,156 @@ public class MockServerClientTest {
     public void shouldRejectBlankPactImportAndVerify() {
         assertThrows(IllegalArgumentException.class, () -> mockServerClient.pactImport(" "));
         assertThrows(IllegalArgumentException.class, () -> mockServerClient.pactVerify(" "));
+    }
+
+    // SRE control-plane: verifySLO
+
+    private static SloCriteria sampleSloCriteria() {
+        return SloCriteria.sloCriteria()
+            .withName("checkout-latency")
+            .withWindow(SloWindow.lookback(60000L))
+            .withMinimumSampleCount(10)
+            .withObjectives(
+                SloObjective.sloObjective()
+                    .withSli(SloObjective.Sli.LATENCY_P99)
+                    .withComparator(SloObjective.Comparator.LESS_THAN)
+                    .withThreshold(250.0)
+            );
+    }
+
+    private static String verdictJson(String result) {
+        return "{\"name\":\"checkout-latency\",\"result\":\"" + result + "\",\"sampleCount\":42,"
+            + "\"windowFromEpochMillis\":1000,\"windowToEpochMillis\":61000,"
+            + "\"objectiveResults\":[{\"sli\":\"LATENCY_P99\",\"comparator\":\"LESS_THAN\",\"threshold\":250.0,"
+            + "\"observedValue\":120.0,\"result\":\"" + result + "\",\"detail\":\"ok\"}]}";
+    }
+
+    @Test
+    public void shouldSendVerifySloRequestAndReturnPassVerdict() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(OK.code()).withBody(verdictJson("PASS")));
+
+        // when
+        SloVerdict verdict = mockServerClient.verifySLO(sampleSloCriteria());
+
+        // then - correct endpoint + serialized payload
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/verifySLO"));
+        assertThat(sent.getBodyAsString(), containsString("\"name\" : \"checkout-latency\""));
+        assertThat(sent.getBodyAsString(), containsString("LATENCY_P99"));
+        // and - parsed verdict
+        assertThat(verdict.getResult(), is(SloVerdict.Result.PASS));
+        assertThat(verdict.getName(), is("checkout-latency"));
+        assertThat(verdict.getSampleCount(), is(42L));
+        assertThat(verdict.getObjectiveResults(), hasSize(1));
+        assertThat(verdict.getObjectiveResults().get(0).getSli(), is(SloObjective.Sli.LATENCY_P99));
+    }
+
+    @Test
+    public void shouldReturnInconclusiveVerdictAsValue() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(OK.code()).withBody(verdictJson("INCONCLUSIVE")));
+
+        // when
+        SloVerdict verdict = mockServerClient.verifySLO(sampleSloCriteria());
+
+        // then
+        assertThat(verdict.getResult(), is(SloVerdict.Result.INCONCLUSIVE));
+    }
+
+    @Test
+    public void shouldThrowAssertionErrorWhenSloVerdictFails() {
+        // given - 406 NOT_ACCEPTABLE signals a FAIL verdict
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(NOT_ACCEPTABLE.code()).withBody(verdictJson("FAIL")));
+
+        // when
+        AssertionError assertionError = assertThrows(AssertionError.class, () -> mockServerClient.verifySLO(sampleSloCriteria()));
+
+        // then - catchable as AssertionError (same as verify(...)), carrying the verdict body
+        assertThat(assertionError.getMessage(), containsString("\"result\":\"FAIL\""));
+        assertThat(assertionError, instanceOf(MockServerClient.SloVerdictAssertionError.class));
+        SloVerdict verdict = ((MockServerClient.SloVerdictAssertionError) assertionError).getVerdict();
+        assertThat(verdict, is(notNullValue()));
+        assertThat(verdict.getResult(), is(SloVerdict.Result.FAIL));
+    }
+
+    @Test
+    public void shouldSurface400AsIllegalArgumentWhenSloTrackingDisabled() {
+        // given - server returns 400 when sloTrackingEnabled=false; sendRequest maps 400 -> IllegalArgumentException
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(BAD_REQUEST.code()).withBody("{\"error\":\"SLO tracking not enabled (set sloTrackingEnabled=true)\"}"));
+
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifySLO(sampleSloCriteria()));
+
+        // then
+        assertThat(exception.getMessage(), containsString("sloTrackingEnabled=true"));
+    }
+
+    @Test
+    public void shouldRejectNullSloCriteria() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.verifySLO(null));
+    }
+
+    // SRE control-plane: startChaosExperiment
+
+    private static final String SAMPLE_EXPERIMENT_JSON =
+        "{\"name\":\"flaky-upstream\",\"loop\":false,\"stages\":[{\"durationMillis\":30000,\"profiles\":{\"api.example.com\":{\"latency\":{\"fixedDelayMillis\":500}}}}]}";
+
+    @Test
+    public void shouldSendStartChaosExperimentRequest() {
+        // given
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(OK.code()).withBody("{\"status\":\"started\",\"name\":\"flaky-upstream\",\"stages\":1,\"loop\":false}"));
+
+        // when
+        String result = mockServerClient.startChaosExperiment(SAMPLE_EXPERIMENT_JSON);
+
+        // then
+        verify(mockHttpClient).sendRequest(httpRequestArgumentCaptor.capture(), anyLong(), any(TimeUnit.class), anyBoolean());
+        HttpRequest sent = httpRequestArgumentCaptor.getValue();
+        assertThat(sent.getMethod().getValue(), is("PUT"));
+        assertThat(sent.getPath().getValue(), is("/mockserver/chaosExperiment"));
+        assertThat(sent.getBodyAsString(), is(SAMPLE_EXPERIMENT_JSON));
+        assertThat(result, containsString("\"status\":\"started\""));
+    }
+
+    @Test
+    public void shouldThrowHelpfulErrorWhenForbiddenOnStartExperiment() {
+        // given - 403 FORBIDDEN (control-plane authorization denied, or chaos disabled)
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(FORBIDDEN.code()).withBody("{\"error\":\"Forbidden for control plane\"}"));
+
+        // when
+        ClientException clientException = assertThrows(ClientException.class, () -> mockServerClient.startChaosExperiment(SAMPLE_EXPERIMENT_JSON));
+
+        // then
+        assertThat(clientException.getMessage(), containsString("forbidden while starting chaos experiment"));
+        assertThat(clientException.getMessage(), containsString("Forbidden for control plane"));
+    }
+
+    @Test
+    public void shouldSurface400AsIllegalArgumentWhenChaosExperimentInvalid() {
+        // given - server returns 400 for a malformed experiment; sendRequest maps 400 -> IllegalArgumentException
+        when(mockHttpClient.sendRequest(any(HttpRequest.class), anyLong(), any(TimeUnit.class), anyBoolean()))
+            .thenReturn(response().withStatusCode(BAD_REQUEST.code()).withBody("{\"error\":\"invalid experiment definition: stages is required\"}"));
+
+        // when
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> mockServerClient.startChaosExperiment(SAMPLE_EXPERIMENT_JSON));
+
+        // then
+        assertThat(exception.getMessage(), containsString("invalid experiment definition"));
+    }
+
+    @Test
+    public void shouldRejectBlankChaosExperiment() {
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.startChaosExperiment(" "));
+        assertThrows(IllegalArgumentException.class, () -> mockServerClient.startChaosExperiment(null));
     }
 
 }

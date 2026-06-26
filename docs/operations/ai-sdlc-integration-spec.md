@@ -456,7 +456,7 @@ flowchart TD
 - **OP1 — Failure handling & safe degradation.** The system **MUST** handle failures (model errors, tool failures, verification outages) by failing safe and degrading gracefully (§20).
 - **OP2 — Fallback modes.** Fallback modes **MUST** exist for model unavailability/underperformance (§9.3) and for verification or diagnosis tooling being unavailable.
 - **OP3 — Retry behaviour.** Retries **MUST** be bounded and **MUST NOT** mask persistent failures; a retried-then-failed task **MUST** be escalated/recorded.
-- **OP4 — Observability.** The system's own behaviour (tasks, agents, model/temperature/effort choices, gate outcomes, costs, concurrency) **MUST** be observable.
+- **OP4 — Observability.** The system's own behaviour (tasks, agents, model/temperature/effort choices, gate outcomes, costs, concurrency, **per-stage activity time and parallelism utilisation** — §18.6, §18.7) **MUST** be observable.
 - **OP5 — Cost visibility & controls.** Cost **MUST** be visible and controllable, with controls tied to **agent count, model class, and execution duration**, and to the concurrency caps (§8). A task or workflow that would exceed cost budget **MUST** be deferred or escalated, not silently run (§20).
 - **OP6 — Concurrency limits enforced.** The §8 caps and dynamic limits **MUST** be operationally enforced, not advisory.
 - **OP7 — Incident support.** The system **MUST** support its own use in incident response (fast diagnosis §13, auditable actions §21) and **MUST NOT** take unsafe autonomous action during incidents in reserved/sensitive domains.
@@ -506,6 +506,9 @@ Each outcome **MUST** have a description, rationale, success measure, evidence s
 - **% tasks correctly routed by model class** and **% correctly routed by temperature profile** (judged retrospectively against outcome/cost).
 - **Average and peak concurrent subagent count** (must respect §8 caps).
 - **Cost per completed unit** and cost by model class.
+- **Activity-time breakdown** — total time per activity category and validation check type (cost lens) **and critical-path duration** (duration lens), with wait distinguished from work, plus **rework / iteration and discarded-work cost** (§18.6).
+- **Cost and duration per delivered feature/fix** — units rolled up to feature/fix level, reconciled to cycle time (§18.6 T11).
+- **Parallelism utilisation, serialisation causes, and duration tax** — achieved vs effective-limit concurrency, the ranked reasons parallelism was not possible, and the gap between theoretical-best and actual critical-path time (§18.7).
 - **Reproducibility/completeness of execution trace.**
 
 ### 18.4 Trust & adoption (`SHOULD`)
@@ -513,6 +516,62 @@ User trust/usability signals **SHOULD** be collected where humans interact with 
 
 ### 18.5 Evaluation harness (`MUST`)
 The system **MUST** maintain an **offline evaluation suite** of representative/golden tasks with known-good outcomes, used to assess agent behaviour, routing, prompts, and review constitutions. Changes to prompts, constitutions, routing policy, guardrails, or **model/provider versions MUST** be validated against this suite **before deployment** and **MUST NOT** regress correctness, safety, or cost beyond the regression thresholds set by policy (§22.5); the threshold *values* are an open decision (§22.6), but the obligation to validate against the suite and to block on policy-defined regression stands regardless of where those values land. The suite **MUST** be extended as new failure patterns are learned (§21.5). This is the mechanism that lets the AI system itself change safely without relying on routine human review of every prompt or model update.
+
+### 18.6 Activity-time instrumentation (time-spend telemetry) (`MUST`)
+
+**Intent:** Make the *time and resource cost* of every stage of the agent workflow visible and attributable, so optimisation effort targets the **largest, most-improvable** sinks rather than the most visible ones. The premise is that **almost everything that consumes time is optimisable** — local validation can be made faster or run less often, CI waits can be parallelised or pre-warmed, rework loops can be shortened, and even **LLM response latency is reducible by supplying better, denser context** (§10 CX9), not only by changing model class.
+
+**Cost and duration optimise differently, and the telemetry MUST serve both:**
+- To reduce **cost** (total inference spend + wasted effort), attack the categories with the **largest total time and token consumption** — including the cost of rework that never lands first-pass (T10).
+- To reduce **duration** (wall-clock from request → reintegrated, verified change — the §18.2 *Reduced cycle time* outcome), attack the **critical path** (T9). Shrinking a large *off*-critical-path stage cuts cost but **not** delivery time.
+
+Conflating the two misdirects effort, so the system **MUST** record where time and cost go with enough structure to answer, separately, "what is most expensive to do?" and "what is making delivery slow?".
+
+```mermaid
+flowchart LR
+    A["Context assembly\n/ retrieval"] --> B["LLM inference\nwait"]
+    B --> C["Local validation\n(unit / IT / contract /\nstatic / lint)"]
+    C --> D["Build & packaging\n(incl. docker build)"]
+    D --> E["CI / pipeline\nwait"]
+    E --> F["Adversarial review\n+ re-verify"]
+    F --> G["Merge /\nreintegration"]
+    B -.->|"escalation"| H["Awaiting human\n(escalation wait)"]
+    A -.->|"capped"| I["Queueing / idle\n(concurrency caps)"]
+    C -.->|"tools"| J["Tool / command\nexecution"]
+```
+
+**Mandatory (`MUST`):**
+- **T1 — Stage-level time capture.** The system **MUST** record elapsed time for each significant stage of a unit's lifecycle, attributed to the unit of work, the subagent, the selected model class, and the task classification (§9), so time can be correlated with routing decisions (§21).
+- **T2 — Activity taxonomy.** Recorded time **MUST** be classified into a defined, extensible **activity taxonomy** so totals roll up per category. The taxonomy **MUST** cover at minimum: **LLM inference wait**, **context assembly/retrieval**, **local validation** (itself broken down — T4), **build & packaging** (including **docker builds**), **CI/pipeline wait**, **tool/command execution**, **adversarial review + re-verify**, **merge/reintegration**, **escalation wait** (awaiting a human, §19.4), and **queueing/idle under concurrency caps** (§8). The taxonomy **MUST** be extensible as new time sinks appear (§21.5).
+- **T3 — Wait vs work distinction.** Time spent **waiting** (LLM response latency, CI queue + run, awaiting human escalation, concurrency-cap queueing) **MUST** be distinguishable from time spent in **active local compute**, because the two have different optimisation levers. Additionally, wait that sits **on the critical path** (T9) — and therefore extends delivery duration — **MUST** be distinguishable from wait that **overlaps other work** (e.g. one unit's CI running while another is under review), which does not.
+- **T4 — Validation granularity.** Local validation time **MUST** be broken down **by check type** (unit tests, integration tests, contract tests, static analysis, build validation, docker build, lint, policy/security checks — §12.1) rather than reported as a single aggregate, so the dominant check can be identified and targeted.
+- **T5 — Aggregation for cost targeting.** Recorded times **MUST** be aggregatable across units and over a period to show **where most total time is spent** — by activity category, check type, model class, and task type. This is the **cost** lens (largest total effort); it is **not** sufficient for duration (use T9). The rollup **MUST** feed optimisation prioritisation in the learning loop (§21.5). Any sampling or truncation applied to keep instrumentation cheap **MUST** be recorded, so an apparent "near-zero" category is not mistaken for "fully measured".
+- **T6 — Time–cost correlation.** Per-stage time **MUST** be recorded alongside token usage and inference cost (§17 OP5) so optimisations can be ranked by **return on effort**, not time alone — a slow-but-cheap stage (e.g. a long but free local test run) **MUST** be distinguishable from a fast-but-expensive one (e.g. a short call to a top-tier model). Without this pairing, cost optimisation is blind to which lever (run less / run faster / route cheaper) applies.
+- **T9 — Critical-path identification & duration tracking.** Per-stage time **MUST** be tagged with dependency relationships (which stages it blocks and is blocked by) so the **critical path** of a unit and of a feature/fix can be computed, and **critical-path duration MUST be tracked separately from aggregate time**. Delivery *duration* is set by the critical path: reducing time on an off-critical-path stage lowers cost (T5) but not duration. The system **MUST** surface which stages currently lie on the critical path so duration-optimisation effort targets them.
+- **T10 — Rework & discarded-work cost.** The system **MUST** capture the time and token/cost of work that does **not** land first-pass — frequently the dominant cost and duration driver and invisible in first-pass stage timing: **adversarial-review iterations** (count and time-per-iteration from first draft to PASS, §14.5), **re-routes and fallbacks** (by trigger reason, §9.3), and **discarded speculative-parallel branches** (§7.4). This rework cost **MUST** be aggregatable so the learning loop (§21.5) can target first-pass quality (better context/model) vs faster iteration cycles.
+- **T11 — Feature/fix-level roll-up.** Because a feature or fix spans many units of work (§7.3), all time, token, cost, critical-path, and serialisation (§18.7) data **MUST** be aggregatable by **feature/fix identifier**, so **cost-per-delivered-feature and duration-per-delivered-feature** are visible and comparable, and the per-stage breakdown **reconciles to the §18.2 *Reduced cycle time* outcome**. Without this, the learning loop cannot prioritise across features.
+
+**Recommended (`SHOULD`):**
+- **T7 — LLM-latency attributability.** Inference-wait time **SHOULD** be recorded with prompt-construction metadata (context size, retrieved-source count, multi-pass stage — §9.4) so latency that is **reducible by better context** (§10 CX9) is distinguishable from irreducible model latency.
+- **T8 — Baselines & trends.** Per-category time, critical-path duration, and rework cost **SHOULD** be tracked against baselines over time (§18.1) to surface regressions (e.g. a test suite silently slowing — see the *core parallel-phase* class of incident) and to **confirm that a shipped optimisation actually moved the number** it targeted.
+
+**Trade-off (instrumentation overhead vs optimisation insight):** Fine-grained timing, dependency tagging, and rework accounting add a small per-stage capture cost. The requirement is scoped to **significant** stages (§15), and T5 permits recorded sampling, so the visibility is bought without throttling routine work — and it is the only way to optimise the *real* bottleneck (cost vs duration, first-pass vs rework) rather than the most visible one.
+
+### 18.7 Parallelism utilisation and serialisation metrics (`MUST`)
+
+**Intent:** Parallelism is a primary throughput lever (O3), bounded by the hard caps (§8.1) and **intentionally traded down** by dynamic lower limits (§8.2). Wall-clock time (§18.6) only tells you *how long* work took; these metrics tell you *whether concurrency was the reason it was slow*. The decisive signal is **when parallelism was not possible** — every forced serialisation is a candidate for better decomposition (§7.3) or reduced contention (§8.4–§8.5). Measuring this distinguishes the case where the caps are the bottleneck (argues for raising them) from the far more common case where **decomposition or contention** is (argues for fixing those instead).
+
+**Mandatory (`MUST`):**
+- **P1 — Achieved parallelism.** The system **MUST** record realised concurrency over time — mean and peak **active subagents** and **concurrent independent units** — alongside the **effective limit in force** (the §8.1 hard cap or the lower §8.2 dynamic limit). This makes **under-utilisation** (limit not the constraint) distinguishable from **saturation** (limit is the constraint).
+- **P2 — Serialisation-cause capture.** Whenever a unit runs **serially**, or concurrency is held **below the hard cap**, the system **MUST** record *why*, against a defined, extensible taxonomy: **true dependency** (§7.3), **shared-file/state contention** (§8.4, §8.5), **dynamic lower limit** (§8.2 — task complexity, cost budget, model availability, verification capacity, operational constraint), **cap-queueing/deferral** (§8.1), **merge-lock serialisation** (§8.4), **task cannot be safely parallelised** (§20), or **blocked on escalation** (§19.4). Each serialisation event **MUST** be attributable so its cost (time lost, §18.6) is known.
+- **P3 — Cap-bound vs self-imposed.** Time during which the **hard cap** (§8.1) was the binding constraint **MUST** be distinguishable from time during which a **dynamic lower limit** (§8.2) or **insufficient decomposition** (too few independent units to fill the available slots) was — because only cap-bound time argues for raising caps; the rest argues for better decomposition (§7.3) or contention reduction.
+- **P4 — Aggregation for targeting.** Serialisation causes **MUST** be aggregatable across a period to rank the **dominant reason parallelism is lost**, and this rollup **MUST** feed decomposition (§7.3) and concurrency tuning (§8) through the learning loop (§21.5).
+- **P6 — Critical-path speedup & duration tax.** The system **MUST** estimate realised **critical-path time** (§18.6 T9) against both a **serial baseline** (sum of unit times) and a **theoretical best** (the critical path under infinite parallelism and zero contention), and track it alongside utilisation (P1). The gap between theoretical-best and actual critical-path time is the **duration tax** imposed by serialisation, caps (§8.1), dynamic limits (§8.2), and contention (§8.4–§8.5) — and is the primary quantitative target for **duration** optimisation. The gap between serial baseline and actual quantifies the parallelism benefit **actually captured**.
+
+**Recommended (`SHOULD`):**
+- **P5 — Decomposition effectiveness.** Independent-units-per-workflow and **contention incidents** (merge conflicts, rebase retries under the lock — §8.4) **SHOULD** be tracked as a proxy for decomposition quality, so chronic contention is surfaced as a decomposition problem, not absorbed silently.
+
+**Trade-off (capturing serialisation causes vs overhead):** Recording a reason at each serialisation point is cheap relative to the work it gates and is the only way to tell an *unavoidable* serialisation (a true dependency) from an *avoidable* one (poor decomposition or needless contention). Without P2 the two are indistinguishable and the system optimises blind.
 
 ---
 
@@ -600,6 +659,7 @@ For each significant AI action/decision, the system **MUST** record:
 - **what model class** was selected and **why** (§9);
 - **what temperature** was selected and **why**, **what reasoning effort** was selected and **why**, and **whether a multi-pass strategy** was used (§9.4);
 - **what verification evidence** was observed (§12);
+- **how long each significant stage took**, and **where parallelism was achieved or forced to serialise** (with cause), for significant workflows (§18.6, §18.7);
 - **which review constitution** (and version) was applied, and **what adversarial findings** were raised across iterations and their disposition (§14);
 - **why** the output was accepted, rejected, escalated, retried, or re-routed;
 - **any security-relevant events** that affected the task — suspected injection, control-integrity flags, sandbox denials, or operator halts (§16, §17).
@@ -630,7 +690,7 @@ The system **MUST**:
 - capture failures and near-misses in a structured way;
 - update prompts, context, policies, constitutions, or guardrails based on evidence, validated against the evaluation harness before deployment (§18.5);
 - prevent recurrence of known failure patterns;
-- periodically review **model-routing**, **temperature-routing**, and **effort-routing** effectiveness, **inference-cost trends**, **verification gaps**, and **standardisation opportunities**;
+- periodically review **model-routing**, **temperature-routing**, and **effort-routing** effectiveness, **inference-cost trends**, **activity-time, latency, and critical-path-duration trends** (§18.6), **rework / iteration and discarded-work cost** (§18.6 T10), **parallelism utilisation, the duration tax, and the dominant serialisation causes** (§18.7), **verification gaps**, and **standardisation opportunities** — and act separately on the largest improvable **cost** sinks (total time/token, including rework) and the largest improvable **duration** sinks (critical-path stages), as well as the most common reasons parallelism is lost;
 - feed these reviews into autonomy promotion/demotion (§19.2) and rollout (§22).
 
 ---
@@ -703,6 +763,7 @@ Adoption **MUST** be incremental and reversible:
 | Broad tool capability vs blast radius | Execution sandboxed to least capability under an operator halt (§16 S12, §17 OP10). |
 | Velocity of AI improvement vs stability | Prompt/constitution/routing/model changes are change-managed and eval-gated (§18.5, §22.5). |
 | Autonomy vs sensible escalation | Escalations are non-blocking and batched by default, but correctness/safety/authority decisions still reach a human promptly (§19.4). |
+| Instrumentation overhead vs optimisation insight | Capture is scoped to significant stages and may be sampled (recorded); time and serialisation-cause telemetry is the only way to optimise the real bottleneck rather than the visible one (§18.6, §18.7). |
 
 ### Appendix B — Conformance checklist (mandatory requirements)
 
@@ -727,6 +788,8 @@ Adoption **MUST** be incremental and reversible:
 - [ ] Licence/IP provenance of generated artefacts checked (§16 S13)
 - [ ] Escalations non-blocking where safe, batched, decidable, and non-expiring (§19.4)
 - [ ] Baseline + ongoing metrics with owned interpretation (§18)
+- [ ] Activity-time instrumentation: per-stage time + token/cost, validation by check type, wait vs work, **critical-path duration**, **rework/discarded-work cost**, **feature/fix-level roll-up** reconciled to cycle time (§18.6)
+- [ ] Parallelism utilisation + serialisation-cause capture + **duration tax** vs theoretical best, aggregated to find why parallelism is lost (§18.7)
 - [ ] Incremental, reversible, checkpoint-gated rollout (§22.5)
 
 ### Appendix C — Glossary
@@ -751,3 +814,8 @@ Terms used normatively in this specification. Where a term is defined here, its 
 | **Reintegration** | Rebasing a completed, gate-passed unit onto the mainline tip and fast-forwarding it onto the mainline under serialised merge discipline, preserving a linear history with no merge commits (§8.4). |
 | **Escalation** | A structured hand-off of a decision to a human when ambiguity, policy, or risk exceeds delegated authority; non-blocking and batched by default (§19.3, §19.4). |
 | **Operator halt** | An operator-invoked control that immediately stops or pauses AI activity, globally or scoped, and cannot be overridden by the system (§17 OP10). |
+| **Activity taxonomy** | The defined, extensible set of categories into which workflow time is classified (LLM inference wait, context assembly, local validation by check type, build/packaging, CI wait, tool execution, review, merge, escalation wait, cap queueing) for time-spend telemetry (§18.6). |
+| **Serialisation cause** | The recorded reason a unit ran serially or concurrency was held below the hard cap — true dependency, contention, dynamic lower limit, cap-queueing, merge-lock, not-safely-parallelisable, or escalation block — used to find where parallelism is avoidably lost (§18.7). |
+| **Critical path** | The longest dependency-ordered chain of stages whose total time sets the minimum delivery **duration** of a unit or feature/fix; reducing time off the critical path lowers cost but not duration (§18.6 T9). |
+| **Duration tax** | The gap between the theoretical-best critical-path time (infinite parallelism, no contention) and the actual critical-path time — the delivery time lost to serialisation, caps, dynamic limits, and contention (§18.7 P6). |
+| **Rework cost** | The time and token/cost of work that does not land first-pass — adversarial-review iterations, re-routes/fallbacks, and discarded speculative branches — often the dominant cost and duration driver (§18.6 T10). |

@@ -198,6 +198,83 @@ if client.has_started():
 client.stop()
 ```
 
+## AI Protocol Mocking
+
+Declarative builders mock an MCP (Model Context Protocol) server or an A2A
+(Agent-to-Agent) server with a single fluent chain. Each builder produces a set of
+HTTP expectations that speak JSON-RPC 2.0 and echo the incoming request id.
+
+```python
+from mockserver import mcp_mock, a2a_mock
+
+# Mock an MCP server (Streamable HTTP, JSON-RPC 2.0) on /mcp
+mcp_mock() \
+    .with_tool("get_weather") \
+        .with_description("Get weather for a city") \
+        .with_input_schema('{"type": "object", "properties": {"city": {"type": "string"}}}') \
+        .responding_with("72F and sunny") \
+        .and_() \
+    .apply_to(client)
+
+# Mock an A2A agent on /a2a (agent card + tasks/send|get|cancel)
+a2a_mock() \
+    .with_agent_name("TranslatorAgent") \
+    .with_skill("translate") \
+        .with_name("Translation") \
+        .with_description("Translates text between languages") \
+        .with_tag("i18n") \
+        .with_example("Translate hello to Spanish") \
+        .and_() \
+    .on_task_send() \
+        .matching_message("translate.*") \
+        .responding_with("Hola") \
+        .and_() \
+    .apply_to(client)
+```
+
+The A2A builder also supports streaming (SSE) and push notifications:
+
+```python
+a2a_mock() \
+    .with_streaming() \
+    .with_push_notifications("http://localhost:1234/callback") \
+    .apply_to(client)
+```
+
+`build()` returns the list of `Expectation` objects without registering them, so
+you can inspect or persist them; `apply_to(client)` registers them via `upsert`.
+
+## SRE / Resilience
+
+Verify a service-level objective over recorded SLI samples, or run a scheduled
+multi-stage chaos experiment. Both require the corresponding server feature to be
+enabled (`sloTrackingEnabled`, chaos experiments).
+
+```python
+# Verify an SLO — a FAIL verdict (HTTP 406) raises MockServerVerificationError
+verdict = client.verify_slo({
+    "name": "checkout",
+    "minimumSampleCount": 100,
+    "objectives": [
+        {"sli": "errorRate", "comparator": "LESS_THAN", "threshold": 0.01},
+        {"sli": "p99LatencyMs", "comparator": "LESS_THAN", "threshold": 250},
+    ],
+})
+print(verdict["result"])  # PASS or INCONCLUSIVE
+
+# Start a multi-stage chaos experiment (only one may be active at a time)
+client.start_chaos_experiment({
+    "name": "latency-injection",
+    "loop": False,
+    "stages": [
+        {"durationMillis": 60000, "profiles": {"payments.svc": {"latencyMs": 500}}},
+    ],
+})
+```
+
+Both methods are available on the async client too (`await client.verify_slo(...)`,
+`await client.start_chaos_experiment(...)`).
+
 ## TLS Support
 
 ```python

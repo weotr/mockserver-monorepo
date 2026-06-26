@@ -164,6 +164,72 @@ public class SloCriteriaSerializerTest {
     }
 
     @Test
+    public void shouldSerializeCriteriaToJsonRoundTrippableViaDeserialize() {
+        SloCriteria original = new SloCriteria()
+            .withName("checkout-slo")
+            .withWindow(SloWindow.lookback(60000))
+            .withMinimumSampleCount(5)
+            .withUpstreamHosts(new java.util.LinkedHashSet<>(Collections.singletonList("payments.svc")))
+            .withObjectives(
+                new SloObjective().withSli(SloObjective.Sli.LATENCY_P99).withComparator(SloObjective.Comparator.LESS_THAN).withThreshold(250.0)
+            );
+
+        String json = serializer.serialize(original);
+        SloCriteria rebuilt = serializer.deserialize(json);
+
+        assertThat(rebuilt.getName(), is("checkout-slo"));
+        assertThat(rebuilt.getWindow().getType(), is(SloWindow.Type.LOOKBACK));
+        assertThat(rebuilt.getWindow().getLookbackMillis(), is(60000L));
+        assertThat(rebuilt.getMinimumSampleCount(), is(5));
+        assertThat(rebuilt.getUpstreamHosts(), contains("payments.svc"));
+        assertThat(rebuilt.getObjectives().size(), is(1));
+        assertThat(rebuilt.getObjectives().get(0).getSli(), is(SloObjective.Sli.LATENCY_P99));
+        assertThat(rebuilt.getObjectives().get(0).getThreshold(), is(250.0));
+    }
+
+    @Test
+    public void shouldDeserializeVerdictResponseBody() {
+        // a verdict as written by the server (serialize(SloVerdict)) must parse back into the model
+        SloVerdict original = new SloVerdict()
+            .withName("checkout-slo")
+            .withResult(SloVerdict.Result.FAIL)
+            .withWindowFromEpochMillis(1000L)
+            .withWindowToEpochMillis(2000L)
+            .withSampleCount(42L)
+            .withObjectiveResults(Collections.singletonList(
+                new SloObjectiveResult()
+                    .withSli(SloObjective.Sli.LATENCY_P95)
+                    .withComparator(SloObjective.Comparator.LESS_THAN)
+                    .withThreshold(250.0)
+                    .withObservedValue(310.0)
+                    .withResult(SloVerdict.Result.FAIL)
+                    .withDetail("breached")
+            ));
+
+        SloVerdict rebuilt = serializer.deserializeVerdict(serializer.serialize(original));
+
+        assertThat(rebuilt.getName(), is("checkout-slo"));
+        assertThat(rebuilt.getResult(), is(SloVerdict.Result.FAIL));
+        assertThat(rebuilt.getWindowFromEpochMillis(), is(1000L));
+        assertThat(rebuilt.getWindowToEpochMillis(), is(2000L));
+        assertThat(rebuilt.getSampleCount(), is(42L));
+        assertThat(rebuilt.getObjectiveResults().size(), is(1));
+        SloObjectiveResult objective = rebuilt.getObjectiveResults().get(0);
+        assertThat(objective.getSli(), is(SloObjective.Sli.LATENCY_P95));
+        assertThat(objective.getComparator(), is(SloObjective.Comparator.LESS_THAN));
+        assertThat(objective.getThreshold(), is(250.0));
+        assertThat(objective.getObservedValue(), is(310.0));
+        assertThat(objective.getResult(), is(SloVerdict.Result.FAIL));
+        assertThat(objective.getDetail(), is("breached"));
+    }
+
+    @Test
+    public void shouldRejectBlankVerdictBody() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> serializer.deserializeVerdict("  "));
+        assertThat(e.getMessage(), containsString("an SLO verdict is required"));
+    }
+
+    @Test
     public void shouldDefaultMinimumSampleCountWhenAbsent() {
         SloCriteria criteria = serializer.deserialize(
             "{\"name\":\"d\",\"window\":{\"type\":\"LOOKBACK\",\"lookbackMillis\":1000}," +

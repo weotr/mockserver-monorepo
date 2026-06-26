@@ -74,9 +74,30 @@ No fix found. See Recommended Fix below.
 
 ---
 
+## How this was determined (replay)
+
+<!-- Render commands_run as a fenced block so the reader can replay the exact
+     evidence-gathering (D5/R6). Omit only if commands_run is empty. -->
+
+```bash
+{commands_run — one command per line}
+```
+
+<!-- If root_cause.alternative_hypotheses is non-empty, list the competing
+     explanations and what ruled each out: -->
+
+**Alternative hypotheses considered**
+
+| Hypothesis | Ruled out by |
+|------------|--------------|
+| {hypothesis} | {ruled_out_by} |
+
+---
+
 ## Summary
 
 - **Root cause**: {root_cause.summary}
+- **Reproduced**: {reproduced ? "yes (deterministic)" : "no (FLAKY / intermittent)"}
 - **Fix status**: {fix_status}
 - **Action**: {recommended_fix || "None - fix already applied"}
 ```

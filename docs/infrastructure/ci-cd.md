@@ -203,9 +203,9 @@ flowchart TD
     PULL --> BUILD["3. Maven build
     java-build.sh (in Docker)
     ./mvnw clean install"]
-    BUILD --> JUNIT["4. JUnit annotate
-    test result annotations"]
-    JUNIT --> DEPLOY["5. Deploy snapshot to Sonatype
+    BUILD --> SUMMARY["4. Coverage summary
+    jacoco coverage annotation"]
+    SUMMARY --> DEPLOY["5. Deploy snapshot to Sonatype
     master only"]
     DEPLOY --> CTESTS["6. Container integration tests
     master only"]
@@ -231,11 +231,11 @@ Runs `.buildkite/scripts/steps/java-build.sh`, which executes the full Maven bui
 - Passes the `BUILDKITE_BRANCH` environment variable
 - Executes `scripts/buildkite_quick_build.sh` which runs `./mvnw clean install`
 - Memory limit: 7 GB
-- Collects `.log` files, surefire/failsafe XML reports, and the shaded JAR as build artifacts
+- Collects build artifacts: `.log` files, the **failing** tests' reports plus their console output (`mockserver/target/failed-tests/**`, curated by `java-collect-failures.sh`), the jacoco coverage XML and HTML tarball, and the shaded JAR. Per-class `TEST-*.xml` for passing classes are **not** uploaded — only failing-test artefacts appear in the build's artefact list, keeping it small (one `TEST-*.xml` per class otherwise produced ~650 artefacts that cluttered the list). A pass/fail summary is still printed at the end of the build log.
 
-#### Step 4: JUnit Annotate
+#### Step 4: Coverage Summary
 
-Uses the `junit-annotate` plugin to parse `**/target/*-reports/TEST-*.xml` and add test result annotations to the Buildkite build page. Runs with `continue_on_failure: true` so annotations appear even on test failures.
+Runs `.buildkite/scripts/steps/java-summarize.sh` to add a jacoco line-coverage annotation (and a link to download the `jacoco-html-reports.tar.gz` artefact) to the Buildkite build page. Runs with `continue_on_failure: true` / `soft_fail: true` so it never reddens the build. A separate diff-coverage gate (`diff-coverage.sh`, also `soft_fail`) annotates new-code coverage. The previous `junit-annotate` per-test-annotation step was removed along with the per-class `TEST-*.xml` upload it depended on; the end-of-log pass/fail summary and the failing-test artefacts cover failure triage instead.
 
 #### Steps 5–8: Master-Only Steps
 

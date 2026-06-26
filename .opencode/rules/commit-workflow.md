@@ -50,7 +50,7 @@ Run `git status --short` to see all changed, staged, and untracked files. From t
 | `npm` | `package.json`, `package-lock.json`, `*.js`, `*.ts`, `*.tsx`, `*.jsx` (in `mockserver-ui/`, `mockserver-client-node/`, `mockserver-node/`) |
 | `python` | `*.py`, `pyproject.toml`, `requirements*.txt` (in `mockserver-client-python/`) |
 | `ruby` | `*.rb`, `Gemfile`, `Gemfile.lock`, `*.gemspec` (in `mockserver-client-ruby/`) |
-| `control` (AI component) | `.opencode/rules/**`, `.opencode/agents/**`, `.claude/agents/**`, `opencode.jsonc`, the review constitution, and CI / test-gate definitions — i.e. changes to **the controls AI is judged by** |
+| `control` (AI component) | `.opencode/rules/**`, `.opencode/agents/**`, `.claude/agents/**`, `.opencode/commands/**`, `.claude/commands/**`, `.opencode/skills/**`, `.opencode/plugins/**`, `.opencode/scripts/**`, `opencode.jsonc`, `.claude/settings*.json`, the review constitution, and CI / test-gate definitions — i.e. changes to **the controls AI is judged by** (the command/skill/plugin/script files that drive the gate chain are themselves controls — a degraded `/commit` is a fail-open hole) |
 
 A commit may contain files from multiple categories. Run ALL applicable validations.
 
@@ -211,7 +211,7 @@ Only after all validations, the changelog review, and the adversarial review pas
    - If lock is held by another session, this will wait (up to 5 minutes)
    - If lock acquisition fails, stop and inform the user
 2. **Verify staged files**: Run `git status` to ensure only your session's files are staged
-3. **Create commit**: Run `git commit` with a descriptive message — the commit message is the durable record of *why* and *what*. For a significant or escalated unit, also capture the fuller decision trail (model/temperature, assumptions, review findings + disposition, evidence) per [[decision-log]].
+3. **Create commit**: Run `git commit` with a descriptive message — the commit message is the durable record of *why* and *what*. For a significant or escalated unit, also capture the fuller decision trail (model/temperature, assumptions, review findings + disposition, evidence) per [[decision-log]]. For a significant or control-class unit, additionally record the per-stage timing in a `telemetry` block in `.tmp/decisions/<id>.md` per [[decision-log]] — local-validation time broken down by check type (`stage.validate.unit_s`, `stage.validate.it_s`, `stage.build.docker_s`, plus lint/static checks) and rework cost (`review_iterations`, `rework_s`).
 4. **Release lock**: Run `.opencode/scripts/release-commit-lock.sh` (ALWAYS, even if commit fails)
 
 **IMPORTANT**: Use this bash pattern to ensure lock is always released:

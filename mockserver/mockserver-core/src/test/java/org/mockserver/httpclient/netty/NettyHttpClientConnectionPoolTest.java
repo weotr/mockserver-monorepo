@@ -42,9 +42,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.lessThan;
+import static org.hamcrest.Matchers.lessThanOrEqualTo;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.model.HttpRequest.request;
 
@@ -91,6 +93,21 @@ public class NettyHttpClientConnectionPoolTest {
 
     private NettyHttpClient unpooledClient() {
         Configuration configuration = configuration().forwardConnectionPoolEnabled(false);
+        return new NettyHttpClient(configuration, mockServerLogger, clientEventLoopGroup, null, false);
+    }
+
+    /**
+     * A pooled client with the opt-in keep-warm retention enabled and a small maxIdlePerKey (1) so
+     * that, were retention NOT raised by keep-warm, surplus channels would be closed back to 1 under
+     * concurrent load -> churn. With keep-warm on, channels are retained up to maxTotalPerKey and
+     * reused, so a sustained burst reuses a bounded warm set rather than churning fresh connections.
+     */
+    private NettyHttpClient keepWarmClient() {
+        Configuration configuration = configuration()
+            .forwardConnectionPoolEnabled(true)
+            .forwardConnectionPoolMaxIdlePerKey(1)
+            .forwardConnectionPoolKeepAlive(true)
+            .forwardConnectionPoolMaxTotalPerKey(64);
         return new NettyHttpClient(configuration, mockServerLogger, clientEventLoopGroup, null, false);
     }
 
@@ -272,6 +289,57 @@ public class NettyHttpClientConnectionPoolTest {
         assertThat("no corrupted/cross-talked responses", failures.get(), is(0));
         // and reuse actually happened: fewer connections were opened than total requests
         assertThat(upstream.acceptedConnections(), lessThan(threads * requestsPerThread));
+    }
+
+    /**
+     * Opt-in keep-warm retention end-to-end over real sockets. With keep-warm OFF and a small
+     * {@code maxIdlePerKey} of 1, a burst of concurrent same-upstream requests would close every
+     * channel except one back down on release (the churn): the warm set never grows past 1, so the
+     * next burst re-opens connections. With keep-warm ON the released channels are RETAINED up to
+     * {@code maxTotalPerKey}, so after the first warm-up burst subsequent sustained bursts reuse the
+     * warm set and open NO further connections. The test asserts that the total connections accepted
+     * is bounded (does not grow per request) across many sustained bursts -> requests-per-connection
+     * is high, i.e. no churn.
+     */
+    @Test
+    public void shouldRetainAndReuseWarmConnectionsUnderSustainedLoadWhenKeepAliveOn() throws Exception {
+        // given - keep-warm on with a deliberately tiny maxIdlePerKey (1) so that only keep-warm
+        // retention (raising the ceiling to maxTotalPerKey=64) can prevent churn
+        NettyHttpClient client = keepWarmClient();
+        int concurrency = 8;
+        int bursts = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(concurrency);
+
+        // when - many sustained bursts of concurrent requests to the same upstream
+        for (int burst = 0; burst < bursts; burst++) {
+            Future<?>[] futures = new Future<?>[concurrency];
+            for (int t = 0; t < concurrency; t++) {
+                futures[t] = executor.submit(() -> {
+                    try {
+                        HttpResponse response = client.sendRequest(request().withHeader("Host", "127.0.0.1:" + upstream.port()))
+                            .get(20, TimeUnit.SECONDS);
+                        assertThat(response.getStatusCode(), is(200));
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
+            for (Future<?> future : futures) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        }
+        executor.shutdown();
+
+        // then - the total connections accepted is bounded by the peak concurrency, NOT by the number
+        // of requests: the warm set is reused across every burst with no per-request churn. (With
+        // keep-warm OFF and maxIdlePerKey=1 this would re-open connections every burst, accepting far
+        // more.) We allow a little slack for cold-start scheduling but assert strong reuse.
+        int totalRequests = concurrency * bursts;
+        assertThat("warm set bounded by concurrency, not by request count",
+            upstream.acceptedConnections(), lessThanOrEqualTo(concurrency * 2));
+        double requestsPerConnection = (double) totalRequests / upstream.acceptedConnections();
+        assertThat("requests-per-connection is high under sustained load (no churn)",
+            requestsPerConnection, greaterThan(4.0));
     }
 
     /**

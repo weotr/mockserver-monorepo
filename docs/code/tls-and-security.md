@@ -326,6 +326,76 @@ For HTTP CONNECT proxy requests, MockServer supports Basic authentication:
 
 SOCKS5 proxy also supports username/password authentication (configured separately).
 
+## Data Plane Authentication
+
+All of the authentication above protects the **control plane** (`/mockserver/*`) or the `CONNECT`
+proxy. The **data plane** — the mocked endpoints themselves — is open by default. An opt-in,
+default-off gate (`dataPlaneAuthenticationRequired`) can require credentials on every mocked request.
+
+```mermaid
+flowchart TD
+    REQ([Request reaches data-plane dispatch]) --> EN{"dataPlaneAuthenticationRequired?"}
+    EN -->|false default| PROC([processAction — serve mock])
+    EN -->|true| CFG{"Any scheme configured?"}
+    CFG -->|No| DENY([401 — fail closed])
+    CFG -->|Yes| ANY{"Request satisfies ANY configured scheme? (Basic / Bearer / API-key)"}
+    ANY -->|Yes| PROC
+    ANY -->|No| DENY401([401 + WWW-Authenticate])
+```
+
+The gate sits at the top of the data-plane `else` branch in `HttpRequestHandler.channelRead0`, just
+before the existing mTLS-upgrade check and `httpActionHandler.processAction(...)`. Because control-plane
+routes, health/status/ready probes and `CONNECT` are all matched in **earlier** branches, reaching this
+branch already means the request is a genuine data-plane request — so control-plane administration,
+liveness/readiness probes and the proxy `CONNECT` handshake are never gated by data-plane auth.
+
+| Aspect | Behaviour |
+|--------|-----------|
+| Default | `dataPlaneAuthenticationRequired=false` — no gate, byte-identical to a server without the feature |
+| Schemes | HTTP Basic, Bearer token, API-key header — any combination |
+| Multi-scheme | **Accept-any** (logical OR): a request is accepted if it satisfies any one configured scheme. Adding a scheme can only widen the accepted set |
+| Required-but-unconfigured | **Fail-closed**: every data-plane request is rejected (401) rather than allowed |
+| Failure response | `401 Unauthorized`, body `Unauthorized for data plane`; `WWW-Authenticate: Basic realm="…"` when Basic is configured, else `Bearer` when Bearer is configured, else no challenge (API-key-only) |
+| Secret comparison | Constant-time (`MessageDigest.isEqual` on UTF-8 bytes) for password / token / API-key value; credential values never logged |
+
+The policy/decision lives in core (`DataPlaneAuthenticator`, `o.m.authentication.dataplane`) so it is unit
+testable; the Netty handlers only invoke it and write the 401. The invocation + 401-writing is itself
+factored into a single shared netty helper (`DataPlaneAuthenticationGate.isAuthenticated(...)`) so that
+**every** data-plane dispatch path enforces it identically — there is no transport on which the gate can be
+skipped. `configuration.dataPlaneAuthenticationRequired()` is a single boolean read, so the default-off
+path adds nothing measurable to the hot path.
+
+**Scope.** The gate covers every HTTP data-plane dispatch path:
+
+- **HTTP/1.1, HTTP/2 and gRPC-over-h2** — `HttpRequestHandler`, just before `httpActionHandler.processAction(...)`.
+- **HTTP/3 (QUIC), including gRPC-over-HTTP/3** — `Http3MockServerHandler`, at both the normal and the
+  gRPC data-plane dispatch sites, before `processAction(...)`. HTTP/3 carries the same HTTP
+  `Authorization` / api-key headers, so it is the same request type and the same gate applies. (This path
+  previously bypassed the gate — a fail-open — and is now closed.)
+- Requests tunnelled through a `CONNECT` proxy are decrypted and re-dispatched back through
+  `HttpRequestHandler`, so they are gated too once enabled.
+
+On all of the above, control-plane (`/mockserver/*`), liveness/status/ready probes and `CONNECT` are routed
+through `httpState.handle(...)` (or earlier branches) **before** the gate, so they remain reachable without
+data-plane credentials — an operator can still administer a locked-down server.
+
+**Out of scope.** Raw-binary proxy traffic handled by `BinaryRequestProxyingHandler` is a non-HTTP byte
+stream (no HTTP request structure), so HTTP credentials are not meaningful there and the gate does not
+apply. mTLS for incoming connections (`tlsMutualAuthenticationRequired`) is an orthogonal transport-layer
+check handled earlier in `PortUnificationHandler` and is unaffected.
+
+### Data-Plane Authentication Properties
+
+| Property | Default | Purpose |
+|----------|---------|---------|
+| `dataPlaneAuthenticationRequired` | false | Master switch — require auth on mocked endpoints |
+| `dataPlaneBasicAuthenticationUsername` | (none) | HTTP Basic username (Basic active only when both username and password are set) |
+| `dataPlaneBasicAuthenticationPassword` | (none) | HTTP Basic password |
+| `dataPlaneBasicAuthenticationRealm` | MockServer | Realm advertised in the `WWW-Authenticate: Basic` challenge |
+| `dataPlaneBearerAuthenticationToken` | (none) | Expected `Authorization: Bearer <token>` value |
+| `dataPlaneApiKeyAuthenticationHeader` | (none) | Header name carrying the API key (e.g. `X-API-Key`) |
+| `dataPlaneApiKeyAuthenticationValue` | (none) | Expected API-key value (API-key active only when both header and value are set) |
+
 ## TLS Configuration Properties
 
 | Property | Default | Purpose |

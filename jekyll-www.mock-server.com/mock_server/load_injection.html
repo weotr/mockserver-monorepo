@@ -16,6 +16,8 @@ sitemap:
 
 <p>This makes MockServer useful for <strong>resilience verification</strong>: inject a chaos fault (see <a href="/mock_server/chaos_testing.html">Chaos Testing</a>), apply load, then assert that your SLOs held — all from a single control plane, with no external load tool required.</p>
 
+<p>One instance injects tens of thousands of requests per second; to drive much more, run instances in parallel — see <a href="/mock_server/load_injection_performance.html">Load Injection Performance</a> for how injection scales across many instances.</p>
+
 <p><strong>Registry model: load, then trigger.</strong> Scenarios are organised as a <strong>registry of named scenarios</strong>. You first <strong>load</strong> (register) a scenario by name with <code class="inline code">PUT /mockserver/loadScenario</code> — this does <em>not</em> run it — then <strong>trigger</strong> one or many by name with <code class="inline code">PUT /mockserver/loadScenario/start</code> to run them <strong>concurrently</strong>, each with its own optional <strong>start delay</strong>. Loading is always allowed; <strong>triggering a run is off by default</strong>: <code class="inline code">start</code> returns <code class="inline code">403 Forbidden</code> until <code class="inline code">loadGenerationEnabled=true</code>. Hard caps on concurrent scenarios, virtual users, in-flight requests, RPS, duration, and step count prevent the feature from self-DoS-ing the server. Scenarios can be <strong>preloaded at startup</strong> from a JSON file via <code class="inline code">mockserver.loadScenarioInitializationJsonPath</code>.</p>
 
 <a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
@@ -38,6 +40,7 @@ sitemap:
 			<td style="vertical-align: top;">
 				<ul>
 					<li><a href="#quickstart">Quickstart</a></li>
+					<li><a href="#lifecycle_operations">Lifecycle Operations</a></li>
 					<li><a href="#control_plane_api">Control-Plane API</a></li>
 					<li><a href="#generate_from_openapi">Generate from OpenAPI</a></li>
 					<li><a href="#generate_from_recording">Generate from Recording</a></li>
@@ -84,9 +87,246 @@ sitemap:
 
 <h2>Quickstart</h2>
 
-<p>Enable load generation, <strong>load</strong> a 10-VU ramp-then-hold scenario, then <strong>trigger</strong> it:</p>
+<p>The whole flow is just a few <a href="#lifecycle_operations">logical steps</a>: <a href="#op_register"><strong>register</strong></a> a 10-VU ramp-then-hold scenario (this does not run it), <a href="#op_start"><strong>start</strong></a> it, <a href="#op_status"><strong>read its live status</strong></a>, then <a href="#op_stop"><strong>stop</strong></a> it. Pick your language:</p>
 
-<pre class="prettyprint code"><code class="code"># 1. Enable load generation (set once at startup or via the config endpoint)
+<button class="accordion">register, start, read status, then stop a ramp-then-hold scenario</button>
+<div class="panel">
+    <p>A closed-model ramp-then-hold scenario with default <code class="inline code">VELOCITY</code> templating: ramp 1 &rarr; 10 virtual users over 30&nbsp;seconds, then hold 10 VUs for a minute. A single step fetches a per-iteration order, pinned to an upstream by a <code class="inline code">Host</code> header and an explicit <code class="inline code">socketAddress</code>. The full lifecycle is exercised: <a href="#op_register"><strong>register</strong></a> (does not run), <a href="#op_start"><strong>start</strong></a>, <a href="#op_status"><strong>list</strong> all / read one scenario's live <strong>status</strong></a>, then <a href="#op_stop"><strong>stop</strong></a>.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.model.SocketAddress;
+
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("checkout-load")
+    .withProfile(LoadProfile.of(
+        LoadStage.rampVus(1, 10, 30000, RampCurve.LINEAR),
+        LoadStage.constantVus(10, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/orders/$iteration.index")
+            .withHeader("Host", "orders.svc:8080")
+            .withSocketAddress("orders.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.loadScenario(scenario);                  // 1. register (does NOT start it yet)
+client.startLoadScenarios("checkout-load");     // 2. start (requires loadGenerationEnabled=true)
+String listing = client.loadScenarios();        // 3. list all registered scenarios
+String status = client.getLoadScenario("checkout-load"); // live throughput / latency status
+client.stopLoadScenarios("checkout-load");      // 4. stop (no args stops ALL running scenarios)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+// The per-step field is `request` (a full HttpRequest), not `httpRequest`.
+var scenario = {
+    name: 'checkout-load',
+    profile: { stages: [
+        { type: 'VU', startVus: 1, endVus: 10, durationMillis: 30000, curve: 'LINEAR' },
+        { type: 'VU', vus: 10, durationMillis: 60000 }
+    ] },
+    steps: [
+        { request: { method: 'GET', path: '/api/orders/$iteration.index',
+                     headers: { Host: ['orders.svc:8080'] },
+                     socketAddress: { host: 'orders.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);                 // 1. register (does NOT start it yet)
+    await client.startLoadScenarios('checkout-load');    // 2. start (requires loadGenerationEnabled=true)
+    var listing = await client.loadScenarios();          // 3. list all registered scenarios
+    var status = await client.getLoadScenario('checkout-load'); // live status
+    await client.stopLoadScenarios('checkout-load');     // 4. stop (no arg stops ALL running scenarios)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import (HttpRequest, KeyToMultiValue, LoadProfile, LoadScenario,
+                        LoadStage, LoadStep, MockServerClient, SocketAddress)
+
+scenario = LoadScenario(
+    name="checkout-load",
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(30000, start_vus=1, end_vus=10, curve="LINEAR"),
+        LoadStage.vu_stage(60000, vus=10),
+    ]),
+    steps=[
+        LoadStep(request=HttpRequest(
+            method="GET", path="/api/orders/$iteration.index",
+            headers=[KeyToMultiValue(name="Host", values=["orders.svc:8080"])],
+            socket_address=SocketAddress(host="orders.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)                # 1. register (does NOT start it yet)
+    client.start_load_scenarios("checkout-load")  # 2. start (requires loadGenerationEnabled=true)
+    listing = client.load_scenarios()             # 3. list all registered scenarios
+    status = client.get_load_scenario("checkout-load")  # live status
+    client.stop_load_scenarios("checkout-load")   # 4. stop (None stops ALL running scenarios)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+scenario = LoadScenario.new(
+  name: 'checkout-load',
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(30_000, start_vus: 1, end_vus: 10, curve: 'LINEAR'),
+    LoadStage.vu(60_000, vus: 10)
+  ]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(method: 'GET', path: '/api/orders/$iteration.index',
+                                          socket_address: SocketAddress.new(host: 'orders.svc', port: 8080, scheme: 'HTTP'))
+                            .with_header('Host', 'orders.svc:8080'))
+  ]
+)
+
+client.load_scenario(scenario)               # 1. register (does NOT start it yet)
+client.start_load_scenarios('checkout-load') # 2. start (requires loadGenerationEnabled=true)
+client.load_scenarios                        # 3. list all registered scenarios
+client.get_load_scenario('checkout-load')    # live status
+client.stop_load_scenarios('checkout-load')  # 4. stop (nil stops ALL running scenarios)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    order := mockserver.Request().Method("GET").Path("/api/orders/$iteration.index").
+        Header("Host", "orders.svc:8080").Build()
+    order.SocketAddress = &amp;mockserver.SocketAddress{Host: "orders.svc", Port: 8080, Scheme: "HTTP"}
+
+    scenario := mockserver.LoadScenario{
+        Name: "checkout-load",
+        Profile: &amp;mockserver.LoadProfile{
+            Stages: []mockserver.LoadStage{
+                mockserver.RampVusStage(1, 10, 30000, mockserver.RampLinear),
+                mockserver.ConstantVusStage(10, 60000),
+            },
+        },
+        Steps: []mockserver.LoadStep{
+            {Request: &amp;order},
+        },
+    }
+
+    client.LoadScenario(scenario)              // 1. register (does NOT start it yet)
+    client.StartLoadScenarios("checkout-load") // 2. start (requires loadGenerationEnabled=true)
+    client.LoadScenarios()                     // 3. list all registered scenarios
+    client.GetLoadScenario("checkout-load")    // live status
+    client.StopLoadScenarios("checkout-load")  // 4. stop (no args stops ALL running scenarios)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var ordersRequest = HttpRequest.Request()
+    .WithMethod("GET").WithPath("/api/orders/$iteration.index")
+    .WithHeader("Host", "orders.svc:8080")
+    .Build();
+ordersRequest.SocketAddress = new SocketAddress { Host = "orders.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "checkout-load",
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt;
+        {
+            LoadStage.RampVus(1, 10, 30000, RampCurve.LINEAR),
+            LoadStage.ConstantVus(10, 60000)
+        }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = ordersRequest }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);              // 1. register (does NOT start it yet)
+await client.StartLoadScenariosAsync("checkout-load"); // 2. start (requires loadGenerationEnabled=true)
+var listing = await client.LoadScenariosAsync();       // 3. list all registered scenarios
+var status = await client.GetLoadScenarioAsync("checkout-load"); // live status
+await client.StopLoadScenariosAsync("checkout-load");  // 4. stop (no args stops ALL running scenarios)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{
+    ClientBuilder, HttpRequest, LoadProfile, LoadScenario, LoadStage, LoadStep, RampCurve, SocketAddress,
+};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_ramp(1, 10, 30_000, RampCurve::Linear),
+    LoadStage::vu_hold(10, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/api/orders/$iteration.index")
+        .header("Host", "orders.svc:8080")
+        .socket_address(SocketAddress::new("orders.svc", 8080).scheme("HTTP"))),
+];
+let scenario = LoadScenario::new("checkout-load", profile, steps);
+
+client.load_scenario(&amp;scenario).unwrap();                 // 1. register (does NOT start it yet)
+client.start_load_scenarios(&amp;["checkout-load"]).unwrap(); // 2. start (requires loadGenerationEnabled=true)
+client.load_scenarios().unwrap();                         // 3. list all registered scenarios
+client.get_load_scenario("checkout-load").unwrap();       // live status
+client.stop_load_scenarios(&amp;["checkout-load"]).unwrap();  // 4. stop (&amp;[] stops ALL running scenarios)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\HttpRequest;
+use MockServer\LoadProfile;
+use MockServer\LoadScenario;
+use MockServer\LoadStage;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$scenario = LoadScenario::scenario('checkout-load')
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuRamp(1, 10, 30000, 'LINEAR'),
+        LoadStage::vuHold(10, 60000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/api/orders/$iteration.index')
+            -&gt;header('Host', 'orders.svc:8080')
+            -&gt;socketAddress('orders.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;loadScenario($scenario);              // 1. register (does NOT start it yet)
+$client-&gt;startLoadScenarios('checkout-load');  // 2. start (requires loadGenerationEnabled=true)
+$client-&gt;loadScenarios();                       // 3. list all registered scenarios
+$client-&gt;getLoadScenario('checkout-load');      // live status
+$client-&gt;stopLoadScenarios('checkout-load');    // 4. stop (null stops ALL running scenarios)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># 1. Enable load generation (set once at startup or via the config endpoint)
 docker run -e MOCKSERVER_LOAD_GENERATION_ENABLED=true mockserver/mockserver
 
 # 2. LOAD (register) a scenario — this does NOT run it
@@ -125,6 +365,8 @@ curl -s http://localhost:1080/mockserver/loadScenario
 # 5. Stop it (stays registered, STOPPED — can be re-triggered)
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
   -d '{ "name": "checkout-load" }'</code></pre>
+    </div>
+</div>
 
 <a id="control_plane_api" class="anchor" href="#control_plane_api">&nbsp;</a>
 
@@ -194,10 +436,92 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
     </tbody>
 </table>
 
+<a id="lifecycle_operations" class="anchor" href="#lifecycle_operations">&nbsp;</a>
+
+<h3>Lifecycle operations at a glance</h3>
+
+<p>However you drive a load test — from a client library, the REST API, or the dashboard — it always follows the same handful of <strong>logical steps</strong>. The code examples on this page are labelled with these step names rather than HTTP verbs and paths. Each step below links to the detail of <em>what you can configure</em> at that point.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Step</th>
+            <th>What it does</th>
+            <th>What you can specify</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td id="op_register"><strong>Register</strong></td>
+            <td>Stage a named scenario in the registry <em>without</em> running it (state <code class="inline code">LOADED</code>). Always allowed, even when load generation is disabled. Re-registering the same name replaces it.</td>
+            <td>The whole <a href="#load_scenario_model">scenario model</a> — its <a href="#steps">steps</a> and <a href="#load_profile">load profile</a> (or a <a href="#named_shapes">named shape</a>), plus optional <a href="#data_feeders">data feeder</a>, <a href="#iteration_variables">template variables</a>, <a href="#cross_step_capture">cross-step capture</a>, <a href="#weighted_step_selection">weighted selection</a>, <a href="#thresholds">in-run thresholds</a>, <a href="#adaptive_pacing">pacing</a>, and custom labels. Or have one generated from an <a href="#generate_from_openapi">OpenAPI spec</a> or a <a href="#generate_from_recording">recording</a>.</td>
+        </tr>
+        <tr>
+            <td id="op_start"><strong>Start</strong></td>
+            <td>Trigger one or many registered scenarios to run concurrently. This is the only step that needs <code class="inline code">loadGenerationEnabled=true</code>.</td>
+            <td>A single name or several at once; each honours its own <code class="inline code">startDelayMillis</code> so triggered scenarios can begin at staggered offsets. Bounded by the <a href="#safety_caps">safety caps</a>.</td>
+        </tr>
+        <tr>
+            <td id="op_status"><strong>Read status</strong></td>
+            <td>Poll live progress while a scenario runs, or read its retained terminal snapshot afterwards. List every scenario, or read one by name.</td>
+            <td>Live counters, <a href="#corrected_latency">corrected-latency percentiles</a>, the pass/fail <a href="#thresholds">verdict</a>, and a full <a href="#summary_report">summary report</a> (JSON or JUnit XML).</td>
+        </tr>
+        <tr>
+            <td id="op_stop"><strong>Stop</strong></td>
+            <td>Stop one, several, or all running scenarios. Stopped scenarios stay registered (state <code class="inline code">STOPPED</code>) and can be re-triggered.</td>
+            <td>One name, several names, or none at all (stop everything running).</td>
+        </tr>
+        <tr>
+            <td id="op_clear"><strong>Clear</strong></td>
+            <td>Remove a scenario from the registry, or clear the whole registry — stopping anything still running first.</td>
+            <td>One name, or the entire registry (idempotent).</td>
+        </tr>
+    </tbody>
+</table>
+
 <p>Trigger several at once — each begins at its own offset via <code class="inline code">startDelayMillis</code>:</p>
 
-<pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
+<button class="accordion">trigger several registered scenarios at once</button>
+<div class="panel">
+    <p><strong>Trigger</strong> several already-registered scenarios in a single call so they run <strong>concurrently</strong> &mdash; here <code class="inline code">checkout-load</code> and <code class="inline code">background-poller</code>. Each honours its own start delay. Both must already be <strong>registered</strong>, and triggering a run requires <code class="inline code">loadGenerationEnabled=true</code>.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">client.startLoadScenarios("checkout-load", "background-poller");</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">await client.startLoadScenarios(['checkout-load', 'background-poller']);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">client.start_load_scenarios(["checkout-load", "background-poller"])</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">client.start_load_scenarios(['checkout-load', 'background-poller'])</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">client.StartLoadScenarios("checkout-load", "background-poller")</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">await client.StartLoadScenariosAsync("checkout-load", "background-poller");</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">client.start_load_scenarios(&amp;["checkout-load", "background-poller"]).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$client-&gt;startLoadScenarios(['checkout-load', 'background-poller']);</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
   -d '{ "names": ["checkout-load", "background-poller"] }'</code></pre>
+    </div>
+</div>
 
 <a id="dashboard_ui" class="anchor" href="#dashboard_ui">&nbsp;</a>
 
@@ -468,7 +792,222 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
 
 <p>The <code class="inline code">metric</code> field controls what the shape drives: <code class="inline code">VU</code> (concurrent virtual users, closed model) or <code class="inline code">RATE</code> (arrival rate in iterations/second, open model).</p>
 
-<pre class="prettyprint code"><code class="code"># A SPIKE shape — no need to write five explicit stages
+<button class="accordion">SPIKE shape — ramp to a peak, hold, ramp down (no explicit stages)</button>
+<div class="panel">
+    <p>Drive a named <code class="inline code">SPIKE</code> shape instead of writing the five explicit stages by hand: ramp the arrival <code class="inline code">RATE</code> from a baseline of 10 up to a peak of 200 iterations/second over 15&nbsp;seconds, hold the peak for 30&nbsp;seconds, ramp back down over 15&nbsp;seconds, then hold the baseline for a 30&nbsp;second recovery. A single step drives each iteration against the target service. Each tab builds the scenario, then <strong>register</strong>s it and <strong>start</strong>s it (starting requires <code class="inline code">loadGenerationEnabled=true</code>).</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.model.SocketAddress;
+
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("spike-test")
+    .withProfile(LoadProfile.shaped(
+        LoadShape.spike(LoadShape.Metric.RATE, 10, 200, 15000, 30000, 15000)
+            .withRecoveryHoldMillis(30000L)))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/health")
+            .withSocketAddress("target.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.loadScenario(scenario);            // register the SPIKE-shaped scenario
+client.startLoadScenarios("spike-test");  // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+// A named SPIKE shape expands into ramp-up / hold / ramp-down / recovery stages.
+var scenario = {
+    name: 'spike-test',
+    profile: {
+        shape: {
+            type: 'SPIKE', metric: 'RATE',
+            baseline: 10, peak: 200,
+            rampUpMillis: 15000, holdMillis: 30000,
+            rampDownMillis: 15000, recoveryHoldMillis: 30000
+        }
+    },
+    steps: [
+        { request: { method: 'GET', path: '/api/health',
+                     socketAddress: { host: 'target.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);            // register the SPIKE-shaped scenario
+    await client.startLoadScenarios('spike-test');  // start (requires loadGenerationEnabled=true)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import (HttpRequest, LoadProfile, LoadScenario, LoadShape,
+                        LoadStep, MockServerClient, SocketAddress)
+
+scenario = LoadScenario(
+    name="spike-test",
+    profile=LoadProfile(shape=LoadShape(
+        type="SPIKE", metric="RATE",
+        baseline=10, peak=200,
+        ramp_up_millis=15000, hold_millis=30000,
+        ramp_down_millis=15000, recovery_hold_millis=30000,
+    )),
+    steps=[
+        LoadStep(request=HttpRequest(method="GET", path="/api/health",
+                 socket_address=SocketAddress(host="target.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)             # register the SPIKE-shaped scenario
+    client.start_load_scenarios("spike-test")  # start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+scenario = LoadScenario.new(
+  name: 'spike-test',
+  profile: LoadProfile.new(shape: LoadShape.new(
+    type: 'SPIKE', metric: 'RATE',
+    baseline: 10, peak: 200,
+    ramp_up_millis: 15_000, hold_millis: 30_000,
+    ramp_down_millis: 15_000, recovery_hold_millis: 30_000
+  )),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(method: 'GET', path: '/api/health',
+                 socket_address: SocketAddress.new(host: 'target.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)            # register the SPIKE-shaped scenario
+client.start_load_scenarios('spike-test') # start (requires loadGenerationEnabled=true)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    health := mockserver.Request().Method("GET").Path("/api/health").Build()
+    health.SocketAddress = &amp;mockserver.SocketAddress{Host: "target.svc", Port: 8080, Scheme: "HTTP"}
+
+    // A named SPIKE shape expands into ramp-up / hold / ramp-down / recovery stages.
+    baseline := 10.0
+    peak := 200.0
+    scenario := mockserver.LoadScenario{
+        Name: "spike-test",
+        Profile: &amp;mockserver.LoadProfile{
+            Shape: &amp;mockserver.LoadShape{
+                Type: mockserver.LoadShapeSpike, Metric: mockserver.LoadShapeMetricRate,
+                Baseline: &amp;baseline, Peak: &amp;peak,
+                RampUpMillis: 15000, HoldMillis: 30000,
+                RampDownMillis: 15000, RecoveryHoldMillis: 30000,
+            },
+        },
+        Steps: []mockserver.LoadStep{ {Request: &amp;health} },
+    }
+
+    client.LoadScenario(scenario)           // register the SPIKE-shaped scenario
+    client.StartLoadScenarios("spike-test") // start (requires loadGenerationEnabled=true)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var health = HttpRequest.Request().WithMethod("GET").WithPath("/api/health").Build();
+health.SocketAddress = new SocketAddress { Host = "target.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "spike-test",
+    Profile = new LoadProfile
+    {
+        Shape = new LoadShape
+        {
+            Type = LoadShapeType.SPIKE, Metric = LoadShapeMetric.RATE,
+            Baseline = 10, Peak = 200,
+            RampUpMillis = 15000, HoldMillis = 30000,
+            RampDownMillis = 15000, RecoveryHoldMillis = 30000
+        }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = health }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);           // register the SPIKE-shaped scenario
+await client.StartLoadScenariosAsync("spike-test"); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{
+    ClientBuilder, HttpRequest, LoadProfile, LoadScenario, LoadShape, LoadShapeMetric, LoadStep,
+    SocketAddress,
+};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let profile = LoadProfile::shaped(
+    LoadShape::spike(10.0, 200.0, 15_000, 30_000, 15_000)
+        .recovery_hold_millis(30_000)
+        .metric(LoadShapeMetric::Rate),
+);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/api/health")
+        .socket_address(SocketAddress::new("target.svc", 8080))),
+];
+let scenario = LoadScenario::new("spike-test", profile, steps);
+
+client.load_scenario(&amp;scenario).unwrap();              // register the SPIKE-shaped scenario
+client.start_load_scenarios(&amp;["spike-test"]).unwrap(); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\HttpRequest;
+use MockServer\LoadProfile;
+use MockServer\LoadScenario;
+use MockServer\LoadShape;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$scenario = LoadScenario::scenario('spike-test')
+    -&gt;profile(LoadProfile::fromShape(
+        LoadShape::spike('RATE', 10, 200, 15000, 30000, 15000)-&gt;recoveryHoldMillis(30000)
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/api/health')
+            -&gt;socketAddress('target.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;loadScenario($scenario);          // register the SPIKE-shaped scenario
+$client-&gt;startLoadScenarios('spike-test'); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># A SPIKE shape — no need to write five explicit stages
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -491,7 +1030,12 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
                      "socketAddress": { "host": "target.svc", "port": 8080, "scheme": "HTTP" } }
       }
     ]
-  }'</code></pre>
+  }'
+
+# ...then start it (requires loadGenerationEnabled=true)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "spike-test" }'</code></pre>
+    </div>
+</div>
 
 <a id="adaptive_pacing" class="anchor" href="#adaptive_pacing">&nbsp;</a>
 
@@ -530,7 +1074,207 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 
 <p>Pacing measures the full iteration elapsed time (including any per-step <code class="inline code">thinkTime</code> waits) and delays only the <em>start of the next iteration</em>. On overrun (the iteration took longer than the cycle) the next iteration starts immediately — pacing never makes a slow VU go faster. Pacing applies only to the closed-model VU loop; open-model <code class="inline code">RATE</code> iterations ignore it.</p>
 
-<pre class="prettyprint code"><code class="code"># Each VU loops at most once per 500 ms (2 iterations/second/VU max)
+<button class="accordion">adaptive pacing — cap each VU's iteration rate</button>
+<div class="panel">
+    <p>Cap each virtual user's iteration rate with scenario-level adaptive pacing: <code class="inline code">CONSTANT_PACING</code> with a 500&nbsp;ms target cycle means every VU loops at most twice per second, no matter how fast the target responds. A flat hold of 10 VUs runs for a minute, each iteration driving one step against the target service. Each tab builds the scenario, then <strong>register</strong>s it and <strong>start</strong>s it (starting requires <code class="inline code">loadGenerationEnabled=true</code>).</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.model.SocketAddress;
+
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("paced-load")
+    .withPacing(LoadPacing.constantPacing(500))
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(10, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/products")
+            .withSocketAddress("target.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.loadScenario(scenario);            // register the paced scenario
+client.startLoadScenarios("paced-load");  // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+// CONSTANT_PACING caps each VU at one iteration per 500 ms (2 iterations/second/VU).
+var scenario = {
+    name: 'paced-load',
+    pacing: { mode: 'CONSTANT_PACING', value: 500 },
+    profile: { stages: [ { type: 'VU', vus: 10, durationMillis: 60000 } ] },
+    steps: [
+        { request: { method: 'GET', path: '/api/products',
+                     socketAddress: { host: 'target.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);            // register the paced scenario
+    await client.startLoadScenarios('paced-load');  // start (requires loadGenerationEnabled=true)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import (HttpRequest, LoadPacing, LoadProfile, LoadScenario,
+                        LoadStage, LoadStep, MockServerClient, SocketAddress)
+
+scenario = LoadScenario(
+    name="paced-load",
+    pacing=LoadPacing(mode="CONSTANT_PACING", value=500),
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(60000, vus=10),
+    ]),
+    steps=[
+        LoadStep(request=HttpRequest(method="GET", path="/api/products",
+                 socket_address=SocketAddress(host="target.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)            # register the paced scenario
+    client.start_load_scenarios("paced-load") # start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+scenario = LoadScenario.new(
+  name: 'paced-load',
+  pacing: LoadPacing.new(mode: 'CONSTANT_PACING', value: 500),
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(60_000, vus: 10)
+  ]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(method: 'GET', path: '/api/products',
+                 socket_address: SocketAddress.new(host: 'target.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)            # register the paced scenario
+client.start_load_scenarios('paced-load') # start (requires loadGenerationEnabled=true)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    products := mockserver.Request().Method("GET").Path("/api/products").Build()
+    products.SocketAddress = &amp;mockserver.SocketAddress{Host: "target.svc", Port: 8080, Scheme: "HTTP"}
+
+    scenario := mockserver.LoadScenario{
+        Name:   "paced-load",
+        Pacing: &amp;mockserver.LoadPacing{Mode: mockserver.LoadPacingConstantPacing, Value: 500},
+        Profile: &amp;mockserver.LoadProfile{
+            Stages: []mockserver.LoadStage{
+                mockserver.ConstantVusStage(10, 60000),
+            },
+        },
+        Steps: []mockserver.LoadStep{ {Request: &amp;products} },
+    }
+
+    client.LoadScenario(scenario)           // register the paced scenario
+    client.StartLoadScenarios("paced-load") // start (requires loadGenerationEnabled=true)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var products = HttpRequest.Request().WithMethod("GET").WithPath("/api/products").Build();
+products.SocketAddress = new SocketAddress { Host = "target.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "paced-load",
+    Pacing = new LoadPacing { Mode = LoadPacingMode.CONSTANT_PACING, Value = 500 },
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt;
+        {
+            LoadStage.ConstantVus(10, 60000)
+        }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = products }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);           // register the paced scenario
+await client.StartLoadScenariosAsync("paced-load"); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{
+    ClientBuilder, HttpRequest, LoadPacing, LoadProfile, LoadScenario, LoadStage, LoadStep,
+    SocketAddress,
+};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(10, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/api/products")
+        .socket_address(SocketAddress::new("target.svc", 8080))),
+];
+let scenario = LoadScenario::new("paced-load", profile, steps)
+    .pacing(LoadPacing::constant_pacing(500.0));
+
+client.load_scenario(&amp;scenario).unwrap();              // register the paced scenario
+client.start_load_scenarios(&amp;["paced-load"]).unwrap(); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\HttpRequest;
+use MockServer\LoadPacing;
+use MockServer\LoadProfile;
+use MockServer\LoadScenario;
+use MockServer\LoadStage;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$scenario = LoadScenario::scenario('paced-load')
+    -&gt;pacing(LoadPacing::constantPacing(500))
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(10, 60000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/api/products')
+            -&gt;socketAddress('target.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;loadScenario($scenario);          // register the paced scenario
+$client-&gt;startLoadScenarios('paced-load'); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Each VU loops at most once per 500 ms (2 iterations/second/VU max)
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -543,7 +1287,12 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
                      "socketAddress": { "host": "target.svc", "port": 8080, "scheme": "HTTP" } }
       }
     ]
-  }'</code></pre>
+  }'
+
+# ...then start it (requires loadGenerationEnabled=true)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "paced-load" }'</code></pre>
+    </div>
+</div>
 
 <a id="iteration_variables" class="anchor" href="#iteration_variables">&nbsp;</a>
 
@@ -565,43 +1314,43 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
             <td><code class="inline code">index</code></td>
             <td>Global iteration index across all VUs (0-based)</td>
             <td><code class="inline code">$iteration.index</code></td>
-            <td><code class="inline code">{{iteration.index}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.index}}{% endraw %}</code></td>
         </tr>
         <tr>
             <td><code class="inline code">vuId</code></td>
             <td>ID of the virtual user running this iteration (0-based)</td>
             <td><code class="inline code">$iteration.vuId</code></td>
-            <td><code class="inline code">{{iteration.vuId}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.vuId}}{% endraw %}</code></td>
         </tr>
         <tr>
             <td><code class="inline code">vuIteration</code></td>
             <td>Iteration count within this specific VU (0-based)</td>
             <td><code class="inline code">$iteration.vuIteration</code></td>
-            <td><code class="inline code">{{iteration.vuIteration}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.vuIteration}}{% endraw %}</code></td>
         </tr>
         <tr>
             <td><code class="inline code">elapsedMillis</code></td>
             <td>Milliseconds since the scenario started</td>
             <td><code class="inline code">$iteration.elapsedMillis</code></td>
-            <td><code class="inline code">{{iteration.elapsedMillis}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.elapsedMillis}}{% endraw %}</code></td>
         </tr>
         <tr>
             <td><code class="inline code">count</code></td>
             <td>Total requests dispatched so far (across all VUs)</td>
             <td><code class="inline code">$iteration.count</code></td>
-            <td><code class="inline code">{{iteration.count}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.count}}{% endraw %}</code></td>
         </tr>
         <tr>
             <td><code class="inline code">data</code></td>
             <td>The data-feeder row for this iteration (a map of column → value; empty when no feeder is set)</td>
             <td><code class="inline code">$iteration.data.column</code></td>
-            <td><code class="inline code">{{iteration.data.column}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.data.column}}{% endraw %}</code></td>
         </tr>
         <tr>
             <td><code class="inline code">captured</code></td>
             <td>Variables captured from earlier steps in the same iteration (a map of name → value; see <a href="#cross_step_capture">Cross-Step Capture</a>)</td>
             <td><code class="inline code">$iteration.captured.token</code></td>
-            <td><code class="inline code">{{iteration.captured.token}}</code></td>
+            <td><code class="inline code">{% raw %}{{iteration.captured.token}}{% endraw %}</code></td>
         </tr>
     </tbody>
 </table>
@@ -650,7 +1399,288 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
     </tbody>
 </table>
 
-<pre class="prettyprint code"><code class="code"># Inline rows — CIRCULAR: each iteration picks the next user in round-robin
+<button class="accordion">data feeder — inline rows (round-robin per iteration)</button>
+<div class="panel">
+    <p>Drive each iteration from an inline round-robin dataset. A scenario-level <strong>feeder</strong> supplies three rows (user + account); with the <code class="inline code">CIRCULAR</code> strategy each iteration picks the next row, so requests cycle alice &rarr; bob &rarr; carol &rarr; alice. The Mustache-templated path and <code class="inline code">X-User</code> header read the current row's columns, and a fixed <code class="inline code">Host</code> header plus <code class="inline code">socketAddress</code> route the call to the target. Hold 5 virtual users for a minute, then <strong>register</strong>.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.model.HttpTemplate;
+import org.mockserver.model.SocketAddress;
+import java.util.List;
+import java.util.Map;
+
+import static org.mockserver.load.LoadFeeder.loadFeeder;
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("user-browse")
+    .withTemplateType(HttpTemplate.TemplateType.MUSTACHE)
+    .withFeeder(loadFeeder()
+        .withRows(List.of(
+            Map.of("userId", "alice", "accountId", "A1"),
+            Map.of("userId", "bob", "accountId", "A2"),
+            Map.of("userId", "carol", "accountId", "A3")))
+        .withStrategy(LoadFeeder.Strategy.CIRCULAR))
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(5, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET")
+                .withPath("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}")
+                .withHeader("X-User", "{% raw %}{{iteration.data.userId}}{% endraw %}")
+                .withHeader("Host", "api.svc:8080")
+                .withSocketAddress("api.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.loadScenario(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+var scenario = {
+    name: 'user-browse',
+    templateType: 'MUSTACHE',
+    feeder: {
+        strategy: 'CIRCULAR',
+        rows: [
+            { userId: 'alice', accountId: 'A1' },
+            { userId: 'bob', accountId: 'A2' },
+            { userId: 'carol', accountId: 'A3' }
+        ]
+    },
+    profile: { stages: [ { type: 'VU', vus: 5, durationMillis: 60000 } ] },
+    steps: [
+        { request: { method: 'GET', path: '/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}',
+                     headers: { 'X-User': ['{% raw %}{{iteration.data.userId}}{% endraw %}'], 'Host': ['api.svc:8080'] },
+                     socketAddress: { host: 'api.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);   // register (does NOT start it yet)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import (HttpRequest, KeyToMultiValue, LoadFeeder, LoadProfile,
+                        LoadScenario, LoadStage, LoadStep, MockServerClient, SocketAddress)
+
+scenario = LoadScenario(
+    name="user-browse",
+    template_type="MUSTACHE",
+    feeder=LoadFeeder(
+        rows=[
+            {"userId": "alice", "accountId": "A1"},
+            {"userId": "bob", "accountId": "A2"},
+            {"userId": "carol", "accountId": "A3"},
+        ],
+        strategy="CIRCULAR",
+    ),
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(60000, vus=5),
+    ]),
+    steps=[
+        LoadStep(request=HttpRequest(
+            method="GET",
+            path="/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}",
+            headers=[
+                KeyToMultiValue(name="X-User", values=["{% raw %}{{iteration.data.userId}}{% endraw %}"]),
+                KeyToMultiValue(name="Host", values=["api.svc:8080"]),
+            ],
+            socket_address=SocketAddress(host="api.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)   # register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+scenario = LoadScenario.new(
+  name: 'user-browse',
+  template_type: 'MUSTACHE',
+  feeder: LoadFeeder.new(
+    strategy: 'CIRCULAR',
+    rows: [
+      { 'userId' =&gt; 'alice', 'accountId' =&gt; 'A1' },
+      { 'userId' =&gt; 'bob',   'accountId' =&gt; 'A2' },
+      { 'userId' =&gt; 'carol', 'accountId' =&gt; 'A3' }
+    ]
+  ),
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(60_000, vus: 5)
+  ]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(
+      method: 'GET',
+      path: '/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}',
+      headers: [
+        KeyToMultiValue.new(name: 'X-User', values: ['{% raw %}{{iteration.data.userId}}{% endraw %}']),
+        KeyToMultiValue.new(name: 'Host', values: ['api.svc:8080'])
+      ],
+      socket_address: SocketAddress.new(host: 'api.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)   # register (does NOT start it yet)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    browse := mockserver.Request().Method("GET").Path("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}").
+        Header("X-User", "{% raw %}{{iteration.data.userId}}{% endraw %}").
+        Header("Host", "api.svc:8080").Build()
+    browse.SocketAddress = &amp;mockserver.SocketAddress{Host: "api.svc", Port: 8080, Scheme: "HTTP"}
+
+    scenario := mockserver.LoadScenario{
+        Name:         "user-browse",
+        TemplateType: "MUSTACHE",
+        Feeder: &amp;mockserver.LoadFeeder{
+            Strategy: mockserver.LoadFeederCircular,
+            Rows: []map[string]string{
+                {"userId": "alice", "accountId": "A1"},
+                {"userId": "bob", "accountId": "A2"},
+                {"userId": "carol", "accountId": "A3"},
+            },
+        },
+        Profile: &amp;mockserver.LoadProfile{
+            Stages: []mockserver.LoadStage{
+                mockserver.ConstantVusStage(5, 60000),
+            },
+        },
+        Steps: []mockserver.LoadStep{
+            {Request: &amp;browse},
+        },
+    }
+
+    client.LoadScenario(scenario)   // register (does NOT start it yet)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var browse = HttpRequest.Request().WithMethod("GET").WithPath("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}")
+    .WithHeader("X-User", "{% raw %}{{iteration.data.userId}}{% endraw %}")
+    .WithHeader("Host", "api.svc:8080")
+    .Build();
+browse.SocketAddress = new SocketAddress { Host = "api.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "user-browse",
+    TemplateType = LoadTemplateType.MUSTACHE,
+    Feeder = new LoadFeeder
+    {
+        Strategy = LoadFeederStrategy.CIRCULAR,
+        Rows = new List&lt;Dictionary&lt;string, string&gt;&gt;
+        {
+            new() { ["userId"] = "alice", ["accountId"] = "A1" },
+            new() { ["userId"] = "bob", ["accountId"] = "A2" },
+            new() { ["userId"] = "carol", ["accountId"] = "A3" }
+        }
+    },
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(5, 60000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = browse }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{
+    ClientBuilder, HttpRequest, LoadFeeder, LoadFeederStrategy, LoadProfile, LoadScenario,
+    LoadStage, LoadStep, SocketAddress,
+};
+use std::collections::HashMap;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let feeder = LoadFeeder::rows(vec![
+    HashMap::from([("userId".to_string(), "alice".to_string()), ("accountId".to_string(), "A1".to_string())]),
+    HashMap::from([("userId".to_string(), "bob".to_string()), ("accountId".to_string(), "A2".to_string())]),
+    HashMap::from([("userId".to_string(), "carol".to_string()), ("accountId".to_string(), "A3".to_string())]),
+])
+.strategy(LoadFeederStrategy::Circular);
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(5, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}")
+        .header("X-User", "{% raw %}{{iteration.data.userId}}{% endraw %}")
+        .header("Host", "api.svc:8080")
+        .socket_address(SocketAddress::new("api.svc", 8080))),
+];
+let scenario = LoadScenario::new("user-browse", profile, steps)
+    .template_type("MUSTACHE")
+    .feeder(feeder);
+
+client.load_scenario(&amp;scenario).unwrap();   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\HttpRequest;
+use MockServer\LoadFeeder;
+use MockServer\LoadProfile;
+use MockServer\LoadScenario;
+use MockServer\LoadStage;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$scenario = LoadScenario::scenario('user-browse')
+    -&gt;templateType('MUSTACHE')
+    -&gt;feeder(LoadFeeder::rows([
+        ['userId' =&gt; 'alice', 'accountId' =&gt; 'A1'],
+        ['userId' =&gt; 'bob', 'accountId' =&gt; 'A2'],
+        ['userId' =&gt; 'carol', 'accountId' =&gt; 'A3'],
+    ])-&gt;strategy('CIRCULAR'))
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(5, 60000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}')
+            -&gt;header('X-User', '{% raw %}{{iteration.data.userId}}{% endraw %}')
+            -&gt;header('Host', 'api.svc:8080')
+            -&gt;socketAddress('api.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;loadScenario($scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Inline rows — CIRCULAR: each iteration picks the next user in round-robin
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -669,16 +1699,207 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
       {
         "request": {
           "method": "GET",
-          "path": "/accounts/{{iteration.data.accountId}}",
-          "headers": { "X-User": ["{{iteration.data.userId}}"],
+          "path": "/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}",
+          "headers": { "X-User": ["{% raw %}{{iteration.data.userId}}{% endraw %}"],
                        "Host": ["api.svc:8080"] },
           "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
         }
       }
     ]
-  }'
+  }'</code></pre>
+    </div>
+</div>
 
-# Equivalent with raw CSV — parse happens once at scenario load time
+<button class="accordion">data feeder — raw CSV</button>
+<div class="panel">
+    <p>The same round-robin dataset supplied as a raw <code class="inline code">CSV</code> string instead of inline rows &mdash; MockServer parses it once at register time. Each iteration still picks the next row in <code class="inline code">CIRCULAR</code> order and exposes its columns to the Mustache-templated path. Hold 5 virtual users for a minute, then <strong>register</strong>.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">LoadScenario scenario = LoadScenario.loadScenario("user-browse-csv")
+    .withTemplateType(HttpTemplate.TemplateType.MUSTACHE)
+    .withFeeder(loadFeeder()
+        .withData("userId,accountId\nalice,A1\nbob,A2\ncarol,A3")
+        .withFormat(LoadFeeder.Format.CSV)
+        .withStrategy(LoadFeeder.Strategy.CIRCULAR))
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(5, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET")
+                .withPath("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}")
+                .withHeader("Host", "api.svc:8080")
+                .withSocketAddress("api.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.loadScenario(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'user-browse-csv',
+    templateType: 'MUSTACHE',
+    feeder: {
+        format: 'CSV',
+        strategy: 'CIRCULAR',
+        data: 'userId,accountId\nalice,A1\nbob,A2\ncarol,A3'
+    },
+    profile: { stages: [ { type: 'VU', vus: 5, durationMillis: 60000 } ] },
+    steps: [
+        { request: { method: 'GET', path: '/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}',
+                     headers: { 'Host': ['api.svc:8080'] },
+                     socketAddress: { host: 'api.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);   // register (does NOT start it yet)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="user-browse-csv",
+    template_type="MUSTACHE",
+    feeder=LoadFeeder(
+        data="userId,accountId\nalice,A1\nbob,A2\ncarol,A3",
+        format="CSV",
+        strategy="CIRCULAR",
+    ),
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(60000, vus=5),
+    ]),
+    steps=[
+        LoadStep(request=HttpRequest(
+            method="GET",
+            path="/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}",
+            headers=[KeyToMultiValue(name="Host", values=["api.svc:8080"])],
+            socket_address=SocketAddress(host="api.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)   # register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'user-browse-csv',
+  template_type: 'MUSTACHE',
+  feeder: LoadFeeder.new(
+    format: 'CSV',
+    strategy: 'CIRCULAR',
+    data: "userId,accountId\nalice,A1\nbob,A2\ncarol,A3"
+  ),
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(60_000, vus: 5)
+  ]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(
+      method: 'GET',
+      path: '/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}',
+      headers: [KeyToMultiValue.new(name: 'Host', values: ['api.svc:8080'])],
+      socket_address: SocketAddress.new(host: 'api.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)   # register (does NOT start it yet)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">browse := mockserver.Request().Method("GET").Path("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}").
+    Header("Host", "api.svc:8080").Build()
+browse.SocketAddress = &amp;mockserver.SocketAddress{Host: "api.svc", Port: 8080, Scheme: "HTTP"}
+
+scenario := mockserver.LoadScenario{
+    Name:         "user-browse-csv",
+    TemplateType: "MUSTACHE",
+    Feeder: &amp;mockserver.LoadFeeder{
+        Data:     "userId,accountId\nalice,A1\nbob,A2\ncarol,A3",
+        Format:   "CSV",
+        Strategy: mockserver.LoadFeederCircular,
+    },
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.ConstantVusStage(5, 60000),
+        },
+    },
+    Steps: []mockserver.LoadStep{
+        {Request: &amp;browse},
+    },
+}
+
+client.LoadScenario(scenario)   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var browse = HttpRequest.Request().WithMethod("GET").WithPath("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}")
+    .WithHeader("Host", "api.svc:8080")
+    .Build();
+browse.SocketAddress = new SocketAddress { Host = "api.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "user-browse-csv",
+    TemplateType = LoadTemplateType.MUSTACHE,
+    Feeder = new LoadFeeder
+    {
+        Data = "userId,accountId\nalice,A1\nbob,A2\ncarol,A3",
+        Format = LoadFeederFormat.CSV,
+        Strategy = LoadFeederStrategy.CIRCULAR
+    },
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(5, 60000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = browse }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{LoadFeeder, LoadFeederFormat, LoadFeederStrategy};
+
+let feeder = LoadFeeder::data("userId,accountId\nalice,A1\nbob,A2\ncarol,A3", LoadFeederFormat::Csv)
+    .strategy(LoadFeederStrategy::Circular);
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(5, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}")
+        .header("Host", "api.svc:8080")
+        .socket_address(SocketAddress::new("api.svc", 8080))),
+];
+let scenario = LoadScenario::new("user-browse-csv", profile, steps)
+    .template_type("MUSTACHE")
+    .feeder(feeder);
+
+client.load_scenario(&amp;scenario).unwrap();   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$scenario = LoadScenario::scenario('user-browse-csv')
+    -&gt;templateType('MUSTACHE')
+    -&gt;feeder(LoadFeeder::raw("userId,accountId\nalice,A1\nbob,A2\ncarol,A3", 'CSV')-&gt;strategy('CIRCULAR'))
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(5, 60000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}')
+            -&gt;header('Host', 'api.svc:8080')
+            -&gt;socketAddress('api.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;loadScenario($scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Equivalent with raw CSV — parse happens once at scenario load time
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -694,13 +1915,15 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
       {
         "request": {
           "method": "GET",
-          "path": "/accounts/{{iteration.data.accountId}}",
+          "path": "/accounts/{% raw %}{{iteration.data.accountId}}{% endraw %}",
           "headers": { "Host": ["api.svc:8080"] },
           "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
         }
       }
     ]
   }'</code></pre>
+    </div>
+</div>
 
 <a id="cross_step_capture" class="anchor" href="#cross_step_capture">&nbsp;</a>
 
@@ -739,7 +1962,222 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 
 <p>Capture is <strong>best-effort and never fails the run</strong>: on no match (or any extraction error) the variable falls back to <code class="inline code">defaultValue</code> when set, otherwise it is left unset.</p>
 
-<pre class="prettyprint code"><code class="code"># Login → capture token → use in subsequent step
+<button class="accordion">cross-step capture — login, capture a token, reuse it</button>
+<div class="panel">
+    <p>Two Mustache-templated steps run in order each iteration: <strong>login</strong> posts credentials and <strong>captures</strong> the response body's <code class="inline code">$.accessToken</code> into a variable named <code class="inline code">token</code>; <strong>fetch-account</strong> — in the same iteration — replays it as an <code class="inline code">Authorization: Bearer</code> header. Each step targets an upstream via <code class="inline code">socketAddress</code>. With 5 virtual users held for a minute, every VU captures and reuses its own token independently.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">LoadScenario scenario = LoadScenario.loadScenario("login-then-browse")
+    .withTemplateType(HttpTemplate.TemplateType.MUSTACHE)
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(5, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("POST").withPath("/auth/login")
+                .withHeader("Host", "api.svc:8080")
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"username\":\"user{% raw %}{{iteration.vuId}}{% endraw %}\",\"password\":\"secret\"}")
+                .withSocketAddress("api.svc", 8080, SocketAddress.Scheme.HTTP))
+            .withName("login")
+            .withCapture(LoadCapture.loadCapture("token", LoadCapture.Source.BODY_JSONPATH, "$.accessToken")),
+        LoadStep.loadStep(request().withMethod("GET").withPath("/account")
+                .withHeader("Host", "api.svc:8080")
+                .withHeader("Authorization", "Bearer {% raw %}{{iteration.captured.token}}{% endraw %}")
+                .withSocketAddress("api.svc", 8080, SocketAddress.Scheme.HTTP))
+            .withName("fetch-account")
+    );
+
+client.loadScenario(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'login-then-browse',
+    templateType: 'MUSTACHE',
+    profile: { stages: [
+        { type: 'VU', vus: 5, durationMillis: 60000 }
+    ] },
+    steps: [
+        { name: 'login',
+          request: { method: 'POST', path: '/auth/login',
+                     headers: { 'Host': ['api.svc:8080'], 'Content-Type': ['application/json'] },
+                     body: '{"username":"user{% raw %}{{iteration.vuId}}{% endraw %}","password":"secret"}',
+                     socketAddress: { host: 'api.svc', port: 8080, scheme: 'HTTP' } },
+          captures: [ { name: 'token', source: 'BODY_JSONPATH', expression: '$.accessToken' } ] },
+        { name: 'fetch-account',
+          request: { method: 'GET', path: '/account',
+                     headers: { 'Host': ['api.svc:8080'], 'Authorization': ['Bearer {% raw %}{{iteration.captured.token}}{% endraw %}'] },
+                     socketAddress: { host: 'api.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+await client.loadScenario(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="login-then-browse",
+    template_type="MUSTACHE",
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(60000, vus=5),
+    ]),
+    steps=[
+        LoadStep(name="login",
+                 request=HttpRequest(method="POST", path="/auth/login",
+                                     headers=[KeyToMultiValue(name="Host", values=["api.svc:8080"]),
+                                              KeyToMultiValue(name="Content-Type", values=["application/json"])],
+                                     body='{"username":"user{% raw %}{{iteration.vuId}}{% endraw %}","password":"secret"}',
+                                     socket_address=SocketAddress(host="api.svc", port=8080, scheme="HTTP")),
+                 captures=[LoadCapture(name="token", source="BODY_JSONPATH", expression="$.accessToken")]),
+        LoadStep(name="fetch-account",
+                 request=HttpRequest(method="GET", path="/account",
+                                     headers=[KeyToMultiValue(name="Host", values=["api.svc:8080"]),
+                                              KeyToMultiValue(name="Authorization", values=["Bearer {% raw %}{{iteration.captured.token}}{% endraw %}"])],
+                                     socket_address=SocketAddress(host="api.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+client.load_scenario(scenario)   # register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'login-then-browse',
+  template_type: 'MUSTACHE',
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(60_000, vus: 5)
+  ]),
+  steps: [
+    LoadStep.new(name: 'login',
+                 request: HttpRequest.new(method: 'POST', path: '/auth/login',
+                                          headers: { 'Host' =&gt; ['api.svc:8080'], 'Content-Type' =&gt; ['application/json'] },
+                                          body: '{"username":"user{% raw %}{{iteration.vuId}}{% endraw %}","password":"secret"}',
+                                          socket_address: SocketAddress.new(host: 'api.svc', port: 8080, scheme: 'HTTP')),
+                 captures: [LoadCapture.new(name: 'token', source: 'BODY_JSONPATH', expression: '$.accessToken')]),
+    LoadStep.new(name: 'fetch-account',
+                 request: HttpRequest.new(method: 'GET', path: '/account',
+                                          headers: { 'Host' =&gt; ['api.svc:8080'], 'Authorization' =&gt; ['Bearer {% raw %}{{iteration.captured.token}}{% endraw %}'] },
+                                          socket_address: SocketAddress.new(host: 'api.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)   # register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">login := mockserver.Request().Method("POST").Path("/auth/login").
+    Header("Host", "api.svc:8080").
+    Header("Content-Type", "application/json").
+    Body(`{"username":"user{% raw %}{{iteration.vuId}}{% endraw %}","password":"secret"}`).Build()
+login.SocketAddress = &amp;mockserver.SocketAddress{Host: "api.svc", Port: 8080, Scheme: "HTTP"}
+
+account := mockserver.Request().Method("GET").Path("/account").
+    Header("Host", "api.svc:8080").
+    Header("Authorization", "Bearer {% raw %}{{iteration.captured.token}}{% endraw %}").Build()
+account.SocketAddress = &amp;mockserver.SocketAddress{Host: "api.svc", Port: 8080, Scheme: "HTTP"}
+
+scenario := mockserver.LoadScenario{
+    Name:         "login-then-browse",
+    TemplateType: "MUSTACHE",
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.ConstantVusStage(5, 60000),
+        },
+    },
+    Steps: []mockserver.LoadStep{
+        {Name: "login", Request: &amp;login,
+         Captures: []mockserver.LoadCapture{
+             {Name: "token", Source: mockserver.LoadCaptureBodyJSONPath, Expression: "$.accessToken"},
+         }},
+        {Name: "fetch-account", Request: &amp;account},
+    },
+}
+
+client.LoadScenario(scenario)   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var login = HttpRequest.Request().WithMethod("POST").WithPath("/auth/login")
+    .WithHeader("Host", "api.svc:8080")
+    .WithHeader("Content-Type", "application/json")
+    .WithBody("{\"username\":\"user{% raw %}{{iteration.vuId}}{% endraw %}\",\"password\":\"secret\"}").Build();
+login.SocketAddress = new SocketAddress { Host = "api.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var account = HttpRequest.Request().WithMethod("GET").WithPath("/account")
+    .WithHeader("Host", "api.svc:8080")
+    .WithHeader("Authorization", "Bearer {% raw %}{{iteration.captured.token}}{% endraw %}").Build();
+account.SocketAddress = new SocketAddress { Host = "api.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "login-then-browse",
+    TemplateType = LoadTemplateType.MUSTACHE,
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(5, 60000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Name = "login", Request = login,
+                Captures = new() { new LoadCapture { Name = "token", Source = LoadCaptureSource.BODY_JSONPATH, Expression = "$.accessToken" } } },
+        new() { Name = "fetch-account", Request = account }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let login = HttpRequest::new().method("POST").path("/auth/login")
+    .header("Host", "api.svc:8080")
+    .header("Content-Type", "application/json")
+    .body(r#"{"username":"user{% raw %}{{iteration.vuId}}{% endraw %}","password":"secret"}"#)
+    .socket_address(SocketAddress::new("api.svc", 8080));
+let account = HttpRequest::new().method("GET").path("/account")
+    .header("Host", "api.svc:8080")
+    .header("Authorization", "Bearer {% raw %}{{iteration.captured.token}}{% endraw %}")
+    .socket_address(SocketAddress::new("api.svc", 8080));
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(5, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(login)
+        .capture(LoadCapture::new("token", LoadCaptureSource::BodyJsonpath, "$.accessToken")),
+    LoadStep::new(account),
+];
+let scenario = LoadScenario::new("login-then-browse", profile, steps)
+    .template_type("MUSTACHE");
+
+client.load_scenario(&amp;scenario).unwrap();   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$login = HttpRequest::request()-&gt;method('POST')-&gt;path('/auth/login')
+    -&gt;header('Host', 'api.svc:8080')
+    -&gt;header('Content-Type', 'application/json')
+    -&gt;body('{"username":"user{% raw %}{{iteration.vuId}}{% endraw %}","password":"secret"}')
+    -&gt;socketAddress('api.svc', 8080, 'HTTP');
+
+$account = HttpRequest::request()-&gt;method('GET')-&gt;path('/account')
+    -&gt;header('Host', 'api.svc:8080')
+    -&gt;header('Authorization', 'Bearer {% raw %}{{iteration.captured.token}}{% endraw %}')
+    -&gt;socketAddress('api.svc', 8080, 'HTTP');
+
+$scenario = LoadScenario::scenario('login-then-browse')
+    -&gt;templateType('MUSTACHE')
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(5, 60000),
+    ))
+    -&gt;addStep($login, name: 'login',
+        captures: [LoadCapture::of('token', 'BODY_JSONPATH', '$.accessToken')])
+    -&gt;addStep($account, name: 'fetch-account');
+
+$client-&gt;loadScenario($scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Login → capture token → use in subsequent step
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -756,7 +2194,7 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
             "Host": ["api.svc:8080"],
             "Content-Type": ["application/json"]
           },
-          "body": { "username": "user{{iteration.vuId}}", "password": "secret" },
+          "body": { "username": "user{% raw %}{{iteration.vuId}}{% endraw %}", "password": "secret" },
           "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
         },
         "captures": [
@@ -770,13 +2208,15 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
           "path": "/account",
           "headers": {
             "Host": ["api.svc:8080"],
-            "Authorization": ["Bearer {{iteration.captured.token}}"]
+            "Authorization": ["Bearer {% raw %}{{iteration.captured.token}}{% endraw %}"]
           },
           "socketAddress": { "host": "api.svc", "port": 8080, "scheme": "HTTP" }
         }
       }
     ]
   }'</code></pre>
+    </div>
+</div>
 
 <p>Step 1 logs in and captures the response body's <code class="inline code">$.accessToken</code> into <code class="inline code">token</code>. Step 2 — in the same iteration — sends it as <code class="inline code">Authorization: Bearer &lt;token&gt;</code>. With 5 VUs, each VU's iterations each capture and replay their own token independently.</p>
 
@@ -810,7 +2250,202 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 
 <p><strong>Note:</strong> cross-step capture is meaningful only under <code class="inline code">SEQUENTIAL</code> — a <code class="inline code">WEIGHTED</code> iteration runs a single step so there is no later step to consume a captured variable. Capture rules on a weighted step do no harm; they simply have nothing to feed into.</p>
 
-<pre class="prettyprint code"><code class="code"># Mixed workload: 70% browse, 20% search, 10% checkout
+<button class="accordion">weighted step selection — a mixed workload in one scenario</button>
+<div class="panel">
+    <p>With <code class="inline code">stepSelection: WEIGHTED</code> each iteration runs exactly <strong>one</strong> step, chosen at random in proportion to its <code class="inline code">weight</code>. Here three steps — <strong>browse</strong> (weight&nbsp;7), <strong>search</strong> (weight&nbsp;2) and <strong>checkout</strong> (weight&nbsp;1) — model a roughly 70% / 20% / 10% mix against one upstream, with 20 virtual users held for a minute.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">LoadScenario scenario = LoadScenario.loadScenario("mixed-shop-workload")
+    .withStepSelection(LoadScenario.StepSelection.WEIGHTED)
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(20, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/products")
+                .withSocketAddress("shop.svc", 8080, SocketAddress.Scheme.HTTP))
+            .withName("browse")
+            .withWeight(7.0),
+        LoadStep.loadStep(request().withMethod("GET").withPath("/search?q=shoes")
+                .withSocketAddress("shop.svc", 8080, SocketAddress.Scheme.HTTP))
+            .withName("search")
+            .withWeight(2.0),
+        LoadStep.loadStep(request().withMethod("POST").withPath("/checkout")
+                .withSocketAddress("shop.svc", 8080, SocketAddress.Scheme.HTTP))
+            .withName("checkout")
+            .withWeight(1.0)
+    );
+
+client.loadScenario(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'mixed-shop-workload',
+    stepSelection: 'WEIGHTED',
+    profile: { stages: [
+        { type: 'VU', vus: 20, durationMillis: 60000 }
+    ] },
+    steps: [
+        { name: 'browse', weight: 7,
+          request: { method: 'GET', path: '/products',
+                     socketAddress: { host: 'shop.svc', port: 8080, scheme: 'HTTP' } } },
+        { name: 'search', weight: 2,
+          request: { method: 'GET', path: '/search?q=shoes',
+                     socketAddress: { host: 'shop.svc', port: 8080, scheme: 'HTTP' } } },
+        { name: 'checkout', weight: 1,
+          request: { method: 'POST', path: '/checkout',
+                     socketAddress: { host: 'shop.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+await client.loadScenario(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="mixed-shop-workload",
+    step_selection="WEIGHTED",
+    profile=LoadProfile(stages=[
+        LoadStage.vu_stage(60000, vus=20),
+    ]),
+    steps=[
+        LoadStep(name="browse", weight=7.0,
+                 request=HttpRequest(method="GET", path="/products",
+                                     socket_address=SocketAddress(host="shop.svc", port=8080, scheme="HTTP"))),
+        LoadStep(name="search", weight=2.0,
+                 request=HttpRequest(method="GET", path="/search?q=shoes",
+                                     socket_address=SocketAddress(host="shop.svc", port=8080, scheme="HTTP"))),
+        LoadStep(name="checkout", weight=1.0,
+                 request=HttpRequest(method="POST", path="/checkout",
+                                     socket_address=SocketAddress(host="shop.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+client.load_scenario(scenario)   # register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'mixed-shop-workload',
+  step_selection: 'WEIGHTED',
+  profile: LoadProfile.new(stages: [
+    LoadStage.vu(60_000, vus: 20)
+  ]),
+  steps: [
+    LoadStep.new(name: 'browse', weight: 7.0,
+                 request: HttpRequest.new(method: 'GET', path: '/products',
+                                          socket_address: SocketAddress.new(host: 'shop.svc', port: 8080, scheme: 'HTTP'))),
+    LoadStep.new(name: 'search', weight: 2.0,
+                 request: HttpRequest.new(method: 'GET', path: '/search?q=shoes',
+                                          socket_address: SocketAddress.new(host: 'shop.svc', port: 8080, scheme: 'HTTP'))),
+    LoadStep.new(name: 'checkout', weight: 1.0,
+                 request: HttpRequest.new(method: 'POST', path: '/checkout',
+                                          socket_address: SocketAddress.new(host: 'shop.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)   # register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">browseReq := mockserver.Request().Method("GET").Path("/products").Build()
+browseReq.SocketAddress = &amp;mockserver.SocketAddress{Host: "shop.svc", Port: 8080, Scheme: "HTTP"}
+searchReq := mockserver.Request().Method("GET").Path("/search?q=shoes").Build()
+searchReq.SocketAddress = &amp;mockserver.SocketAddress{Host: "shop.svc", Port: 8080, Scheme: "HTTP"}
+checkoutReq := mockserver.Request().Method("POST").Path("/checkout").Build()
+checkoutReq.SocketAddress = &amp;mockserver.SocketAddress{Host: "shop.svc", Port: 8080, Scheme: "HTTP"}
+
+browseWeight, searchWeight, checkoutWeight := 7.0, 2.0, 1.0
+
+scenario := mockserver.LoadScenario{
+    Name:          "mixed-shop-workload",
+    StepSelection: mockserver.StepSelectionWeighted,
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.ConstantVusStage(20, 60000),
+        },
+    },
+    Steps: []mockserver.LoadStep{
+        {Name: "browse", Request: &amp;browseReq, Weight: &amp;browseWeight},
+        {Name: "search", Request: &amp;searchReq, Weight: &amp;searchWeight},
+        {Name: "checkout", Request: &amp;checkoutReq, Weight: &amp;checkoutWeight},
+    },
+}
+
+client.LoadScenario(scenario)   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var browse = HttpRequest.Request().WithMethod("GET").WithPath("/products").Build();
+browse.SocketAddress = new SocketAddress { Host = "shop.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+var search = HttpRequest.Request().WithMethod("GET").WithPath("/search?q=shoes").Build();
+search.SocketAddress = new SocketAddress { Host = "shop.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+var checkout = HttpRequest.Request().WithMethod("POST").WithPath("/checkout").Build();
+checkout.SocketAddress = new SocketAddress { Host = "shop.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "mixed-shop-workload",
+    StepSelection = LoadStepSelection.WEIGHTED,
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(20, 60000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Name = "browse", Request = browse, Weight = 7.0 },
+        new() { Name = "search", Request = search, Weight = 2.0 },
+        new() { Name = "checkout", Request = checkout, Weight = 1.0 }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">let browse = HttpRequest::new().method("GET").path("/products")
+    .socket_address(SocketAddress::new("shop.svc", 8080));
+let search = HttpRequest::new().method("GET").path("/search?q=shoes")
+    .socket_address(SocketAddress::new("shop.svc", 8080));
+let checkout = HttpRequest::new().method("POST").path("/checkout")
+    .socket_address(SocketAddress::new("shop.svc", 8080));
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(20, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(browse).weight(7.0),
+    LoadStep::new(search).weight(2.0),
+    LoadStep::new(checkout).weight(1.0),
+];
+let scenario = LoadScenario::new("mixed-shop-workload", profile, steps)
+    .step_selection(LoadStepSelection::Weighted);
+
+client.load_scenario(&amp;scenario).unwrap();   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$browse = HttpRequest::request()-&gt;method('GET')-&gt;path('/products')
+    -&gt;socketAddress('shop.svc', 8080, 'HTTP');
+$search = HttpRequest::request()-&gt;method('GET')-&gt;path('/search?q=shoes')
+    -&gt;socketAddress('shop.svc', 8080, 'HTTP');
+$checkout = HttpRequest::request()-&gt;method('POST')-&gt;path('/checkout')
+    -&gt;socketAddress('shop.svc', 8080, 'HTTP');
+
+$scenario = LoadScenario::scenario('mixed-shop-workload')
+    -&gt;stepSelection('WEIGHTED')
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(20, 60000),
+    ))
+    -&gt;addStep($browse, name: 'browse', weight: 7.0)
+    -&gt;addStep($search, name: 'search', weight: 2.0)
+    -&gt;addStep($checkout, name: 'checkout', weight: 1.0);
+
+$client-&gt;loadScenario($scenario);   // register (does NOT start it yet)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Mixed workload: 70% browse, 20% search, 10% checkout
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -838,6 +2473,8 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
       }
     ]
   }'</code></pre>
+    </div>
+</div>
 
 <a id="examples" class="anchor" href="#examples">&nbsp;</a>
 
@@ -888,7 +2525,265 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 
 <p><strong>CI integration:</strong> poll <code class="inline code">GET /mockserver/loadScenario/&lt;name&gt;</code> until <code class="inline code">state</code> is terminal, then check <code class="inline code">verdict</code>: map <code class="inline code">FAIL</code> to a non-zero exit code. Or fetch the JUnit report (<code class="inline code">?format=junit</code>) and let your CI system parse it.</p>
 
-<pre class="prettyprint code"><code class="code"># Scenario with thresholds — will FAIL the run if p99 exceeds 200ms or error rate exceeds 1%
+<button class="accordion">in-run thresholds — fail the run on a latency or error budget breach</button>
+<div class="panel">
+    <p>Attach in-run <strong>thresholds</strong> to a scenario, then <strong>register</strong> it, <strong>start</strong> it, and read its live <strong>status</strong> to inspect the <code class="inline code">verdict</code> field. The run carries a <code class="inline code">PASS</code> verdict while every threshold holds (here: p99 latency under 200&nbsp;ms and error rate at or below 1%) and flips to <code class="inline code">FAIL</code> on a breach. With <code class="inline code">abortOnFail</code> set, a <code class="inline code">FAIL</code> stops the run early — after a 5&nbsp;second grace window so noisy startup samples cannot trigger a premature abort.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.model.SocketAddress;
+import org.mockserver.slo.SloObjective;
+
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("checkout-gated")
+    .withThresholds(
+        LoadThreshold.loadThreshold()
+            .withMetric(LoadThreshold.Metric.LATENCY_P99)
+            .withComparator(SloObjective.Comparator.LESS_THAN)
+            .withThreshold(200),
+        LoadThreshold.loadThreshold()
+            .withMetric(LoadThreshold.Metric.ERROR_RATE)
+            .withComparator(SloObjective.Comparator.LESS_THAN_OR_EQUAL)
+            .withThreshold(0.01))
+    .withAbortOnFail(true)
+    .withAbortGraceMillis(5000)
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(10, 60000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("POST").withPath("/checkout")
+            .withSocketAddress("shop.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.loadScenario(scenario);                // register
+client.startLoadScenarios("checkout-gated");  // start (requires loadGenerationEnabled=true)
+String status = client.getLoadScenario("checkout-gated");
+// the status JSON carries a "verdict" field — "PASS" while all thresholds hold, "FAIL" on a breach</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+var scenario = {
+    name: 'checkout-gated',
+    thresholds: [
+        { metric: 'LATENCY_P99', comparator: 'LESS_THAN', threshold: 200 },
+        { metric: 'ERROR_RATE', comparator: 'LESS_THAN_OR_EQUAL', threshold: 0.01 }
+    ],
+    abortOnFail: true,
+    abortGraceMillis: 5000,
+    profile: { stages: [ { type: 'VU', vus: 10, durationMillis: 60000 } ] },
+    steps: [
+        { request: { method: 'POST', path: '/checkout',
+                     socketAddress: { host: 'shop.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.loadScenario(scenario);               // register
+    await client.startLoadScenarios('checkout-gated'); // start (requires loadGenerationEnabled=true)
+    var status = await client.getLoadScenario('checkout-gated');
+    // status.verdict is 'PASS' while all thresholds hold, 'FAIL' on a breach
+    console.log('verdict:', status.verdict);
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import (HttpRequest, LoadProfile, LoadScenario, LoadStage,
+                        LoadStep, LoadThreshold, MockServerClient, SocketAddress)
+
+scenario = LoadScenario(
+    name="checkout-gated",
+    thresholds=[
+        LoadThreshold(metric="LATENCY_P99", comparator="LESS_THAN", threshold=200),
+        LoadThreshold(metric="ERROR_RATE", comparator="LESS_THAN_OR_EQUAL", threshold=0.01),
+    ],
+    abort_on_fail=True,
+    abort_grace_millis=5000,
+    profile=LoadProfile(stages=[LoadStage.vu_stage(60000, vus=10)]),
+    steps=[
+        LoadStep(request=HttpRequest(method="POST", path="/checkout",
+                                     socket_address=SocketAddress(host="shop.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+with MockServerClient("localhost", 1080) as client:
+    client.load_scenario(scenario)                 # register
+    client.start_load_scenarios("checkout-gated")  # start (requires loadGenerationEnabled=true)
+    status = client.get_load_scenario("checkout-gated")
+    # status["verdict"] is "PASS" while all thresholds hold, "FAIL" on a breach
+    print("verdict:", status.get("verdict"))</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+scenario = LoadScenario.new(
+  name: 'checkout-gated',
+  thresholds: [
+    LoadThreshold.new(metric: 'LATENCY_P99', comparator: 'LESS_THAN', threshold: 200),
+    LoadThreshold.new(metric: 'ERROR_RATE', comparator: 'LESS_THAN_OR_EQUAL', threshold: 0.01)
+  ],
+  abort_on_fail: true,
+  abort_grace_millis: 5000,
+  profile: LoadProfile.new(stages: [LoadStage.vu(60_000, vus: 10)]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(method: 'POST', path: '/checkout',
+                                          socket_address: SocketAddress.new(host: 'shop.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)                # register
+client.start_load_scenarios('checkout-gated') # start (requires loadGenerationEnabled=true)
+status = client.get_load_scenario('checkout-gated')
+# status['verdict'] is 'PASS' while all thresholds hold, 'FAIL' on a breach
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "fmt"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    checkout := mockserver.Request().Method("POST").Path("/checkout").Build()
+    checkout.SocketAddress = &amp;mockserver.SocketAddress{Host: "shop.svc", Port: 8080, Scheme: "HTTP"}
+
+    scenario := mockserver.LoadScenario{
+        Name: "checkout-gated",
+        Thresholds: []mockserver.LoadThreshold{
+            {Metric: mockserver.LoadThresholdLatencyP99, Comparator: "LESS_THAN", Threshold: 200},
+            {Metric: mockserver.LoadThresholdErrorRate, Comparator: "LESS_THAN_OR_EQUAL", Threshold: 0.01},
+        },
+        AbortOnFail:      true,
+        AbortGraceMillis: 5000,
+        Profile: &amp;mockserver.LoadProfile{
+            Stages: []mockserver.LoadStage{
+                mockserver.ConstantVusStage(10, 60000),
+            },
+        },
+        Steps: []mockserver.LoadStep{ {Request: &amp;checkout} },
+    }
+
+    client.LoadScenario(scenario)               // register
+    client.StartLoadScenarios("checkout-gated") // start (requires loadGenerationEnabled=true)
+    status, _ := client.GetLoadScenario("checkout-gated")
+    // status.Verdict is "PASS" while all thresholds hold, "FAIL" on a breach
+    fmt.Println("verdict:", status.Verdict)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var checkout = HttpRequest.Request().WithMethod("POST").WithPath("/checkout").Build();
+checkout.SocketAddress = new SocketAddress { Host = "shop.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+var scenario = new LoadScenario
+{
+    Name = "checkout-gated",
+    Thresholds = new()
+    {
+        new LoadThreshold { Metric = LoadThresholdMetric.LATENCY_P99,
+                            Comparator = LoadThresholdComparator.LESS_THAN, Threshold = 200 },
+        new LoadThreshold { Metric = LoadThresholdMetric.ERROR_RATE,
+                            Comparator = LoadThresholdComparator.LESS_THAN_OR_EQUAL, Threshold = 0.01 }
+    },
+    AbortOnFail = true,
+    AbortGraceMillis = 5000,
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(10, 60000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = checkout }
+    }
+};
+
+await client.LoadScenarioAsync(scenario);               // register
+await client.StartLoadScenariosAsync("checkout-gated"); // start (requires loadGenerationEnabled=true)
+var status = await client.GetLoadScenarioAsync("checkout-gated");
+// the status JSON carries a "verdict" field — "PASS" while all thresholds hold, "FAIL" on a breach</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{
+    ClientBuilder, HttpRequest, LoadComparator, LoadProfile, LoadScenario, LoadStage, LoadStep,
+    LoadThreshold, LoadThresholdMetric, SocketAddress,
+};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let profile = LoadProfile::of(vec![
+    LoadStage::vu_hold(10, 60_000),
+]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("POST").path("/checkout")
+        .socket_address(SocketAddress::new("shop.svc", 8080))),
+];
+let scenario = LoadScenario::new("checkout-gated", profile, steps)
+    .threshold(LoadThreshold::new(LoadThresholdMetric::LatencyP99, LoadComparator::LessThan, 200.0))
+    .threshold(LoadThreshold::new(LoadThresholdMetric::ErrorRate, LoadComparator::LessThanOrEqual, 0.01))
+    .abort_on_fail(true)
+    .abort_grace_millis(5000);
+
+client.load_scenario(&amp;scenario).unwrap();                 // register
+client.start_load_scenarios(&amp;["checkout-gated"]).unwrap(); // start (requires loadGenerationEnabled=true)
+let status = client.get_load_scenario("checkout-gated").unwrap();
+// the status JSON carries a "verdict" field — "PASS" while all thresholds hold, "FAIL" on a breach</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\HttpRequest;
+use MockServer\LoadProfile;
+use MockServer\LoadScenario;
+use MockServer\LoadStage;
+use MockServer\LoadThreshold;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$scenario = LoadScenario::scenario('checkout-gated')
+    -&gt;addThreshold(LoadThreshold::of('LATENCY_P99', 'LESS_THAN', 200))
+    -&gt;addThreshold(LoadThreshold::of('ERROR_RATE', 'LESS_THAN_OR_EQUAL', 0.01))
+    -&gt;abortOnFail()
+    -&gt;abortGraceMillis(5000)
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(10, 60000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('POST')-&gt;path('/checkout')
+            -&gt;socketAddress('shop.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;loadScenario($scenario);               // register
+$client-&gt;startLoadScenarios('checkout-gated');  // start (requires loadGenerationEnabled=true)
+$status = $client-&gt;getLoadScenario('checkout-gated');
+// $status['verdict'] is 'PASS' while all thresholds hold, 'FAIL' on a breach</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Scenario with thresholds — will FAIL the run if p99 exceeds 200ms or error rate exceeds 1%
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -919,7 +2814,9 @@ until [ "$(curl -s http://localhost:1080/mockserver/loadScenario/checkout-gated 
 VERDICT=$(curl -s http://localhost:1080/mockserver/loadScenario/checkout-gated \
   | python3 -c "import sys,json; s=json.load(sys.stdin); print(s.get('verdict','PASS'))")
 echo "Verdict: $VERDICT"
-[ "$VERDICT" = "FAIL" ] && exit 1 || exit 0</code></pre>
+[ "$VERDICT" = "FAIL" ] &amp;&amp; exit 1 || exit 0</code></pre>
+    </div>
+</div>
 
 <a id="summary_report" class="anchor" href="#summary_report">&nbsp;</a>
 
@@ -936,12 +2833,116 @@ echo "Verdict: $VERDICT"
 
 <p>Drop the JUnit report into your CI pipeline as a test-report artifact so a breached threshold automatically fails the build:</p>
 
-<pre class="prettyprint code"><code class="code"># JSON report
+<button class="accordion">fetch the summary report (JSON and JUnit XML)</button>
+<div class="panel">
+    <p>For a scenario that has already run (<code class="inline code">checkout-load</code>), fetch its end-of-run summary <strong>report</strong> in both formats: the structured <strong>JSON</strong> object (counts, error rate, latency percentiles, per-threshold results) and the <strong>JUnit XML</strong> document. Write the JUnit XML to a file so your CI system can ingest it as a test-report artifact and fail the build on a breached threshold.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+String jsonReport = client.getLoadScenarioReport("checkout-load");           // JSON summary
+String junitReport = client.getLoadScenarioReport("checkout-load", "junit"); // JUnit XML
+Files.writeString(Path.of("load-report.xml"), junitReport);                  // attach to CI as a test artifact</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var fs = require('fs');
+var client = mockServerClient("localhost", 1080);
+
+(async function () {
+    var jsonReport = await client.getLoadScenarioReport('checkout-load');           // parsed JSON
+    var junitReport = await client.getLoadScenarioReport('checkout-load', 'junit'); // JUnit XML string
+    fs.writeFileSync('load-report.xml', junitReport);                               // attach to CI
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient
+
+with MockServerClient("localhost", 1080) as client:
+    json_report = client.get_load_scenario_report("checkout-load")                  # dict
+    junit_report = client.get_load_scenario_report("checkout-load", format="junit") # JUnit XML string
+    with open("load-report.xml", "w") as f:                                          # attach to CI
+        f.write(junit_report)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+json_report = client.get_load_scenario_report('checkout-load')            # Hash
+junit_report = client.get_load_scenario_report('checkout-load', 'junit')  # JUnit XML string
+File.write('load-report.xml', junit_report)                               # attach to CI
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "os"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    jsonReport, _ := client.GetLoadScenarioReport("checkout-load", "")       // JSON summary
+    junitReport, _ := client.GetLoadScenarioReport("checkout-load", "junit") // JUnit XML
+    _ = jsonReport
+    os.WriteFile("load-report.xml", []byte(junitReport), 0o644)              // attach to CI
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+
+var jsonReport = client.GetLoadScenarioReport("checkout-load");           // JSON summary
+var junitReport = client.GetLoadScenarioReport("checkout-load", "junit"); // JUnit XML
+File.WriteAllText("load-report.xml", junitReport);                        // attach to CI</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+let json_report = client.get_load_scenario_report("checkout-load", None).unwrap();           // JSON summary
+let junit_report = client.get_load_scenario_report("checkout-load", Some("junit")).unwrap(); // JUnit XML
+std::fs::write("load-report.xml", junit_report).unwrap();                                     // attach to CI</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$jsonReport = $client-&gt;getLoadScenarioReport('checkout-load');            // array
+$junitReport = $client-&gt;getLoadScenarioReport('checkout-load', 'junit');  // JUnit XML string
+file_put_contents('load-report.xml', $junitReport);                       // attach to CI</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># JSON report
 curl http://localhost:1080/mockserver/loadScenario/checkout-load/report
 
 # JUnit XML — attach to CI as a test artifact
 curl 'http://localhost:1080/mockserver/loadScenario/checkout-load/report?format=junit' \
   -o load-report.xml</code></pre>
+    </div>
+</div>
 
 <a id="corrected_latency" class="anchor" href="#corrected_latency">&nbsp;</a>
 
@@ -1028,7 +3029,147 @@ curl 'http://localhost:1080/mockserver/loadScenario/checkout-load/report?format=
     </tbody>
 </table>
 
-<pre class="prettyprint code"><code class="code"># Generate a load scenario from a public OpenAPI spec
+<button class="accordion">generate a scenario from an OpenAPI spec, then run it</button>
+<div class="panel">
+    <p>Seed an editable load scenario from a public OpenAPI spec &mdash; one step per operation, routed at the given target &mdash; then run it. <strong>generate</strong> registers the scenario in the <code class="inline code">LOADED</code> state and produces no traffic (allowed even when <code class="inline code">loadGenerationEnabled=false</code>); <strong>start</strong> then runs it (requires <code class="inline code">loadGenerationEnabled=true</code>).</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+// generateLoadScenarioFromOpenAPI takes a raw JSON request document.
+String request = """
+    {
+      "name": "petstore-load",
+      "specUrlOrPayload": "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+      "target": { "host": "petstore.svc", "port": 8080, "scheme": "http" },
+      "profile": { "stages": [ { "type": "VU", "vus": 10, "durationMillis": 60000 } ] }
+    }""";
+
+client.generateLoadScenarioFromOpenAPI(request);   // generate + register (LOADED), no traffic
+client.startLoadScenarios("petstore-load");        // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+(async function () {
+    await client.generateLoadScenarioFromOpenAPI({
+        name: 'petstore-load',
+        specUrlOrPayload: 'https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml',
+        target: { host: 'petstore.svc', port: 8080, scheme: 'http' },
+        profile: { stages: [ { type: 'VU', vus: 10, durationMillis: 60000 } ] }
+    });                                               // generate + register (LOADED), no traffic
+    await client.startLoadScenarios('petstore-load'); // start (requires loadGenerationEnabled=true)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import LoadProfile, LoadStage, MockServerClient
+
+with MockServerClient("localhost", 1080) as client:
+    client.generate_load_scenario_from_openapi(
+        "petstore-load",
+        "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+        target={"host": "petstore.svc", "port": 8080, "scheme": "http"},
+        profile=LoadProfile(stages=[LoadStage.vu_stage(60000, vus=10)]),
+    )                                             # generate + register (LOADED), no traffic
+    client.start_load_scenarios("petstore-load")  # start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+client.generate_load_scenario_from_openapi(
+  'petstore-load',
+  'https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml',
+  target: { 'host' =&gt; 'petstore.svc', 'port' =&gt; 8080, 'scheme' =&gt; 'http' },
+  profile: LoadProfile.new(stages: [LoadStage.vu(60_000, vus: 10)])
+)                                            # generate + register (LOADED), no traffic
+client.start_load_scenarios('petstore-load') # start (requires loadGenerationEnabled=true)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+)
+
+func main() {
+    client := mockserver.New("localhost", 1080)
+
+    // GenerateLoadScenarioFromOpenAPI takes a raw request document.
+    client.GenerateLoadScenarioFromOpenAPI(map[string]any{
+        "name":             "petstore-load",
+        "specUrlOrPayload": "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+        "target":           map[string]any{"host": "petstore.svc", "port": 8080, "scheme": "http"},
+        "profile": map[string]any{
+            "stages": []map[string]any{
+                {"type": "VU", "vus": 10, "durationMillis": 60000},
+            },
+        },
+    }) // generate + register (LOADED), no traffic
+    client.StartLoadScenarios("petstore-load") // start (requires loadGenerationEnabled=true)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+await client.GenerateLoadScenarioFromOpenAPIAsync(
+    "petstore-load",
+    "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+    new LoadGenerateTarget { Host = "petstore.svc", Port = 8080, Scheme = LoadTargetScheme.http },
+    new LoadProfile { Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(10, 60000) } }); // generate + register (LOADED)
+await client.StartLoadScenariosAsync("petstore-load");                  // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+use serde_json::json;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+// generate_load_scenario_from_openapi takes a raw request document.
+client.generate_load_scenario_from_openapi(&amp;json!({
+    "name": "petstore-load",
+    "specUrlOrPayload": "https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml",
+    "target": { "host": "petstore.svc", "port": 8080, "scheme": "http" },
+    "profile": { "stages": [ { "type": "VU", "vus": 10, "durationMillis": 60000 } ] }
+})).unwrap();                                              // generate + register (LOADED), no traffic
+client.start_load_scenarios(&amp;["petstore-load"]).unwrap(); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\LoadProfile;
+use MockServer\LoadStage;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$client-&gt;generateLoadScenarioFromOpenAPI(
+    'petstore-load',
+    'https://raw.githubusercontent.com/OAI/OpenAPI-Specification/master/examples/v3.0/petstore.yaml',
+    ['host' =&gt; 'petstore.svc', 'port' =&gt; 8080, 'scheme' =&gt; 'http'],
+    LoadProfile::of(LoadStage::vuHold(10, 60000)),
+);                                            // generate + register (LOADED), no traffic
+$client-&gt;startLoadScenarios('petstore-load'); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Generate a load scenario from a public OpenAPI spec
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario/generateFromOpenAPI \
   -H "Content-Type: application/json" \
   -d '{
@@ -1037,11 +3178,12 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/generateFromOpenAPI
     "target": { "host": "petstore.svc", "port": 8080, "scheme": "http" },
     "profile": { "stages": [ { "type": "VU", "vus": 10, "durationMillis": 60000 } ] }
   }'
-# -> { "status": "loaded", "name": "petstore-load", "state": "LOADED", "scenario": { ...edit me... } }
 
 # Then trigger it (requires loadGenerationEnabled=true)
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
   -d '{ "name": "petstore-load" }'</code></pre>
+    </div>
+</div>
 
 <p>A missing <code class="inline code">name</code>/<code class="inline code">specUrlOrPayload</code>, an unparseable spec, a spec with no operations, or a generated scenario that fails validation returns <code class="inline code">400</code> with a JSON error.</p>
 
@@ -1119,7 +3261,141 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
     </tbody>
 </table>
 
-<pre class="prettyprint code"><code class="code"># First, record real traffic through the MockServer proxy...
+<button class="accordion">generate a scenario from recorded proxy traffic, then run it</button>
+<div class="panel">
+    <p>Seed an editable load scenario from traffic previously recorded through the MockServer proxy &mdash; <code class="inline code">TEMPLATIZED</code> keeps one weighted step per unique route, filtered to <code class="inline code">/api/.*</code> and capped at 50 steps, routed at the given target &mdash; then run it. <strong>generate</strong> registers the scenario in the <code class="inline code">LOADED</code> state and produces no traffic; <strong>start</strong> then runs it (requires <code class="inline code">loadGenerationEnabled=true</code>).</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+// generateLoadScenarioFromRecording takes a raw JSON request document.
+String request = """
+    {
+      "name": "replay-prod-traffic",
+      "mode": "TEMPLATIZED",
+      "requestFilter": { "path": "/api/.*" },
+      "maxSteps": 50,
+      "target": { "host": "staging.svc", "port": 8080, "scheme": "http" }
+    }""";
+
+client.generateLoadScenarioFromRecording(request);  // generate + register (LOADED), no traffic
+client.startLoadScenarios("replay-prod-traffic");   // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+(async function () {
+    await client.generateLoadScenarioFromRecording({
+        name: 'replay-prod-traffic',
+        mode: 'TEMPLATIZED',
+        requestFilter: { path: '/api/.*' },
+        maxSteps: 50,
+        target: { host: 'staging.svc', port: 8080, scheme: 'http' }
+    });                                                    // generate + register (LOADED), no traffic
+    await client.startLoadScenarios('replay-prod-traffic'); // start (requires loadGenerationEnabled=true)
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import HttpRequest, MockServerClient
+
+with MockServerClient("localhost", 1080) as client:
+    client.generate_load_scenario_from_recording(
+        "replay-prod-traffic",
+        mode="TEMPLATIZED",
+        request_filter=HttpRequest(path="/api/.*"),
+        max_steps=50,
+        target={"host": "staging.svc", "port": 8080, "scheme": "http"},
+    )                                                  # generate + register (LOADED), no traffic
+    client.start_load_scenarios("replay-prod-traffic")  # start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+client.generate_load_scenario_from_recording(
+  'replay-prod-traffic',
+  mode: 'TEMPLATIZED',
+  request_filter: HttpRequest.new(path: '/api/.*'),
+  max_steps: 50,
+  target: { 'host' =&gt; 'staging.svc', 'port' =&gt; 8080, 'scheme' =&gt; 'http' }
+)                                                  # generate + register (LOADED), no traffic
+client.start_load_scenarios('replay-prod-traffic') # start (requires loadGenerationEnabled=true)
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">client := mockserver.New("localhost", 1080)
+
+// GenerateLoadScenarioFromRecording takes a raw request document.
+client.GenerateLoadScenarioFromRecording(map[string]any{
+    "name":          "replay-prod-traffic",
+    "mode":          "TEMPLATIZED",
+    "requestFilter": map[string]any{"path": "/api/.*"},
+    "maxSteps":      50,
+    "target":        map[string]any{"host": "staging.svc", "port": 8080, "scheme": "http"},
+}) // generate + register (LOADED), no traffic
+client.StartLoadScenarios("replay-prod-traffic") // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+// Parameter order is (name, mode, requestFilter, target, maxSteps).
+await client.GenerateLoadScenarioFromRecordingAsync(
+    "replay-prod-traffic",
+    LoadRecordingMode.TEMPLATIZED,
+    HttpRequest.Request().WithPath("/api/.*"),
+    new LoadGenerateTarget { Host = "staging.svc", Port = 8080, Scheme = LoadTargetScheme.http },
+    maxSteps: 50);                                           // generate + register (LOADED), no traffic
+await client.StartLoadScenariosAsync("replay-prod-traffic"); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+use serde_json::json;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+// generate_load_scenario_from_recording takes a raw request document.
+client.generate_load_scenario_from_recording(&amp;json!({
+    "name": "replay-prod-traffic",
+    "mode": "TEMPLATIZED",
+    "requestFilter": { "path": "/api/.*" },
+    "maxSteps": 50,
+    "target": { "host": "staging.svc", "port": 8080, "scheme": "http" }
+})).unwrap();                                                   // generate + register (LOADED), no traffic
+client.start_load_scenarios(&amp;["replay-prod-traffic"]).unwrap(); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\HttpRequest;
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+$client-&gt;generateLoadScenarioFromRecording(
+    'replay-prod-traffic',
+    mode: 'TEMPLATIZED',
+    requestFilter: HttpRequest::request()-&gt;path('/api/.*'),
+    target: ['host' =&gt; 'staging.svc', 'port' =&gt; 8080, 'scheme' =&gt; 'http'],
+    maxSteps: 50,
+);                                                  // generate + register (LOADED), no traffic
+$client-&gt;startLoadScenarios('replay-prod-traffic'); // start (requires loadGenerationEnabled=true)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># First, record real traffic through the MockServer proxy...
 # (see Proxy Configuration for setup)
 
 # Then generate a load scenario from the recorded traffic
@@ -1132,11 +3408,12 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/generateFromRecordi
     "maxSteps": 50,
     "target": { "host": "staging.svc", "port": 8080, "scheme": "http" }
   }'
-# -> { "status": "loaded", "name": "replay-prod-traffic", "state": "LOADED", "scenario": { ...edit me... } }
 
 # Then trigger it
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
   -d '{ "name": "replay-prod-traffic" }'</code></pre>
+    </div>
+</div>
 
 <p>A missing <code class="inline code">name</code>, no recorded requests to convert (none recorded or none matching the filter), an invalid <code class="inline code">mode</code>, or a generated scenario that fails validation returns <code class="inline code">400</code>. The <code class="inline code">TEMPLATIZED</code> seeder produces a <strong>weighted mix</strong>: each route's <code class="inline code">weight</code> is its observed hit count and the scenario is marked <a href="#weighted_step_selection"><code class="inline code">stepSelection: WEIGHTED</code></a>, so each iteration fires a route in proportion to its recorded frequency. Edit the weights (or switch to <code class="inline code">SEQUENTIAL</code>) on the returned scenario for different behaviour.</p>
 
@@ -1219,13 +3496,258 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
 
 <p>Every completed load-scenario request is recorded into MockServer's SLO sample store (when <code class="inline code">sloTrackingEnabled=true</code>), so you can drive load and then assert that latency and error-rate objectives held — all from the MockServer control plane.</p>
 
-<pre class="prettyprint code"><code class="code"># 1. Enable both features
-docker run \
-  -e MOCKSERVER_LOAD_GENERATION_ENABLED=true \
-  -e MOCKSERVER_SLO_TRACKING_ENABLED=true \
-  mockserver/mockserver
+<button class="accordion">drive load, then assert SLOs held over the run</button>
+<div class="panel">
+    <p>Drive a closed-model load run (10 virtual users for 30&nbsp;seconds) at the target, let the run <strong>complete</strong>, then assert the recorded latency and error-rate objectives held over the window with <strong>verifySLO</strong>. Starting the run needs <code class="inline code">loadGenerationEnabled=true</code>; recording the SLI samples needs <code class="inline code">sloTrackingEnabled=true</code>.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.model.SocketAddress;
+import org.mockserver.slo.SloCriteria;
+import org.mockserver.slo.SloObjective;
+import org.mockserver.slo.SloWindow;
+import java.util.Set;
 
-# 2. Load (register) then trigger a load scenario (e.g. 10 VUs for 30 s)
+LoadScenario scenario = LoadScenario.loadScenario("slo-validation-run")
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(10, 30000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/health")
+            .withSocketAddress("target.svc", 8080, SocketAddress.Scheme.HTTP))
+    );
+
+client.runLoadScenario(scenario);   // register + start (requires loadGenerationEnabled=true)
+
+// ... let the run COMPLETE before asserting (poll getLoadScenario until state COMPLETED) ...
+
+// assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+client.verifySLO(SloCriteria.sloCriteria()
+    .withName("checkout-slo")
+    .withWindow(SloWindow.lookback(60000))
+    .withMinimumSampleCount(50)
+    .withUpstreamHosts(Set.of("target.svc"))
+    .withObjectives(
+        SloObjective.sloObjective()
+            .withSli(SloObjective.Sli.LATENCY_P95)
+            .withComparator(SloObjective.Comparator.LESS_THAN)
+            .withThreshold(200.0),
+        SloObjective.sloObjective()
+            .withSli(SloObjective.Sli.ERROR_RATE)
+            .withComparator(SloObjective.Comparator.LESS_THAN_OR_EQUAL)
+            .withThreshold(0.01)
+    ));</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'slo-validation-run',
+    profile: { stages: [ { type: 'VU', vus: 10, durationMillis: 30000 } ] },
+    steps: [
+        { request: { method: 'GET', path: '/api/health',
+                     socketAddress: { host: 'target.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+(async function () {
+    await client.runLoadScenario(scenario);   // register + start (requires loadGenerationEnabled=true)
+
+    // ... let the run COMPLETE before asserting (poll getLoadScenario until state COMPLETED) ...
+
+    // assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+    await client.verifySLO({
+        name: 'checkout-slo',
+        window: { type: 'LOOKBACK', lookbackMillis: 60000 },
+        minimumSampleCount: 50,
+        upstreamHosts: ['target.svc'],
+        objectives: [
+            { sli: 'LATENCY_P95', comparator: 'LESS_THAN', threshold: 200.0 },
+            { sli: 'ERROR_RATE', comparator: 'LESS_THAN_OR_EQUAL', threshold: 0.01 }
+        ]
+    });
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="slo-validation-run",
+    profile=LoadProfile(stages=[LoadStage.vu_stage(30000, vus=10)]),
+    steps=[
+        LoadStep(request=HttpRequest(method="GET", path="/api/health",
+                                     socket_address=SocketAddress(host="target.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+client.run_load_scenario(scenario)   # register + start (requires loadGenerationEnabled=true)
+
+# ... let the run COMPLETE before asserting (poll get_load_scenario until state COMPLETED) ...
+
+# assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+client.verify_slo({
+    "name": "checkout-slo",
+    "window": {"type": "LOOKBACK", "lookbackMillis": 60000},
+    "minimumSampleCount": 50,
+    "upstreamHosts": ["target.svc"],
+    "objectives": [
+        {"sli": "LATENCY_P95", "comparator": "LESS_THAN", "threshold": 200.0},
+        {"sli": "ERROR_RATE", "comparator": "LESS_THAN_OR_EQUAL", "threshold": 0.01},
+    ],
+})</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'slo-validation-run',
+  profile: LoadProfile.new(stages: [LoadStage.vu(30_000, vus: 10)]),
+  steps: [
+    LoadStep.new(request: HttpRequest.new(method: 'GET', path: '/api/health',
+                                          socket_address: SocketAddress.new(host: 'target.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.run_load_scenario(scenario)   # register + start (requires loadGenerationEnabled=true)
+
+# ... let the run COMPLETE before asserting (poll get_load_scenario until state COMPLETED) ...
+
+# assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+client.verify_slo({
+  'name' =&gt; 'checkout-slo',
+  'window' =&gt; { 'type' =&gt; 'LOOKBACK', 'lookbackMillis' =&gt; 60_000 },
+  'minimumSampleCount' =&gt; 50,
+  'upstreamHosts' =&gt; ['target.svc'],
+  'objectives' =&gt; [
+    { 'sli' =&gt; 'LATENCY_P95', 'comparator' =&gt; 'LESS_THAN', 'threshold' =&gt; 200.0 },
+    { 'sli' =&gt; 'ERROR_RATE', 'comparator' =&gt; 'LESS_THAN_OR_EQUAL', 'threshold' =&gt; 0.01 }
+  ]
+})</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">health := mockserver.Request().Method("GET").Path("/api/health").Build()
+health.SocketAddress = &amp;mockserver.SocketAddress{Host: "target.svc", Port: 8080, Scheme: "HTTP"}
+
+scenario := mockserver.LoadScenario{
+    Name: "slo-validation-run",
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.ConstantVusStage(10, 30000),
+        },
+    },
+    Steps: []mockserver.LoadStep{ {Request: &amp;health} },
+}
+
+client.RunLoadScenario(scenario)   // register + start (requires loadGenerationEnabled=true)
+
+// ... let the run COMPLETE before asserting (poll GetLoadScenario until state COMPLETED) ...
+
+// assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+client.VerifySLO(mockserver.SloCriteria{
+    Name:               "checkout-slo",
+    Window:             &amp;mockserver.SloWindow{Type: "LOOKBACK", LookbackMillis: 60000},
+    MinimumSampleCount: 50,
+    UpstreamHosts:      []string{"target.svc"},
+    Objectives: []mockserver.SloObjective{
+        {Sli: "LATENCY_P95", Comparator: "LESS_THAN", Threshold: 200.0},
+        {Sli: "ERROR_RATE", Comparator: "LESS_THAN_OR_EQUAL", Threshold: 0.01},
+    },
+})</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var scenario = new LoadScenario
+{
+    Name = "slo-validation-run",
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(10, 30000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new() { Request = HttpRequest.Request().WithMethod("GET").WithPath("/api/health").Build() }
+    }
+};
+scenario.Steps[0].Request.SocketAddress =
+    new SocketAddress { Host = "target.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+await client.RunLoadScenarioAsync(scenario);   // register + start (requires loadGenerationEnabled=true)
+
+// ... let the run COMPLETE before asserting (poll GetLoadScenarioAsync until state COMPLETED) ...
+
+// assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+client.VerifySlo(new SloCriteria
+{
+    Name = "checkout-slo",
+    Window = SloWindow.Lookback(60000),
+    MinimumSampleCount = 50,
+    UpstreamHosts = new List&lt;string&gt; { "target.svc" },
+    Objectives = new List&lt;SloObjective&gt;
+    {
+        new() { Sli = Sli.LATENCY_P95, Comparator = SloComparator.LESS_THAN, Threshold = 200.0 },
+        new() { Sli = Sli.ERROR_RATE, Comparator = SloComparator.LESS_THAN_OR_EQUAL, Threshold = 0.01 }
+    }
+});</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{SloCriteria, SloObjective, SloWindow, SocketAddress};
+
+let profile = LoadProfile::of(vec![LoadStage::vu_hold(10, 30_000)]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/api/health")
+        .socket_address(SocketAddress::new("target.svc", 8080))),
+];
+let scenario = LoadScenario::new("slo-validation-run", profile, steps);
+
+client.run_load_scenario(&amp;scenario).unwrap();   // register + start (requires loadGenerationEnabled=true)
+
+// ... let the run COMPLETE before asserting (poll get_load_scenario until state COMPLETED) ...
+
+// assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+let criteria = SloCriteria::new(vec![
+    SloObjective::new("LATENCY_P95", "LESS_THAN", 200.0),
+    SloObjective::new("ERROR_RATE", "LESS_THAN_OR_EQUAL", 0.01),
+])
+    .name("checkout-slo")
+    .window(SloWindow::lookback(60_000))
+    .minimum_sample_count(50)
+    .upstream_hosts(vec!["target.svc".to_string()]);
+client.verify_slo(&amp;criteria).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$scenario = LoadScenario::scenario('slo-validation-run')
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(10, 30000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/api/health')
+            -&gt;socketAddress('target.svc', 8080, 'HTTP'),
+    );
+
+$client-&gt;runLoadScenario($scenario);   // register + start (requires loadGenerationEnabled=true)
+
+// ... let the run COMPLETE before asserting (poll getLoadScenario until state COMPLETED) ...
+
+// assert latency + error-rate SLOs held over the run (requires sloTrackingEnabled=true)
+$client-&gt;verifySlo([
+    'name' =&gt; 'checkout-slo',
+    'window' =&gt; ['type' =&gt; 'LOOKBACK', 'lookbackMillis' =&gt; 60000],
+    'minimumSampleCount' =&gt; 50,
+    'upstreamHosts' =&gt; ['target.svc'],
+    'objectives' =&gt; [
+        ['sli' =&gt; 'LATENCY_P95', 'comparator' =&gt; 'LESS_THAN', 'threshold' =&gt; 200.0],
+        ['sli' =&gt; 'ERROR_RATE', 'comparator' =&gt; 'LESS_THAN_OR_EQUAL', 'threshold' =&gt; 0.01],
+    ],
+]);</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Enable both features at startup:
+#   docker run \
+#     -e MOCKSERVER_LOAD_GENERATION_ENABLED=true \
+#     -e MOCKSERVER_SLO_TRACKING_ENABLED=true \
+#     mockserver/mockserver
+
+# 1. Register, then start a load run (e.g. 10 VUs for 30 s)
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -1244,10 +3766,9 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start \
   -d '{ "name": "slo-validation-run" }'
 
-# 3. Wait for the scenario to complete (poll GET /loadScenario/slo-validation-run until state = "COMPLETED")
+# 2. Wait for the scenario to complete (poll GET /loadScenario/slo-validation-run until state = "COMPLETED")
 
-# 4. Assert SLOs held during the run
-# Returns 200 (PASS) or 406 (FAIL)
+# 3. Assert SLOs held during the run — returns 200 (PASS) or 406 (FAIL)
 curl -s -w "\n%{http_code}" -X PUT http://localhost:1080/mockserver/verifySLO \
   -H "Content-Type: application/json" \
   -d '{
@@ -1260,6 +3781,8 @@ curl -s -w "\n%{http_code}" -X PUT http://localhost:1080/mockserver/verifySLO \
       { "sli": "ERROR_RATE",  "comparator": "LESS_THAN_OR_EQUAL", "threshold": 0.01 }
     ]
   }'</code></pre>
+    </div>
+</div>
 
 <p>See <a href="/mock_server/chaos_testing.html#slo_resilience_verdicts">SLO Resilience Verdicts</a> for the full <code class="inline code">verifySLO</code> reference, including window types, all SLI options, and the response body schema.</p>
 
@@ -1412,13 +3935,157 @@ curl -s http://localhost:1080/mockserver/metrics | grep '^mock_server_load_'</co
 
 <p>Attach domain dimensions (environment, region, team) to metric series using the <code class="inline code">labels</code> field on the scenario or step:</p>
 
-<pre class="prettyprint code"><code class="code"># Enable load generation with a custom label allowlist (Prometheus requires this at startup)
-docker run \
-  -e MOCKSERVER_LOAD_GENERATION_ENABLED=true \
-  -e MOCKSERVER_LOAD_GENERATION_METRIC_LABELS=env,region \
-  mockserver/mockserver
+<button class="accordion">attach custom metric labels to a run</button>
+<div class="panel">
+    <p>Tag a scenario's metric series with custom dimensions &mdash; scenario-level (<code class="inline code">env</code>, <code class="inline code">region</code>) and step-level (<code class="inline code">team</code>) &mdash; then <strong>register</strong> it. Prometheus only exposes label keys named in the startup allowlist (<code class="inline code">loadGenerationMetricLabels</code>); OpenTelemetry forwards every custom label automatically.</p>
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.model.SocketAddress;
+import java.util.Map;
 
-# Scenario with custom labels
+LoadScenario scenario = LoadScenario.loadScenario("checkout-load")
+    .withLabels(Map.of("env", "staging", "region", "eu-west-1"))
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(10, 30000)
+    ))
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/orders/$iteration.index")
+                .withSocketAddress("orders.svc", 8080, SocketAddress.Scheme.HTTP))
+            .withName("get-order")
+            .withLabels(Map.of("team", "orders"))
+    );
+
+client.loadScenario(scenario);   // register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var scenario = {
+    name: 'checkout-load',
+    labels: { env: 'staging', region: 'eu-west-1' },
+    profile: { stages: [ { type: 'VU', vus: 10, durationMillis: 30000 } ] },
+    steps: [
+        { name: 'get-order', labels: { team: 'orders' },
+          request: { method: 'GET', path: '/api/orders/$iteration.index',
+                     socketAddress: { host: 'orders.svc', port: 8080, scheme: 'HTTP' } } }
+    ]
+};
+
+await client.loadScenario(scenario);   // register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">scenario = LoadScenario(
+    name="checkout-load",
+    labels={"env": "staging", "region": "eu-west-1"},
+    profile=LoadProfile(stages=[LoadStage.vu_stage(30000, vus=10)]),
+    steps=[
+        LoadStep(name="get-order", labels={"team": "orders"},
+                 request=HttpRequest(method="GET", path="/api/orders/$iteration.index",
+                                     socket_address=SocketAddress(host="orders.svc", port=8080, scheme="HTTP"))),
+    ],
+)
+
+client.load_scenario(scenario)   # register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">scenario = LoadScenario.new(
+  name: 'checkout-load',
+  labels: { 'env' =&gt; 'staging', 'region' =&gt; 'eu-west-1' },
+  profile: LoadProfile.new(stages: [LoadStage.vu(30_000, vus: 10)]),
+  steps: [
+    LoadStep.new(name: 'get-order', labels: { 'team' =&gt; 'orders' },
+                 request: HttpRequest.new(method: 'GET', path: '/api/orders/$iteration.index',
+                                          socket_address: SocketAddress.new(host: 'orders.svc', port: 8080, scheme: 'HTTP')))
+  ]
+)
+
+client.load_scenario(scenario)   # register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">order := mockserver.Request().Method("GET").Path("/api/orders/$iteration.index").Build()
+order.SocketAddress = &amp;mockserver.SocketAddress{Host: "orders.svc", Port: 8080, Scheme: "HTTP"}
+
+scenario := mockserver.LoadScenario{
+    Name:   "checkout-load",
+    Labels: map[string]string{"env": "staging", "region": "eu-west-1"},
+    Profile: &amp;mockserver.LoadProfile{
+        Stages: []mockserver.LoadStage{
+            mockserver.ConstantVusStage(10, 30000),
+        },
+    },
+    Steps: []mockserver.LoadStep{
+        {Name: "get-order", Request: &amp;order, Labels: map[string]string{"team": "orders"}},
+    },
+}
+
+client.LoadScenario(scenario)   // register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">var scenario = new LoadScenario
+{
+    Name = "checkout-load",
+    Labels = new Dictionary&lt;string, string&gt; { ["env"] = "staging", ["region"] = "eu-west-1" },
+    Profile = new LoadProfile
+    {
+        Stages = new List&lt;LoadStage&gt; { LoadStage.ConstantVus(10, 30000) }
+    },
+    Steps = new List&lt;LoadStep&gt;
+    {
+        new()
+        {
+            Name = "get-order",
+            Request = HttpRequest.Request().WithMethod("GET").WithPath("/api/orders/$iteration.index").Build(),
+            Labels = new Dictionary&lt;string, string&gt; { ["team"] = "orders" }
+        }
+    }
+};
+scenario.Steps[0].Request.SocketAddress =
+    new SocketAddress { Host = "orders.svc", Port = 8080, Scheme = SocketScheme.HTTP };
+
+await client.LoadScenarioAsync(scenario);   // register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::SocketAddress;
+
+// Rust client: custom labels / step names are not exposed
+let profile = LoadProfile::of(vec![LoadStage::vu_hold(10, 30_000)]);
+let steps = vec![
+    LoadStep::new(HttpRequest::new().method("GET").path("/api/orders/$iteration.index")
+        .socket_address(SocketAddress::new("orders.svc", 8080))),
+];
+let scenario = LoadScenario::new("checkout-load", profile, steps);
+
+client.load_scenario(&amp;scenario).unwrap();   // register</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">$scenario = LoadScenario::scenario('checkout-load')
+    -&gt;labels(['env' =&gt; 'staging', 'region' =&gt; 'eu-west-1'])
+    -&gt;profile(LoadProfile::of(
+        LoadStage::vuHold(10, 30000),
+    ))
+    -&gt;addStep(
+        HttpRequest::request()-&gt;method('GET')-&gt;path('/api/orders/$iteration.index')
+            -&gt;socketAddress('orders.svc', 8080, 'HTTP'),
+        name: 'get-order',
+        labels: ['team' =&gt; 'orders'],
+    );
+
+$client-&gt;loadScenario($scenario);   // register (Prometheus needs the label keys allow-listed at startup)</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Enable load generation with a custom label allowlist (Prometheus requires this at startup):
+#   docker run \
+#     -e MOCKSERVER_LOAD_GENERATION_ENABLED=true \
+#     -e MOCKSERVER_LOAD_GENERATION_METRIC_LABELS=env,region \
+#     mockserver/mockserver
+
+# Register a scenario with scenario-level and step-level custom labels
 curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
   -H "Content-Type: application/json" \
   -d '{
@@ -1430,10 +4097,12 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
         "name": "get-order",
         "labels": { "team": "orders" },
         "request": { "method": "GET", "path": "/api/orders/$iteration.index",
-                     "socketAddress": { "host": "orders.svc", "port": 8080 } }
+                     "socketAddress": { "host": "orders.svc", "port": 8080, "scheme": "HTTP" } }
       }
     ]
   }'</code></pre>
+    </div>
+</div>
 
 <p><strong>Prometheus:</strong> Only label keys listed in <code class="inline code">mockserver.loadGenerationMetricLabels</code> (set at startup) appear as Prometheus labels. This is a Prometheus requirement — the schema is fixed at registration time.<br>
 <strong>OpenTelemetry:</strong> All custom label keys are forwarded as OTEL attributes with no allowlist needed.</p>
@@ -1551,6 +4220,7 @@ rate(mock_server_load_throttled_total[1m])</code></pre>
 <h2>Related Pages</h2>
 
 <ul>
+    <li><a href="/mock_server/load_injection_performance.html">Load Injection Performance</a> &mdash; how injected throughput scales across many parallel instances, with measured figures</li>
     <li><a href="/mock_server/mockserver_ui.html#ui_performance_section">Dashboard — Performance view</a> &mdash; build, run, and monitor load scenarios from the UI (see <a href="#dashboard_ui">Dashboard UI</a> above)</li>
     <li><a href="/mock_server/chaos_testing.html">Chaos Testing &amp; Fault Injection</a> &mdash; inject faults alongside load to verify resilience under stress</li>
     <li><a href="/mock_server/chaos_testing.html#slo_resilience_verdicts">SLO Resilience Verdicts</a> &mdash; assert that latency and error-rate objectives held during the load run (post-run, via <code class="inline code">verifySLO</code>)</li>
