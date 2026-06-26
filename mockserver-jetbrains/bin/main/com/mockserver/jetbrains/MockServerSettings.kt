@@ -1,12 +1,11 @@
 package com.mockserver.jetbrains
 
-import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.ide.plugins.cl.PluginAwareClassLoader
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
-import com.intellij.openapi.extensions.PluginId
 
 /**
  * Application-level settings for the MockServer plugin: the Docker image,
@@ -57,14 +56,22 @@ class MockServerSettings : PersistentStateComponent<MockServerSettings.State> {
     companion object {
         const val DEFAULT_CONTAINER_NAME = "mockserver-ide"
         const val DEFAULT_PORT = 1080
-        const val PLUGIN_ID = "com.mock-server.mockserver"
 
         fun getInstance(): MockServerSettings = service()
 
-        /** Plugin version, or "latest" if it cannot be resolved (e.g. outside the IDE). */
+        /**
+         * Plugin version, or "latest" if it cannot be resolved (e.g. outside the IDE).
+         *
+         * Resolved from this class's own plugin class loader, which implements
+         * [PluginAwareClassLoader] and exposes the plugin descriptor — a public, stable
+         * API across the supported platform range. Looking the descriptor up by id via
+         * `PluginManagerCore.getPlugin(PluginId)` is avoided because that method is marked
+         * `@ApiStatus.Internal` on newer platforms (the Plugin Verifier rejects it).
+         */
         private fun pluginVersion(): String =
             try {
-                PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.version ?: "latest"
+                (MockServerSettings::class.java.classLoader as? PluginAwareClassLoader)
+                    ?.pluginDescriptor?.version ?: "latest"
             } catch (_: Throwable) {
                 "latest"
             }

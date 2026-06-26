@@ -52,7 +52,7 @@ class MockServerDashboardToolWindowFactory : ToolWindowFactory {
     }
 
     private fun createEmbeddedBrowser(toolWindow: ToolWindow, dashboardUrl: String): JPanel {
-        val browser = JBCefBrowser(dashboardUrl)
+        val browser = JBCefBrowser.createBuilder().setUrl(dashboardUrl).build()
         // Release the native Chromium process when the tool window is disposed.
         Disposer.register(toolWindow.disposable, browser)
 

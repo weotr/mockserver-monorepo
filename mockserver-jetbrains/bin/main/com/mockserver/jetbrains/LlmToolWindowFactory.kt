@@ -216,7 +216,7 @@ class LlmToolWindowPanel(private val project: Project) {
     private fun showGraph(mermaidSource: String) {
         if (JBCefApp.isSupported()) {
             val existing = browser
-            val cefBrowser = existing ?: JBCefBrowser().also { browser = it }
+            val cefBrowser = existing ?: JBCefBrowser.createBuilder().build().also { browser = it }
             graphContainer.removeAll()
             graphContainer.add(cefBrowser.component, BorderLayout.CENTER)
             cefBrowser.loadHTML(MermaidRenderer.toHtml(mermaidSource))
