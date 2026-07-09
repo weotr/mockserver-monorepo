@@ -26,8 +26,11 @@ function ClosestRow({ exp }: { exp: ClosestExpectation }) {
           {exp.expectationMethod} {exp.expectationPath || '(any)'}
         </Typography>
         {exp.expectationId && <Chip size="small" variant="outlined" label={exp.expectationId.slice(0, 8)} />}
-        <Chip size="small" color={exp.differingFieldCount === 0 ? 'success' : 'default'}
-          label={`matched ${exp.matchedFieldCount}/${exp.totalFieldCount} fields`} />
+        <Chip
+          size="small"
+          color={exp.matches ? 'success' : exp.differingFieldCount <= 2 ? 'warning' : 'error'}
+          label={exp.matches ? 'matches' : `differs on ${exp.differingFieldCount} field${exp.differingFieldCount === 1 ? '' : 's'}`}
+        />
       </Box>
       {exp.differences && Object.keys(exp.differences).length > 0 && (
         <Box sx={{ mt: 0.5 }}>
@@ -85,7 +88,7 @@ export default function ExplainUnmatchedDialog({
   return (
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth fullScreen={fullScreen} aria-labelledby="explain-unmatched-dialog-title">
       <DialogTitle id="explain-unmatched-dialog-title">
-        Explain unmatched requests
+        Explain Unmatched Requests
         <Button size="small" sx={{ ml: 2 }} disabled={loading} onClick={refresh}>Refresh</Button>
       </DialogTitle>
       <DialogContent>

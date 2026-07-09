@@ -21,16 +21,21 @@ import java.util.stream.Collectors;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.endsWith;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.socket.tls.KeyAndCertificateFactory.PROXY_SETUP_CA_CERTIFICATE_FILE_NAME;
 import static org.mockserver.socket.tls.PEMToFile.certToPEM;
+import static org.mockserver.socket.tls.PEMToFile.x509FromPEMFile;
 
 public class BCKeyAndCertificateFactoryBehaviourTest {
 
@@ -293,6 +298,48 @@ public class BCKeyAndCertificateFactoryBehaviourTest {
         assertThat(caCert.getIssuerX500Principal(), equalTo(caCert.getSubjectX500Principal()));
         // and it can verify itself
         caCert.verify(caCert.getPublicKey());
+    }
+
+    // --- Materialising the active CA to a stable file (proxy setup) ---
+
+    @Test
+    public void shouldWriteDynamicCaToDiskWithStableFileName() throws Exception {
+        // when - the dynamic CA is materialised to the stable mockserver-ca.pem filename
+        String path = factory.writeCertificateAuthorityToDisk();
+
+        // then
+        assertThat(path, endsWith(PROXY_SETUP_CA_CERTIFICATE_FILE_NAME));
+        File caFile = new File(path);
+        assertTrue(caFile.exists());
+
+        // the written file is the public CA certificate (never the private key)
+        String pem = new String(java.nio.file.Files.readAllBytes(caFile.toPath()));
+        assertThat(pem, containsString("BEGIN CERTIFICATE"));
+        assertThat(pem, not(containsString("PRIVATE KEY")));
+
+        // and it round-trips to the same certificate the factory serves
+        X509Certificate written = x509FromPEMFile(path);
+        assertThat(written, equalTo(factory.certificateAuthorityX509Certificate()));
+    }
+
+    @Test
+    public void shouldWriteBakedInCaToDiskWithStableFileName() throws Exception {
+        // given - a factory using the baked-in (public) CA, no dynamic generation
+        Configuration bakedInConfiguration = configuration()
+            .dynamicallyCreateCertificateAuthorityCertificate(false)
+            .certificateAuthorityCertificate(org.mockserver.configuration.ConfigurationProperties.DEFAULT_CERTIFICATE_AUTHORITY_X509_CERTIFICATE)
+            .directoryToSaveDynamicSSLCertificate(tempFolder.getRoot().getAbsolutePath());
+        BCKeyAndCertificateFactory bakedInFactory =
+            new BCKeyAndCertificateFactory(bakedInConfiguration, new MockServerLogger());
+
+        // when
+        String path = bakedInFactory.writeCertificateAuthorityToDisk();
+
+        // then - the written file matches the baked-in CA certificate loaded from the classpath
+        assertThat(path, endsWith(PROXY_SETUP_CA_CERTIFICATE_FILE_NAME));
+        assertTrue(new File(path).exists());
+        X509Certificate written = x509FromPEMFile(path);
+        assertThat(written, equalTo(bakedInFactory.certificateAuthorityX509Certificate()));
     }
 
     // --- Helper methods ---

@@ -9,7 +9,7 @@ graph TB
     subgraph "Production Images"
         MAIN["docker/Dockerfile
 Main (nonroot)
-gcr.io/distroless/java17:nonroot"]
+distroless/java-base + jlink Temurin 25 + AppCDS"]
         ROOT["docker/root/Dockerfile
 Root
 gcr.io/distroless/java17"]
@@ -23,8 +23,8 @@ gcr.io/distroless/java17:debug-nonroot"]
 Root Snapshot
 gcr.io/distroless/java17"]
         LOCAL["docker/local/Dockerfile
-Local Build
-gcr.io/distroless/java17:nonroot"]
+Local Build (release + snapshot artifact)
+distroless/java-base + jlink Temurin 25 + AppCDS"]
         WEBHOOK["docker/webhook/Dockerfile
 Admission Webhook
 gcr.io/distroless/java17:nonroot"]
@@ -47,14 +47,15 @@ grafana/k6"]
 
 | Variant | Dockerfile | Base Image | User | Purpose |
 |---------|-----------|------------|------|---------|
-| Main | `docker/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Default production image |
+| Main | `docker/Dockerfile` | `gcr.io/distroless/java-base-debian12:nonroot` + jlink-trimmed Temurin 25 + AppCDS | `nonroot` | Default production **reference** image (download mode); ships netty-tcnative + a baked AppCDS archive (~⅓ faster time-to-ready). JVM is JDK 25; the library is still compiled to the Java 17 floor (runtime-only) |
 | Root | `docker/root/Dockerfile` | `gcr.io/distroless/java17` | `root` | When root access is needed |
 | GraalJS | `docker/graaljs/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Includes GraalJS for JS templating |
 | Snapshot | `docker/snapshot/Dockerfile` | `gcr.io/distroless/java17:debug-nonroot` | `nonroot` | Testing pre-release builds |
 | Root Snapshot | `docker/root-snapshot/Dockerfile` | `gcr.io/distroless/java17` | `root` | Testing pre-release (root) |
-| Local | `docker/local/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Building from local JAR |
+| Local | `docker/local/Dockerfile` | `gcr.io/distroless/java-base-debian12:nonroot` + jlink-trimmed Temurin 25 + AppCDS | `nonroot` | The image the release **and** snapshot pipelines actually build+push as `mockserver/mockserver:<ver>` / `:snapshot`; builds from a local JAR, bakes a baked AppCDS archive (~⅓ faster time-to-ready); no netty-tcnative (JDK TLS provider). JVM is JDK 25; the library is still compiled to the Java 17 floor (runtime-only) |
 | Webhook | `docker/webhook/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Kubernetes admission webhook for sidecar injection |
 | Clustered | `docker/clustered/Dockerfile` | `gcr.io/distroless/java17:nonroot` | `nonroot` | Infinispan state backend for multi-node clustering |
+| AOT (experimental) | `docker/aot/Dockerfile` | `gcr.io/distroless/java-base-debian12:nonroot` + jlink-trimmed Temurin 25 | `nonroot` | EXPERIMENTAL, published as opt-in `X.Y.Z-aot` / `latest-aot` tags (Docker Hub + ECR Public) from the next release; bakes a JDK 25 AOT cache (JEP 483/514) at image-build time via a training run; ~2× faster time-to-ready; JDK TLS provider (no tcnative) |
 
 ### Docker Registries
 
@@ -67,11 +68,13 @@ Images are published to two registries:
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver` | Avoids Docker Hub rate limits for AWS-based CI/CD |
 | AWS ECR Public | `public.ecr.aws/mockserver/mockserver-webhook` | Webhook image on ECR |
 
-Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, `-graaljs`, `clustered-*`, and webhook release variants. The `:latest` tag is pushed only by the release pipeline, not by the per-merge snapshot step. The `:latest` tag always points to the most recent official release, not the development branch.
+Both registries receive the same tags on every push. On each merge to `master`, the legacy Buildkite pipeline (`.buildkite/scripts/steps/java-docker-push-snapshot.sh`) pushes the `:snapshot`, `:mockserver-snapshot`, and `-graaljs` snapshot variants (plus `:snapshot` / `:mockserver-snapshot` for the webhook image). During releases, the release pipeline (`scripts/release/components/docker.sh`) pushes `:latest`, `:X.Y.Z`, `:mockserver-X.Y.Z`, `-graaljs`, `clustered-*`, `-aot` (experimental, error-isolated), and webhook release variants. The `:latest` tag is pushed only by the release pipeline, not by the per-merge snapshot step. The `:latest` tag always points to the most recent official release, not the development branch.
 
 Release images are cosign-signed by digest after push (see below). Snapshot images are not signed.
 
 The `-clustered` image variant (`clustered-X.Y.Z`, `clustered-mockserver-X.Y.Z`, `clustered-latest`) is published alongside the base and GraalJS images at release time. It bundles the `mockserver-state-infinispan` module and its transitive dependencies (Infinispan, JGroups, etc.) plus `netty-tcnative-boringssl-static` for native TLS. The build is error-isolated: a clustered image push failure does not abort the release since the main images have already been published.
+
+The **AOT experimental variant** (`docker/aot/Dockerfile`) is published as opt-in `X.Y.Z-aot`, `mockserver-X.Y.Z-aot`, and `latest-aot` tags (Docker Hub + ECR Public) from the next release, alongside the base and GraalJS images. Like the clustered image it is error-isolated in the release pipeline: an `-aot` build or push failure does not abort the release, since the main images have already been published by that point (the arm64 training run executes under QEMU emulation and is the most likely failure point). It copies a jlink-trimmed JDK 25 (Eclipse Temurin 25) runtime onto `gcr.io/distroless/java-base-debian12:nonroot`, runs a training start of MockServer during the image build to produce a JDK 25 AOT cache (JEP 483/514), and bakes that cache into the final image layer. At runtime the JVM loads the cache with `-XX:AOTCache=/mockserver.aot`, cutting time-to-ready by roughly half (~0.35 s vs ~0.7–0.8 s for the standard image). The AOT cache is CPU-architecture and JDK-build specific, so a separate cache is baked for each platform in a multi-arch build. When the soft-fail build succeeds, the published `-aot` tags are cosign-signed like every other release image (the signing step adds them only when the build actually pushed); it is not mirrored to GHCR. TLS uses the JDK provider rather than netty-tcnative; functional parity is complete (unlike GraalVM native-image). It can also be built from a repository checkout for local evaluation: `cd docker/aot && touch ca-bundle.pem && docker build .` (the `ca-bundle.pem` file must exist in the build context — it may be empty unless you are behind a corporate TLS-inspection proxy).
 
 ### Verifying Image Signatures
 
@@ -90,14 +93,14 @@ cosign verify \
 # Or verify the tag (resolves to digest internally)
 cosign verify \
   --key https://www.mock-server.com/mockserver-cosign.pub \
-  mockserver/mockserver:7.2.0
+  mockserver/mockserver:7.4.0
 ```
 
 The public key corresponding to `mockserver-release/cosign-key` is **published at `https://www.mock-server.com/mockserver-cosign.pub`** (source: `jekyll-www.mock-server.com/mockserver-cosign.pub`; an identical copy is at `helm/mockserver/cosign.pub`). It can also be re-derived from the private key with `cosign public-key --key cosign.key`. The same key signs the Helm chart.
 
 Signing is non-fatal in the release pipeline: if the key is absent (or the cosign binary cannot be downloaded), images are published unsigned and the release continues. The cosign binary itself is no longer a prerequisite — the release step downloads and checksum-verifies it on demand.
 
-> **IAM note:** the signing step is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`, so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret in addition to `GetSecretValue` — otherwise the probe fails and signing is silently skipped (this caused the 7.2.0 chart/images to publish unsigned until the grant was added to `read_release_secrets`).
+> **IAM note:** the signing step is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`, so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret in addition to `GetSecretValue` — otherwise the probe fails and signing is silently skipped (this caused the 7.4.0 chart/images to publish unsigned until the grant was added to `read_release_secrets`).
 
 ### Base Image CVE Baseline
 
@@ -142,12 +145,17 @@ Uses local JAR"]
     DL -->|default| INT[Intermediate Stage]
     CP -->|ARG source=copy| INT
 
-    INT --> RT["Runtime Stage
-distroless/java17:nonroot"]
+    INT --> AC["AppCDS build stage
+eclipse-temurin:25-jdk-noble
+jlink-trim + -Xshare:dump + training run
+-> /mockserver.jsa"]
+    AC --> RT["Runtime Stage
+distroless/java-base-debian12:nonroot
++ jlink Temurin 25 + jar + AppCDS archive + tcnative .so"]
 
     RT --> EXPOSE["EXPOSE 1080"]
-    RT --> ENTRY["ENTRYPOINT java -cp mockserver-netty-jar-with-dependencies.jar
-org.mockserver.cli.Main"]
+    RT --> ENTRY["ENTRYPOINT java -XX:SharedArchiveFile=/mockserver.jsa
+-cp mockserver-netty-jar-with-dependencies.jar org.mockserver.cli.Main"]
 ```
 
 The main Dockerfile supports two source modes via the `source` build ARG:
@@ -157,13 +165,37 @@ The main Dockerfile supports two source modes via the `source` build ARG:
 
 Both modes download `netty-tcnative-boringssl-static` from Maven Central (`repo1.maven.org`) for TLS performance.
 
+After the source stage the JAR flows through an **AppCDS build stage** (see [AppCDS Standard Image](#appcds-standard-image-fast-start) below) that jlink-trims a JDK 25 runtime and produces a baked AppCDS archive via a training run; the runtime stage copies that trimmed runtime, the archive, the JAR, and the tcnative `.so` onto `distroless/java-base-debian12`. The JVM in the runtime image is JDK 25; the MockServer library itself is still compiled to the Java 17 bytecode floor, so this is a runtime-only choice (the jar runs unmodified on the newer JVM).
+
 **Exposed port:** 1080
 
 > **MCP endpoint:** When `mcpEnabled=true` (via system property or `mockserver.properties`), the MCP (Model Context Protocol) endpoint is available at `/mockserver/mcp` on the same port. AI agents can connect using HTTP+SSE transport.
 
-**Entry point:** `java -Dfile.encoding=UTF-8 -XX:MaxRAMPercentage=75.0 -cp /mockserver-netty-jar-with-dependencies.jar:/libs/* -Dmockserver.propertyFile=/config/mockserver.properties org.mockserver.cli.Main`
+**Entry point:** `/usr/lib/jvm/temurin25-trimmed/bin/java -Dfile.encoding=UTF-8 -XX:MaxRAMPercentage=75.0 -XX:SharedArchiveFile=/mockserver.jsa -cp /mockserver-netty-jar-with-dependencies.jar:/libs/* -Dmockserver.propertyFile=/config/mockserver.properties org.mockserver.cli.Main`
 
 **Heap cap:** `-XX:MaxRAMPercentage=75.0` limits the JVM heap to 75% of the container's memory limit so the in-memory request/expectation ring buffers size off a bounded heap rather than total node memory. The Helm chart delivers any `app.jvmOptions` value via the `JAVA_TOOL_OPTIONS` environment variable; the JVM **prepends** `JAVA_TOOL_OPTIONS` flags before the command-line args, so the `ENTRYPOINT`'s `-XX:MaxRAMPercentage=75.0` is evaluated **last** and wins over any competing `MaxRAMPercentage` in `jvmOptions`. An explicit `-Xmx` in `jvmOptions` (or `JAVA_TOOL_OPTIONS`) does disable `MaxRAMPercentage` — once `-Xmx` is present the flag is ignored. Both `docker/Dockerfile` and `docker/clustered/Dockerfile` include this flag.
+
+### AppCDS Standard Image (fast start)
+
+**Outcome:** the standard image (`docker/local/Dockerfile`, which the release **and** snapshot pipelines build+push, and its download-mode reference `docker/Dockerfile`) bakes an **Application Class Data Sharing (AppCDS)** archive over the MockServer + library classes at image-build time. This cuts container time-to-ready by roughly a third (measured ~855 ms → ~570 ms launch-to-ready on an arm64 host, median of 5; that figure was measured on the JDK 17 runtime and should be re-measured on JDK 25 — a single local container observation post-bump was comparable) while remaining the real HotSpot JVM with 100% feature parity. It uses the same train-at-build + jlink-runtime shape as the experimental `-aot` image, on a JDK 25 runtime with an AppCDS archive rather than the `-aot` variant's JDK 25 Leyden AOT cache. The MockServer library is still compiled to the Java 17 bytecode floor — the JDK 25 runtime is a runtime-only choice.
+
+**Build shape (three stages):**
+
+1. **Source stage** (`download` / `copy`, unchanged) produces `mockserver-netty-jar-with-dependencies.jar` (+ tcnative in `docker/Dockerfile`).
+2. **AppCDS build stage** (`eclipse-temurin:25-jdk-noble`): `jlink` trims a JDK 25 runtime with the same module set as the binary bundle (`java.se,jdk.unsupported,jdk.crypto.ec,jdk.crypto.cryptoki,jdk.naming.dns,jdk.zipfs`, see `scripts/build-binary-bundle.sh`). A jlink image does **not** carry the JDK's default CDS base archive, so `java -Xshare:dump` regenerates it from the bundled `lib/classlist`. A **training run** then starts MockServer with `-XX:ArchiveClassesAtExit=/mockserver.jsa`, polls the bundled `org.mockserver.cli.HealthCheck` until the status endpoint answers (which also drives the post-bind warmup so the first-request class burst is archived), and stops cleanly so the JVM writes the dynamic archive at exit. An `ls -l /mockserver.jsa` fails the build if the archive was not produced.
+3. **Runtime stage** (`gcr.io/distroless/java-base-debian12:nonroot`, digest-pinned — the **same base+digest as `docker/aot`**): copies the trimmed runtime to `/usr/lib/jvm/temurin25-trimmed`, plus the JAR, the `/mockserver.jsa` archive (and, in `docker/Dockerfile` only, the tcnative `.so`). The entrypoint adds `-XX:SharedArchiveFile=/mockserver.jsa`.
+
+> **AppCDS vs Leyden AOT (both on JDK 25):** this image and `docker/aot/Dockerfile` both run a JDK 25 runtime and both use the `jlink --compress=zip-<level>` form (the legacy numeric `--compress=2` was removed after JDK 17). The difference is the baked artifact: this image bakes a classic **AppCDS** archive layered on a `-Xshare:dump` base CDS archive, whereas `-aot` bakes a **Leyden AOT cache** (which does not need the `-Xshare:dump` base layering). AppCDS keeps the standard image on the graceful `-Xshare:auto` fallback so it can never hard-fail on the archive at release time.
+
+**Archive / JDK-build coupling:** a CDS archive is only usable by the exact JDK build it was trained with (same constraint as the AOT cache), so the trimmed JDK runtime is **baked into the image alongside the archive**, and each platform of a multi-arch build trains + bakes its own archive. When re-pinning the `java-base` digest or bumping the Temurin 25 build, the archive is rebuilt automatically by the next image build — no separate step.
+
+**Graceful fallback (validated):** the runtime relies on the JVM default `-Xshare:auto`, so a **missing or corrupt** `/mockserver.jsa` (bind-mounted away, arch mismatch, truncated) logs a CDS warning (`Unable to map shared spaces` / `bad magic number`) and starts **normally** rather than failing. This is the guarantee the DEFAULT image depends on — unlike the `-aot` variant it cannot soft-fail at release time. Verified by running the image with the archive replaced by `/dev/null` and by random bytes: both reached `PUT /mockserver/status` → 200.
+
+**Image size:** roughly break-even with the old `distroless/java17` image (the jlink-trimmed JDK 25 runtime offsets the ~33 MB archive; measured ~411 MB vs ~422 MB for `mockserver/mockserver:7.4.0` — re-measure on JDK 25 at the next size audit).
+
+**QEMU note (release/CI):** the release pipeline builds multi-arch via `buildx` on amd64 agents, so the **arm64 training run executes under QEMU emulation** and is slower than a native run. This is the same cost the `-aot` image already pays. Unlike `-aot` (which is error-isolated / soft-fail), the standard image is the primary artifact, so a training-run failure under QEMU would fail the build — the training loop polls for up to 120 s and stops cleanly, which is ample on emulated arm64.
+
+**Peak-throughput tip (not shipped):** adding `-XX:TieredStopAtLevel=1` shaves further startup but caps peak JIT throughput — wrong default for load-injection users, so it is **not** set in the shipped images. Testcontainers / ephemeral users who value fast start over sustained throughput can add it via `JAVA_TOOL_OPTIONS`.
 
 ### Building Behind a Corporate TLS-Inspecting Proxy
 
@@ -177,7 +209,7 @@ docker build docker/            # base image (downloads from Maven Central via t
 
 **How it works:** each variant's alpine download stage (`docker/`, `docker/root/`, `docker/snapshot/`, `docker/root-snapshot/`, `docker/clustered/`, `docker/graaljs/`) `COPY`s a `ca-bundle.pem` from the build context. When that file is non-empty, the stage trusts it before `apk add` and before the `wget` jar downloads from `repo1.maven.org`, so TLS interception does not break the build. When it is empty (the CI/published-image case), an `[ -s ]` guard skips all trust changes, so the build is identical to a no-CA build.
 
-The release/CI scripts and the container-integration-test harness stage this file automatically via the shared `docker/ensure-ca-bundle.sh` helper: it copies `MOCKSERVER_LOCAL_CA_BUNDLE` (or the `NODE_EXTRA_CA_CERTS` / `AWS_CA_BUNDLE` fallbacks) into the context when set, otherwise writes an empty placeholder. All `ca-bundle.pem` files are gitignored. The single-stage `docker/local` and `docker/webhook` images do not download anything and so do not use this mechanism.
+The release/CI scripts and the container-integration-test harness stage this file automatically via the shared `docker/ensure-ca-bundle.sh` helper: it copies `MOCKSERVER_LOCAL_CA_BUNDLE` (or the `NODE_EXTRA_CA_CERTS` / `AWS_CA_BUNDLE` fallbacks) into the context when set, otherwise writes an empty placeholder. All `ca-bundle.pem` files are gitignored. `docker/local` and `docker/webhook` do **not** use this mechanism: `docker/webhook` is single-stage, and although `docker/local` is now multi-stage (its AppCDS build stage runs on `eclipse-temurin`), that stage performs **no network downloads** (it only copies the local JAR, jlink-trims, and runs a training start), so it needs no CA-bundle trust even behind a TLS-inspecting proxy.
 
 The same download stages also harden Maven Central downloads against transient DNS/connection blips by appending GNU-wget retry directives (`tries`, `timeout`, `waitretry`, `retry_on_host_error`, `retry_connrefused`) to `/etc/wgetrc`. BusyBox wget ignores `/etc/wgetrc`, so this is a safe no-op on images that fall back to it.
 

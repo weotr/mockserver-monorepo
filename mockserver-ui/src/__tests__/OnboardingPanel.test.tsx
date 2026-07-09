@@ -120,6 +120,45 @@ describe('OnboardingPanel', () => {
     // The dialog should appear (OpenApiImportDialog renders with a dialog title)
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
+
+  it('navigates to the composer from the Mocking tile Create Mock button', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /^Create Mock$/i }));
+    expect(useDashboardStore.getState().view).toBe('composer');
+  });
+
+  it('no longer renders the Try It Now quick-start section', () => {
+    renderPanel();
+    // The Mocking tile's Create Mock CTA now carries the primary first-run action,
+    // so the duplicated "Try It Now" steps (and their curl / proxy snippets) are gone.
+    expect(screen.queryByText('Try It Now')).not.toBeInTheDocument();
+    expect(screen.queryByText(/curl http:\/\//i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/export HTTPS_PROXY=/i)).not.toBeInTheDocument();
+  });
+
+  it('does not show the returning-user banner when the server has no state', () => {
+    renderPanel();
+    expect(screen.queryByRole('button', { name: /Open Dashboard/i })).not.toBeInTheDocument();
+  });
+
+  it('shows the returning-user banner only when there are active mocks or recorded requests', async () => {
+    useDashboardStore.setState({
+      activeExpectations: [{ key: 'exp1', value: { httpRequest: { path: '/a' } } }],
+      recordedRequests: [
+        { key: 'rec1', value: { path: '/b' } },
+        { key: 'rec2', value: { path: '/c' } },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.getByText(/This server has 1 active mock and 2 recorded requests/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Open Dashboard/i }));
+    expect(useDashboardStore.getState().view).toBe('dashboard');
+  });
 });
 
 describe('OnboardingPanel default-selection logic', () => {

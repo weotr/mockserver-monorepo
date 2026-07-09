@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
 import VerificationView from '../components/VerificationView';
+import { useDashboardStore } from '../store';
 
 const params = { host: '127.0.0.1', port: '1080', secure: false };
 
@@ -373,7 +374,7 @@ describe('VerificationView', () => {
 
   it('shows generated code panel even when no matchers are filled (empty form = verify any request)', () => {
     renderView();
-    expect(screen.getByText('Generated code')).toBeInTheDocument();
+    expect(screen.getByText('Generated Code')).toBeInTheDocument();
     // Java tab should be present and selected by default
     expect(screen.getByRole('tab', { name: 'Java' })).toBeInTheDocument();
     // The empty-form code should contain a verify call with request()
@@ -387,7 +388,7 @@ describe('VerificationView', () => {
     const pathField = screen.getByLabelText('Path');
     await user.type(pathField, '/api/orders');
 
-    expect(screen.getByText('Generated code')).toBeInTheDocument();
+    expect(screen.getByText('Generated Code')).toBeInTheDocument();
     // Java tab should be present and selected by default
     expect(screen.getByRole('tab', { name: 'Java' })).toBeInTheDocument();
     // The code should contain the Java verify call
@@ -398,7 +399,7 @@ describe('VerificationView', () => {
   it('shows generated code panel in sequence mode even with empty steps', () => {
     renderView();
     // The panel is always present, even before switching to sequence mode
-    expect(screen.getByText('Generated code')).toBeInTheDocument();
+    expect(screen.getByText('Generated Code')).toBeInTheDocument();
   });
 
   it('shows all 9 language tabs in the generated code panel', () => {
@@ -439,5 +440,34 @@ describe('VerificationView', () => {
     // Response-only sequence: no httpRequests key
     expect(body).not.toHaveProperty('httpRequests');
     expect(body.httpResponses).toBeDefined();
+  });
+});
+
+describe('VerificationView — launchpad draft consumption', () => {
+  afterEach(() => {
+    useDashboardStore.setState({ pendingVerificationDraft: null });
+  });
+
+  it('prefills the single-request matcher from a pending verification draft and clears it', () => {
+    useDashboardStore.setState({
+      pendingVerificationDraft: { method: 'POST', path: '/api/orders' },
+    });
+    renderView();
+
+    // Path prefilled from the draft.
+    expect(screen.getByLabelText('Path')).toHaveValue('/api/orders');
+    // Method prefilled (shown in the method Select's rendered value).
+    expect(screen.getByText('POST')).toBeInTheDocument();
+    // Single-request mode is active and the request matcher is expanded.
+    expect(screen.getByRole('button', { name: 'Single request', pressed: true })).toBeInTheDocument();
+    // The one-shot draft is consumed exactly once.
+    expect(useDashboardStore.getState().pendingVerificationDraft).toBeNull();
+  });
+
+  it('prefills only the path when the draft carries no method', () => {
+    useDashboardStore.setState({ pendingVerificationDraft: { path: '/health' } });
+    renderView();
+    expect(screen.getByLabelText('Path')).toHaveValue('/health');
+    expect(useDashboardStore.getState().pendingVerificationDraft).toBeNull();
   });
 });

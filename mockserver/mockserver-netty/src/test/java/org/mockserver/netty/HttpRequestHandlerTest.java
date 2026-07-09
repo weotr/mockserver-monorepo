@@ -40,6 +40,7 @@ import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.endsWith;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsNot.not;
 import static org.hamcrest.core.IsNull.nullValue;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.openMocks;
@@ -83,7 +84,7 @@ public class HttpRequestHandlerTest {
         when(server.getScheduler()).thenReturn(mock(Scheduler.class));
         mockActionHandler = mock(HttpActionHandler.class);
 
-        httpStateHandler = new HttpState(configuration(), new MockServerLogger(), mock(Scheduler.class));
+        httpStateHandler = new HttpState(configuration(), new MockServerLogger(), synchronousScheduler());
         mockServerHandler = new HttpRequestHandler(configuration(), server, httpStateHandler, null);
 
         openMocks(this);
@@ -943,6 +944,86 @@ public class HttpRequestHandlerTest {
         assertThat(httpResponse.getBodyAsString(), containsString("\"logLevel\" : \"WARN\""));
     }
 
+    @Test
+    public void shouldRejectDashboardWhenControlPlaneAuthEnabledAndNotAuthenticated() {
+        // given - control-plane auth configured but the request carries no/invalid creds. The
+        // dashboard streams all captured traffic, so it must take the same gate as /configuration.
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> false);
+        HttpRequest dashboardRequest = request("/mockserver/dashboard").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(dashboardRequest);
+
+        // then - 401 and the dashboard content is NOT served
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(401));
+        assertThat(httpResponse.getBodyAsString(), containsString("Unauthorized for control plane"));
+    }
+
+    @Test
+    public void shouldServeDashboardWhenControlPlaneAuthEnabledAndAuthenticated() {
+        // given - control-plane auth configured and the request is authenticated
+        httpStateHandler.setControlPlaneAuthenticationHandler(request -> true);
+        HttpRequest dashboardRequest = request("/mockserver/dashboard").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(dashboardRequest);
+
+        // then - the gate allows it through to the dashboard handler (not a 401/403 challenge)
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), not(is(401)));
+        assertThat(httpResponse.getStatusCode(), not(is(403)));
+    }
+
+    @Test
+    public void shouldServeDashboardWhenNoControlPlaneAuthConfigured() {
+        // given - default config: NO control-plane auth handler set. The shared gate is a no-op
+        // (returns true), so the dashboard stays open with no credentials (non-breaking default).
+        HttpRequest dashboardRequest = request("/mockserver/dashboard").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(dashboardRequest);
+
+        // then - not an auth challenge
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), not(is(401)));
+        assertThat(httpResponse.getStatusCode(), not(is(403)));
+    }
+
+    @Test
+    public void shouldAllowDashboardForReadOnlyPrincipalWhenAuthorizationEnabled() {
+        // given - authorization enabled with a verified READ-only principal; GET /dashboard is a
+        // READ, so a read-only control-plane role may view the dashboard
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("viewer", java.util.Set.of("viewers"));
+        HttpRequest dashboardRequest = request("/mockserver/dashboard").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(dashboardRequest);
+
+        // then - allowed through (not a 401/403 challenge)
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), not(is(401)));
+        assertThat(httpResponse.getStatusCode(), not(is(403)));
+    }
+
+    @Test
+    public void shouldForbidDashboardForUnmappedPrincipalWhenAuthorizationEnabled() {
+        // given - authorization enabled with a verified principal whose scopes map to NO role;
+        // fail-closed, so even a READ (the dashboard) is denied with 403
+        rebuildHttpStateWithAuthorization(true);
+        authenticateWithScopes("stranger", java.util.Set.of("no-mapped-group"));
+        HttpRequest dashboardRequest = request("/mockserver/dashboard").withMethod("GET");
+
+        // when
+        embeddedChannel.writeInbound(dashboardRequest);
+
+        // then - 403 and the dashboard content is NOT served
+        HttpResponse httpResponse = embeddedChannel.readOutbound();
+        assertThat(httpResponse.getStatusCode(), is(403));
+        assertThat(httpResponse.getBodyAsString(), containsString("Forbidden for control plane"));
+    }
+
     /**
      * Rebuilds {@link #httpStateHandler} (and re-wires the embedded channel handler) with a
      * configuration that enables/disables control-plane authorization and a fixed scope
@@ -956,9 +1037,25 @@ public class HttpRequestHandlerTest {
         org.mockserver.configuration.Configuration configuration = configuration()
             .controlPlaneAuthorizationEnabled(authorizationEnabled)
             .controlPlaneScopeMapping(mapping);
-        httpStateHandler = new HttpState(configuration, new MockServerLogger(), mock(Scheduler.class));
+        httpStateHandler = new HttpState(configuration, new MockServerLogger(), synchronousScheduler());
         mockServerHandler = new HttpRequestHandler(configuration, server, httpStateHandler, null);
         embeddedChannel = new EmbeddedChannel(mockServerHandler);
+    }
+
+    /**
+     * A mock {@link Scheduler} whose {@code submit(Runnable)} runs the task inline.
+     * The control-plane handler offloads the optimisation-report build off the event
+     * loop via {@code httpState.getScheduler().submit(...)}; in tests we must execute
+     * that runnable so the response is written and {@code readOutbound()} can observe
+     * it. All other scheduler methods remain no-op mocks.
+     */
+    private Scheduler synchronousScheduler() {
+        Scheduler scheduler = mock(Scheduler.class);
+        doAnswer(invocation -> {
+            invocation.getArgument(0, Runnable.class).run();
+            return null;
+        }).when(scheduler).submit(any(Runnable.class));
+        return scheduler;
     }
 
     private void authenticateWithScopes(String principal, java.util.Set<String> scopes) {

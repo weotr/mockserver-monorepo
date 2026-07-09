@@ -3,7 +3,7 @@
     <parent>
         <groupId>org.mock-server</groupId>
         <artifactId>mockserver</artifactId>
-        <version>7.2.1-SNAPSHOT</version>
+        <version>7.4.1-SNAPSHOT</version>
     </parent>
 
     <modelVersion>4.0.0</modelVersion>
@@ -87,6 +87,11 @@
             <dependency>
                 <groupId>${project.groupId}</groupId>
                 <artifactId>mockserver-spring-test-listener-no-dependencies</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>mockserver-spring-boot-starter</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

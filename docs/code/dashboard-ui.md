@@ -65,6 +65,7 @@ sequenceDiagram
     B->>PU: GET /_mockserver_ui_websocket (Upgrade: websocket)
     PU->>DWSH: channelRead() detects upgrade URI
 
+    Note over DWSH: If control-plane auth configured: evaluate the SAME gate as /configuration. On UNAUTHENTICATED/FORBIDDEN reply 401/403 and do NOT upgrade.
     DWSH->>DWSH: upgradeChannel()
     Note over DWSH: 1. WebSocket handshake 2. Register in clientRegistry 3. Register as log listener 4. Register as matcher listener 5. Start throttle scheduler (1/sec)
 
@@ -83,6 +84,15 @@ sequenceDiagram
     DWSH->>DWSH: Store filter, trigger sendUpdate()
     DWSH-->>B: Filtered JSON data
 ```
+
+### Authentication
+
+The dashboard exposes all captured traffic (request/response bodies included), so both the dashboard HTTP surface (`GET /mockserver/dashboard*`, served in `HttpRequestHandler`) and the UI WebSocket upgrade (`/_mockserver_ui_websocket`, handled in `DashboardWebSocketHandler`) go through the **same control-plane authentication/authorization gate** as `PUT /mockserver/configuration` — `HttpState.controlPlaneRequestAuthenticated(...)` for the HTTP path and its non-writing sibling `HttpState.evaluateControlPlaneAuthentication(...)` for the WebSocket path (the WebSocket must render a raw HTTP handshake rejection, not a MockServer `HttpResponse`).
+
+- **Default (no control-plane authentication configured):** the gate returns `ALLOWED`, so the dashboard stays open exactly as before — this is non-breaking.
+- **Control-plane auth enabled (mTLS / JWT / OIDC):** an unauthenticated caller gets `401`; an authenticated caller whose scopes map to no role gets `403`. The dashboard is a **read** (`GET`), so a read-only control-plane role (`controlPlaneScopeMapping`) can view it.
+- **Health/lifecycle unaffected:** `/status` and `/ready` remain reachable without credentials (and `/bind` / `/stop` keep their own gate).
+- **Browser limitation:** a browser cannot attach a bearer token to a WebSocket, so a token/OIDC-authenticated dashboard must be served through an authenticating reverse proxy (or use mutual TLS). The SPA's `useWebSocket` hook probes `GET /mockserver/dashboard` on a failed upgrade and, on `401`/`403`, shows an actionable "dashboard requires authentication" message instead of the generic "server unreachable" banner.
 
 ### 3. Real-Time Updates
 
@@ -125,6 +135,7 @@ When `resetKeys` changes (the user navigates to another tab), the boundary clear
 | AsyncAPI | `useAutoRefresh` (interval, 5 s) |
 | gRPC Services | `useAutoRefresh` (interval, 5 s) |
 | MCP tools panel | `useAutoRefresh` (interval, 3 s) |
+| MCP Server Health | WebSocket push (reads `proxiedRequests` + `recordedRequests` from store; no independent polling) |
 | Chaos | `setInterval` poll every 4 s (predates `useAutoRefresh`) |
 | Performance — live status | `useAutoRefresh` (interval, 1 s) polling `GET /mockserver/loadScenario` |
 | Performance — metrics graph | `usePolling` (interval, 3 s) scraping `GET /mockserver/metrics` (shared with Metrics view) |
@@ -145,18 +156,21 @@ When `resetKeys` changes (the user navigates to another tab), the boundary clear
 
 `src/lib/expectations.ts` exposes `deleteExpectation(params, id)`, which issues `PUT /mockserver/clear?type=expectations` with body `{ "id": "<expectationId>" }` to remove a single expectation without disturbing logs or recorded requests.
 
+`src/lib/traffic.ts` exposes `clearLoggedRequest(params, requestDefinition)` (issues `PUT /mockserver/clear?type=log` with the request definition as the matcher body, removing the matching log entries / captured requests) and `requestDefinitionOf(value)` (returns the row's `httpRequest`, or the whole value when absent). Used by the Traffic inspector's bulk-clear.
+
 ## Top-Level Views
 
-The dashboard has **eighteen top-level views** controlled by the AppBar. The view state is stored in Zustand as `view: ViewMode` where:
+The dashboard has **twenty-one top-level views** controlled by the AppBar. The view state is stored in Zustand as `view: ViewMode` where:
 
 ```
 ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library'
          | 'chaos' | 'performance' | 'metrics' | 'drift' | 'verification'
          | 'slo' | 'async' | 'grpc' | 'breakpoints'
-         | 'contract' | 'cluster' | 'optimise' | 'get-started'
+         | 'contract' | 'cluster' | 'optimise' | 'mcp-health' | 'get-started'
+         | 'scenarios' | 'audit'
 ```
 
-`'composer'` is surfaced in the UI under the button label **Mocks**; `'async'` is the **AsyncAPI** broker view; `'performance'` is the **Performance** load-scenario panel; `'sessions'` is labelled **Trace** in the nav; `'get-started'` is the initial onboarding view shown to new users before any data arrives.
+`'composer'` is surfaced in the UI under the button label **Mocks**; `'async'` is the **AsyncAPI** broker view; `'performance'` is the **Performance** load-scenario panel; `'sessions'` is labelled **Trace** in the nav; `'get-started'` is the initial onboarding view shown to new users before any data arrives; `'scenarios'` is a standalone view over the same `ScenarioPanel` that the Mocks composer embeds as a tab; `'audit'` renders the control-plane audit trail from `GET /mockserver/audit` (see [Audit View](#audit-view)). The audit trail is a record of **control-plane mutations** — who changed what (`PUT /expectation`, `/clear`, `/reset`, configuration changes, etc.) with principal, source, and authorization outcome. It is a **separate, additional trail from the data-plane event log** (received requests, responses, and expectation matches) — the two never overlap. The audit trail is **opt-in and off by default** — the server records an `AuditEntry` for a control-plane operation only when `controlPlaneAuditEnabled=true` (recording is gated purely on that flag in `HttpState.recordAudit`; it is independent of whether control-plane authentication is configured, and an unauthenticated mutation is recorded with principal `anonymous`/source `none`). Reads are skipped unless `controlPlaneAuditReads=true` (a `FORBIDDEN` outcome is always recorded, even for a read). Request headers and bodies are never stored — only the mutation metadata.
 
 The active view and per-panel search terms persist across page reloads: the view is mirrored in the URL hash (`#/<view>`) and in `localStorage`, resolved at startup by `coerceView`/`persistView` in `store/index.ts`; per-panel search terms are stored under a separate `localStorage` key. Unknown or stale values are silently ignored and fall back to `'get-started'`.
 
@@ -178,6 +192,7 @@ The Request Filter panel is shown on Dashboard, Traffic, and Trace views. It is 
 | `contract` | Contract | `ContractTestPanel.tsx` | Validate mocks and traffic against an OpenAPI contract |
 | `cluster` | Cluster | `ClusterPanel.tsx` | Monitor MockServer cluster nodes and shared state |
 | `optimise` | LLM Optimise | `OptimiseView.tsx` | Analyse captured LLM traffic to optimise prompts, inference cost, safety, and speed |
+| `mcp-health` | MCP Health | `McpServerHealthPanel.tsx` | Per-MCP-server latency and error rate derived from captured proxied/recorded traffic; highlights slow or erroring servers worst-first (see [MCP Server Health View](#mcp-server-health-view)) |
 | `async` | Async | `AsyncApiPanel.tsx` | AsyncAPI broker mock status: loaded spec, channels/topics, publisher/subscriber summary, and recorded broker messages |
 | `grpc` | gRPC | `GrpcServicesPanel.tsx` | gRPC services and methods loaded from protobuf descriptors, with per-service health-check status (see [gRPC Services View](#grpc-services-view)) |
 | `metrics` | Metrics | `MetricsView.tsx` | Prometheus metrics polling: request counters, latency percentiles, JVM stats, chaos gauges |
@@ -218,6 +233,8 @@ grouped nav: 6 dropdown groups"]
 (view = 'cluster')"]
     OP["OptimiseView.tsx
 (view = 'optimise')"]
+    MHP["McpServerHealthPanel.tsx
+(view = 'mcp-health')"]
     AAP["AsyncApiPanel.tsx
 (view = 'async')"]
     GP["GrpcServicesPanel.tsx
@@ -244,6 +261,7 @@ grouped nav: 6 dropdown groups"]
     APP -->|view = contract| CO
     APP -->|view = cluster| CL
     APP -->|view = optimise| OP
+    APP -->|view = mcp-health| MHP
     APP -->|view = async| AAP
     APP -->|view = grpc| GP
     APP -->|view = metrics| MV
@@ -276,6 +294,18 @@ There is **no charting dependency** (inline SVG) and no server change required. 
 - a **Clear all** button.
 
 `lib/serviceChaos.ts` is framework-agnostic (plain `fetch`) so it is unit-tested independently of the component; it surfaces the server's `{"error": ...}` message on a 4xx.
+
+## Audit View
+
+`AuditPanel.tsx` (view = `audit`) shows the **control-plane audit trail** — a newest-first list of control-plane *mutations* (who changed what: register/clear an expectation, reset, configuration change, …) with method, path, operation, source address, principal, principal source, and authorization outcome. This is a **separate, additional trail from the data-plane event log** shown on the Dashboard/Traffic views (received requests, responses, expectation matches); the audit trail never contains request/response traffic and never stores request headers or bodies.
+
+**Enabling from the UI.** The trail is off by default (`controlPlaneAuditEnabled`, gated in `HttpState.recordAudit`). The panel fetches the live configuration (`getConfiguration()` → `GET /mockserver/configuration`) alongside the entries on mount and on Refresh, so the header shows an accurate status chip — **Audit Trail: On** (success) or **Audit Trail: Off** (muted) — even when the list is empty:
+
+- When **Off**, an **Enable Audit Trail** button calls `updateConfiguration({ controlPlaneAuditEnabled: true })` (`PUT /mockserver/configuration`) and, on success, refetches config + entries so the chip flips to On. An info banner notes that only changes made *after* enabling are recorded.
+- When **On**, a switch turns recording back off (`{ controlPlaneAuditEnabled: false }`). A plain switch (no confirmation) matches the other runtime toggles in `ConfigurationDialog`; turning off is not destructive (it only stops recording).
+- An **Also record reads** checkbox wires `controlPlaneAuditReads` (only mutations are recorded unless this is set; a `FORBIDDEN` read is always recorded regardless). It is disabled while the trail is off.
+
+A failed `updateConfiguration` (e.g. control-plane auth rejecting the write) surfaces through `HumanErrorAlert` and does **not** flip the status chip. The audit-list load and the config load have independent error surfaces (fetched via `Promise.allSettled`), so a failure of one does not blank the other. When the connected server predates the endpoint, `GET /mockserver/audit` 404s and the panel shows a "not available on this server" branch. The empty state points at the in-UI Enable control and still documents the `controlPlaneAuditEnabled` / `-Dmockserver.controlPlaneAuditEnabled` / `MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED` startup forms as an alternative. The panel does not poll — the user pulls updates with the **Refresh** button (the audit trail is a control-plane history, not live traffic).
 
 ## Performance View
 
@@ -349,6 +379,10 @@ Each row in `ExpectationPanel` exposes two inline actions (shown only when the r
 - **Delete** — opens a `ConfirmDialog` describing what will be removed; on confirmation calls `deleteExpectation(params, id)` from `src/lib/expectations.ts`, which issues `PUT /mockserver/clear?type=expectations { "id": "<id>" }`. The row is optimistically removed from the local store; a success toast confirms. Recorded requests and logs are kept.
 - **Edit** — calls the store action `editExpectation(item.value)`, which sets `pendingEditExpectation` in the store and switches `view` to `'composer'`. `ComposerView` detects the non-null `pendingEditExpectation` in a `useEffect`, loads the expectation JSON into the form, and switches to **Advanced** mode automatically. `clearPendingEditExpectation()` is called after loading so the signal is consumed once.
 
+### Bulk Select and Delete (Expectations)
+
+A **Select** toggle in the `ExpectationPanel` header turns on bulk-select mode: each row shows a leading checkbox (`JsonListItem` renders it when `onSelectToggle` is passed), and a toolbar strip above the list offers a select-all checkbox, a running count, and a **Delete selected** action. Only rows carrying an `expectationId` are selectable. On confirmation (`ConfirmDialog`), the panel batches per-id clears client-side via `Promise.allSettled(ids.map(id => deleteExpectation(params, id)))` — there is no bulk-clear endpoint — optimistically drops the succeeded rows from the store, and reports success / partial-failure / all-failed as a success / warning / error toast. Selected keys are always intersected with the currently-selectable rows so a WebSocket refresh that removes a row cannot act on a stale key.
+
 ### Generate Stub on Unmatched Requests
 
 Log entries for unmatched requests (description contains `EXPECTATION_NOT_MATCHED`) show an
@@ -415,9 +449,11 @@ Below the strip, the adaptive tab row:
 |-------------|---------------|
 | Anthropic, OpenAI, OpenAI Responses, Gemini, Ollama | **Messages**, **Conversation**, optionally **Scripted Turns** (when active scripted expectations exist), optionally **SSE Timeline** (when stream events present), **Raw JSON** |
 | MCP JSON-RPC (`jsonrpc` field present) | **MCP**, **Raw JSON** |
-| All other traffic | Raw JSON rendered directly (no tab bar) |
+| All other traffic | **Request**, **Response**, **Raw JSON** — structured request/response tabs (method/path or status prominent, query and header tables, pretty-printed JSON or raw body) with the raw tree last |
 
-A **Capture as mock** button appears top-right of the detail pane for LLM-kind rows. Clicking it opens `CaptureAsMockDialog.tsx`, which calls the MCP `mock_llm_completion` tool to register a mock expectation from the captured traffic. For non-LLM (generic HTTP) traffic, the same dialog is opened with a generic draft. In the generic case a **Refine in Composer** button appears alongside the Register button in the dialog actions: clicking it calls the store's `editExpectation` action, which loads the draft into the Composer and switches to `view = 'composer'`, so the capture and the Composer share a single creation flow rather than being two divergent engines. Only the generic draft maps cleanly onto the Composer form; LLM drafts go directly to the MCP tool.
+**Injected-vs-real latency waterfall.** When the selected row's `httpResponse.timing` block is present, the detail pane renders `TimingWaterfall` — a stacked bar that separates **real** time (connect / wait-TTFB / receive for proxied flows, or a single processing segment for mock-served flows) from latency **MockServer injected**: `injectedDelayMillis` (the action's configured response delay, deep purple), `injectedChaosLatencyMillis` (a chaos-profile latency fault, red), and `breakpointHeldMillis` (time held at a response breakpoint, pink). A grouped legend labels the two sets ("Real" vs "Injected by MockServer"), each segment has an ms tooltip, and an `injected <n>ms` chip summarises the total injected time. This block now renders for **both** proxied entries and mock-served entries **that injected latency** (the server attaches a timing block to a mock response only when it applied a chaos fault, a configured delay, or a breakpoint hold — see [request-processing.md](request-processing.md)), so it is no longer proxy-only. A plain mock with no injected latency has no timing block and shows no waterfall. The injected fields are additive and optional, so older servers that omit them simply render the real segments.
+
+A **Promote to Mocks** button in the Traffic header (enabled when proxied recordings exist) opens a dialog that calls `PUT /mockserver/recordings/promote` — optionally scoped by a method/path filter prefilled from the current search — and reports how many consolidated, redacted expectations were activated. A **Capture as mock** button appears top-right of the detail pane for LLM-kind rows. Clicking it opens `CaptureAsMockDialog.tsx`, which calls the MCP `mock_llm_completion` tool to register a mock expectation from the captured traffic. For non-LLM (generic HTTP) traffic, the same dialog is opened with a generic draft. In the generic case a **Refine in Composer** button appears alongside the Register button in the dialog actions: clicking it calls the store's `editExpectation` action, which loads the draft into the Composer and switches to `view = 'composer'`, so the capture and the Composer share a single creation flow rather than being two divergent engines. Only the generic draft maps cleanly onto the Composer form; LLM drafts go directly to the MCP tool.
 
 ### ConversationView Component
 
@@ -491,6 +527,12 @@ The Response Template and Forward Template panels also expose an **"Or load temp
 - **Step 3 · {action name}**: per-action panel with fields specific to that action.
 - **Step 4 · Review & register**: client-library tabs first — Java / Node.js / Python / Go / C# / Ruby / Rust — then JSON and curl last (read-only preview generated from the current form state by `standardToJava`/`standardToNode`/`standardToPython`/`standardToGo`/`standardToCsharp`/`standardToRuby`/`standardToRust`/`standardToJson`/`standardToCurl` in `standardCodegen.ts`), then the Register expectation button. The client-library tabs hydrate the same expectation JSON via each client's native facility (Node `mockAnyResponse({...})`, Python `Expectation.from_dict({...})`, Go `json.Unmarshal → client.Upsert`, C# `JsonSerializer.Deserialize<Expectation> → client.Upsert`, Ruby `Expectation.from_hash(JSON.parse(...)) → client.upsert`, Rust `serde_json::from_str::<Expectation> → client.upsert`) instead of reimplementing each language's builder matrix. The Node client is JSON-native so it reproduces every field; the typed-model clients hydrate into model objects, so a field the installed client version does not yet model is dropped on hydration (the JSON tab stays the authoritative, lossless source). Helper text next to the button changes based on whether the Expectation ID field is filled (editing existing in place vs. creating new).
 
+#### Scenario Bindings (Advanced)
+
+Advanced mode has an optional **Scenario** section with three fields — **Scenario Name** (`scenarioName`), **Required State** (`scenarioState`), and **Transition To** (`newScenarioState`) — that wire the mock into a scenario state machine (it matches only while the scenario is in the required state, then advances it). Blank fields are omitted, so a fresh Advanced compose with an empty Scenario section is byte-identical to before the section existed.
+
+These three keys are **modeled only on the Advanced path**. `StandardActionPayload.scenarioModeled` (set true only when the Advanced form rendered the section) makes them form-authoritative in `mergeUnmodeledFields` / `unmodeledFieldNames` (`standardCodegen.ts`): set when non-empty, **deleted when cleared**, and dropped from the "Preserving N fields" chip. On the **Quick path** `scenarioModeled` is never set, so the same three keys stay **unmodeled passthrough** — a quick edit of a scenario-bound mock can never drop its bindings. On edit, the fields are prefilled from the original (in both `handleLoadExisting` and the `pendingEditExpectation` hand-off), so an untouched edit round-trips the bindings identically. See `FORM_MODELED_SCENARIO_KEYS` in `standardCodegen.ts`.
+
 ### LLM Conversation
 
 - Same **Edit existing or add new** dropdown, but listing scenario names (e.g. `weather-agent (2 turns)`).
@@ -498,6 +540,14 @@ The Response Template and Forward Template panels also expose an **"Or load temp
 - Picking an existing scenario from the dropdown remounts the form via React `key` and prefills all fields. The Register button reads "Update N expectations" instead of "Register on server" when editing. A green note confirms "Editing — the existing expectation IDs will be reused so this updates in place."
 
 The edit-existing flow works because `ComposerView.tsx` collects the current expectation IDs and passes them as `ids: string[]` to the `create_llm_conversation` MCP tool call. The server then calls `Expectation.withId(...)` on each generated expectation before `httpState.add(...)`, which performs an upsert.
+
+## Scenarios View
+
+`ScenarioPanel.tsx` is rendered both as the standalone **Scenarios** nav view (`view = 'scenarios'`) and as the **Scenarios** tab inside the Mocks composer — the same component in both contexts. It controls MockServer's scenario state machines via `GET/PUT /mockserver/scenario…` (`lib/scenarios.ts`) and, on top of the existing current-state / set-state / trigger / reset controls and the observed-transition Mermaid diagram, surfaces a **Scenario Details** section so a scenario is legible, not just controllable.
+
+**Scenario Details** builds entirely client-side from the store's `activeExpectations` — each expectation carries top-level `scenarioName` / `scenarioState` / `newScenarioState`, so no extra fetch is needed (`buildScenarioDetails` in `lib/scenarioState.ts`). The `GET /mockserver/scenario` list annotates each scenario with its live current state and also surfaces scenarios that exist server-side but have no client-side expectation (e.g. cross-protocol trigger-only scenarios). Each scenario renders as an expandable card: its states (sorted by `scenarioStateSortKey`) and, under each state, the bound mocks — showing the `METHOD /path` summary, the state matched in, and the state transitioned to (`state → newState`).
+
+Every bound mock has a per-row **Edit** action, and each scenario has a scenario-level **Edit** (edits its single mock directly, or opens a picker when several mocks are bound). All Edit actions reuse the store's `editExpectation(value)` — the exact hand-off `ExpectationPanel` uses — which loads the mock into the Composer and switches `view` to `'composer'`. From the standalone Scenarios view that navigates to Mocks; inside the Mocks view the `pendingEditExpectation` effect also flips the composer to its **Compose** tab so the loaded form is visible. Because `editExpectation` hands off the full expectation JSON and the Composer's edit-overlay preserves scenario bindings (see [Scenario Bindings](#scenario-bindings-advanced)), editing a scenario-bound mock keeps its bindings intact.
 
 ## Library View
 
@@ -529,11 +579,12 @@ The server evaluates the objectives and returns an `SloVerdict` with `result` (`
 
 ## Contract View
 
-`ContractTestPanel.tsx` (view = `contract`, AppBar label **Contract**, under the **Verify** group) validates mocks and recorded traffic against an OpenAPI spec. Two modes:
-- **Traffic validate** — calls `PUT /mockserver/trafficValidate` with a spec (URL or inline YAML/JSON) to check whether all recorded traffic conforms to the spec.
-- **Contract test** — calls `PUT /mockserver/contractTest` with a spec and a target `baseUrl` (and optional `operationId`) to exercise the live service and report pass/fail per operation.
+`ContractTestPanel.tsx` (view = `contract`, AppBar label **Contract**, under the **Verify** group) validates mocks and recorded traffic against an OpenAPI spec. A ToggleButtonGroup switches between two modes; both take the OpenAPI spec as a URL, file path, or inline YAML/JSON document (the same spec `TextField`):
 
-Results are rendered as a report table with columns: operation, status code received, pass/fail, and validation errors. The UI result type (`lib/contractTest.ts`) has fields `operationId`, `method`, `path`, `statusCodeReceived`, `passed`, and `validationErrors: string[]`; the Java client maps these to `ContractResult.requestErrors`/`responseErrors`.
+- **Live Contract Test** — calls `PUT /mockserver/contractTest` with a spec, a target `baseUrl`, and an optional `operationId` to exercise the live service and report pass/fail per operation. Results render as a table with columns: result (PASS/FAIL), operation, method, path, status code received, and validation errors. The UI result type `ContractTestOperationResult` (`lib/contractTest.ts`) has fields `operationId`, `method`, `path`, `statusCodeReceived`, `passed`, and `validationErrors: string[]`.
+- **Validate Recorded Traffic** — calls `PUT /mockserver/trafficValidate` with only a spec (no `baseUrl`; the endpoint contacts no live service). The server locates every request/response pair it has already recorded against the spec and validates each in place — the safer, CI-style twin of the live contract test. Results render as a table with columns: result, method, path, matched operation, request errors, and response errors. The UI result type `TrafficValidationResult` has fields `method`, `path`, `matchedOperation: string | null`, `passed`, `requestErrors: string[]`, and `responseErrors: string[]`; the report adds `totalRequests`/`passed`/`failed`/`allPassed`. When no traffic has been recorded (`totalRequests === 0`) the panel shows an info alert prompting the user to record or proxy traffic first.
+
+Both modes surface the server's `{ "error": ... }` envelope on failure via `HumanErrorAlert`. `lib/contractTest.ts` is framework-agnostic (plain `fetch`) so `runContractTest` and `validateRecordedTraffic` are unit-tested independently of the component.
 
 ## Cluster View
 
@@ -542,6 +593,35 @@ Results are rendered as a report table with columns: operation, status code rece
 ## LLM Optimise View
 
 `OptimiseView.tsx` (view = `optimise`, AppBar label **LLM Optimise**, under the **AI** group) analyses captured LLM proxy traffic and exports a brief recommending optimisations to prompts, inference cost, safety, and speed. It calls the LLM optimise REST endpoint, renders per-call signals (token usage, cost, cache-hit rate, one-shot rate, latency), and assigns an A–F verdict with a dollar-value "recoverable" attribution capped at actual spend. An export button downloads the full JSON report.
+
+## MCP Server Health View
+
+`McpServerHealthPanel.tsx` (view = `mcp-health`, AppBar label **MCP Health**, in the **AI** group) shows which MCP servers your proxied coding-assistant CLI traffic is calling, and which ones are slow or erroring. The MCP server is often the real bottleneck while MockServer's own forwarding is fast; this view surfaces the culprit at a glance.
+
+**Data source.** The panel reads `proxiedRequests` + `recordedRequests` from the Zustand store — both pushed over the main dashboard WebSocket — and passes their `.value` objects to the pure client-side function `aggregateMcpServerHealth` in `src/lib/llmTraffic.ts`. Only MCP JSON-RPC entries (where the parsed kind is `mcp`) contribute to the table; all other traffic is silently ignored. No independent polling is performed.
+
+**Columns.**
+
+| Column | Content |
+|--------|---------|
+| Server | Upstream `Host` header value (or `(unknown host)` when absent) |
+| Calls | Total MCP JSON-RPC exchanges seen for this server |
+| Errors | Count and rate — a JSON-RPC `error` field or a non-2xx HTTP status counts as an error |
+| Median | Median round-trip latency (ms or s), nearest-rank percentile |
+| p95 | 95th-percentile latency (ms or s), nearest-rank percentile |
+| Max | Slowest single exchange; shown in warning colour when the `slow` flag is set |
+| Slowest method | JSON-RPC method name of the single slowest exchange |
+
+**Flags.** Each row carries two optional flags:
+
+- **errors** (red chip) — `errorCount > 0`; the row gets an error-tinted background
+- **slow** (amber chip, only when no errors) — p95 (or max when p95 is unavailable) is at or over `MCP_SLOW_THRESHOLD_MS` (5 000 ms); the row gets a warning-tinted background
+
+Rows are sorted worst-first: most errors → highest error rate → slowest (p95 or max) → busiest → host name for a stable tie-break.
+
+**Empty state.** When no MCP traffic has been captured, an info alert reads: "No MCP traffic captured. Proxy a tool that talks to MCP servers (JSON-RPC over HTTP) and its per-server health will appear here."
+
+**Lazy loading.** `McpServerHealthPanel` is lazy-loaded in `App.tsx` via `React.lazy`, so the chunk is not fetched until the MCP Health tab is first opened.
 
 ## AsyncAPI View
 
@@ -623,6 +703,12 @@ See [docs/code/breakpoints.md](breakpoints.md) for the server-side architecture 
 
 **Compare (diff) button** — a `CompareArrowsIcon` checkbox on each row. Selecting two rows enables structural comparison of those two requests or their responses via the `DiffPanel` (`PUT /mockserver/diff`). This is the same diff engine used by the Tools menu "Diff two requests" dialog.
 
+**Select mode (bulk clear)** — a `ChecklistIcon` **Select** toggle in the master-list header turns on bulk-select mode: each `TrafficRow` renders a checkbox (uncapped, unlike the two-row compare cap) and the header gains a select-all checkbox and a **Clear (N)** button. Select mode and compare mode are mutually exclusive — entering one exits the other. On confirmation (`ConfirmDialog`), `handleBulkClear` batches one `clearLoggedRequest(params, requestDefinitionOf(item.value))` call per selected row (`src/lib/traffic.ts` → `PUT /mockserver/clear?type=log` with the request definition as the matcher body), because MockServer has no delete-by-id for captured requests. Cleared rows are optimistically removed from `recordedRequests` / `proxiedRequests` and the outcome is reported as a success / warning / error toast. Because the server clears by request *shape* (not a unique id), identical requests captured alongside a selection may also be removed — the confirmation dialog says so.
+
+## Log-Pressure Banner (silent eviction warning)
+
+`src/components/LogPressureBanner.tsx` warns when MockServer's log ring buffer has evicted events — the most common cause of "verification intermittently fails" and "the dashboard is missing requests". `App.tsx` mounts it only on the Dashboard and Traffic views (the request/log views that eviction would make incomplete, which also avoids polling metrics from unrelated tabs). The dropped-event count comes from the Prometheus counter `mock_server_dropped_log_events` via `useDroppedLogEvents` (`src/hooks/useDroppedLogEvents.ts`), which polls the existing `GET /mockserver/metrics` endpoint slowly (15s), pauses while the tab is hidden, and stops permanently on a `404` (metrics disabled — the counter is then unavailable, so the banner can never fire). No new server endpoint was added. The banner is a dismissible MUI warning `Alert`; dismissal is remembered at the count seen at dismiss time, so it re-appears only if *more* events are subsequently dropped. It stays hidden on a healthy server (count 0) or when metrics are disabled.
+
 ## AppBar Styling and Responsive Behaviour
 
 The AppBar navigation is driven by `NAV_GROUPS` — six top-level group-button entries, each of which opens a dropdown `Menu` of its member views. Groups, in order:
@@ -633,7 +719,7 @@ The AppBar navigation is driven by `NAV_GROUPS` — six top-level group-button e
 | **Observe** | Dashboard, Traffic, Trace, Metrics |
 | **Verify** | Verify, Contract, SLO, Drift |
 | **Resilience** | Chaos, Performance |
-| **AI** | LLM Optimise |
+| **AI** | LLM Optimise, MCP Health, Trace |
 | **Inspect** | Breakpoints, Library, Cluster |
 
 The group button whose group contains the active view is highlighted (a translucent-white tint in light mode; the theme action-selected overlay in dark mode). Clicking a group button opens a dropdown `Menu`; selecting an item calls `setView` and closes the menu. One shared `<Menu>` is reused across all groups rather than one per group.
@@ -712,7 +798,7 @@ The AppBar "Import / export" (wrench) menu groups one-off control-plane tools, e
   receivedSearch: '',
   proxiedSearch: '',
   trafficSearch: '',
-  view: 'get-started',          // 18 values — see ViewMode in store/index.ts; 'sessions' is labelled "Trace", 'composer' is "Mocks", 'async' is AsyncAPI, 'slo' is SLO, 'contract' is Contract, 'cluster' is Cluster, 'optimise' is "LLM Optimise"
+  view: 'get-started',          // 21 values — see ViewMode in store/index.ts; 'sessions' is labelled "Trace", 'composer' is "Mocks", 'async' is AsyncAPI, 'slo' is SLO, 'contract' is Contract, 'cluster' is Cluster, 'optimise' is "LLM Optimise", 'mcp-health' is "MCP Health"
   selectedTrafficIndex: null,
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -742,7 +828,7 @@ graph TB
 Orchestrator: theme, WebSocket, shortcuts"]
     AB["AppBar.tsx
 Title bar: status, theme, clear menu
-grouped nav (18 views)"]
+grouped nav (19 views)"]
     FP["FilterPanel.tsx
 Collapsible request filter form"]
     DG["DashboardGrid.tsx
@@ -822,7 +908,7 @@ Expandable match failure reasons"]
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu; on wide screens (`>= lg`): six grouped dropdown buttons (Mock / Observe / Verify / Resilience / AI / Inspect), each opening a `Menu` of its views; on narrow screens: hamburger icon with all 18 views in labelled sections |
+| `AppBar` | `AppBar.tsx` | Title bar with connection status chip, keyboard shortcut hints, auto-scroll toggle, dark/light mode toggle, clear/reset menu; on wide screens (`>= lg`): six grouped dropdown buttons (Mock / Observe / Verify / Resilience / AI / Inspect), each opening a `Menu` of its views; on narrow screens: hamburger icon with all 19 views in labelled sections |
 | `FilterPanel` | `FilterPanel.tsx` | Collapsible request filter form (method, path, headers, query params, cookies) with debounced WebSocket send; shown on dashboard/traffic/sessions |
 | `DashboardGrid` | `DashboardGrid.tsx` | 2×2 CSS grid layout for the four panels |
 | `TrafficInspector` | `TrafficInspector.tsx` | Full-width master list + adaptive detail pane for all captured traffic (mock-matched + proxied) |

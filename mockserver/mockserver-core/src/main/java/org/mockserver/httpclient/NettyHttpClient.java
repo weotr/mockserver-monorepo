@@ -10,6 +10,7 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.WriteBufferWaterMark;
+import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.util.AttributeKey;
 import org.apache.commons.lang3.StringUtils;
 import org.mockserver.configuration.Configuration;
@@ -36,6 +37,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static org.mockserver.model.HttpResponse.response;
@@ -47,6 +49,13 @@ public class NettyHttpClient {
     static final AttributeKey<CompletableFuture<Message>> RESPONSE_FUTURE = AttributeKey.valueOf("RESPONSE_FUTURE");
     static final AttributeKey<Boolean> ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE = AttributeKey.valueOf("ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE");
     static final AttributeKey<Boolean> DISABLE_RESPONSE_STREAMING = AttributeKey.valueOf("DISABLE_RESPONSE_STREAMING");
+    // Set when the OUTGOING request asks for a streamed response, so the response is relayed
+    // incrementally even if the upstream omits Content-Type: text/event-stream. Read by
+    // StreamingAwareHttpObjectAggregator (same interned key name).
+    static final AttributeKey<Boolean> EXPECT_STREAMING_RESPONSE = AttributeKey.valueOf("EXPECT_STREAMING_RESPONSE");
+    // A JSON request body that turns on streaming, e.g. {"stream": true} (OpenAI/Anthropic/Codex).
+    private static final java.util.regex.Pattern STREAM_TRUE_IN_BODY =
+        java.util.regex.Pattern.compile("\"stream\"\\s*:\\s*true");
     static final AttributeKey<AtomicLong> FIRST_BYTE_MILLIS = TimeToFirstByteHandler.FIRST_BYTE_MILLIS;
     /**
      * When set on a channel, {@link HttpClientHandler} returns the channel to this pool (keyed by
@@ -58,7 +67,12 @@ public class NettyHttpClient {
     private static final HopByHopHeaderFilter hopByHopHeaderFilter = new HopByHopHeaderFilter();
     private final Configuration configuration;
     private final MockServerLogger mockServerLogger;
-    private final EventLoopGroup eventLoopGroup;
+    // Supplies the outbound event-loop group lazily. For the forward/proxy client this is the
+    // LifeCycle accessor (a method reference to getForwardClientEventLoopGroup()), so the disjoint
+    // forward-client group is only created on the FIRST forward/proxy request — a pure-mock
+    // deployment that never forwards never pays for it. May be null for callers (chiefly tests) that
+    // never forward; eventLoopGroup() then returns null, exactly matching the historical behaviour.
+    private final Supplier<EventLoopGroup> eventLoopGroupSupplier;
     private final Map<ProxyConfiguration.Type, ProxyConfiguration> proxyConfigurations;
     private final boolean forwardProxyClient;
     private final NettySslContextFactory nettySslContextFactory;
@@ -69,9 +83,21 @@ public class NettyHttpClient {
     }
 
     public NettyHttpClient(Configuration configuration, MockServerLogger mockServerLogger, EventLoopGroup eventLoopGroup, List<ProxyConfiguration> proxyConfigurations, boolean forwardProxyClient, NettySslContextFactory nettySslContextFactory) {
+        // Wrap a concrete group as a constant supplier so all call paths share the lazy-resolution
+        // seam; a null group stays null (eventLoopGroup() returns null) preserving prior behaviour.
+        this(configuration, mockServerLogger, eventLoopGroup == null ? (Supplier<EventLoopGroup>) null : () -> eventLoopGroup, proxyConfigurations, forwardProxyClient, nettySslContextFactory);
+    }
+
+    /**
+     * Supplier-based constructor: the outbound event-loop group is resolved lazily on first use
+     * ({@link #eventLoopGroup()}) rather than captured eagerly at construction. The forward/proxy
+     * client passes the {@code LifeCycle} accessor here so the disjoint forward-client group is only
+     * created the first time MockServer actually forwards/proxies.
+     */
+    public NettyHttpClient(Configuration configuration, MockServerLogger mockServerLogger, Supplier<EventLoopGroup> eventLoopGroupSupplier, List<ProxyConfiguration> proxyConfigurations, boolean forwardProxyClient, NettySslContextFactory nettySslContextFactory) {
         this.configuration = configuration;
         this.mockServerLogger = mockServerLogger;
-        this.eventLoopGroup = eventLoopGroup;
+        this.eventLoopGroupSupplier = eventLoopGroupSupplier;
         this.proxyConfigurations = proxyConfigurations != null ? proxyConfigurations.stream().collect(Collectors.toMap(ProxyConfiguration::getType, proxyConfiguration -> proxyConfiguration)) : ImmutableMap.of();
         this.forwardProxyClient = forwardProxyClient;
         this.nettySslContextFactory = nettySslContextFactory;
@@ -84,8 +110,46 @@ public class NettyHttpClient {
             : null;
     }
 
+    /**
+     * Resolves the outbound event-loop group, triggering its (lazy) creation on the FIRST call for a
+     * forward/proxy client. Returns {@code null} when no supplier was provided (callers that never
+     * forward), matching the historical behaviour where the group field could be {@code null}. The
+     * {@code LifeCycle} accessor memoises the group, so repeated calls return the same instance.
+     */
+    private EventLoopGroup eventLoopGroup() {
+        return eventLoopGroupSupplier == null ? null : eventLoopGroupSupplier.get();
+    }
+
     public CompletableFuture<HttpResponse> sendRequest(final HttpRequest httpRequest) throws SocketConnectionException {
         return sendRequest(httpRequest, httpRequest.socketAddressFromHostHeader());
+    }
+
+    /**
+     * Whether the OUTGOING request asks for a streamed (Server-Sent Events style) response, so
+     * the upstream response should be relayed to the proxy client incrementally even if it omits
+     * {@code Content-Type: text/event-stream}. Some streaming backends do — notably the OpenAI
+     * Codex backend used by the opencode CLI ({@code chatgpt.com/backend-api/codex/responses}),
+     * whose SSE response carries no content-type at all; without this hint MockServer would
+     * aggregate the whole 10–30s stream and the client would time out waiting for response headers.
+     * Detected from the client's own intent: an {@code Accept: text/event-stream} header, or a JSON
+     * request body containing {@code "stream": true}.
+     */
+    static boolean requestExpectsStreamingResponse(HttpRequest request) {
+        if (request == null) {
+            return false;
+        }
+        String accept = request.getFirstHeader("accept");
+        if (accept != null && accept.toLowerCase().contains("text/event-stream")) {
+            return true;
+        }
+        String contentType = request.getFirstHeader("content-type");
+        if (contentType != null && contentType.toLowerCase().contains("json")) {
+            String body = request.getBodyAsString();
+            if (body != null && !body.isEmpty() && STREAM_TRUE_IN_BODY.matcher(body).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public CompletableFuture<HttpResponse> sendRequest(final HttpRequest httpRequest, @Nullable InetSocketAddress remoteAddress) throws SocketConnectionException {
@@ -97,6 +161,8 @@ public class NettyHttpClient {
     }
 
     public CompletableFuture<HttpResponse> sendRequest(final HttpRequest httpRequest, @Nullable InetSocketAddress remoteAddress, Long connectionTimeoutMillis, boolean disableStreaming) throws SocketConnectionException {
+        // Resolve (lazily creating on first forward) once per request so the whole request uses one group.
+        final EventLoopGroup eventLoopGroup = eventLoopGroup();
         if (!eventLoopGroup.isShuttingDown()) {
             if (proxyConfigurations != null && !Boolean.TRUE.equals(httpRequest.isSecure())
                 && proxyConfigurations.containsKey(ProxyConfiguration.Type.HTTP)
@@ -133,6 +199,10 @@ public class NettyHttpClient {
             final AtomicLong firstByteMillis = new AtomicLong();
 
             final boolean secure = httpRequest.isSecure() != null && httpRequest.isSecure();
+            // Relay the response as a stream (not aggregated) when the client asked for one, so a
+            // streaming upstream that omits Content-Type: text/event-stream (e.g. opencode's Codex
+            // backend) is not buffered to completion before its headers reach the client.
+            final boolean expectStreaming = !disableStreaming && requestExpectsStreamingResponse(httpRequest);
             final InetSocketAddress effectiveRemoteAddress = remoteAddress;
             // Only plain HTTP/1.1 keep-alive connections are pooled. HTTP/2, HTTP/3 (multiplexed
             // differently), binary forwarding, and any proxy-tunnelled connection bypass the pool
@@ -153,8 +223,13 @@ public class NettyHttpClient {
                 reused.attr(ERROR_IF_CHANNEL_CLOSED_WITHOUT_RESPONSE).set(true);
                 reused.attr(FIRST_BYTE_MILLIS).set(firstByteMillis);
                 reused.attr(DISABLE_RESPONSE_STREAMING).set(disableStreaming ? Boolean.TRUE : null);
+                reused.attr(EXPECT_STREAMING_RESPONSE).set(expectStreaming ? Boolean.TRUE : null);
                 reused.eventLoop().execute(() -> {
                     if (reused.isActive()) {
+                        // Guard this in-flight request: a reused idle connection whose upstream has
+                        // silently gone away would otherwise hang with no read timeout (pooled channels
+                        // carry none while idle). Removed again on return to the pool.
+                        armPooledInFlightReadTimeout(reused);
                         reused.writeAndFlush(httpRequest).addListener((ChannelFutureListener) writeFuture -> {
                             if (!writeFuture.isSuccess()) {
                                 responseFuture.completeExceptionally(writeFuture.cause());
@@ -231,6 +306,7 @@ public class NettyHttpClient {
      */
     private void connectFresh(HttpRequest httpRequest, InetSocketAddress remoteAddress, Long connectionTimeoutMillis, boolean disableStreaming, boolean secure, Protocol httpProtocol, String poolKey, CompletableFuture<Message> responseFuture, AtomicLong firstByteMillis, AtomicLong connectionEstablishedMillis, CompletableFuture<HttpResponse> httpResponseFuture) {
         final HttpClientInitializer clientInitializer = new HttpClientInitializer(proxyConfigurations, mockServerLogger, forwardProxyClient, nettySslContextFactory, httpProtocol, configuration);
+        final EventLoopGroup eventLoopGroup = eventLoopGroup();
         Bootstrap bootstrap = new Bootstrap()
             .group(eventLoopGroup)
             .channel(NettyTransport.socketChannelClassFor(eventLoopGroup))
@@ -248,6 +324,9 @@ public class NettyHttpClient {
         if (disableStreaming) {
             bootstrap.attr(DISABLE_RESPONSE_STREAMING, true);
         }
+        if (!disableStreaming && requestExpectsStreamingResponse(httpRequest)) {
+            bootstrap.attr(EXPECT_STREAMING_RESPONSE, true);
+        }
         if (poolKey != null) {
             // Mark the fresh channel so HttpClientHandler returns it to the pool after a reusable
             // keep-alive response instead of closing it.
@@ -262,6 +341,11 @@ public class NettyHttpClient {
                         if (throwable != null) {
                             httpResponseFuture.completeExceptionally(throwable);
                         } else {
+                            // A fresh POOLED channel skipped the build-time read timeout; arm it for this
+                            // first in-flight request so a connected-but-silent upstream cannot hang it.
+                            // (A non-pooled fresh channel already has its build-time read timeout, so this
+                            // is a no-op for it.) Removed again on return to the pool.
+                            armPooledInFlightReadTimeout(future.channel());
                             future.channel().writeAndFlush(httpRequest);
                         }
                     });
@@ -269,6 +353,33 @@ public class NettyHttpClient {
                     httpResponseFuture.completeExceptionally(future.cause());
                 }
             });
+    }
+
+    /**
+     * Arm an in-flight read timeout on a POOLED channel for the duration of one request.
+     * <p>
+     * Non-pooled channels get their {@link ReadTimeoutHandler} at pipeline-build time
+     * ({@link HttpClientInitializer#addReadTimeoutHandlerIfNotPooled}); pooled channels deliberately do
+     * NOT, because a blanket read timeout would fire while the connection sits idle in the pool between
+     * requests and tear down a healthy keep-alive connection. But a pooled channel with a request IN
+     * FLIGHT (a reused connection, or a fresh pooled channel's first request) was left unguarded — a
+     * stalled upstream that connects/keep-alives but never sends the response would hang the request
+     * future until {@code maxFutureTimeoutInMillis} at best, or indefinitely. We therefore arm the read
+     * timeout just before dispatching a request on a pooled channel and remove it again when the channel
+     * is returned to the pool ({@link HttpClientHandler#tryReturnToPool}); a streaming response removes
+     * it earlier ({@link org.mockserver.codec.StreamingAwareHttpObjectAggregator}, which strips any
+     * {@link ReadTimeoutHandler} by type when it switches to streaming, so a long inter-chunk pause is
+     * not mistaken for a stall). No-op for non-pooled channels (already guarded) and when the timeout is
+     * disabled or already armed.
+     */
+    private void armPooledInFlightReadTimeout(Channel channel) {
+        if (configuration == null || channel.attr(CONNECTION_POOL).get() == null) {
+            return;
+        }
+        Long readTimeoutMillis = configuration.maxSocketTimeoutInMillis();
+        if (readTimeoutMillis != null && readTimeoutMillis > 0 && channel.pipeline().get(ReadTimeoutHandler.class) == null) {
+            channel.pipeline().addFirst("pooledInFlightReadTimeout", new ReadTimeoutHandler(readTimeoutMillis, TimeUnit.MILLISECONDS));
+        }
     }
 
     /**
@@ -293,7 +404,7 @@ public class NettyHttpClient {
     private void applyForwardSocketKeepAlive(Bootstrap bootstrap) {
         applyForwardSocketKeepAlive(
             bootstrap,
-            eventLoopGroup,
+            eventLoopGroup(),
             Boolean.TRUE.equals(configuration.forwardSocketKeepAlive()),
             configuration.forwardSocketKeepAliveIdleSeconds(),
             configuration.forwardSocketKeepAliveIntervalSeconds(),
@@ -368,6 +479,7 @@ public class NettyHttpClient {
     }
 
     public CompletableFuture<BinaryMessage> sendRequest(final BinaryMessage binaryRequest, final boolean isSecure, InetSocketAddress remoteAddress, Long connectionTimeoutMillis) throws SocketConnectionException {
+        final EventLoopGroup eventLoopGroup = eventLoopGroup();
         if (!eventLoopGroup.isShuttingDown()) {
             if (proxyConfigurations != null && !isSecure && proxyConfigurations.containsKey(ProxyConfiguration.Type.HTTP)) {
                 remoteAddress = proxyConfigurations.get(ProxyConfiguration.Type.HTTP).getProxyAddress();

@@ -123,7 +123,10 @@ log_info "subtree split: $SPLIT_REF"
 # to swallow — reseed once manually with:
 #   git push --force $MIRROR_REPO <split>:refs/heads/master
 log_info "Pushing split to mirror master"
-retry 3 5 -- git -C "$REPO_ROOT" push "$MIRROR_REPO" "${SPLIT_REF}:refs/heads/master"
+if ! retry 3 5 -- git -C "$REPO_ROOT" push "$MIRROR_REPO" "${SPLIT_REF}:refs/heads/master"; then
+  log_info "Fast-forward push rejected — mirror history diverged from the split; force-converging (mirror is derived, pipeline-only state)"
+  retry 3 5 -- git -C "$REPO_ROOT" push --force "$MIRROR_REPO" "${SPLIT_REF}:refs/heads/master"
+fi
 log_info "Pushed mirror master"
 
 # Push the version tag to the mirror (idempotent). Packagist indexes this as the
@@ -146,7 +149,7 @@ PACKAGE_NAME="$(jq -r '.name' "$MODULE_DIR/composer.json")"
 log_info "Confirming Packagist indexed $PACKAGE_NAME@$TAG (webhook lags ~1-2 min)"
 if ! retry 5 10 -- bash -c '
        url="https://repo.packagist.org/p2/'"$PACKAGE_NAME"'.json"
-       curl -fsSL --max-time 30 "$url" 2>/dev/null | grep -q "\"version\":\"'"$TAG"'\""
+       body=$(curl -fsSL --max-time 30 "$url" 2>/dev/null) && grep -q "\"version\":\"'"$TAG"'\"" <<<"$body"
      '; then
   log_info ":warning: Packagist has not indexed $PACKAGE_NAME@$TAG yet after retries — non-fatal (mirror master + tag pushed; the webhook indexes within minutes)"
 fi

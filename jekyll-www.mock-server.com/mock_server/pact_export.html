@@ -77,8 +77,164 @@ sitemap:
 
 <p>The same redaction rules apply as for HAR and Postman imports: credential-bearing headers and common secret body fields are masked by default. Pass <span class="inline_code">?redactSensitiveData=false</span> to import values verbatim. See <a href="/mock_server/importing_expectations.html#import_redaction">Sensitive Data Redaction</a> for the full list of query parameters.</p>
 
+<p>Each language client has a typed <span class="inline_code">pactImport</span> helper (<span class="inline_code">pact_import</span> / <span class="inline_code">PactImport</span>) that wraps <span class="inline_code">PUT /mockserver/pact/import</span> and returns the upserted expectations. Pass the Pact v3 contract as a JSON string. The REST API tab shows the equivalent raw request.</p>
+
 <button id="button_pact_import" class="accordion">import a Pact v3 contract as expectations</button>
 <div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+String generatedExpectations = client.pactImport("{" +
+    "\"consumer\": {\"name\": \"frontend\"}," +
+    "\"provider\": {\"name\": \"users-service\"}," +
+    "\"interactions\": [{" +
+    "  \"description\": \"get users\"," +
+    "  \"request\": {\"method\": \"GET\", \"path\": \"/api/users\"}," +
+    "  \"response\": {\"status\": 200, \"headers\": {\"content-type\": [\"application/json\"]}, \"body\": {\"users\": []}}" +
+    "}]," +
+    "\"metadata\": {\"pactSpecification\": {\"version\": \"3.0.0\"}}" +
+    "}");
+// generatedExpectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+
+var pact = {
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+        "description": "get users",
+        "request": {"method": "GET", "path": "/api/users"},
+        "response": {"status": 200, "headers": {"content-type": ["application/json"]}, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+};
+mockServerClient("localhost", 1080).pactImport(JSON.stringify(pact)).then(
+    function (expectations) {
+        console.log(expectations); // the upserted expectations, one per interaction
+    },
+    function (error) {
+        console.log(error);
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import json
+from mockserver.client import MockServerClient
+
+pact = {
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+        "description": "get users",
+        "request": {"method": "GET", "path": "/api/users"},
+        "response": {"status": 200, "headers": {"content-type": ["application/json"]}, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}
+client = MockServerClient("localhost", 1080)
+generated_expectations = client.pact_import(json.dumps(pact))
+# generated_expectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+require 'json'
+
+pact = {
+    "consumer" => { "name" => "frontend" },
+    "provider" => { "name" => "users-service" },
+    "interactions" => [{
+        "description" => "get users",
+        "request" => { "method" => "GET", "path" => "/api/users" },
+        "response" => { "status" => 200, "headers" => { "content-type" => ["application/json"] }, "body" => { "users" => [] } }
+    }],
+    "metadata" => { "pactSpecification" => { "version" => "3.0.0" } }
+}
+
+client = MockServer::Client.new('localhost', 1080)
+generated_expectations = client.pact_import(pact.to_json)
+# generated_expectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+pactJSON := `{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "headers": {"content-type": ["application/json"]}, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}`
+expectations, _ := client.PactImport(pactJSON)
+// expectations holds the upserted expectations, one per interaction</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var pactJson = @"{
+    ""consumer"": {""name"": ""frontend""},
+    ""provider"": {""name"": ""users-service""},
+    ""interactions"": [{
+      ""description"": ""get users"",
+      ""request"": {""method"": ""GET"", ""path"": ""/api/users""},
+      ""response"": {""status"": 200, ""headers"": {""content-type"": [""application/json""]}, ""body"": {""users"": []}}
+    }],
+    ""metadata"": {""pactSpecification"": {""version"": ""3.0.0""}}
+}";
+var expectations = client.PactImport(pactJson);
+// expectations holds the upserted expectations, one per interaction</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let pact_json = r#"{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "headers": {"content-type": ["application/json"]}, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}"#;
+let expectations = client.pact_import(pact_json).unwrap();
+// expectations holds the upserted expectations, one per interaction</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$pactJson = &lt;&lt;&lt;'JSON'
+{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "headers": {"content-type": ["application/json"]}, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}
+JSON;
+
+$client = new MockServerClient('localhost', 1080);
+$generatedExpectations = $client-&gt;pactImport($pactJson);
+// $generatedExpectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact/import" \
@@ -164,8 +320,79 @@ sitemap:
 
 <p>Given an active expectation that mocks <span class="inline_code">GET /api/users</span>, export a Pact contract for the <span class="inline_code">frontend</span> consumer and <span class="inline_code">users-service</span> provider:</p>
 
+<p>Each language client has a typed <span class="inline_code">pactExport(consumer, provider)</span> helper (<span class="inline_code">pact_export</span> / <span class="inline_code">PactExport</span>) that wraps <span class="inline_code">PUT /mockserver/pact</span> and returns the generated Pact v3 contract. The REST API tab shows the equivalent raw request.</p>
+
 <button id="button_pact_export" class="accordion">export Pact v3 consumer contract</button>
 <div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+String pactContract = client.pactExport("frontend", "users-service");
+// pactContract holds the Pact v3 contract as JSON</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+
+mockServerClient("localhost", 1080).pactExport("frontend", "users-service").then(
+    function (pactContract) {
+        console.log(pactContract); // the Pact v3 contract as JSON
+    },
+    function (error) {
+        console.log(error);
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+pact_contract = client.pact_export("frontend", "users-service")
+# pact_contract holds the Pact v3 contract as JSON</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+pact_contract = client.pact_export(consumer: 'frontend', provider: 'users-service')
+# pact_contract holds the Pact v3 contract as JSON</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+pactContract, _ := client.PactExport("frontend", "users-service")
+// pactContract holds the Pact v3 contract as JSON</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var pactContract = client.PactExport("frontend", "users-service");
+// pactContract holds the Pact v3 contract as JSON</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let pact_contract = client.pact_export("frontend", "users-service").unwrap();
+// pact_contract holds the Pact v3 contract as JSON</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$pactContract = $client-&gt;pactExport('frontend', 'users-service');
+// $pactContract holds the Pact v3 contract as JSON</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact?consumer=frontend&amp;provider=users-service"</code></pre>
@@ -284,8 +511,166 @@ sitemap:
     <li>For response sequences, verification compares against the <strong>first response</strong> in the sequence.</li>
 </ul>
 
+<p>Each language client has a typed <span class="inline_code">pactVerify</span> helper (<span class="inline_code">pact_verify</span> / <span class="inline_code">PactVerify</span>) that wraps <span class="inline_code">PUT /mockserver/pact/verify</span>. The server replies <span class="inline_code">202 Accepted</span> when every interaction verifies and <span class="inline_code">406 Not Acceptable</span> otherwise — a FAIL is a normal outcome and does not raise. The return type reflects how each language exposes that pass/fail verdict: Java, Python, and Ruby return the verification <strong>report</strong> string (inspect its <span class="inline_code">verified</span> flag); Node returns the parsed report object; Go returns <span class="inline_code">(passed bool, report string, err error)</span>; Rust returns a <span class="inline_code">PactVerification</span> with <span class="inline_code">passed</span> and <span class="inline_code">report</span> fields; and .NET and PHP return a <span class="inline_code">bool</span>. The REST API tab shows the equivalent raw request.</p>
+
 <button id="button_pact_verify" class="accordion">verify a Pact v3 contract</button>
 <div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+String verificationReport = client.pactVerify("{" +
+    "\"consumer\": {\"name\": \"frontend\"}," +
+    "\"provider\": {\"name\": \"users-service\"}," +
+    "\"interactions\": [{" +
+    "  \"description\": \"get users\"," +
+    "  \"request\": {\"method\": \"GET\", \"path\": \"/api/users\"}," +
+    "  \"response\": {\"status\": 200, \"body\": {\"users\": []}}" +
+    "}]," +
+    "\"metadata\": {\"pactSpecification\": {\"version\": \"3.0.0\"}}" +
+    "}");
+// verificationReport holds the per-interaction verification result as JSON</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+
+var pact = {
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+        "description": "get users",
+        "request": {"method": "GET", "path": "/api/users"},
+        "response": {"status": 200, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+};
+mockServerClient("localhost", 1080).pactVerify(JSON.stringify(pact)).then(
+    function (report) {
+        console.log("verified: " + report.verified); // report carries the per-interaction breakdown
+    },
+    function (error) {
+        console.log(error);
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">import json
+from mockserver.client import MockServerClient
+
+pact = {
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+        "description": "get users",
+        "request": {"method": "GET", "path": "/api/users"},
+        "response": {"status": 200, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}
+client = MockServerClient("localhost", 1080)
+report = client.pact_verify(json.dumps(pact))   # the verification report JSON string
+verified = json.loads(report)["verified"]</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+require 'json'
+
+pact = {
+    "consumer" => { "name" => "frontend" },
+    "provider" => { "name" => "users-service" },
+    "interactions" => [{
+        "description" => "get users",
+        "request" => { "method" => "GET", "path" => "/api/users" },
+        "response" => { "status" => 200, "body" => { "users" => [] } }
+    }],
+    "metadata" => { "pactSpecification" => { "version" => "3.0.0" } }
+}
+
+client = MockServer::Client.new('localhost', 1080)
+report = client.pact_verify(pact.to_json)        # the verification report JSON string
+verified = JSON.parse(report)['verified']</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+pactJSON := `{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}`
+passed, report, err := client.PactVerify(pactJSON)
+// passed == true when every interaction verified (202); report holds the report JSON
+_ = report
+_ = err</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var json = @"{
+    ""consumer"": {""name"": ""frontend""},
+    ""provider"": {""name"": ""users-service""},
+    ""interactions"": [{
+      ""description"": ""get users"",
+      ""request"": {""method"": ""GET"", ""path"": ""/api/users""},
+      ""response"": {""status"": 200, ""body"": {""users"": []}}
+    }],
+    ""metadata"": {""pactSpecification"": {""version"": ""3.0.0""}}
+}";
+bool verified = client.PactVerify(json);
+// verified == true when every interaction verified (202), false otherwise (406)</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let pact_json = r#"{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}"#;
+let verification = client.pact_verify(pact_json).unwrap();
+// verification.passed == true on 202, false on 406; verification.report holds the report JSON</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$pactJson = &lt;&lt;&lt;'JSON'
+{
+    "consumer": {"name": "frontend"},
+    "provider": {"name": "users-service"},
+    "interactions": [{
+      "description": "get users",
+      "request": {"method": "GET", "path": "/api/users"},
+      "response": {"status": 200, "body": {"users": []}}
+    }],
+    "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}
+JSON;
+
+$client = new MockServerClient('localhost', 1080);
+$verified = $client-&gt;pactVerify($pactJson);
+// $verified === true when every interaction verified (202), false otherwise (406)</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/pact/verify" \

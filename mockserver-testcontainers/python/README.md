@@ -35,13 +35,14 @@ with MockServerContainer() as mockserver:
 
 ### `MockServerContainer(image=..., port=1080)`
 
-- `image` — Docker image to use. Defaults to `mockserver/mockserver:mockserver-7.2.0`.
+- `image` — Docker image to use. Defaults to `mockserver/mockserver:mockserver-7.4.0`.
 - `port` — Container port MockServer listens on. Defaults to `1080`.
 
 ### Methods
 
 | Method | Returns | Description |
 |--------|---------|-------------|
+| `get_client()` | `MockServerClient` | A cached, ready-wired `mockserver` client pointed at the mapped host/port |
 | `get_url()` | `str` | HTTP base URL (e.g. `http://localhost:49152`) |
 | `get_secure_url()` | `str` | HTTPS base URL (same port, `https://` scheme) |
 | `get_host()` | `str` | Mapped host IP |

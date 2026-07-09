@@ -39,6 +39,9 @@ import org.mockserver.serialization.ObjectMapperFactory;
 import org.mockserver.serialization.java.ExpectationToJavaSerializer;
 import org.mockserver.serialization.YamlToJsonConverter;
 import org.mockserver.server.initialize.ExpectationInitializerLoader;
+import org.mockserver.cluster.ClusterFanIn;
+import org.mockserver.cluster.ClusterFanInException;
+import org.mockserver.cluster.HttpClusterPeerAccessor;
 import org.mockserver.state.InvalidationListener;
 import org.mockserver.state.StateBackend;
 import org.mockserver.state.StateBackendFactory;
@@ -89,6 +92,7 @@ public class HttpState {
     private final Scheduler scheduler;
     private ExpectationFileSystemPersistence expectationFileSystemPersistence;
     private org.mockserver.persistence.RecordedExpectationFileSystemPersistence recordedExpectationFileSystemPersistence;
+    private org.mockserver.persistence.RecordedRequestsFileSystemPersistence recordedRequestsFileSystemPersistence;
     private ExpectationFileWatcher expectationFileWatcher;
     // mockserver
     private final RequestMatchers requestMatchers;
@@ -97,6 +101,8 @@ public class HttpState {
     // ADV3: persisted, named library of reusable chaos experiment profiles
     private final org.mockserver.mock.action.http.ChaosProfileLibrary chaosProfileLibrary;
     private final org.mockserver.mock.action.http.LoadScenarioRegistry loadScenarioRegistry;
+    // T1.9: opt-in cluster verify/retrieve fan-in coordinator (default OFF = per-node)
+    private ClusterFanIn clusterFanIn;
     private final Configuration configuration;
     // Adds CORS headers to dashboard-facing control-plane responses (e.g. service
     // chaos) so the dashboard works when served from another origin (a dev server),
@@ -269,6 +275,10 @@ public class HttpState {
         if (configuration.persistRecordedExpectations()) {
             this.recordedExpectationFileSystemPersistence = new org.mockserver.persistence.RecordedExpectationFileSystemPersistence(configuration, mockServerLogger, mockServerLog, stateBackend.blobs());
         }
+        if (configuration.persistRecordedRequestsToDisk()) {
+            this.recordedRequestsFileSystemPersistence = new org.mockserver.persistence.RecordedRequestsFileSystemPersistence(configuration, mockServerLogger);
+            mockServerLog.setRecordedRequestConsumer(recordedRequestsFileSystemPersistence::append);
+        }
         if (isNotBlank(configuration.initializationJsonPath()) || isNotBlank(configuration.initializationOpenAPIPath()) || isNotBlank(configuration.initializationClass())) {
             ExpectationInitializerLoader expectationInitializerLoader = new ExpectationInitializerLoader(configuration, mockServerLogger, requestMatchers);
             if ((isNotBlank(configuration.initializationJsonPath()) || isNotBlank(configuration.initializationOpenAPIPath())) && configuration.watchInitializationJson()) {
@@ -294,6 +304,12 @@ public class HttpState {
             });
         }
         CrossProtocolEventBus.getInstance().setScenarioManager(requestMatchers.getScenarioManager());
+        // T1.9: opt-in cluster verify/retrieve fan-in. The per-node event log means a
+        // verify/retrieve behind a load balancer sees only local traffic; when enabled
+        // (clusterVerifyFanIn=true + clusterVerifyFanInPeers set) this aggregates across
+        // peers. Default OFF = unchanged per-node behaviour. Injectable for tests.
+        this.clusterFanIn = new ClusterFanIn(configuration, this.mockServerLogger,
+            new HttpClusterPeerAccessor(configuration, this.mockServerLogger));
         // Preload load scenario definitions from a JSON file into the registry (LOADED state, staged but
         // not running). Mirrors the expectation initialization-from-file mechanism.
         preloadLoadScenarios();
@@ -499,6 +515,7 @@ public class HttpState {
         crudDispatcher.reset();
         fileStore.reset();
         org.mockserver.llm.LlmQuotaRegistry.getInstance().reset();
+        org.mockserver.llm.OpenAiResponsesStore.getInstance().reset();
         org.mockserver.mock.action.http.HttpQuotaRegistry.getInstance().reset();
         org.mockserver.ratelimit.RateLimitRegistry.getInstance().reset();
         org.mockserver.mock.action.http.RecoveryAttemptRegistry.getInstance().reset();
@@ -1003,6 +1020,16 @@ public class HttpState {
                 // tenant's expectations plus global (no-namespace) expectations.
                 final String namespaceFilter = resolveNamespaceFilter(request);
 
+                // T1.9 cluster verify/retrieve fan-in. When ?fanInLocalOnly=true the caller is a peer
+                // fan-in query — serve ONLY this node's log (infinite-recursion guard). Otherwise, when
+                // fan-in is enabled and configured, REQUESTS/REQUEST_RESPONSES retrieval aggregates each
+                // peer's LOCAL log with this node's before formatting.
+                final boolean fanInLocalOnly = Boolean.parseBoolean(request.getFirstQueryStringParameter("fanInLocalOnly"));
+                final boolean applyFanIn = !fanInLocalOnly
+                    && clusterFanIn != null
+                    && clusterFanIn.enabled()
+                    && (type == RetrieveType.REQUESTS || type == RetrieveType.REQUEST_RESPONSES);
+
                 // Record-and-forward one-command round-trip (Unit R): when ?forwardUnmatchedTo=<upstream>
                 // is supplied, enable record-and-forward of unmatched requests to that upstream for the
                 // session. Subsequent traffic that matches no expectation is forwarded to the upstream and
@@ -1019,60 +1046,63 @@ public class HttpState {
 
                 switch (type) {
                     case LOGS: {
-                        java.util.function.Consumer<List<LogEntry>> logsConsumer;
+                        // Materialize the (cheap) List<LogEntry> on the disruptor consumer thread, then
+                        // format the response body on THIS caller thread — formatting potentially many large
+                        // captured log entries inside the single log-consumer callback raced the retrieve future
+                        // timeout and stalled all further logging (see awaitRetrieve / bug #3).
+                        List<LogEntry> logEntries = awaitRetrieve(
+                            consumer -> {
+                                if (isNotBlank(correlationIdFilter)) {
+                                    mockServerLog.retrieveLogEntriesByCorrelationId(correlationIdFilter, consumer);
+                                } else {
+                                    mockServerLog.retrieveMessageLogEntries(requestDefinition, consumer);
+                                }
+                            },
+                            logCorrelationId, request
+                        );
                         if (format == Format.LOG_ENTRIES) {
-                            logsConsumer = (List<LogEntry> logEntries) -> {
-                                response.withBody(
-                                    getLogEntrySerializer().serialize(logEntries),
-                                    MediaType.JSON_UTF_8
+                            response.withBody(
+                                getLogEntrySerializer().serialize(logEntries),
+                                MediaType.JSON_UTF_8
+                            );
+                            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setType(RETRIEVED)
+                                        .setLogLevel(Level.INFO)
+                                        .setCorrelationId(logCorrelationId)
+                                        .setHttpRequest(requestDefinition)
+                                        .setMessageFormat("retrieved log entries in log_entries format that match:{}")
+                                        .setArguments(requestDefinition)
                                 );
-                                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                                    mockServerLogger.logEvent(
-                                        new LogEntry()
-                                            .setType(RETRIEVED)
-                                            .setLogLevel(Level.INFO)
-                                            .setCorrelationId(logCorrelationId)
-                                            .setHttpRequest(requestDefinition)
-                                            .setMessageFormat("retrieved log entries in log_entries format that match:{}")
-                                            .setArguments(requestDefinition)
-                                    );
-                                }
-                                httpResponseFuture.complete(response);
-                            };
+                            }
                         } else {
-                            logsConsumer = (List<LogEntry> logEntries) -> {
-                                StringBuilder stringBuffer = new StringBuilder();
-                                for (int i = 0; i < logEntries.size(); i++) {
-                                    LogEntry messageLogEntry = logEntries.get(i);
-                                    stringBuffer
-                                        .append(messageLogEntry.getTimestamp())
-                                        .append(" - ")
-                                        .append(messageLogEntry.getMessage());
-                                    if (i < logEntries.size() - 1) {
-                                        stringBuffer.append(LOG_SEPARATOR);
-                                    }
+                            StringBuilder stringBuffer = new StringBuilder();
+                            for (int i = 0; i < logEntries.size(); i++) {
+                                LogEntry messageLogEntry = logEntries.get(i);
+                                stringBuffer
+                                    .append(messageLogEntry.getTimestamp())
+                                    .append(" - ")
+                                    .append(messageLogEntry.getMessage());
+                                if (i < logEntries.size() - 1) {
+                                    stringBuffer.append(LOG_SEPARATOR);
                                 }
-                                stringBuffer.append(NEW_LINE);
-                                response.withBody(stringBuffer.toString(), MediaType.PLAIN_TEXT_UTF_8);
-                                if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
-                                    mockServerLogger.logEvent(
-                                        new LogEntry()
-                                            .setType(RETRIEVED)
-                                            .setLogLevel(Level.INFO)
-                                            .setCorrelationId(logCorrelationId)
-                                            .setHttpRequest(requestDefinition)
-                                            .setMessageFormat("retrieved logs that match:{}")
-                                            .setArguments(requestDefinition)
-                                    );
-                                }
-                                httpResponseFuture.complete(response);
-                            };
+                            }
+                            stringBuffer.append(NEW_LINE);
+                            response.withBody(stringBuffer.toString(), MediaType.PLAIN_TEXT_UTF_8);
+                            if (mockServerLogger.isEnabledForInstance(Level.INFO)) {
+                                mockServerLogger.logEvent(
+                                    new LogEntry()
+                                        .setType(RETRIEVED)
+                                        .setLogLevel(Level.INFO)
+                                        .setCorrelationId(logCorrelationId)
+                                        .setHttpRequest(requestDefinition)
+                                        .setMessageFormat("retrieved logs that match:{}")
+                                        .setArguments(requestDefinition)
+                                );
+                            }
                         }
-                        if (isNotBlank(correlationIdFilter)) {
-                            mockServerLog.retrieveLogEntriesByCorrelationId(correlationIdFilter, logsConsumer);
-                        } else {
-                            mockServerLog.retrieveMessageLogEntries(requestDefinition, logsConsumer);
-                        }
+                        httpResponseFuture.complete(response);
                         break;
                     }
                     case REQUESTS: {
@@ -1084,105 +1114,96 @@ public class HttpState {
                             .setMessageFormat("retrieved requests in " + format.name().toLowerCase() + " that match:{}")
                             .setArguments(requestDefinition);
                         switch (format) {
-                            case JAVA:
-                                mockServerLog
-                                    .retrieveRequests(
-                                        requestDefinition,
-                                        requests -> {
-                                            response.withBody(
-                                                getRequestDefinitionSerializer().serialize(requests),
-                                                MediaType.create("application", "java").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            case JAVA: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getRequestDefinitionSerializer().serialize(requests),
+                                    MediaType.create("application", "java").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case JSON:
-                                mockServerLog
-                                    .retrieveRequests(
-                                        requestDefinition,
-                                        requests -> {
-                                            response.withBody(
-                                                getRequestDefinitionSerializer().serializeRecordedRequests(true, requests),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case JSON: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getRequestDefinitionSerializer().serializeRecordedRequests(true, requests),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case LOG_ENTRIES:
-                                mockServerLog
-                                    .retrieveRequestLogEntries(
-                                        requestDefinition,
-                                        logEntries -> {
-                                            response.withBody(
-                                                getLogEntrySerializer().serialize(logEntries),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case LOG_ENTRIES: {
+                                List<LogEntry> logEntries = awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRequestLogEntries(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                );
+                                response.withBody(
+                                    getLogEntrySerializer().serialize(logEntries),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case OPENAPI:
-                                mockServerLog.retrieveRequests(requestDefinition, requests -> {
-                                    response.withBody(
-                                        getExpectationExportSerializer().serializeRequestsAsOpenApi(requests),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case OPENAPI: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getExpectationExportSerializer().serializeRequestsAsOpenApi(requests),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case POSTMAN:
-                                mockServerLog.retrieveRequests(requestDefinition, requests -> {
-                                    response.withBody(
-                                        getExpectationExportSerializer().serializeRequestsAsPostman(requests),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case POSTMAN: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getExpectationExportSerializer().serializeRequestsAsPostman(requests),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case BRUNO:
-                                mockServerLog.retrieveRequests(requestDefinition, requests -> {
-                                    response
-                                        .withBody(getExpectationExportSerializer().serializeRequestsAsBruno(requests))
-                                        .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
-                                        .withHeader("content-disposition", "attachment; filename=\"mockserver-requests.bruno.zip\"");
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case BRUNO: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response
+                                    .withBody(getExpectationExportSerializer().serializeRequestsAsBruno(requests))
+                                    .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
+                                    .withHeader("content-disposition", "attachment; filename=\"mockserver-requests.bruno.zip\"");
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case HAR:
-                                mockServerLog.retrieveRequests(requestDefinition, requests -> {
-                                    java.util.List<org.mockserver.model.LogEventRequestAndResponse> pairs = new java.util.ArrayList<>(requests.size());
-                                    for (org.mockserver.model.RequestDefinition r : requests) {
-                                        if (r instanceof org.mockserver.model.HttpRequest) {
-                                            pairs.add(new org.mockserver.model.LogEventRequestAndResponse()
-                                                .withHttpRequest((org.mockserver.model.HttpRequest) r));
-                                        }
+                            }
+                            case HAR: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                java.util.List<org.mockserver.model.LogEventRequestAndResponse> pairs = new java.util.ArrayList<>(requests.size());
+                                for (org.mockserver.model.RequestDefinition r : requests) {
+                                    if (r instanceof org.mockserver.model.HttpRequest) {
+                                        pairs.add(new org.mockserver.model.LogEventRequestAndResponse()
+                                            .withHttpRequest((org.mockserver.model.HttpRequest) r));
                                     }
-                                    response.withBody(getHarConverter().serialize(pairs), MediaType.JSON_UTF_8);
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                                }
+                                response.withBody(getHarConverter().serialize(pairs), MediaType.JSON_UTF_8);
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case CURL:
-                                mockServerLog.retrieveRequests(requestDefinition, requests -> {
-                                    List<HttpRequest> httpRequests = new java.util.ArrayList<>(requests.size());
-                                    for (RequestDefinition r : requests) {
-                                        if (r instanceof HttpRequest) {
-                                            httpRequests.add((HttpRequest) r);
-                                        }
+                            }
+                            case CURL: {
+                                List<RequestDefinition> requests = retrieveRequestsPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                List<HttpRequest> httpRequests = new java.util.ArrayList<>(requests.size());
+                                for (RequestDefinition r : requests) {
+                                    if (r instanceof HttpRequest) {
+                                        httpRequests.add((HttpRequest) r);
                                     }
-                                    response.withBody(toCurlCommands(httpRequests), MediaType.PLAIN_TEXT_UTF_8);
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                                }
+                                response.withBody(toCurlCommands(httpRequests), MediaType.PLAIN_TEXT_UTF_8);
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
+                            }
                             case JAVASCRIPT:
                             case PYTHON:
                             case GO:
@@ -1218,91 +1239,86 @@ public class HttpState {
                                 mockServerLogger.logEvent(logEntry);
                                 httpResponseFuture.complete(response);
                                 break;
-                            case JSON:
-                                mockServerLog
-                                    .retrieveRequestResponses(
-                                        requestDefinition,
-                                        httpRequestAndHttpResponses -> {
-                                            response.withBody(
-                                                getHttpRequestResponseSerializer().serialize(httpRequestAndHttpResponses),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            case JSON: {
+                                // Materialize the (cheap) redacted list on the disruptor consumer thread, then
+                                // serialize on THIS caller thread — serializing potentially many large captured
+                                // bodies inside the single log-consumer callback raced the retrieve future timeout
+                                // and stalled all further logging (#3).
+                                List<LogEventRequestAndResponse> pairs = retrieveRequestResponsesPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getHttpRequestResponseSerializer().serialize(pairs),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case LOG_ENTRIES:
-                                mockServerLog
-                                    .retrieveRequestResponseMessageLogEntries(
-                                        requestDefinition,
-                                        logEntries -> {
-                                            response.withBody(
-                                                getLogEntrySerializer().serialize(logEntries),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case LOG_ENTRIES: {
+                                List<LogEntry> logEntries = awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRequestResponseMessageLogEntries(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                );
+                                response.withBody(
+                                    getLogEntrySerializer().serialize(logEntries),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case HAR:
-                                mockServerLog
-                                    .retrieveRequestResponses(
-                                        requestDefinition,
-                                        httpRequestAndHttpResponses -> {
-                                            response.withBody(
-                                                getHarConverter().serialize(httpRequestAndHttpResponses),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case HAR: {
+                                List<LogEventRequestAndResponse> pairs = retrieveRequestResponsesPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getHarConverter().serialize(pairs),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case OPENAPI:
-                                mockServerLog.retrieveRequestResponses(requestDefinition, pairs -> {
-                                    response.withBody(
-                                        getExpectationExportSerializer().serializeRequestResponsesAsOpenApi(pairs),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case OPENAPI: {
+                                List<LogEventRequestAndResponse> pairs = retrieveRequestResponsesPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getExpectationExportSerializer().serializeRequestResponsesAsOpenApi(pairs),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case POSTMAN:
-                                mockServerLog.retrieveRequestResponses(requestDefinition, pairs -> {
-                                    response.withBody(
-                                        getExpectationExportSerializer().serializeRequestResponsesAsPostman(pairs),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case POSTMAN: {
+                                List<LogEventRequestAndResponse> pairs = retrieveRequestResponsesPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response.withBody(
+                                    getExpectationExportSerializer().serializeRequestResponsesAsPostman(pairs),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case BRUNO:
-                                mockServerLog.retrieveRequestResponses(requestDefinition, pairs -> {
-                                    response
-                                        .withBody(getExpectationExportSerializer().serializeRequestResponsesAsBruno(pairs))
-                                        .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
-                                        .withHeader("content-disposition", "attachment; filename=\"mockserver-traffic.bruno.zip\"");
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case BRUNO: {
+                                List<LogEventRequestAndResponse> pairs = retrieveRequestResponsesPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                response
+                                    .withBody(getExpectationExportSerializer().serializeRequestResponsesAsBruno(pairs))
+                                    .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
+                                    .withHeader("content-disposition", "attachment; filename=\"mockserver-traffic.bruno.zip\"");
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case CURL:
-                                mockServerLog.retrieveRequestResponses(requestDefinition, pairs -> {
-                                    List<HttpRequest> httpRequests = new java.util.ArrayList<>(pairs.size());
-                                    for (LogEventRequestAndResponse pair : pairs) {
-                                        if (pair.getHttpRequest() instanceof HttpRequest) {
-                                            httpRequests.add((HttpRequest) pair.getHttpRequest());
-                                        }
+                            }
+                            case CURL: {
+                                List<LogEventRequestAndResponse> pairs = retrieveRequestResponsesPossiblyFanIn(requestDefinition, logCorrelationId, request, applyFanIn);
+                                List<HttpRequest> httpRequests = new java.util.ArrayList<>(pairs.size());
+                                for (LogEventRequestAndResponse pair : pairs) {
+                                    if (pair.getHttpRequest() instanceof HttpRequest) {
+                                        httpRequests.add((HttpRequest) pair.getHttpRequest());
                                     }
-                                    response.withBody(toCurlCommands(httpRequests), MediaType.PLAIN_TEXT_UTF_8);
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                                }
+                                response.withBody(toCurlCommands(httpRequests), MediaType.PLAIN_TEXT_UTF_8);
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
+                            }
                         }
                         break;
                     }
@@ -1315,199 +1331,188 @@ public class HttpState {
                             .setMessageFormat("retrieved recorded expectations in " + format.name().toLowerCase() + " that match:{}")
                             .setArguments(requestDefinition);
                         switch (format) {
-                            case JAVA:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToJavaSerializer().serialize(requests),
-                                                MediaType.create("application", "java").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            case JAVA: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToJavaSerializer().serialize(requests),
+                                    MediaType.create("application", "java").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case JAVASCRIPT:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToJavaScriptSerializer().serialize(requests),
-                                                MediaType.create("application", "javascript").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case JAVASCRIPT: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToJavaScriptSerializer().serialize(requests),
+                                    MediaType.create("application", "javascript").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case PYTHON:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToPythonSerializer().serialize(requests),
-                                                MediaType.create("text", "x-python").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case PYTHON: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToPythonSerializer().serialize(requests),
+                                    MediaType.create("text", "x-python").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case GO:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToGoSerializer().serialize(requests),
-                                                MediaType.create("text", "x-go").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case GO: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToGoSerializer().serialize(requests),
+                                    MediaType.create("text", "x-go").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case CSHARP:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToCSharpSerializer().serialize(requests),
-                                                MediaType.create("text", "x-csharp").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case CSHARP: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToCSharpSerializer().serialize(requests),
+                                    MediaType.create("text", "x-csharp").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case RUBY:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToRubySerializer().serialize(requests),
-                                                MediaType.create("text", "x-ruby").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case RUBY: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToRubySerializer().serialize(requests),
+                                    MediaType.create("text", "x-ruby").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case RUST:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToRustSerializer().serialize(requests),
-                                                MediaType.create("text", "x-rust").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case RUST: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToRustSerializer().serialize(requests),
+                                    MediaType.create("text", "x-rust").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case PHP:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationToPhpSerializer().serialize(requests),
-                                                MediaType.create("application", "x-httpd-php").withCharset(UTF_8)
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case PHP: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationToPhpSerializer().serialize(requests),
+                                    MediaType.create("application", "x-httpd-php").withCharset(UTF_8)
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case JSON:
-                                mockServerLog
-                                    .retrieveRecordedExpectations(
-                                        requestDefinition,
-                                        rawRequests -> {
-                                            List<Expectation> requests = postProcessRecordedExpectations(rawRequests);
-                                            response.withBody(
-                                                getExpectationSerializerThatSerializesBodyDefault().serialize(requests),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case JSON: {
+                                List<Expectation> requests = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationSerializerThatSerializesBodyDefault().serialize(requests),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case LOG_ENTRIES:
-                                mockServerLog
-                                    .retrieveRecordedExpectationLogEntries(
-                                        requestDefinition,
-                                        logEntries -> {
-                                            response.withBody(
-                                                getLogEntrySerializer().serialize(logEntries),
-                                                MediaType.JSON_UTF_8
-                                            );
-                                            mockServerLogger.logEvent(logEntry);
-                                            httpResponseFuture.complete(response);
-                                        }
-                                    );
+                            }
+                            case LOG_ENTRIES: {
+                                List<LogEntry> logEntries = awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectationLogEntries(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                );
+                                response.withBody(
+                                    getLogEntrySerializer().serialize(logEntries),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case OPENAPI:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
-                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
-                                    response.withBody(
-                                        getExpectationExportSerializer().serializeAsOpenApi(expectations),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case OPENAPI: {
+                                List<Expectation> expectations = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationExportSerializer().serializeAsOpenApi(expectations),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case POSTMAN:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
-                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
-                                    response.withBody(
-                                        getExpectationExportSerializer().serializeAsPostmanCollection(expectations),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case POSTMAN: {
+                                List<Expectation> expectations = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getExpectationExportSerializer().serializeAsPostmanCollection(expectations),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case BRUNO:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
-                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
-                                    response
-                                        .withBody(getExpectationExportSerializer().serializeAsBrunoCollection(expectations))
-                                        .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
-                                        .withHeader("content-disposition", "attachment; filename=\"mockserver-recorded.bruno.zip\"");
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case BRUNO: {
+                                List<Expectation> expectations = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response
+                                    .withBody(getExpectationExportSerializer().serializeAsBrunoCollection(expectations))
+                                    .withHeader(io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE.toString(), "application/zip")
+                                    .withHeader("content-disposition", "attachment; filename=\"mockserver-recorded.bruno.zip\"");
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
-                            case HAR:
-                                mockServerLog.retrieveRecordedExpectations(requestDefinition, rawExpectations -> {
-                                    List<Expectation> expectations = postProcessRecordedExpectations(rawExpectations);
-                                    response.withBody(
-                                        getHarConverter().serialize(expectationsToLogEvents(expectations)),
-                                        MediaType.JSON_UTF_8
-                                    );
-                                    mockServerLogger.logEvent(logEntry);
-                                    httpResponseFuture.complete(response);
-                                });
+                            }
+                            case HAR: {
+                                List<Expectation> expectations = postProcessRecordedExpectations(awaitRetrieve(
+                                    consumer -> mockServerLog.retrieveRecordedExpectations(requestDefinition, consumer),
+                                    logCorrelationId, request
+                                ), request);
+                                response.withBody(
+                                    getHarConverter().serialize(expectationsToLogEvents(expectations)),
+                                    MediaType.JSON_UTF_8
+                                );
+                                mockServerLogger.logEvent(logEntry);
+                                httpResponseFuture.complete(response);
                                 break;
+                            }
                             case CURL:
                                 response.withBody("CURL not supported for RECORDED_EXPECTATIONS", MediaType.create("text", "plain").withCharset(UTF_8));
                                 mockServerLogger.logEvent(logEntry);
@@ -1641,6 +1646,19 @@ public class HttpState {
                     );
                     throw new RuntimeException("Exception retrieving state for " + request, ex);
                 }
+            } catch (ClusterFanInException cfe) {
+                // fail-closed: a retrieve that cannot reach all cluster peers returns an error
+                // (502) rather than a partial result that would silently under-report traffic.
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setCorrelationId(logCorrelationId)
+                        .setMessageFormat("cluster retrieve fan-in failed:{}")
+                        .setArguments(cfe.getMessage())
+                );
+                return response()
+                    .withStatusCode(BAD_GATEWAY.code())
+                    .withBody("{\"error\":\"" + cfe.getMessage().replace("\"", "'") + "\"}", MediaType.JSON_UTF_8);
             } catch (IllegalArgumentException iae) {
                 mockServerLogger.logEvent(
                     new LogEntry()
@@ -1663,6 +1681,87 @@ public class HttpState {
         }
     }
 
+    /**
+     * Materialize a retrieve result list off the single disruptor log-consumer thread and return it to the
+     * CALLER, so any heavy serialization (JSON/HAR/OpenAPI/etc. over large captured response bodies) runs on
+     * the caller thread rather than inside the log-consumer callback. Previously the whole list was serialized
+     * inside the consumer callback (on the one log-processing thread): with many large captured streaming
+     * bodies that both raced the retrieve future timeout ({@code maxFutureTimeoutInMillis}) AND stalled all
+     * further logging (filling the ring buffer and dropping events) — see bug #3. The list the consumer
+     * receives is already fully materialized and redacted (cheap to produce), so only its construction runs on
+     * the consumer thread; the expensive serialize(...) now runs here. The consumer runs after the disruptor
+     * has drained prior log writes, so the list is a consistent snapshot.
+     */
+    private <T> T awaitRetrieve(Consumer<Consumer<T>> retriever, String logCorrelationId, HttpRequest request) {
+        CompletableFuture<T> listFuture = new CompletableFuture<>();
+        retriever.accept(listFuture::complete);
+        try {
+            return listFuture.get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
+        } catch (ExecutionException | InterruptedException | TimeoutException ex) {
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setCorrelationId(logCorrelationId)
+                    .setMessageFormat("exception handling request:{}error:{}")
+                    .setArguments(request, ex.getMessage())
+                    .setThrowable(ex)
+            );
+            throw new RuntimeException("Exception retrieving state for " + request, ex);
+        }
+    }
+
+    /**
+     * T1.9 test seam: inject a {@link ClusterFanIn} coordinator (with a mocked
+     * {@link ClusterFanIn.PeerAccessor}) so fan-in merge logic can be unit-tested
+     * without a real multi-node cluster.
+     */
+    public void setClusterFanIn(ClusterFanIn clusterFanIn) {
+        this.clusterFanIn = clusterFanIn;
+    }
+
+    /**
+     * Retrieve this node's local matching requests and, when fan-in applies, concatenate every
+     * peer's LOCAL matching requests. Fail-closed: an unreachable peer throws
+     * {@link ClusterFanInException} (surfaced as a 502 by {@link #retrieve(HttpRequest)}).
+     */
+    private List<RequestDefinition> retrieveRequestsPossiblyFanIn(RequestDefinition requestDefinition, String logCorrelationId, HttpRequest request, boolean applyFanIn) {
+        List<RequestDefinition> local = awaitRetrieve(
+            consumer -> mockServerLog.retrieveRequests(requestDefinition, consumer),
+            logCorrelationId, request
+        );
+        if (!applyFanIn) {
+            return local;
+        }
+        ClusterFanIn.FanInResult<List<RequestDefinition>> remote = clusterFanIn.fanInRequests(requestDefinition);
+        if (remote.hasUnreachablePeers()) {
+            throw new ClusterFanInException(remote.unreachablePeers());
+        }
+        List<RequestDefinition> merged = new ArrayList<>(local);
+        merged.addAll(remote.merged());
+        return merged;
+    }
+
+    /**
+     * Retrieve this node's local matching request-response pairs and, when fan-in applies,
+     * concatenate every peer's LOCAL pairs. Fail-closed like {@link #retrieveRequestsPossiblyFanIn}.
+     */
+    private List<LogEventRequestAndResponse> retrieveRequestResponsesPossiblyFanIn(RequestDefinition requestDefinition, String logCorrelationId, HttpRequest request, boolean applyFanIn) {
+        List<LogEventRequestAndResponse> local = awaitRetrieve(
+            consumer -> mockServerLog.retrieveRequestResponses(requestDefinition, consumer),
+            logCorrelationId, request
+        );
+        if (!applyFanIn) {
+            return local;
+        }
+        ClusterFanIn.FanInResult<List<LogEventRequestAndResponse>> remote = clusterFanIn.fanInRequestResponses(requestDefinition);
+        if (remote.hasUnreachablePeers()) {
+            throw new ClusterFanInException(remote.unreachablePeers());
+        }
+        List<LogEventRequestAndResponse> merged = new ArrayList<>(local);
+        merged.addAll(remote.merged());
+        return merged;
+    }
+
     public Future<String> verify(Verification verification) {
         CompletableFuture<String> result = new CompletableFuture<>();
         verify(verification, result::complete);
@@ -1673,6 +1772,24 @@ public class HttpState {
         if (verification.getExpectationId() != null) {
             // check valid expectation id and populate for error message
             verification.withRequest(resolveExpectationId(verification.getExpectationId()));
+        }
+        // T1.9 count-based verify fan-in. When enabled, aggregate each peer's LOCAL match
+        // count with this node's before evaluating VerificationTimes, so a verify behind a
+        // load balancer reflects fleet-wide traffic rather than only the node it hit.
+        // Scoped to request-only verification (no httpResponse, no expectationId): response-aware
+        // verify and expectationId-based verify aggregation are documented deferred boundaries and
+        // stay node-local. Fail-closed: an unreachable peer yields a verification failure rather
+        // than a partial (potentially wrong) result.
+        if (clusterFanIn != null && clusterFanIn.enabled()
+            && verification.getHttpResponse() == null
+            && verification.getExpectationId() == null) {
+            ClusterFanIn.FanInResult<List<RequestDefinition>> remote = clusterFanIn.fanInRequests(verification.getHttpRequest());
+            if (remote.hasUnreachablePeers()) {
+                resultConsumer.accept("Verification could not be evaluated cluster-wide: unreachable peer(s) " + remote.unreachablePeers());
+                return;
+            }
+            mockServerLog.verify(verification, remote.merged().size(), resultConsumer);
+            return;
         }
         mockServerLog.verify(verification, resultConsumer);
     }
@@ -1988,40 +2105,131 @@ public class HttpState {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     try {
-                        String requestBody = request.getBodyAsJsonOrXmlString();
-                        if (requestBody == null || requestBody.trim().isEmpty()) {
-                            throw new IllegalArgumentException("import request body is required — must be a HAR, Postman collection or Pact contract JSON document");
-                        }
                         String formatParam = request.getFirstQueryStringParameter("format");
                         org.mockserver.imports.ImportRedaction.Options redactionOptions = buildImportRedactionOptions(request);
-                        List<Expectation> importedExpectations;
-                        if ("har".equalsIgnoreCase(formatParam)) {
-                            importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody, redactionOptions);
-                        } else if ("postman".equalsIgnoreCase(formatParam)) {
-                            importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody, redactionOptions);
-                        } else if ("pact".equalsIgnoreCase(formatParam)) {
-                            importedExpectations = new org.mockserver.mock.pact.PactImporter().importExpectations(requestBody, redactionOptions);
-                        } else if (formatParam != null && !formatParam.isEmpty()) {
-                            throw new IllegalArgumentException("unsupported import format: " + formatParam + " (supported formats: har, postman, pact)");
+
+                        // Recorded-traffic re-import: reload a persisted NDJSON archive of recorded
+                        // request/response pairs back into the event log so they are retrievable like
+                        // in-memory recordings. Unlike the expectation importers below this reads NDJSON
+                        // (one HttpRequestAndHttpResponse per line) and can source it from disk via
+                        // ?source=disk (or when the body is empty), reading the configured
+                        // persistedRecordedRequestsPath.
+                        if ("recording".equalsIgnoreCase(formatParam)) {
+                            String sourceParam = request.getFirstQueryStringParameter("source");
+                            String ndjson = request.getBodyAsJsonOrXmlString();
+                            boolean fromDisk = "disk".equalsIgnoreCase(sourceParam) || ndjson == null || ndjson.trim().isEmpty();
+                            if (fromDisk) {
+                                java.nio.file.Path archivePath = java.nio.file.Paths.get(configuration.persistedRecordedRequestsPath());
+                                if (!java.nio.file.Files.exists(archivePath)) {
+                                    throw new IllegalArgumentException("no persisted recorded requests archive found at " + archivePath.toAbsolutePath() + " (set mockserver.persistedRecordedRequestsPath or supply the archive in the request body)");
+                                }
+                                ndjson = new String(java.nio.file.Files.readAllBytes(archivePath), java.nio.charset.StandardCharsets.UTF_8);
+                            }
+                            org.mockserver.imports.RecordedTrafficImporter.Result recordingResult =
+                                new org.mockserver.imports.RecordedTrafficImporter(mockServerLogger).importRecordedTraffic(ndjson, redactionOptions);
+                            List<org.mockserver.model.HttpRequestAndHttpResponse> pairs = recordingResult.getPairs();
+                            for (org.mockserver.model.HttpRequestAndHttpResponse pair : pairs) {
+                                mockServerLog.importRecordedRequestResponse(pair.getHttpRequest(), pair.getHttpResponse());
+                            }
+                            HttpResponse recordingResponse = response()
+                                .withStatusCode(CREATED.code())
+                                .withBody(new org.mockserver.serialization.HttpRequestAndHttpResponseSerializer(mockServerLogger).serialize(pairs), MediaType.JSON_UTF_8);
+                            // surface how many crash-truncated / malformed lines were skipped so a
+                            // recovery import is not silently lossy (the intact exchanges still import)
+                            if (recordingResult.getSkippedLineCount() > 0) {
+                                recordingResponse.withHeader("x-mockserver-recorded-requests-skipped", String.valueOf(recordingResult.getSkippedLineCount()));
+                            }
+                            responseWriter.writeResponse(request, recordingResponse, true);
                         } else {
-                            // Auto-detect format from JSON structure
-                            com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(requestBody);
-                            if (!rootNode.path("log").path("entries").isMissingNode()) {
+                            String requestBody = request.getBodyAsJsonOrXmlString();
+                            if (requestBody == null || requestBody.trim().isEmpty()) {
+                                throw new IllegalArgumentException("import request body is required — must be a HAR, Postman collection, Pact contract, WireMock stub, Mountebank imposter or Mockoon environment JSON document");
+                            }
+                            List<Expectation> importedExpectations;
+                            // Migration importers (WireMock / Mountebank / Mockoon) return an ImportResult
+                            // carrying structured warnings for every foreign construct that could not be
+                            // faithfully mapped; when non-null the response body includes those warnings.
+                            List<org.mockserver.imports.ImportWarning> importWarnings = null;
+                            if ("har".equalsIgnoreCase(formatParam)) {
                                 importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody, redactionOptions);
-                            } else if (!rootNode.path("info").isMissingNode() && !rootNode.path("item").isMissingNode()) {
+                            } else if ("postman".equalsIgnoreCase(formatParam)) {
                                 importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody, redactionOptions);
-                            } else if (!rootNode.path("interactions").isMissingNode() && rootNode.path("interactions").isArray()) {
+                            } else if ("pact".equalsIgnoreCase(formatParam)) {
                                 importedExpectations = new org.mockserver.mock.pact.PactImporter().importExpectations(requestBody, redactionOptions);
+                            } else if ("wiremock".equalsIgnoreCase(formatParam)) {
+                                org.mockserver.imports.ImportResult result = new org.mockserver.imports.WireMockImporter().importExpectations(requestBody, redactionOptions);
+                                importedExpectations = result.getExpectations();
+                                importWarnings = result.getWarnings();
+                            } else if ("mountebank".equalsIgnoreCase(formatParam)) {
+                                org.mockserver.imports.ImportResult result = new org.mockserver.imports.MountebankImporter().importExpectations(requestBody, redactionOptions);
+                                importedExpectations = result.getExpectations();
+                                importWarnings = result.getWarnings();
+                            } else if ("mockoon".equalsIgnoreCase(formatParam)) {
+                                org.mockserver.imports.ImportResult result = new org.mockserver.imports.MockoonImporter().importExpectations(requestBody, redactionOptions);
+                                importedExpectations = result.getExpectations();
+                                importWarnings = result.getWarnings();
+                            } else if (formatParam != null && !formatParam.isEmpty()) {
+                                throw new IllegalArgumentException("unsupported import format: " + formatParam + " (supported formats: har, postman, pact, wiremock, mountebank, mockoon, recording)");
                             } else {
-                                throw new IllegalArgumentException("unable to auto-detect import format — use ?format=har, ?format=postman or ?format=pact query parameter");
+                                // Auto-detect format from JSON structure
+                                com.fasterxml.jackson.databind.JsonNode rootNode = ObjectMapperFactory.createObjectMapper().readTree(requestBody);
+                                if (!rootNode.path("log").path("entries").isMissingNode()) {
+                                    importedExpectations = new org.mockserver.imports.HarImporter().importExpectations(requestBody, redactionOptions);
+                                } else if (!rootNode.path("info").isMissingNode() && !rootNode.path("item").isMissingNode()) {
+                                    importedExpectations = new org.mockserver.imports.PostmanCollectionImporter().importExpectations(requestBody, redactionOptions);
+                                } else if (!rootNode.path("interactions").isMissingNode() && rootNode.path("interactions").isArray()) {
+                                    importedExpectations = new org.mockserver.mock.pact.PactImporter().importExpectations(requestBody, redactionOptions);
+                                } else if (rootNode.path("mappings").isArray()
+                                    || rootNode.path("request").path("urlPath").isTextual()
+                                    || rootNode.path("request").path("urlPathPattern").isTextual()
+                                    || rootNode.path("request").path("urlPattern").isTextual()
+                                    || rootNode.path("response").path("jsonBody").isObject()
+                                    || rootNode.path("response").path("fault").isTextual()) {
+                                    org.mockserver.imports.ImportResult result = new org.mockserver.imports.WireMockImporter().importExpectations(requestBody, redactionOptions);
+                                    importedExpectations = result.getExpectations();
+                                    importWarnings = result.getWarnings();
+                                } else if (rootNode.path("imposters").isArray()
+                                    || (rootNode.path("protocol").isTextual() && rootNode.path("stubs").isArray())) {
+                                    org.mockserver.imports.ImportResult result = new org.mockserver.imports.MountebankImporter().importExpectations(requestBody, redactionOptions);
+                                    importedExpectations = result.getExpectations();
+                                    importWarnings = result.getWarnings();
+                                } else if (rootNode.path("routes").isArray()) {
+                                    org.mockserver.imports.ImportResult result = new org.mockserver.imports.MockoonImporter().importExpectations(requestBody, redactionOptions);
+                                    importedExpectations = result.getExpectations();
+                                    importWarnings = result.getWarnings();
+                                } else {
+                                    throw new IllegalArgumentException("unable to auto-detect import format — use ?format=har, ?format=postman, ?format=pact, ?format=wiremock, ?format=mountebank, ?format=mockoon or ?format=recording query parameter");
+                                }
+                            }
+                            // Optional consolidation of imported exchanges (e.g. a HAR that
+                            // captured the same endpoint many times) into reusable mocks —
+                            // ?consolidate=true collapses by request shape into unlimited-times
+                            // expectations (sequencing differing responses); ?parameterize=true
+                            // additionally generalises volatile path/query/header/body values.
+                            if ("true".equalsIgnoreCase(request.getFirstQueryStringParameter("consolidate"))
+                                || "true".equalsIgnoreCase(request.getFirstQueryStringParameter("parameterize"))) {
+                                boolean parameterizeImport = "true".equalsIgnoreCase(request.getFirstQueryStringParameter("parameterize"));
+                                importedExpectations = RecordedExpectationPostProcessor.consolidate(importedExpectations, parameterizeImport);
+                            }
+                            List<Expectation> upsertedExpectations = add(
+                                importedExpectations.toArray(new Expectation[0])
+                            );
+                            if (importWarnings != null) {
+                                // Migration importer: return { "expectations": [...], "warnings": [...] }
+                                // so no unmapped foreign construct is ever silently dropped.
+                                com.fasterxml.jackson.databind.ObjectMapper importMapper = ObjectMapperFactory.createObjectMapper();
+                                com.fasterxml.jackson.databind.node.ObjectNode importBody = importMapper.createObjectNode();
+                                importBody.set("expectations", importMapper.readTree(getExpectationSerializer().serialize(upsertedExpectations)));
+                                importBody.set("warnings", importMapper.valueToTree(importWarnings));
+                                responseWriter.writeResponse(request, response()
+                                    .withStatusCode(CREATED.code())
+                                    .withBody(importMapper.writerWithDefaultPrettyPrinter().writeValueAsString(importBody), MediaType.JSON_UTF_8), true);
+                            } else {
+                                responseWriter.writeResponse(request, response()
+                                    .withStatusCode(CREATED.code())
+                                    .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
                             }
                         }
-                        List<Expectation> upsertedExpectations = add(
-                            importedExpectations.toArray(new Expectation[0])
-                        );
-                        responseWriter.writeResponse(request, response()
-                            .withStatusCode(CREATED.code())
-                            .withBody(getExpectationSerializer().serialize(upsertedExpectations), MediaType.JSON_UTF_8), true);
                     } catch (IllegalArgumentException iae) {
                         mockServerLogger.logEvent(
                             new LogEntry()
@@ -2050,6 +2258,58 @@ public class HttpState {
                             e.getMessage(),
                             MediaType.create("text", "plain").toString()
                         );
+                    }
+                }
+                canHandle.complete(true);
+
+            } else if (request.matches("PUT", PATH_PREFIX + "/recordings/promote", "/recordings/promote")) {
+
+                // Server-side "promote recordings to active mocks": the REST equivalent of the
+                // MCP create_expectations_from_recorded_traffic tool. Retrieves recorded
+                // (FORWARDED_REQUEST) exchanges matching an optional request-matcher filter,
+                // consolidates them into reusable mocks (unlimited times, path/value
+                // parameterization, differing responses sequenced), redacts secrets, and
+                // ACTIVATES them (adds to the active expectation set).
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    try {
+                        RequestDefinition filter = request();
+                        String requestBody = request.getBodyAsJsonOrXmlString();
+                        if (isNotBlank(requestBody)) {
+                            filter = getRequestDefinitionSerializer().deserialize(requestBody);
+                        }
+
+                        // Redact BEFORE consolidation (on by default; ?redactSensitiveData=false to
+                        // disable) so promoted mocks never carry captured credentials. Consolidate by
+                        // default (?consolidate=false promotes verbatim); ?parameterize defaults on and
+                        // generalises volatile path/query/header/body values so a single recorded id
+                        // does not pin the mock. Delegates to the shared promoteRecordings(...) so the
+                        // REST endpoint and the promote_recordings MCP tool share one code path.
+                        org.mockserver.imports.ImportRedaction.Options redactionOptions = buildImportRedactionOptions(request);
+                        boolean consolidate = !"false".equalsIgnoreCase(request.getFirstQueryStringParameter("consolidate"));
+                        boolean parameterize = !"false".equalsIgnoreCase(request.getFirstQueryStringParameter("parameterize"));
+
+                        List<Expectation> activated = promoteRecordings(filter, consolidate, parameterize, redactionOptions);
+                        responseWriter.writeResponse(request, response()
+                            .withStatusCode(CREATED.code())
+                            .withBody(getExpectationSerializer().serialize(activated), MediaType.JSON_UTF_8), true);
+                    } catch (IllegalArgumentException iae) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request to promote recordings:{}error:{}")
+                                .setArguments(request, iae.getMessage())
+                                .setThrowable(iae)
+                        );
+                        responseWriter.writeResponse(request, BAD_REQUEST, iae.getMessage(), MediaType.create("text", "plain").toString());
+                    } catch (Exception e) {
+                        mockServerLogger.logEvent(
+                            new LogEntry()
+                                .setLogLevel(Level.ERROR)
+                                .setMessageFormat("exception handling request to promote recordings:{}error:{}")
+                                .setArguments(request, e.getMessage())
+                                .setThrowable(e)
+                        );
+                        responseWriter.writeResponse(request, BAD_REQUEST, e.getMessage(), MediaType.create("text", "plain").toString());
                     }
                 }
                 canHandle.complete(true);
@@ -2203,9 +2463,7 @@ public class HttpState {
 
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     try {
-                        MockMode mode = MockMode.parse(request.getFirstQueryStringParameter("mode"));
-                        mockMode = mode;
-                        configuration.attemptToProxyIfNoMatchingExpectation(mode.proxyUnmatchedRequests());
+                        MockMode mode = setMode(MockMode.parse(request.getFirstQueryStringParameter("mode")));
                         responseWriter.writeResponse(request, response()
                             .withStatusCode(OK.code())
                             .withBody("{\"mode\":\"" + mode + "\",\"proxyUnmatchedRequests\":" + mode.proxyUnmatchedRequests() + "}", MediaType.JSON_UTF_8), true);
@@ -2733,6 +2991,12 @@ public class HttpState {
                 }
                 return true;
             }
+            if (request.matches("GET", PATH_PREFIX + "/proxyConfiguration", "/proxyConfiguration")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleProxyConfiguration(request)), true);
+                }
+                return true;
+            }
             if (request.matches("GET", PATH_PREFIX + "/cassettes", "/cassettes")) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleCassettesGet()), true);
@@ -2754,6 +3018,12 @@ public class HttpState {
             if (chaosProfileName(request, "GET", "/chaosExperiment/profiles/") != null) {
                 if (controlPlaneRequestAuthenticated(request, responseWriter)) {
                     responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosProfileGet(chaosProfileName(request, "GET", "/chaosExperiment/profiles/"))), true);
+                }
+                return true;
+            }
+            if (request.matches("GET", PATH_PREFIX + "/chaosExperiment/history", "/chaosExperiment/history")) {
+                if (controlPlaneRequestAuthenticated(request, responseWriter)) {
+                    responseWriter.writeResponse(request, withDashboardCORS(request, handleChaosExperimentHistoryGet()), true);
                 }
                 return true;
             }
@@ -3041,20 +3311,16 @@ public class HttpState {
                 method = requestNode.has("method") && !requestNode.get("method").isNull() ? requestNode.get("method").asText() : "";
                 path = requestNode.has("path") && !requestNode.get("path").isNull() ? requestNode.get("path").asText() : "";
                 sampleBody = requestNode.has("body") && !requestNode.get("body").isNull() ? requestNode.get("body").asText() : null;
-                wasmRequest = new org.mockserver.wasm.WasmRequest(method, path, null, sampleBody);
-                com.fasterxml.jackson.databind.JsonNode headersNode = requestNode.get("headers");
-                if (headersNode != null && headersNode.isObject()) {
-                    java.util.Iterator<String> names = headersNode.fieldNames();
-                    while (names.hasNext()) {
-                        String name = names.next();
-                        com.fasterxml.jackson.databind.JsonNode valuesNode = headersNode.get(name);
-                        if (valuesNode != null && valuesNode.isArray()) {
-                            for (com.fasterxml.jackson.databind.JsonNode v : valuesNode) {
-                                wasmRequest.withHeader(name, v.isNull() ? null : v.asText());
-                            }
-                        } else if (valuesNode != null) {
-                            wasmRequest.withHeader(name, valuesNode.isNull() ? null : valuesNode.asText());
-                        }
+                wasmRequest = new org.mockserver.wasm.WasmRequest(method, path, null, null, null, sampleBody);
+                addWasmMultiValued(requestNode.get("headers"), wasmRequest::withHeader);
+                addWasmMultiValued(requestNode.get("queryStringParameters"), wasmRequest::withQueryStringParameter);
+                com.fasterxml.jackson.databind.JsonNode cookiesNode = requestNode.get("cookies");
+                if (cookiesNode != null && cookiesNode.isObject()) {
+                    java.util.Iterator<String> cookieNames = cookiesNode.fieldNames();
+                    while (cookieNames.hasNext()) {
+                        String name = cookieNames.next();
+                        com.fasterxml.jackson.databind.JsonNode valueNode = cookiesNode.get(name);
+                        wasmRequest.withCookie(name, valueNode == null || valueNode.isNull() ? null : valueNode.asText());
                     }
                 }
             } else {
@@ -3062,13 +3328,113 @@ public class HttpState {
             }
 
             boolean matched = new org.mockserver.wasm.WasmRuntime(wasmBytes).callMatch(wasmRequest);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("matched", matched);
+            // Optionally exercise the shape_response export (ABI v3): when the caller supplies a candidate
+            // "response", return the shaped response the module would produce (or null when it does not shape
+            // / opts out / fails), so IDEs can preview response shaping without a live expectation.
+            com.fasterxml.jackson.databind.JsonNode candidateResponseNode = node.get("response");
+            if (candidateResponseNode != null && candidateResponseNode.isObject()) {
+                addWasmShapedResponse(result, wasmBytes, wasmRequest, candidateResponseNode);
+            }
             return response()
                 .withStatusCode(OK.code())
-                .withBody(objectMapper.createObjectNode().put("matched", matched).toString(), MediaType.JSON_UTF_8);
+                .withBody(result.toString(), MediaType.JSON_UTF_8);
         } catch (Exception e) {
             return response()
                 .withStatusCode(BAD_REQUEST.code())
                 .withBody(objectMapper.createObjectNode().put("error", "failed to test WASM module: " + e.getMessage()).toString(), MediaType.JSON_UTF_8);
+        }
+    }
+
+    /**
+     * Exercise a module's {@code shape_response} export against a caller-supplied candidate response and
+     * add the shaped result to {@code result} under {@code "shaped"} (or {@code null} when the module does
+     * not shape, opts out, or fails — the endpoint stays fail-safe). Used by {@code POST /wasm/test}.
+     */
+    private static void addWasmShapedResponse(com.fasterxml.jackson.databind.node.ObjectNode result,
+                                              byte[] wasmBytes,
+                                              org.mockserver.wasm.WasmRequest wasmRequest,
+                                              com.fasterxml.jackson.databind.JsonNode responseNode) {
+        try {
+            Integer statusCode = responseNode.has("statusCode") && responseNode.get("statusCode").isNumber()
+                ? responseNode.get("statusCode").intValue() : null;
+            String body = responseNode.has("body") && !responseNode.get("body").isNull()
+                ? responseNode.get("body").asText() : null;
+            java.util.Map<String, java.util.List<String>> headers = new java.util.LinkedHashMap<>();
+            com.fasterxml.jackson.databind.JsonNode headersNode = responseNode.get("headers");
+            if (headersNode != null && headersNode.isObject()) {
+                java.util.Iterator<String> names = headersNode.fieldNames();
+                while (names.hasNext()) {
+                    String name = names.next();
+                    com.fasterxml.jackson.databind.JsonNode valuesNode = headersNode.get(name);
+                    java.util.List<String> values = new java.util.ArrayList<>();
+                    if (valuesNode != null && valuesNode.isArray()) {
+                        for (com.fasterxml.jackson.databind.JsonNode v : valuesNode) {
+                            if (!v.isNull()) {
+                                values.add(v.asText());
+                            }
+                        }
+                    } else if (valuesNode != null && !valuesNode.isNull()) {
+                        values.add(valuesNode.asText());
+                    }
+                    headers.put(name, values);
+                }
+            }
+            org.mockserver.wasm.WasmResponse shaped = new org.mockserver.wasm.WasmRuntime(wasmBytes)
+                .callShape(wasmRequest, new org.mockserver.wasm.WasmResponse(statusCode, headers, body));
+            if (shaped == null) {
+                result.putNull("shaped");
+                return;
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode shapedNode = result.putObject("shaped");
+            if (shaped.getStatusCode() == null) {
+                shapedNode.putNull("statusCode");
+            } else {
+                shapedNode.put("statusCode", shaped.getStatusCode());
+            }
+            com.fasterxml.jackson.databind.node.ObjectNode shapedHeaders = shapedNode.putObject("headers");
+            if (shaped.getHeaders() != null) {
+                for (java.util.Map.Entry<String, java.util.List<String>> entry : shaped.getHeaders().entrySet()) {
+                    com.fasterxml.jackson.databind.node.ArrayNode values = shapedHeaders.putArray(entry.getKey());
+                    if (entry.getValue() != null) {
+                        for (String value : entry.getValue()) {
+                            values.add(value);
+                        }
+                    }
+                }
+            }
+            if (shaped.getBody() == null) {
+                shapedNode.putNull("body");
+            } else {
+                shapedNode.put("body", shaped.getBody());
+            }
+        } catch (Exception e) {
+            // fail-safe: a broken shaper never breaks the test endpoint
+            result.putNull("shaped");
+        }
+    }
+
+    /**
+     * Add a {@code name -> [values]} (or {@code name -> value}) JSON object from the sample
+     * request into the {@link org.mockserver.wasm.WasmRequest} envelope, used for both the
+     * {@code headers} and {@code queryStringParameters} fields of the {@code /wasm/test} payload.
+     */
+    private static void addWasmMultiValued(com.fasterxml.jackson.databind.JsonNode node, java.util.function.BiConsumer<String, String> add) {
+        if (node == null || !node.isObject()) {
+            return;
+        }
+        java.util.Iterator<String> names = node.fieldNames();
+        while (names.hasNext()) {
+            String name = names.next();
+            com.fasterxml.jackson.databind.JsonNode valuesNode = node.get(name);
+            if (valuesNode != null && valuesNode.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode v : valuesNode) {
+                    add.accept(name, v.isNull() ? null : v.asText());
+                }
+            } else if (valuesNode != null) {
+                add.accept(name, valuesNode.isNull() ? null : valuesNode.asText());
+            }
         }
     }
 
@@ -3180,6 +3546,70 @@ public class HttpState {
             return response()
                 .withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to get clock status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    /**
+     * Serves the copy-paste proxy-setup information — the active Certificate Authority certificate path
+     * and PEM (public certificate only, never the private key), the HTTPS proxy URL, and OS-specific
+     * environment-variable blocks — the same information printed on startup. Returns the plain-text
+     * copy-paste block when the request Accepts text/plain, otherwise a JSON document.
+     */
+    private HttpResponse handleProxyConfiguration(HttpRequest request) {
+        try {
+            org.mockserver.socket.tls.KeyAndCertificateFactory keyAndCertificateFactory =
+                org.mockserver.socket.tls.KeyAndCertificateFactoryFactory.createKeyAndCertificateFactory(configuration, mockServerLogger);
+            String caCertificatePath = keyAndCertificateFactory.writeCertificateAuthorityToDisk();
+            List<Integer> ports = getPort() == null ? Collections.emptyList() : Collections.singletonList(getPort());
+            org.mockserver.socket.tls.ProxySetupInfo info =
+                new org.mockserver.socket.tls.ProxySetupInfo(caCertificatePath, ports, configuration, System.getProperty("os.name"));
+
+            String acceptHeader = request.getFirstHeader("Accept");
+            if (acceptHeader != null && acceptHeader.toLowerCase().contains("text/plain")) {
+                return response()
+                    .withStatusCode(OK.code())
+                    .withBody(info.copyPasteText(), MediaType.create("text", "plain").withCharset(UTF_8));
+            }
+
+            // public certificate only — the private key is never read or exposed here
+            String caCertificatePem = "";
+            try {
+                caCertificatePem = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(caCertificatePath)), UTF_8);
+            } catch (Exception ignore) {
+                // PEM contents are best-effort; the path is still returned
+            }
+
+            com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+            com.fasterxml.jackson.databind.node.ObjectNode resultNode = objectMapper.createObjectNode();
+            resultNode.put("caCertificatePath", info.caCertificatePath());
+            resultNode.put("caCertificatePem", caCertificatePem);
+            resultNode.put("httpsProxy", info.httpsProxyUrl());
+            com.fasterxml.jackson.databind.node.ObjectNode environmentVariables = resultNode.putObject("environmentVariables");
+            environmentVariables.put("unix", info.unixEnvBlock());
+            environmentVariables.put("powershell", info.powershellEnvBlock());
+            resultNode.put("usingDefaultCa", info.usingDefaultCa());
+            if (info.warning() != null) {
+                resultNode.put("warning", info.warning());
+            } else {
+                resultNode.putNull("warning");
+            }
+            return response()
+                .withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(resultNode), MediaType.JSON_UTF_8);
+        } catch (Throwable throwable) {
+            // Throwable (not just Exception) so a third-party custom KeyAndCertificateFactory that throws
+            // AbstractMethodError/Error still yields a 400 here rather than propagating (matches the
+            // fail-soft LifeCycle.logProxySetup path).
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setLogLevel(Level.ERROR)
+                    .setMessageFormat("exception handling request for proxy configuration:{}")
+                    .setArguments(throwable.getMessage())
+                    .setThrowable(throwable)
+            );
+            return response()
+                .withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get proxy configuration\"}", MediaType.JSON_UTF_8);
         }
     }
 
@@ -3451,6 +3881,27 @@ public class HttpState {
         } catch (Exception e) {
             return response().withStatusCode(BAD_REQUEST.code())
                 .withBody("{\"error\":\"failed to get chaos experiment status\"}", MediaType.JSON_UTF_8);
+        }
+    }
+
+    private HttpResponse handleChaosExperimentHistoryGet() {
+        com.fasterxml.jackson.databind.ObjectMapper objectMapper = ObjectMapperFactory.createObjectMapper();
+        try {
+            org.mockserver.mock.action.http.ChaosExperimentOrchestrator orchestrator =
+                org.mockserver.mock.action.http.ChaosExperimentOrchestrator.getInstance();
+            java.util.List<org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentHistoryEntry> entries =
+                orchestrator.getHistory(org.mockserver.mock.action.http.ChaosExperimentOrchestrator.MAX_HISTORY);
+            com.fasterxml.jackson.databind.node.ObjectNode result = objectMapper.createObjectNode();
+            result.put("count", entries.size());
+            com.fasterxml.jackson.databind.node.ArrayNode historyArray = result.putArray("history");
+            for (org.mockserver.mock.action.http.ChaosExperimentOrchestrator.ExperimentHistoryEntry entry : entries) {
+                historyArray.add(entry.toJson());
+            }
+            return response().withStatusCode(OK.code())
+                .withBody(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result), MediaType.JSON_UTF_8);
+        } catch (Exception e) {
+            return response().withStatusCode(BAD_REQUEST.code())
+                .withBody("{\"error\":\"failed to get chaos experiment history\"}", MediaType.JSON_UTF_8);
         }
     }
 
@@ -4064,6 +4515,29 @@ public class HttpState {
                     resultNode.put("threshold", result.threshold);
                     resultNode.put("observed", result.observed);
                     resultNode.put("satisfied", result.satisfied);
+                }
+            }
+            if (status.checkResults != null && !status.checkResults.isEmpty()) {
+                com.fasterxml.jackson.databind.node.ArrayNode checkResultsNode = node.putArray("checkResults");
+                for (org.mockserver.mock.action.http.LoadScenarioOrchestrator.CheckResult result : status.checkResults) {
+                    com.fasterxml.jackson.databind.node.ObjectNode resultNode = checkResultsNode.addObject();
+                    if (result.step != null) {
+                        resultNode.put("step", result.step);
+                    }
+                    if (result.source != null) {
+                        resultNode.put("source", result.source);
+                    }
+                    if (result.detail != null && !result.detail.isEmpty()) {
+                        resultNode.put("detail", result.detail);
+                    }
+                    if (result.comparator != null) {
+                        resultNode.put("comparator", result.comparator);
+                    }
+                    if (result.value != null) {
+                        resultNode.put("value", result.value);
+                    }
+                    resultNode.put("passed", result.passed);
+                    resultNode.put("failed", result.failed);
                 }
             }
             node.put("runId", status.runId);
@@ -5401,6 +5875,82 @@ public class HttpState {
      * dispatched through {@link #handle} already call this internally.
      */
     public boolean controlPlaneRequestAuthenticated(HttpRequest request, ResponseWriter responseWriter) {
+        ControlPlaneAuthDecision decision = evaluateControlPlaneAuthentication(request);
+        switch (decision.outcome()) {
+            case ALLOWED:
+                return true;
+            case FORBIDDEN:
+                // verified principal, but its scopes/groups do not grant a role that
+                // satisfies the operation's required role: deny with a generic 403. The
+                // detail (granted vs required role) is logged server-side only so the
+                // authorization policy is not disclosed to the client.
+                responseWriter.writeResponse(request, FORBIDDEN, "Forbidden for control plane", MediaType.create("text", "plain").toString());
+                return false;
+            case UNAUTHENTICATED:
+            default:
+                String message = decision.clientSafeMessage() != null
+                    ? "Unauthorized for control plane - " + decision.clientSafeMessage()
+                    : "Unauthorized for control plane";
+                responseWriter.writeResponse(request, UNAUTHORIZED, message, MediaType.create("text", "plain").toString());
+                return false;
+        }
+    }
+
+    /**
+     * The outcome of the control-plane authn + authz decision.
+     * <ul>
+     *   <li>{@code ALLOWED} — proceed (this is the value returned when no control-plane
+     *       authentication is configured, so default behaviour is unchanged).</li>
+     *   <li>{@code UNAUTHENTICATED} — no/invalid credentials → 401-equivalent.</li>
+     *   <li>{@code FORBIDDEN} — verified principal lacks the required role → 403-equivalent.</li>
+     * </ul>
+     */
+    public enum ControlPlaneAuthOutcome {ALLOWED, UNAUTHENTICATED, FORBIDDEN}
+
+    /**
+     * The decision of {@link #evaluateControlPlaneAuthentication(HttpRequest)}: an
+     * {@link ControlPlaneAuthOutcome} plus, for the UNAUTHENTICATED case, an optional
+     * client-safe message (only when the authentication handler produced one; the OIDC
+     * path deliberately withholds detail from the client).
+     */
+    public static final class ControlPlaneAuthDecision {
+        private static final ControlPlaneAuthDecision ALLOWED = new ControlPlaneAuthDecision(ControlPlaneAuthOutcome.ALLOWED, null);
+        private static final ControlPlaneAuthDecision FORBIDDEN = new ControlPlaneAuthDecision(ControlPlaneAuthOutcome.FORBIDDEN, null);
+        private final ControlPlaneAuthOutcome outcome;
+        private final String clientSafeMessage;
+
+        private ControlPlaneAuthDecision(ControlPlaneAuthOutcome outcome, String clientSafeMessage) {
+            this.outcome = outcome;
+            this.clientSafeMessage = clientSafeMessage;
+        }
+
+        public ControlPlaneAuthOutcome outcome() {
+            return outcome;
+        }
+
+        public String clientSafeMessage() {
+            return clientSafeMessage;
+        }
+
+        public boolean isAllowed() {
+            return outcome == ControlPlaneAuthOutcome.ALLOWED;
+        }
+    }
+
+    /**
+     * Non-writing control-plane authn + authz decision, shared by
+     * {@link #controlPlaneRequestAuthenticated(HttpRequest, ResponseWriter)} (which renders
+     * a MockServer {@link HttpResponse}) and by control-plane choke points that must render
+     * their own transport-specific rejection — notably the dashboard UI WebSocket upgrade,
+     * which replies with a raw HTTP handshake response rather than a MockServer response.
+     * <p>
+     * Identical authn + authz + audit semantics to {@link #controlPlaneRequestAuthenticated}:
+     * when no control-plane authentication handler is configured (the default) it returns
+     * {@code ALLOWED} so behaviour is unchanged; when one is configured it enforces the SAME
+     * authentication and (when enabled) Wave-2 authorization, records the SAME audit entry,
+     * and logs the OIDC failure reason server-side only.
+     */
+    public ControlPlaneAuthDecision evaluateControlPlaneAuthentication(HttpRequest request) {
         try {
             org.mockserver.authentication.AuthenticationResult authenticationResult =
                 controlPlaneAuthenticationHandler == null
@@ -5408,37 +5958,29 @@ public class HttpState {
                     : controlPlaneAuthenticationHandler.authenticate(request);
             if (authenticationResult.isAuthenticated()) {
                 if (configuration.controlPlaneAuthorizationEnabled() && !controlPlaneAuthorized(request, authenticationResult)) {
-                    // verified principal, but its scopes/groups do not grant a role that
-                    // satisfies the operation's required role: deny with a generic 403 and
-                    // record the denial. The detail (granted vs required role) is logged
-                    // server-side only so authorization policy is not disclosed to the client.
                     recordAudit(request, authenticationResult, "FORBIDDEN");
-                    responseWriter.writeResponse(request, FORBIDDEN, "Forbidden for control plane", MediaType.create("text", "plain").toString());
-                    return false;
+                    return ControlPlaneAuthDecision.FORBIDDEN;
                 }
                 recordAudit(request, authenticationResult, "AUTHORIZED");
-                return true;
+                return ControlPlaneAuthDecision.ALLOWED;
             }
         } catch (AuthenticationException authenticationException) {
             if (authenticationException.isClientSafeMessage()) {
-                responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane - " + authenticationException.getMessage(), MediaType.create("text", "plain").toString());
-            } else {
-                // OIDC path: log the detailed reason server-side only and return a generic
-                // body so the expected issuer/audience/scopes are not disclosed to the client.
-                mockServerLogger.logEvent(
-                    new org.mockserver.log.model.LogEntry()
-                        .setLogLevel(org.slf4j.event.Level.INFO)
-                        .setHttpRequest(request)
-                        .setMessageFormat("control plane request failed authentication:{}")
-                        .setArguments(authenticationException.getMessage())
-                        .setThrowable(authenticationException)
-                );
-                responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane", MediaType.create("text", "plain").toString());
+                return new ControlPlaneAuthDecision(ControlPlaneAuthOutcome.UNAUTHENTICATED, authenticationException.getMessage());
             }
-            return false;
+            // OIDC path: log the detailed reason server-side only and withhold detail from
+            // the client so the expected issuer/audience/scopes are not disclosed.
+            mockServerLogger.logEvent(
+                new org.mockserver.log.model.LogEntry()
+                    .setLogLevel(org.slf4j.event.Level.INFO)
+                    .setHttpRequest(request)
+                    .setMessageFormat("control plane request failed authentication:{}")
+                    .setArguments(authenticationException.getMessage())
+                    .setThrowable(authenticationException)
+            );
+            return new ControlPlaneAuthDecision(ControlPlaneAuthOutcome.UNAUTHENTICATED, null);
         }
-        responseWriter.writeResponse(request, UNAUTHORIZED, "Unauthorized for control plane", MediaType.create("text", "plain").toString());
-        return false;
+        return new ControlPlaneAuthDecision(ControlPlaneAuthOutcome.UNAUTHENTICATED, null);
     }
 
     /**
@@ -5592,6 +6134,10 @@ public class HttpState {
                 null
             );
             org.mockserver.mock.audit.AuditStore.getInstance().add(entry);
+            // Optional durable NDJSON file sink — observes the same entry the in-memory
+            // ring holds, appending one JSON line per record. No-op unless auditLogFile is
+            // set; never crashes request handling (it self-disables on IO error).
+            org.mockserver.mock.audit.AuditFileSink.getInstance().write(entry, configuration.auditLogFile());
             if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(Level.INFO)) {
                 mockServerLogger.logEvent(
                     new LogEntry()
@@ -5765,6 +6311,70 @@ public class HttpState {
         return mockServerLog;
     }
 
+    /**
+     * Set the high-level operating mode (SIMULATE/SPY/CAPTURE), the single behavioural
+     * switch behind {@code PUT /mockserver/mode}. Records the mode so {@code GET /mockserver/mode}
+     * round-trips it and toggles {@code attemptToProxyIfNoMatchingExpectation} to match. Shared
+     * by the REST handler and the {@code set_operating_mode} MCP tool so there is one code path.
+     *
+     * @param mode the mode to apply (must not be null)
+     * @return the applied mode
+     */
+    public MockMode setMode(MockMode mode) {
+        if (mode == null) {
+            throw new IllegalArgumentException("mode is required (one of SIMULATE, SPY, CAPTURE)");
+        }
+        this.mockMode = mode;
+        configuration.attemptToProxyIfNoMatchingExpectation(mode.proxyUnmatchedRequests());
+        return mode;
+    }
+
+    /**
+     * Promote traffic already recorded by MockServer's forwarding/proxy mode into ACTIVE mock
+     * expectations — the shared implementation behind {@code PUT /mockserver/recordings/promote}
+     * and the {@code promote_recordings} MCP tool, so an agent can "record then mock" in one step.
+     * Retrieves recorded {@code FORWARDED_REQUEST} exchanges matching the optional filter, redacts
+     * secrets (per {@code redactionOptions}), optionally consolidates/parameterizes them into
+     * reusable mocks (unlimited times), and ADDs them to the active expectation set.
+     *
+     * @param filter           optional request-matcher filter (null promotes all recorded traffic)
+     * @param consolidate      when true, collapse duplicate exchanges into consolidated mocks;
+     *                         when false, promote each recording verbatim (still unlimited times)
+     * @param parameterize     when true (and consolidating), generalise volatile path/query/header/
+     *                         body values so a single recorded id does not pin the mock
+     * @param redactionOptions redaction options (null defaults to enabled with the default lists)
+     * @return the activated expectations (with their assigned ids)
+     */
+    public List<Expectation> promoteRecordings(RequestDefinition filter, boolean consolidate, boolean parameterize, org.mockserver.imports.ImportRedaction.Options redactionOptions) {
+        final RequestDefinition promoteFilter = filter != null ? filter : request();
+        final String promoteCorrelationId = UUIDService.getUUID();
+        List<Expectation> recorded = awaitRetrieve(
+            (Consumer<Consumer<List<Expectation>>>) consumer -> mockServerLog.retrieveRecordedExpectations(promoteFilter, consumer),
+            promoteCorrelationId, promoteFilter instanceof HttpRequest ? (HttpRequest) promoteFilter : null
+        );
+
+        // Redact BEFORE consolidation so promoted mocks never carry captured credentials and so
+        // responses that differed only in a secret can collapse together.
+        recorded = org.mockserver.imports.ImportRedaction.redact(recorded, redactionOptions != null ? redactionOptions : org.mockserver.imports.ImportRedaction.Options.enabled());
+
+        List<Expectation> produced;
+        if (consolidate) {
+            produced = RecordedExpectationPostProcessor.consolidate(recorded, parameterize);
+        } else {
+            produced = new ArrayList<>(recorded.size());
+            for (Expectation recordedExpectation : recorded) {
+                produced.add(new Expectation(
+                    recordedExpectation.getHttpRequest(),
+                    org.mockserver.matchers.Times.unlimited(),
+                    org.mockserver.matchers.TimeToLive.unlimited(),
+                    0
+                ).thenRespond(recordedExpectation.getHttpResponse()));
+            }
+        }
+
+        return add(produced.toArray(new Expectation[0]));
+    }
+
     public Scheduler getScheduler() {
         return scheduler;
     }
@@ -5783,6 +6393,9 @@ public class HttpState {
         }
         if (recordedExpectationFileSystemPersistence != null) {
             recordedExpectationFileSystemPersistence.stop();
+        }
+        if (recordedRequestsFileSystemPersistence != null) {
+            recordedRequestsFileSystemPersistence.stop();
         }
         if (expectationFileWatcher != null) {
             expectationFileWatcher.stop();
@@ -6546,9 +7159,25 @@ public class HttpState {
      * @param expectations the recorded expectations as retrieved from the event log
      * @return the post-processed list when the flag is on, otherwise the input list
      */
-    private List<Expectation> postProcessRecordedExpectations(List<Expectation> expectations) {
+    private List<Expectation> postProcessRecordedExpectations(List<Expectation> expectations, HttpRequest request) {
         List<Expectation> processed = expectations;
-        if (Boolean.TRUE.equals(configuration.deduplicateRecordedExpectations())) {
+        // Per-request opt-in overrides via query parameters take precedence over the
+        // config-flag path: ?consolidate=true collapses recorded exchanges by request
+        // shape into unlimited-times mocks (sequencing differing responses), and
+        // ?parameterize=true additionally generalises volatile path/query/header/body
+        // values. Default (neither param, flag off) keeps the historical verbatim output.
+        boolean consolidateParam = "true".equalsIgnoreCase(request.getFirstQueryStringParameter("consolidate"));
+        boolean parameterizeParam = "true".equalsIgnoreCase(request.getFirstQueryStringParameter("parameterize"));
+        if (consolidateParam || parameterizeParam) {
+            int inputCount = processed == null ? 0 : processed.size();
+            processed = RecordedExpectationPostProcessor.consolidate(processed, parameterizeParam);
+            mockServerLogger.logEvent(
+                new LogEntry()
+                    .setType(LogEntry.LogMessageType.INFO)
+                    .setLogLevel(Level.INFO)
+                    .setMessageFormat("consolidated recorded expectations from " + inputCount + " to " + processed.size())
+            );
+        } else if (Boolean.TRUE.equals(configuration.deduplicateRecordedExpectations())) {
             int inputCount = processed == null ? 0 : processed.size();
             boolean templatizeValues = Boolean.TRUE.equals(configuration.templatizeRecordedValues());
             processed = RecordedExpectationPostProcessor.deduplicateAndTemplatize(processed, templatizeValues);

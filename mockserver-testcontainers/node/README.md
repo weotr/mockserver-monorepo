@@ -49,7 +49,7 @@ Static factory that creates and starts a MockServer container. Returns a `Starte
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `image` | `string` | `mockserver/mockserver:mockserver-7.2.0` | Docker image to use |
+| `image` | `string` | `mockserver/mockserver:mockserver-7.4.0` | Docker image to use |
 | `serverPort` | `number` | `1080` | Port MockServer listens on inside the container |
 | `env` | `Record<string, string>` | `{}` | Environment variables (e.g. `MOCKSERVER_LOG_LEVEL`) |
 
@@ -63,6 +63,7 @@ Static factory that creates and starts a MockServer container. Returns a `Starte
 | `getHost()` | `string` | Container host |
 | `getPort()` | `number` | Mapped port on the host |
 | `getMappedPort(port)` | `number` | Mapped port for a specific internal port |
+| `getClient()` | `unknown` | A cached, ready-wired `mockserver-client` pointed at the mapped host/port (untyped — the client ships no TS types) |
 | `stop()` | `Promise<void>` | Stops and removes the container |
 
 ## Build

@@ -1,9 +1,17 @@
 package org.mockserver.socket.tls;
 
+import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.keys.AsymmetricKeyPairAlgorithm;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
+import java.util.Base64;
 import java.util.Date;
 import java.util.List;
 
@@ -90,5 +98,65 @@ public interface KeyAndCertificateFactory {
     X509Certificate certificateAuthorityX509Certificate();
 
     List<X509Certificate> certificateChain();
+
+    /**
+     * Stable filename, under {@code directoryToSaveDynamicSSLCertificate}, that the active Certificate
+     * Authority X.509 certificate (public certificate only — never the private key) is written to so it
+     * can be pinned into client trust stores when MockServer is used as a TLS-intercepting proxy.
+     */
+    String PROXY_SETUP_CA_CERTIFICATE_FILE_NAME = "mockserver-ca.pem";
+
+    /**
+     * Materialise the active Certificate Authority X.509 certificate (the baked-in public CA, a custom
+     * supplied CA, or the dynamically generated CA, whichever is in effect) to
+     * {@code <directoryToSaveDynamicSSLCertificate>/}{@value #PROXY_SETUP_CA_CERTIFICATE_FILE_NAME}.
+     * Only the public certificate is written, never the private key.
+     * <p>
+     * This default implementation is self-contained (no BouncyCastle dependency): it PEM-encodes the
+     * DER bytes of {@link #certificateAuthorityX509Certificate()} and writes them atomically, using the
+     * directory from the global {@link ConfigurationProperties#directoryToSaveDynamicSSLCertificate()}.
+     * Implementations that hold their own {@code Configuration} (e.g. the BouncyCastle factory) override
+     * this to honour their instance-scoped directory.
+     *
+     * @return the absolute path of the written CA certificate PEM file
+     */
+    default String writeCertificateAuthorityToDisk() {
+        return writeCertificateAuthorityPem(certificateAuthorityX509Certificate(), ConfigurationProperties.directoryToSaveDynamicSSLCertificate());
+    }
+
+    /**
+     * PEM-encode the public certificate (never a private key) and write it atomically to
+     * {@code <directory>/}{@value #PROXY_SETUP_CA_CERTIFICATE_FILE_NAME} — written to a sibling temp file
+     * then moved into place (ATOMIC_MOVE where supported) so a concurrent reader never observes a
+     * truncated/empty file.
+     *
+     * @param caCertificate the public CA certificate to write
+     * @param directory     the directory to write the {@value #PROXY_SETUP_CA_CERTIFICATE_FILE_NAME} file into
+     * @return the absolute path of the written CA certificate PEM file
+     */
+    static String writeCertificateAuthorityPem(X509Certificate caCertificate, String directory) {
+        File targetFile = new File(new File(directory), PROXY_SETUP_CA_CERTIFICATE_FILE_NAME);
+        String absolutePath = targetFile.toPath().toAbsolutePath().normalize().toString();
+        try {
+            String pem = "-----BEGIN CERTIFICATE-----\n"
+                + Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(caCertificate.getEncoded())
+                + "\n-----END CERTIFICATE-----\n";
+            File parent = targetFile.getParentFile();
+            if (parent != null) {
+                parent.mkdirs();
+            }
+            Path parentPath = parent != null ? parent.toPath() : targetFile.toPath().toAbsolutePath().getParent();
+            Path tempPath = Files.createTempFile(parentPath, "mockserver-ca", ".pem.tmp");
+            Files.write(tempPath, pem.getBytes(StandardCharsets.UTF_8));
+            try {
+                Files.move(tempPath, targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException atomicMoveNotSupported) {
+                Files.move(tempPath, targetFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            }
+            return absolutePath;
+        } catch (Exception exception) {
+            throw new RuntimeException("exception while writing certificate authority X509 certificate to " + absolutePath, exception);
+        }
+    }
 
 }

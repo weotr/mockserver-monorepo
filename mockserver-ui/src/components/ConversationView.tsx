@@ -1,10 +1,12 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
+import Button from '@mui/material/Button';
 import BuildIcon from '@mui/icons-material/Build';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Tooltip from '@mui/material/Tooltip';
 import JsonViewer from './JsonViewer';
 import { monospaceFontFamily } from '../theme';
@@ -16,6 +18,8 @@ import type {
   GeminiParsed,
   OllamaParsed,
   OpenAiResponsesParsed,
+  ParsedTraffic,
+  ConversationGroup,
 } from '../lib/llmTraffic';
 
 // ---------------------------------------------------------------------------
@@ -350,10 +354,87 @@ function MetadataStrip({ model, inputTokens, outputTokens, stopReason, streamed,
 }
 
 // ---------------------------------------------------------------------------
+// Truncated / malformed non-stream response notice
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a non-stream response body looks like it failed to parse — e.g. it was
+ * truncated at the capture cap, leaving invalid JSON. Returns false for an empty
+ * body (nothing captured yet) and for a body that parses cleanly. Streaming
+ * truncation is surfaced separately by the "Truncated" metadata chip, so callers
+ * pass `rawResponseBody` only for non-stream responses.
+ */
+export function responseLooksUnparseable(rawResponseBody: string | null | undefined): boolean {
+  if (typeof rawResponseBody !== 'string') return false;
+  const trimmed = rawResponseBody.trim();
+  if (trimmed.length === 0) return false;
+  try {
+    JSON.parse(trimmed);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Warns that a non-stream response body could not be parsed (and was likely
+ * truncated), with a toggle to reveal the raw captured body. Renders nothing when
+ * the body parsed cleanly or is absent, so it is safe to drop into every view.
+ */
+function TruncatedResponseNotice({ rawResponseBody }: { rawResponseBody?: string | null }) {
+  const [showRaw, setShowRaw] = useState(false);
+  if (!responseLooksUnparseable(rawResponseBody)) return null;
+
+  return (
+    <Box
+      data-testid="truncated-response-notice"
+      sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start', mt: 0.5 }}
+    >
+      <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Chip
+          size="small"
+          color="warning"
+          variant="outlined"
+          icon={<WarningAmberIcon sx={{ fontSize: '0.85rem' }} />}
+          label="Response could not be parsed — possibly truncated"
+          sx={{ height: 20, fontSize: '0.65rem' }}
+        />
+        <Button
+          size="small"
+          onClick={() => setShowRaw((v) => !v)}
+          sx={{ fontSize: '0.65rem', textTransform: 'none', minWidth: 0, py: 0 }}
+        >
+          {showRaw ? 'Hide raw body' : 'Show raw body'}
+        </Button>
+      </Box>
+      {showRaw && (
+        <Box
+          component="pre"
+          sx={{
+            m: 0,
+            p: 1,
+            width: '100%',
+            borderRadius: 1,
+            bgcolor: 'action.hover',
+            fontFamily: monospaceFontFamily,
+            fontSize: '0.7rem',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            overflowX: 'auto',
+          }}
+        >
+          {rawResponseBody}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Anthropic ConversationView
 // ---------------------------------------------------------------------------
 
-export function AnthropicConversationView({ parsed }: { parsed: AnthropicParsed }) {
+export function AnthropicConversationView({ parsed, rawResponseBody }: { parsed: AnthropicParsed; rawResponseBody?: string | null }) {
   const inputTokens = parsed.usage?.input_tokens;
   const outputTokens = parsed.usage?.output_tokens;
 
@@ -394,17 +475,16 @@ export function AnthropicConversationView({ parsed }: { parsed: AnthropicParsed 
         <Box sx={{ display: 'flex', flexDirection: 'column' }}>
           <RoleLabel role="assistant" align="right" />
           <Box sx={{ ...rightBubbleSx, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-            {parsed.responseContent.map((block, i) =>
-              block.type === 'tool_use'
-                ? renderAnthropicContentBlock(block, i, 'right')
-                : renderAnthropicContentBlock(block, i, 'right'),
-            )}
+            {parsed.responseContent.map((block, i) => renderAnthropicContentBlock(block, i, 'right'))}
           </Box>
         </Box>
       )}
 
+      {/* Truncated/malformed non-stream response warning */}
+      {parsed.responseContent.length === 0 && <TruncatedResponseNotice rawResponseBody={rawResponseBody} />}
+
       {/* Empty state */}
-      {parsed.messages.length === 0 && parsed.responseContent.length === 0 && (
+      {parsed.messages.length === 0 && parsed.responseContent.length === 0 && !responseLooksUnparseable(rawResponseBody) && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
           No conversation content
         </Typography>
@@ -417,7 +497,7 @@ export function AnthropicConversationView({ parsed }: { parsed: AnthropicParsed 
 // OpenAI ConversationView
 // ---------------------------------------------------------------------------
 
-export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
+export function OpenAiConversationView({ parsed, rawResponseBody }: { parsed: OpenAiParsed; rawResponseBody?: string | null }) {
   const inputTokens = parsed.usage?.prompt_tokens;
   const outputTokens = parsed.usage?.completion_tokens;
 
@@ -546,8 +626,11 @@ export function OpenAiConversationView({ parsed }: { parsed: OpenAiParsed }) {
         );
       })}
 
+      {/* Truncated/malformed non-stream response warning */}
+      {parsed.choices.length === 0 && <TruncatedResponseNotice rawResponseBody={rawResponseBody} />}
+
       {/* Empty state */}
-      {parsed.messages.length === 0 && parsed.choices.length === 0 && (
+      {parsed.messages.length === 0 && parsed.choices.length === 0 && !responseLooksUnparseable(rawResponseBody) && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
           No conversation content
         </Typography>
@@ -646,7 +729,7 @@ function renderGeminiParts(parts: unknown, side: 'left' | 'right') {
 // Gemini ConversationView
 // ---------------------------------------------------------------------------
 
-export function GeminiConversationView({ parsed }: { parsed: GeminiParsed }) {
+export function GeminiConversationView({ parsed, rawResponseBody }: { parsed: GeminiParsed; rawResponseBody?: string | null }) {
   const inputTokens = parsed.usage?.promptTokenCount;
   const outputTokens = parsed.usage?.candidatesTokenCount;
 
@@ -701,8 +784,11 @@ export function GeminiConversationView({ parsed }: { parsed: GeminiParsed }) {
         );
       })}
 
+      {/* Truncated/malformed non-stream response warning */}
+      {parsed.candidates.length === 0 && <TruncatedResponseNotice rawResponseBody={rawResponseBody} />}
+
       {/* Empty state */}
-      {parsed.contents.length === 0 && parsed.candidates.length === 0 && (
+      {parsed.contents.length === 0 && parsed.candidates.length === 0 && !responseLooksUnparseable(rawResponseBody) && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
           No conversation content
         </Typography>
@@ -744,7 +830,7 @@ function renderOllamaMessageContent(content: unknown, side: 'left' | 'right') {
 // Ollama ConversationView
 // ---------------------------------------------------------------------------
 
-export function OllamaConversationView({ parsed }: { parsed: OllamaParsed }) {
+export function OllamaConversationView({ parsed, rawResponseBody }: { parsed: OllamaParsed; rawResponseBody?: string | null }) {
   const inputTokens = parsed.usage?.prompt_eval_count;
   const outputTokens = parsed.usage?.eval_count;
 
@@ -804,8 +890,11 @@ export function OllamaConversationView({ parsed }: { parsed: OllamaParsed }) {
         );
       })()}
 
+      {/* Truncated/malformed non-stream response warning */}
+      {parsed.responseMessage == null && <TruncatedResponseNotice rawResponseBody={rawResponseBody} />}
+
       {/* Empty state */}
-      {parsed.messages.length === 0 && parsed.responseMessage == null && (
+      {parsed.messages.length === 0 && parsed.responseMessage == null && !responseLooksUnparseable(rawResponseBody) && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
           No conversation content
         </Typography>
@@ -962,7 +1051,7 @@ function renderResponsesItem(item: unknown, index: number, side: 'left' | 'right
 // OpenAI Responses ConversationView
 // ---------------------------------------------------------------------------
 
-export function OpenAiResponsesConversationView({ parsed }: { parsed: OpenAiResponsesParsed }) {
+export function OpenAiResponsesConversationView({ parsed, rawResponseBody }: { parsed: OpenAiResponsesParsed; rawResponseBody?: string | null }) {
   // Responses API reports input_tokens / output_tokens (not prompt_/completion_tokens).
   const inputTokens = parsed.usage?.input_tokens;
   const outputTokens = parsed.usage?.output_tokens;
@@ -984,12 +1073,192 @@ export function OpenAiResponsesConversationView({ parsed }: { parsed: OpenAiResp
       {/* Response side: output */}
       {parsed.output.map((item, i) => renderResponsesItem(item, parsed.input.length + i, 'right'))}
 
+      {/* Truncated/malformed non-stream response warning */}
+      {parsed.output.length === 0 && <TruncatedResponseNotice rawResponseBody={rawResponseBody} />}
+
       {/* Empty state */}
-      {parsed.input.length === 0 && parsed.output.length === 0 && (
+      {parsed.input.length === 0 && parsed.output.length === 0 && !responseLooksUnparseable(rawResponseBody) && (
         <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
           No conversation content
         </Typography>
       )}
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Grouped (growing-conversation) view
+//
+// A stateless coding-assistant CLI resends its whole growing history every turn.
+// `groupConversationTurns` (llmTraffic.ts) collapses such a run into ONE group
+// whose turns each carry only the NEW messages they added. This view renders the
+// group as a single thread that GROWS — each turn contributes only its delta, not
+// the whole replayed history — reusing the per-provider Conversation views above.
+//
+// Trick: for each turn we synthesise a parsed object whose request-message array
+// is just that turn's delta, and we keep the assistant response / model / token
+// metadata only on the LAST turn (every earlier turn's response reappears as a
+// message in the next turn's delta, so showing it again would duplicate it).
+// ---------------------------------------------------------------------------
+
+/** The subset of ParsedTraffic kinds that carry a renderable conversation. */
+type ConversationParsed =
+  | AnthropicParsed
+  | OpenAiParsed
+  | OpenAiResponsesParsed
+  | GeminiParsed
+  | OllamaParsed;
+
+function isConversationParsed(parsed: ParsedTraffic): parsed is ConversationParsed {
+  return (
+    parsed.kind === 'anthropic' ||
+    parsed.kind === 'openai' ||
+    parsed.kind === 'openai_responses' ||
+    parsed.kind === 'gemini' ||
+    parsed.kind === 'ollama'
+  );
+}
+
+/**
+ * Build a per-turn parsed object: the request-message array is replaced with this
+ * turn's delta; response/model/token metadata is retained only on the last turn
+ * and the system prompt only on the first. SSE events are dropped (already
+ * reassembled into the response on the last turn).
+ */
+function turnParsed(
+  parsed: ConversationParsed,
+  delta: unknown[],
+  isFirst: boolean,
+  isLast: boolean,
+): ConversationParsed {
+  const model = isLast ? parsed.model : null;
+  const streamed = isLast ? parsed.streamed : false;
+  const streamTruncated = isLast ? parsed.streamTruncated : false;
+  switch (parsed.kind) {
+    case 'anthropic':
+      return {
+        ...parsed,
+        messages: delta,
+        system: isFirst ? parsed.system : null,
+        model,
+        responseContent: isLast ? parsed.responseContent : [],
+        usage: isLast ? parsed.usage : null,
+        stopReason: isLast ? parsed.stopReason : null,
+        sseEvents: null,
+        streamed,
+        streamTruncated,
+      };
+    case 'openai':
+      return {
+        ...parsed,
+        messages: delta,
+        model,
+        choices: isLast ? parsed.choices : [],
+        usage: isLast ? parsed.usage : null,
+        sseEvents: null,
+        streamed,
+        streamTruncated,
+      };
+    case 'openai_responses':
+      return {
+        ...parsed,
+        input: delta,
+        model,
+        output: isLast ? parsed.output : [],
+        usage: isLast ? parsed.usage : null,
+        sseEvents: null,
+        streamed,
+        streamTruncated,
+      };
+    case 'gemini':
+      return {
+        ...parsed,
+        contents: delta,
+        model,
+        candidates: isLast ? parsed.candidates : [],
+        usage: isLast ? parsed.usage : null,
+        sseEvents: null,
+        streamed,
+        streamTruncated,
+      };
+    case 'ollama':
+      return {
+        ...parsed,
+        messages: delta,
+        model,
+        responseMessage: isLast ? parsed.responseMessage : null,
+        usage: isLast ? parsed.usage : null,
+        sseEvents: null,
+        streamed,
+        streamTruncated,
+      };
+  }
+}
+
+function renderConversationByKind(parsed: ConversationParsed) {
+  switch (parsed.kind) {
+    case 'anthropic':
+      return <AnthropicConversationView parsed={parsed} />;
+    case 'openai':
+      return <OpenAiConversationView parsed={parsed} />;
+    case 'openai_responses':
+      return <OpenAiResponsesConversationView parsed={parsed} />;
+    case 'gemini':
+      return <GeminiConversationView parsed={parsed} />;
+    case 'ollama':
+      return <OllamaConversationView parsed={parsed} />;
+  }
+}
+
+/** A labelled divider between turns in the growing thread. */
+function TurnDivider({ label }: { label: string }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, my: 0.75 }}>
+      <Divider sx={{ flex: 1 }} />
+      <Chip
+        label={label}
+        size="small"
+        variant="outlined"
+        color="primary"
+        sx={{ height: 18, fontSize: '0.6rem', fontWeight: 600 }}
+      />
+      <Divider sx={{ flex: 1 }} />
+    </Box>
+  );
+}
+
+/**
+ * Render one grouped conversation as a single growing thread. A single-turn group
+ * renders exactly as the underlying per-provider Conversation view does today; a
+ * multi-turn group shows each turn's delta under a "Turn N" divider.
+ */
+export function GroupedConversationView<T>({ group }: { group: ConversationGroup<T> }) {
+  const { turns } = group;
+  if (turns.length === 0) return null;
+
+  // A single-turn group is just the one request — render it unchanged.
+  if (turns.length === 1) {
+    const only = turns[0]!.parsed;
+    return isConversationParsed(only) ? renderConversationByKind(only) : null;
+  }
+
+  return (
+    <Box data-testid="grouped-conversation" sx={{ display: 'flex', flexDirection: 'column' }}>
+      {turns.map((turn, i) => {
+        const isFirst = i === 0;
+        const isLast = i === turns.length - 1;
+        // An exact duplicate resend adds nothing new — skip it unless it carries
+        // the final response (the last turn always renders so the reply shows).
+        if (turn.newMessages.length === 0 && !isLast) return null;
+        if (!isConversationParsed(turn.parsed)) return null;
+        const synthesized = turnParsed(turn.parsed, turn.newMessages, isFirst, isLast);
+        return (
+          <Box key={i}>
+            <TurnDivider label={isLast ? `Turn ${i + 1} · response` : `Turn ${i + 1}`} />
+            {renderConversationByKind(synthesized)}
+          </Box>
+        );
+      })}
     </Box>
   );
 }

@@ -32,7 +32,8 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import PostAddIcon from '@mui/icons-material/PostAdd';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import SpeedIcon from '@mui/icons-material/Speed';
-import SavingsIcon from '@mui/icons-material/Savings';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 import BoltIcon from '@mui/icons-material/Bolt';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
@@ -43,6 +44,8 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import PanToolIcon from '@mui/icons-material/PanTool';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import RpcIcon from '@mui/icons-material/Cable';
+import SchemaIcon from '@mui/icons-material/Schema';
+import HistoryIcon from '@mui/icons-material/History';
 import Button from '@mui/material/Button';
 import Select from '@mui/material/Select';
 import type { SelectChangeEvent } from '@mui/material/Select';
@@ -55,10 +58,11 @@ import type { ReactNode } from 'react';
 import BuildIcon from '@mui/icons-material/Build';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import DownloadIcon from '@mui/icons-material/Download';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useDashboardStore, type ViewMode } from '../store';
 import type { ConnectionStatus } from '../types';
 import { useConnectionParams } from '../hooks/useConnectionParams';
+import { usePolling } from '../hooks/usePolling';
 import {
   fetchMode,
   setMode as setServerMode,
@@ -69,11 +73,12 @@ import {
 import { fetchHttp3Status, type Http3Status } from '../lib/http3Status';
 import { humanizeError } from '../lib/errorMessage';
 import WsdlImportDialog from './WsdlImportDialog';
+import GraphqlImportDialog from './GraphqlImportDialog';
 import OpenApiImportDialog from './OpenApiImportDialog';
 import PactExportDialog from './PactExportDialog';
 import OidcDialog from './OidcDialog';
 import SamlDialog from './SamlDialog';
-import ShortcutsDialog from './ShortcutsDialog';
+import ScimDialog from './ScimDialog';
 import AsyncApiDialog from './AsyncApiDialog';
 import CrudDialog from './CrudDialog';
 import FileStoreDialog from './FileStoreDialog';
@@ -139,7 +144,10 @@ interface NavTab {
 // per entry; clicking it opens a dropdown Menu of that group's views. Grouping
 // the views into a handful of intuitive categories makes the full nav
 // discoverable at a glance instead of hiding most views behind a flat "More"
-// overflow. Every ViewMode appears in exactly one group (asserted by a test).
+// overflow. Every ViewMode appears in at least one group (asserted by a test);
+// a view may deliberately appear in more than one — the Trace view (`sessions`)
+// is listed under both Observe and AI — in which case every owning group's
+// button highlights when it is active.
 interface NavGroup {
   /** Stable id used for keys, aria, and active-group lookup. */
   id: string;
@@ -164,6 +172,7 @@ const NAV_GROUPS: NavGroup[] = [
     tabs: [
       { value: 'get-started', label: 'Get Started', ariaLabel: 'Get started view', icon: <RocketLaunchIcon sx={tabIconSx} /> },
       { value: 'composer', label: 'Mocks', ariaLabel: 'Mocks view', description: 'Create, edit, and manage mock expectations — quick mode for common cases, advanced mode for full control.', icon: <PostAddIcon sx={tabIconSx} /> },
+      { value: 'scenarios', label: 'Scenarios', ariaLabel: 'Scenarios view', description: 'Manage scenario states and transitions — drive stateful, multi-step mock flows through a state machine.', icon: <SchemaIcon sx={tabIconSx} /> },
       { value: 'grpc', label: 'gRPC', ariaLabel: 'gRPC services view', description: 'Mock gRPC services and inspect gRPC calls.', icon: <RpcIcon sx={tabIconSx} /> },
       { value: 'async', label: 'Async', ariaLabel: 'AsyncAPI broker mock view', description: 'Mock event-driven APIs from an AsyncAPI spec — publish test messages to Kafka, MQTT, and AMQP (RabbitMQ) brokers.', icon: <HubIcon sx={tabIconSx} /> },
     ],
@@ -206,9 +215,11 @@ const NAV_GROUPS: NavGroup[] = [
     id: 'ai',
     label: 'AI',
     ariaLabel: 'AI views',
-    icon: <SavingsIcon sx={tabIconSx} />,
+    icon: <AutoAwesomeIcon sx={tabIconSx} />,
     tabs: [
-      { value: 'optimise', label: 'LLM Optimise', ariaLabel: 'LLM Optimise view', description: 'Analyse captured LLM traffic to optimise prompts, inference cost, safety, and speed.', icon: <SavingsIcon sx={tabIconSx} /> },
+      { value: 'optimise', label: 'LLM Optimise', ariaLabel: 'LLM Optimise view', description: 'Analyse captured LLM traffic to optimise prompts, inference cost, safety, and speed.', icon: <AutoAwesomeIcon sx={tabIconSx} /> },
+      { value: 'mcp-health', label: 'MCP Health', ariaLabel: 'MCP server health view', description: 'See which MCP servers your proxied tools call are slow or erroring — the MCP server is often the real bottleneck behind a slow coding assistant.', icon: <MonitorHeartIcon sx={tabIconSx} /> },
+      { value: 'sessions', label: 'Trace', ariaLabel: 'Trace inspector view', description: 'Trace related requests grouped together — including LLM agent runs — to debug multi-step flows end to end.', icon: <AccountTreeIcon sx={tabIconSx} /> },
     ],
   },
   {
@@ -218,6 +229,7 @@ const NAV_GROUPS: NavGroup[] = [
     icon: <PanToolIcon sx={tabIconSx} />,
     tabs: [
       { value: 'breakpoints', label: 'Breakpoints', ariaLabel: 'Breakpoints view', description: 'Pause matching requests or responses mid-flight to inspect and edit them.', icon: <PanToolIcon sx={tabIconSx} /> },
+      { value: 'audit', label: 'Audit', ariaLabel: 'Audit trail view', description: 'Review recent control-plane changes — a chronological trail of mutations to expectations, configuration, and server state.', icon: <HistoryIcon sx={tabIconSx} /> },
       { value: 'library', label: 'Library', ariaLabel: 'Library of captured content', description: 'Browse and reuse captured requests, responses, and content.', icon: <Inventory2Icon sx={tabIconSx} /> },
       { value: 'cluster', label: 'Cluster', ariaLabel: 'Cluster status view', description: 'Monitor MockServer cluster nodes and shared state.', icon: <HubOutlinedIcon sx={tabIconSx} /> },
     ],
@@ -230,11 +242,15 @@ const NAV_GROUPS: NavGroup[] = [
 const NAV_TABS: NavTab[] = NAV_GROUPS.flatMap((g) => g.tabs);
 
 // Compile-time exhaustiveness guard. This `Record<ViewMode, string>` must name
-// every ViewMode exactly once — TypeScript errors if a value is added to the
+// every ViewMode at least once — TypeScript errors if a value is added to the
 // ViewMode union without an entry here. The build of NAV_TABS above guarantees
 // each of these values is grouped, so the missing-key error effectively means
 // "a new view was added without being placed in a NAV_GROUPS group". (A runtime
-// assertion below also proves every listed view is actually rendered.)
+// assertion below also proves every listed view is actually rendered.) The map
+// is used only for this existence check; for a view that appears in more than
+// one group the reduce keeps the last group id, so do NOT use it to decide
+// "the owning group" — use `groupsForView` (membership), which returns all of
+// them.
 const NAV_VIEW_GROUP_ID: Record<ViewMode, string> = NAV_GROUPS.reduce<Record<string, string>>(
   (acc, group) => {
     for (const tab of group.tabs) acc[tab.value] = group.id;
@@ -250,6 +266,7 @@ const NAV_VIEW_GROUP_ID: Record<ViewMode, string> = NAV_GROUPS.reduce<Record<str
     composer: true, library: true, chaos: true, performance: true,
     metrics: true, drift: true, verification: true, slo: true, async: true,
     grpc: true, breakpoints: true, contract: true, cluster: true, optimise: true,
+    'mcp-health': true, scenarios: true, audit: true,
   };
   for (const v of Object.keys(ALL_VIEW_MODES) as ViewMode[]) {
     if (!(v in NAV_VIEW_GROUP_ID)) {
@@ -258,9 +275,11 @@ const NAV_VIEW_GROUP_ID: Record<ViewMode, string> = NAV_GROUPS.reduce<Record<str
   }
 }
 
-// The group that owns a given view, for active-group highlighting.
-function groupForView(view: ViewMode): NavGroup | undefined {
-  return NAV_GROUPS.find((g) => g.tabs.some((t) => t.value === view));
+// The groups a given view belongs to, for active-group highlighting. A view may
+// live in more than one group (e.g. Trace under both Observe and AI), so every
+// owning group is returned and each highlights when the view is active.
+function groupsForView(view: ViewMode): NavGroup[] {
+  return NAV_GROUPS.filter((g) => g.tabs.some((t) => t.value === view));
 }
 
 // Lookup of the active view's one-line description, for the bar under the nav.
@@ -275,9 +294,11 @@ interface AppBarProps {
   onClearServer: () => Promise<void>;
   onClearLogs: () => Promise<void>;
   onClearExpectations: () => Promise<void>;
+  /** Open the app-owned keyboard-shortcuts help dialog (shared with the `?` shortcut). */
+  onShowShortcuts: () => void;
 }
 
-export default function AppBar({ onClearServer, onClearLogs, onClearExpectations }: AppBarProps) {
+export default function AppBar({ onClearServer, onClearLogs, onClearExpectations, onShowShortcuts }: AppBarProps) {
   const connectionStatus = useDashboardStore((s) => s.connectionStatus);
   const themeMode = useDashboardStore((s) => s.themeMode);
   const toggleTheme = useDashboardStore((s) => s.toggleThemeMode);
@@ -297,10 +318,14 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [openGroupId, setOpenGroupId] = useState<string | null>(null);
   const [groupMenuAnchorEl, setGroupMenuAnchorEl] = useState<null | HTMLElement>(null);
 
-  // The group that owns the active view — its group button is highlighted.
-  const activeGroup = groupForView(view);
+  // The groups that own the active view — each of their group buttons is
+  // highlighted (a view may belong to more than one group, e.g. Trace).
+  const activeGroupIds = new Set(groupsForView(view).map((g) => g.id));
 
   const connectionParams = useConnectionParams();
+  // Human-readable server location for the connection-status chip tooltip, so the
+  // chip finally says WHERE it is connected (host:port), not just "connected".
+  const serverUrl = `${connectionParams.secure ? 'https' : 'http'}://${connectionParams.host}:${connectionParams.port}${connectionParams.basePath ?? ''}`;
   const [mode, setModeState] = useState<MockServerMode | null>(null);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [modeTooltipOpen, setModeTooltipOpen] = useState(false);
@@ -311,9 +336,10 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [playgroundOpen, setPlaygroundOpen] = useState(false);
   const [oidcOpen, setOidcOpen] = useState(false);
   const [samlOpen, setSamlOpen] = useState(false);
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [scimOpen, setScimOpen] = useState(false);
   const [asyncApiOpen, setAsyncApiOpen] = useState(false);
   const [wsdlOpen, setWsdlOpen] = useState(false);
+  const [graphqlOpen, setGraphqlOpen] = useState(false);
   const [openApiOpen, setOpenApiOpen] = useState(false);
   const [pactOpen, setPactOpen] = useState(false);
   const [crudOpen, setCrudOpen] = useState(false);
@@ -321,7 +347,6 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
   const [diffOpen, setDiffOpen] = useState(false);
   const [baselineOpen, setBaselineOpen] = useState(false);
   // Mode errors are now surfaced through the app-wide notification store.
-  const [http3Status, setHttp3Status] = useState<Http3Status | null>(null);
   const setNotification = useDashboardStore((s) => s.setNotification);
   // Confirmation for destructive actions (reset / bulk clear). Holds the pending action.
   const [confirm, setConfirm] = useState<{ title: string; message: string; confirmLabel: string; onConfirm: () => void } | null>(null);
@@ -338,25 +363,16 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
     return () => controller.abort();
   }, [connectionParams]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const poll = () => {
-      void fetchHttp3Status(connectionParams, controller.signal)
-        .then((status) => {
-          if (!controller.signal.aborted) setHttp3Status(status);
-        })
-        .catch(() => {
-          /* endpoint unavailable (older server or H3 not compiled in) */
-        });
-    };
-    poll();
-    // poll every 5 seconds so active connection count stays reasonably fresh
-    const interval = setInterval(poll, 5000);
-    return () => {
-      controller.abort();
-      clearInterval(interval);
-    };
-  }, [connectionParams]);
+  // Poll the HTTP/3 status every 5s so the active-connection count stays fresh.
+  // usePolling self-reschedules (no overlapping fetches), pauses while the tab is
+  // hidden, and aborts in-flight requests on unmount — important because the AppBar
+  // mounts on every view. A rejected fetch (older server, or H3 not compiled in)
+  // leaves `data` null so the chip stays hidden; the error is intentionally ignored.
+  const fetchHttp3 = useCallback(
+    (signal: AbortSignal) => fetchHttp3Status(connectionParams, signal),
+    [connectionParams],
+  );
+  const { data: http3Status } = usePolling<Http3Status>({ fetcher: fetchHttp3, intervalMs: 5000 });
 
   const handleModeChange = (event: SelectChangeEvent) => {
     const next = event.target.value as MockServerMode;
@@ -427,16 +443,18 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '0.9rem' }}>
           MockServer
         </Typography>
-        <Chip
-          label={connectionStatus}
-          size="small"
-          color={statusColor(connectionStatus)}
-          variant="outlined"
-          sx={{
-            textTransform: 'capitalize',
-            ...statusChipPaletteSx(themeMode, connectionStatus),
-          }}
-        />
+        <Tooltip title={`MockServer at ${serverUrl}`}>
+          <Chip
+            label={connectionStatus}
+            size="small"
+            color={statusColor(connectionStatus)}
+            variant="outlined"
+            sx={{
+              textTransform: 'capitalize',
+              ...statusChipPaletteSx(themeMode, connectionStatus),
+            }}
+          />
+        </Tooltip>
         {http3Status?.enabled && (
           <Tooltip title={`HTTP/3 (QUIC) on UDP port ${http3Status.port} -- ${http3Status.activeConnections} active connection${http3Status.activeConnections === 1 ? '' : 's'}`}>
             <Chip
@@ -486,7 +504,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
                 </ListSubheader>,
                 ...group.tabs.map((tab) => (
                   <MenuItem
-                    key={tab.value}
+                    key={`${group.id}-${tab.value}`}
                     selected={view === tab.value}
                     aria-label={tab.ariaLabel}
                     onClick={() => handleSelectView(tab.value)}
@@ -506,7 +524,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
                 views. The active view's group button is highlighted so the
                 current location is always indicated. */}
             {NAV_GROUPS.map((group) => {
-              const isActiveGroup = activeGroup?.id === group.id;
+              const isActiveGroup = activeGroupIds.has(group.id);
               const isOpen = openGroupId === group.id;
               return (
                 <Button
@@ -548,7 +566,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         )}
         <Box sx={{ flex: compactNav ? 1 : '0 0 auto' }} />
         <Tooltip title="Keyboard shortcuts">
-          <IconButton size="small" color="inherit" onClick={() => setShortcutsOpen(true)} aria-label="Keyboard shortcuts">
+          <IconButton size="small" color="inherit" onClick={onShowShortcuts} aria-label="Keyboard shortcuts">
             <KeyboardIcon fontSize="small" />
           </IconButton>
         </Tooltip>
@@ -640,12 +658,17 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         >
           <MenuItem
             onClick={() => {
-              void onClearLogs();
               setAnchorEl(null);
+              setConfirm({
+                title: 'Clear server logs?',
+                message: 'This removes all server log messages. Expectations and recorded requests are kept.',
+                confirmLabel: 'Clear logs',
+                onConfirm: () => { void onClearLogs(); },
+              });
             }}
           >
             <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Clear server logs</ListItemText>
+            <ListItemText>Clear Server Logs</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -659,7 +682,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><LayersClearIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Clear server expectations</ListItemText>
+            <ListItemText>Clear Server Expectations</ListItemText>
           </MenuItem>
           <Divider />
           <MenuItem
@@ -675,7 +698,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             sx={{ color: 'error.main' }}
           >
             <ListItemIcon><RestartAltIcon fontSize="small" color="error" /></ListItemIcon>
-            <ListItemText>Reset server (all)</ListItemText>
+            <ListItemText>Reset Server (all)</ListItemText>
           </MenuItem>
         </Menu>
         <Menu
@@ -703,12 +726,21 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
           </MenuItem>
           <MenuItem
             onClick={() => {
+              setGraphqlOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><UploadFileIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Import GraphQL Schema…</ListItemText>
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
               setPactOpen(true);
               setToolsAnchorEl(null);
             }}
           >
             <ListItemIcon><DownloadIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Pact contract (export / verify)…</ListItemText>
+            <ListItemText>Pact Contract (export / verify)…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -717,7 +749,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><VpnKeyIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Mock OIDC provider…</ListItemText>
+            <ListItemText>Mock OIDC Provider…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -726,7 +758,16 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><VpnKeyIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Mock SAML provider…</ListItemText>
+            <ListItemText>Mock SAML Provider…</ListItemText>
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setScimOpen(true);
+              setToolsAnchorEl(null);
+            }}
+          >
+            <ListItemIcon><VpnKeyIcon fontSize="small" /></ListItemIcon>
+            <ListItemText>Mock SCIM Provider…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -735,7 +776,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><HubIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>AsyncAPI broker mock…</ListItemText>
+            <ListItemText>AsyncAPI Broker Mock…</ListItemText>
           </MenuItem>
           <Divider />
           <MenuItem
@@ -745,7 +786,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><StorageIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Register CRUD resource…</ListItemText>
+            <ListItemText>Register CRUD Resource…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -754,7 +795,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><FolderOpenIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Mock file store…</ListItemText>
+            <ListItemText>Mock File Store…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -763,7 +804,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><CompareArrowsIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Diff two requests…</ListItemText>
+            <ListItemText>Diff Two Requests…</ListItemText>
           </MenuItem>
           <MenuItem
             onClick={() => {
@@ -772,7 +813,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
             }}
           >
             <ListItemIcon><CompareArrowsIcon fontSize="small" /></ListItemIcon>
-            <ListItemText>Compare against baseline…</ListItemText>
+            <ListItemText>Compare Against Baseline…</ListItemText>
           </MenuItem>
         </Menu>
         <OpenApiImportDialog
@@ -783,6 +824,11 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
         <WsdlImportDialog
           open={wsdlOpen}
           onClose={() => setWsdlOpen(false)}
+          connectionParams={connectionParams}
+        />
+        <GraphqlImportDialog
+          open={graphqlOpen}
+          onClose={() => setGraphqlOpen(false)}
           connectionParams={connectionParams}
         />
         <PactExportDialog
@@ -798,7 +844,7 @@ export default function AppBar({ onClearServer, onClearLogs, onClearExpectations
       <MatcherPlaygroundDialog open={playgroundOpen} onClose={() => setPlaygroundOpen(false)} />
       <OidcDialog open={oidcOpen} onClose={() => setOidcOpen(false)} connectionParams={connectionParams} />
       <SamlDialog open={samlOpen} onClose={() => setSamlOpen(false)} connectionParams={connectionParams} />
-      <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <ScimDialog open={scimOpen} onClose={() => setScimOpen(false)} connectionParams={connectionParams} />
       <AsyncApiDialog open={asyncApiOpen} onClose={() => setAsyncApiOpen(false)} connectionParams={connectionParams} />
       <CrudDialog open={crudOpen} onClose={() => setCrudOpen(false)} connectionParams={connectionParams} />
       <FileStoreDialog open={fileStoreOpen} onClose={() => setFileStoreOpen(false)} connectionParams={connectionParams} />

@@ -1,7 +1,7 @@
 ---
-title: Transparent Proxy / Sidecar Mode
+title: Transparent Proxy<br/>(Sidecar & Host-level Interception)
 shortTitle: Transparent Proxy
-description: Run MockServer as a Kubernetes sidecar with transparent proxy interception for service mesh integration.
+description: Run MockServer as a transparent proxy that intercepts outbound traffic with no application changes, on any Linux host (containers, VMs, bare metal) or as a Kubernetes sidecar, for mocking, recording, or chaos.
 layout: page
 pageOrder: 3
 section: 'Chaos Testing'
@@ -13,7 +13,9 @@ sitemap:
 keywords: sidecar proxy, transparent proxy, kubernetes sidecar, iptables redirect, mockserver sidecar, conntrack, proxy protocol, NLB, HAProxy
 ---
 
-<p>MockServer can run as a <strong>Kubernetes sidecar</strong> with transparent HTTP proxy interception. This enables service mesh integration patterns where MockServer intercepts traffic destined for external services without any application code changes.</p>
+<p>MockServer can run as a <strong>transparent proxy</strong> that intercepts outbound HTTP(S) traffic with <strong>no application code or proxy-configuration changes</strong>. It works on any Linux host &mdash; containers, VMs, or bare metal &mdash; using <code class="inline code">iptables</code>/eBPF interception; running it as a <strong>Kubernetes sidecar</strong> is the most common deployment, but not the only one (it also fronts traffic behind an AWS NLB / HAProxy or as an OS-level proxy on a host &mdash; see <a href="#deployment_contexts">Deployment Contexts</a>).</p>
+
+<p><strong>This page is about the interception mechanism</strong> &mdash; <em>how</em> traffic transparently reaches MockServer &mdash; independent of what MockServer then does with it (mock, record, or inject faults). If you instead want to inject faults into real upstream calls using <strong>explicit</strong> Kubernetes routing (swapping a Service, setting <code class="inline code">HTTP_PROXY</code>, or a sidecar with a fixed remote host), see <a href="/mock_server/chaos_testing_kubernetes.html">Chaos Proxy in Kubernetes</a>.</p>
 
 <a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
 
@@ -208,6 +210,8 @@ spec:
 <a id="original_destination_resolution" class="anchor" href="#original_destination_resolution">&nbsp;</a>
 
 <h2>Original Destination Resolution</h2>
+
+<p><strong>What "the original destination" is, and why it must be recovered:</strong> it is the host and port the client was actually trying to reach (for example <code class="inline code">api.stripe.com:443</code>). Because transparent interception redirects the connection to MockServer's own address, the original destination is overwritten &mdash; so by the time the request arrives, MockServer no longer knows where the client meant to go. It must <strong>recover</strong> the original destination to do two things: match an expectation by host, and forward the request on to the real upstream.</p>
 
 <p>MockServer uses a pluggable, ordered chain of strategies to resolve the original destination of transparently intercepted connections. The first strategy that returns a result wins; if none do, MockServer falls back to the <code class="inline code">Host</code> header. The strategies below are listed in the real priority order MockServer applies them: TPROXY, then eBPF, then SO_ORIGINAL_DST, then conntrack, then DNS-intent, then the Host header. A PROXY protocol header, when present, is detected and consumed earlier in the pipeline — before this resolver chain runs.</p>
 

@@ -83,6 +83,8 @@ flowchart TB
 3. Formats each event per the SSE specification — multi-line `data` values are split into multiple `data:` lines; `id`, `event`, and `retry` fields are written when non-null
 4. Writes `LastHttpContent.EMPTY_LAST_CONTENT` to terminate the chunked stream, then closes the channel if `closeConnection` is `true` (or null, which defaults to closing)
 
+Since T1.2, streaming payloads can be **templated**: setting an optional `templateType` (`VELOCITY`/`MUSTACHE`/`JAVASCRIPT`) on the `httpSseResponse` (or `httpWebSocketResponse`, or per-message on `grpcStreamResponse`) renders each event's `data` (each WebSocket text frame / each gRPC message `json`) as a response template against the triggering request via the shared `StreamTemplateRenderer` — same request/template context as `httpResponseTemplate` (`$!request.body`, `$jsonPath(...)`, built-in helpers, `faker`, `scenario`). Rendering is per event/message and opt-in; with no `templateType` payloads are emitted byte-for-byte unchanged. See *Templated streaming payloads* in [request-processing.md](request-processing.md).
+
 ```mermaid
 sequenceDiagram
     participant Client
@@ -182,6 +184,120 @@ mockServerClient.when(
 );
 ```
 
+### Proxy passthrough (relay to a real upstream)
+
+WebSocket is no longer mock-only. When MockServer is used as a **proxy** and a WebSocket upgrade request matches no
+`WEBSOCKET_RESPONSE` expectation (or matches a plain `FORWARD` expectation), MockServer relays the connection through
+to the real upstream WebSocket server — completing the upstream `ws`/`wss` handshake, relaying the `101` back to the
+client, then relaying frames bidirectionally until either side closes. The relayed frames are recorded (bounded by
+`webSocketProxyMaxRecordedFrames`) so `retrieveRecordedRequests` and the dashboard show the traffic. This is
+implemented at the proxy/relay layer by `WebSocketProxyRelayHandler`, not the mock action handler — see
+[netty-pipeline.md → WebSocket Proxy Passthrough](netty-pipeline.md#websocket-proxy-passthrough).
+
+## Realtime Voice API Mocking (OpenAI Realtime, Gemini Live)
+
+### Outcome
+
+MockServer mocks the two dominant realtime (voice) LLM protocols — the **OpenAI Realtime API** (GA 2025 event
+protocol) and the **Google Gemini Live API** (`BidiGenerateContent`) — so an agent/app that speaks them can be
+tested fully offline, with no real API and no audio hardware. It is a thin layer over the existing WebSocket mock
+primitive: **no new `Action.Type`, DTO, or JSON schema**. A pure event codec generates the provider-correct event
+JSON; the Java client `RealtimeMockBuilder` wires that into a single `httpWebSocketResponse` expectation (initial
+pushed frame + per-incoming-frame matchers), exactly as A2A streaming reuses `httpSseResponse`.
+
+```mermaid
+flowchart LR
+    Builder["RealtimeMockBuilder\n(client-java)"] --> Codec["OpenAiRealtimeCodec /\nGeminiLiveCodec\n(core, pure)"]
+    Codec --> WS["HttpWebSocketResponse\nmessages + matchers"]
+    WS --> Handler["HttpWebSocketResponseActionHandler\n+ BidirectionalWebSocketFrameHandler"]
+    Handler --> Client["Realtime SDK client"]
+```
+
+### Components
+
+| Class | Module | Package | Purpose |
+|-------|--------|---------|---------|
+| `RealtimeProvider` | core | `org.mockserver.llm.realtime` | `OPENAI_REALTIME` / `GEMINI_LIVE` (separate from the HTTP `Provider` enum) |
+| `RealtimeModality` | core | `org.mockserver.llm.realtime` | `AUDIO` (transcript + audio deltas) or `TEXT` |
+| `RealtimeTurn` | core | `org.mockserver.llm.realtime` | Provider-neutral scripted assistant turn (text, audio transcript, audio bytes, usage) — the realtime analogue of `Completion` |
+| `RealtimeStreamingPhysics` | core | `org.mockserver.llm.realtime` | Deterministic `tokensPerSecond` + time-to-first-token timing (jitter-free WS analogue of `StreamingPhysics`) |
+| `RealtimeEvent` | core | `org.mockserver.llm.realtime` | One rendered event frame `{json, delayMillis}` |
+| `OpenAiRealtimeCodec` | core | `org.mockserver.llm.realtime` | Pure OpenAI Realtime event codec |
+| `GeminiLiveCodec` | core | `org.mockserver.llm.realtime` | Pure Gemini Live event codec |
+| `RealtimeMockBuilder` | client-java | `org.mockserver.client` | Builds the `httpWebSocketResponse` expectation |
+
+### How the flow maps onto the WebSocket primitive
+
+The realtime session is inherently request-driven, which is exactly what the WebSocket mock's `matchers` model
+(incoming frame → scripted `responses`) provides, plus one connect-time push (`messages`):
+
+- **OpenAI** — `session.created` is pushed on connect (`messages`); matchers answer `session.update` →
+  `session.updated`, `conversation.item.create` → `conversation.item.created`, and `response.create` → the full
+  scripted response event sequence.
+- **Gemini** — nothing is pushed on connect; matchers answer `setup` → `setupComplete` and `clientContent` → the
+  scripted `serverContent` chunk stream. Matchers use a DOTALL regex on the distinctive top-level key (`"setup"`,
+  `"clientContent"`) / OpenAI `"type"` value.
+
+Because the bidirectional matcher schedules a match's response frames **concurrently** (each with a delay relative
+to the match instant), the builder converts the codec's per-event gaps into **monotonically-increasing cumulative
+absolute** delays (`RealtimeMockBuilder.toMessages`, `MIN_STEP_MILLIS` floor) so the event stream stays strictly
+ordered. The same script answers every matching frame, so a client that repeats `response.create` /
+`clientContent` receives the scripted turn each time. `closeConnection` is `false` — the client owns disconnect.
+
+### Protocol coverage matrix (event type → status)
+
+**OpenAI Realtime (server events)**
+
+| Event | Status |
+|-------|--------|
+| `session.created` (connect push) | ✅ mocked |
+| `session.updated` (← `session.update`) | ✅ mocked |
+| `conversation.item.created` (← `conversation.item.create`) | ✅ mocked |
+| `response.created` | ✅ mocked |
+| `response.output_item.added` | ✅ mocked |
+| `response.content_part.added` | ✅ mocked |
+| `response.output_audio_transcript.delta` / `.done` | ✅ mocked (AUDIO) |
+| `response.output_audio.delta` / `.done` | ✅ mocked (AUDIO, silence placeholder bytes) |
+| `response.output_text.delta` / `.done` | ✅ mocked (TEXT) |
+| `response.content_part.done`, `response.output_item.done` | ✅ mocked |
+| `response.done` (with `usage`) | ✅ mocked |
+| `input_audio_buffer.*` / server VAD (`speech_started`/`stopped`) | ⛔ deferred |
+| `conversation.item.input_audio_transcription.*` | ⛔ deferred |
+| function-call output items, `rate_limits.updated`, `error` | ⛔ deferred |
+
+**Gemini Live (server messages)**
+
+| Message | Status |
+|---------|--------|
+| `setupComplete` (← `setup`) | ✅ mocked |
+| `serverContent.modelTurn` text parts (← `clientContent`) | ✅ mocked (TEXT) |
+| `serverContent.modelTurn` `inlineData` audio + `outputTranscription` | ✅ mocked (AUDIO, silence placeholder bytes) |
+| `serverContent.generationComplete` / `turnComplete` | ✅ mocked |
+| `usageMetadata` | ✅ mocked |
+| `realtimeInput` / `realtimeInputAcknowledgement` | ⛔ deferred |
+| `toolCall` / `toolCallCancellation` / `toolResponse` | ⛔ deferred |
+| `goAway`, `sessionResumptionUpdate`, `interrupted` | ⛔ deferred |
+
+Audio bytes are opaque silence placeholders — the fidelity target is the **event protocol**, not audio DSP.
+
+### Usage
+
+```java
+import static org.mockserver.llm.realtime.RealtimeTurn.realtimeTurn;
+
+// OpenAI Realtime — point the SDK at ws://localhost:1080/v1/realtime
+RealtimeMockBuilder.openAiRealtime()
+    .withModel("gpt-realtime")
+    .respondingWith(realtimeTurn("The capital of France is Paris.")
+        .withInputTokens(20).withOutputTokens(7))
+    .applyTo(mockServerClient);
+
+// Gemini Live
+RealtimeMockBuilder.geminiLive()
+    .respondingWith("Bonjour le monde")
+    .applyTo(mockServerClient);
+```
+
 ## MCP Mock Builder
 
 ### Purpose
@@ -199,7 +315,25 @@ mockServerClient.when(
 | `path` | `/mcp` |
 | `serverName` | `MockMCPServer` |
 | `serverVersion` | `1.0.0` |
-| `protocolVersion` | `2025-03-26` |
+| `protocolVersion` | `2025-06-18` |
+
+### Protocol Version Negotiation (server)
+
+MockServer's own MCP server (`McpRequestProcessor`) advertises and negotiates the **2025-06-18** MCP spec revision, while remaining backward compatible with older clients:
+
+- The client sends its preferred `protocolVersion` in `initialize`. When it is one the server supports (`2025-06-18`, `2025-03-26`, `2024-11-05`) the server **echoes it back**; otherwise (or when omitted) the server replies with its latest, `2025-06-18` (`negotiateProtocolVersion`).
+- The negotiated version is stored on the `McpSession` and governs whether version-specific response fields are emitted for that session.
+- `Mcp-Session-Id` is emitted on the `initialize` response and required (and echoed) on subsequent requests — already handled by `McpStreamableHttpHandler`.
+
+### 2025-06-18 Capabilities
+
+| Capability | Server (`McpRequestProcessor`) | Mock builder (`McpMockBuilder`) |
+|---|---|---|
+| Structured tool output (`structuredContent`) | `tools/call` results include `structuredContent` (the raw tool-result object) when the session negotiated 2025-06-18+ | `respondingWithStructured(text, structuredJson)` + `withOutputSchema(schema)` (advertised in `tools/list`) |
+| Resource links (`type: resource_link`) | — | `respondingWithResourceLink(uri, name, description, mimeType)` on a `tools/call` result |
+| `Mcp-Session-Id` | Emitted on `initialize`, required on subsequent requests | Session handling is the client's responsibility against the mock |
+
+**Deferred (require a server→client push channel):** `elicitation/create` (server-initiated) and the GET SSE server-push stream are not mocked — MockServer's request/response expectation model has no channel to initiate requests to the client. `sampling/createMessage` remains a deterministic mocked completion on the server. JSON-RPC batching (removed in 2025-06-18) is still accepted for back-compat with older clients.
 
 ### Generated Expectations
 
@@ -296,7 +430,7 @@ Notes and limitations:
 - **Escaping**: the caller response is Velocity-templated (response text is Velocity-escaped so `$`/`#` render literally), whereas the webhook POST body is a literal request override (JSON-escaped only — no Velocity escaping, which would corrupt `$`/`#`).
 - **Custom handlers + push**: push delivery fires only for the generic `tasks/send` catch-all. Custom `onTaskSend(...)` handlers still return a task response to the caller but do not POST to the webhook.
 - **Delivery failures are non-fatal-but-visible**: the caller response template renders only when the webhook returns a response; if the webhook is unreachable the caller receives the forward error rather than a synthesised 200.
-- **Streaming JSON-RPC id**: the SSE event envelopes use a fixed placeholder id (`"1"`) because `HttpSseResponse` events are static (not templated), so the streaming response id is not correlated to the request id — streaming clients correlate by the stream itself.
+- **Streaming JSON-RPC id**: the A2A builder's SSE event envelopes use a fixed placeholder id (`"1"`); streaming clients correlate by the stream itself. Since T1.2, `HttpSseResponse` (and `HttpWebSocketResponse` / gRPC `grpcStreamResponse`) support an optional `templateType`, so a hand-authored streaming expectation *can* now template each event/message payload — e.g. echo the request's JSON-RPC id via `$jsonPath.find("$.id")` — against the triggering request. The A2A builder itself still emits static envelopes.
 
 ### Usage
 
@@ -662,12 +796,42 @@ All overrides are cleared on `HttpState.reset()`. An empty `service` string sets
 | `PUT /mockserver/grpc/services` | List all loaded gRPC services and their methods |
 | `PUT /mockserver/grpc/clear` | Clear all loaded descriptors and reset the store |
 
-### Limitations
+### gRPC Forward Proxy + Record/Replay
 
-- **gRPC forwarding/proxy** is deferred — requires HTTP/2 + gRPC-framing client changes to `NettyHttpClient`
-- **True client streaming and bidirectional streaming** require migration from `InboundHttp2ToHttpAdapter` (which aggregates full messages) to `Http2MultiplexHandler` with per-stream child channels
+MockServer can forward a gRPC call to a real upstream gRPC server and record the decoded exchange, bringing the record-then-mock workflow to gRPC. When a decoded gRPC request (produced by `GrpcToHttpRequestHandler`, i.e. carrying `x-grpc-service`/`x-grpc-method` + a JSON body + `application/grpc`) matches a `FORWARD`-class expectation, or arrives in proxy mode with no matching expectation, the forward path:
+
+1. re-encodes the JSON request body back into gRPC length-prefixed protobuf frames, sets `content-type: application/grpc`, forces HTTP/2, adds `te: trailers`, and strips the internal `x-grpc-*` helper headers so they do not leak upstream;
+2. decodes the upstream's gRPC-framed protobuf response back to JSON and re-stamps `x-grpc-service`/`x-grpc-method` (and `grpc-status-name`) onto the response so `GrpcToHttpResponseHandler` re-frames it for the calling client and the logged `FORWARDED_REQUEST` entry carries decoded JSON.
+
+```mermaid
+flowchart LR
+    Client["gRPC client"] -->|"application/grpc\nprotobuf frame"| Proxy["MockServer proxy\n(descriptors loaded)"]
+    Proxy -->|"decode → JSON,\nmatch FORWARD / proxy no-match"| Enc["GrpcForwardTranslator\nencodeRequestForUpstream"]
+    Enc -->|"re-framed protobuf,\nHTTP/2"| Upstream["real gRPC server"]
+    Upstream -->|"framed protobuf\nresponse"| Dec["GrpcForwardTranslator\ndecodeResponseFromUpstream"]
+    Dec -->|"JSON + x-grpc-* stamped"| Log["FORWARDED_REQUEST\n(decoded, replayable)"]
+    Dec -->|"re-frame"| Client
+```
+
+| Class | Module | Purpose |
+|-------|--------|---------|
+| `GrpcForwardTranslator` | core (`org.mockserver.grpc`) | `encodeRequestForUpstream` (JSON → gRPC-framed protobuf, force HTTP/2) and `decodeResponseFromUpstream` (framed protobuf → JSON + re-stamp headers). Both fail-safe: non-gRPC / unknown-method / error → original message returned unchanged. |
+
+Wiring: the matched `FORWARD`-family path threads the descriptor store into `HttpForwardAction` (`setGrpcDescriptorStore`, set in the `HttpActionHandler` handler getters) and applies the transform once in `HttpForwardAction.sendRequest` (covers all `FORWARD*` action types); the response is decoded via a composed `overrideHttpResponse` so both the client write and the recorded log entry see the decoded JSON. The unmatched/anonymous proxy paths in `HttpActionHandler` apply the same helper (`grpcEncodeForForward` / `grpcDecodeOverride`) around their inline `httpClient.sendRequest` calls.
+
+**Boundaries and requirements:**
+
+- **Descriptors on the proxy are required to decode.** `GrpcToHttpRequestHandler` only converts inbound gRPC to JSON when the descriptor store `hasServices()`. Without descriptors on the proxy the raw `application/grpc` bytes are still forwarded verbatim over HTTP/2 and recorded, but undecoded (binary body, no method JSON).
+- **Unary + client-streaming requests** (single JSON object / JSON array body) and **unary + server-streaming responses** (one or more frames) are handled. Full bidirectional streaming forward is out of scope — it is driven by the multiplex bidi pipeline, not the request/response forward path.
+- **Transport downgrade.** The re-encoded request is marked HTTP/2; `NettyHttpClient` downgrades a non-secure HTTP/2 request to HTTP/1.1, so a cleartext (h2c) upstream receives the framed `application/grpc` body over HTTP/1.1 (which MockServer-to-MockServer handles, since the gRPC handlers are content-type driven and present on the HTTP/1.1 pipeline). Reach a strict HTTP/2-only gRPC server over TLS (h2 via ALPN).
+- **Terminal status from upstream trailers.** Real gRPC servers send `grpc-status`/`grpc-message` in HTTP/2 (or chunked HTTP/1.1) **trailers**, not as headers. `FullHttpResponseToMockServerHttpResponse.setHeaders` folds the upstream `trailingHeaders()` into the response model (only for trailer names not already present as headers), so `decodeResponseFromUpstream` sees the real `grpc-status` and stamps `grpc-status-name` — otherwise a non-OK upstream RPC would be relayed and recorded as OK.
+- **`FORWARD_REPLACE` (`httpOverrideForwardedRequest`) ordering with gRPC.** The gRPC response decode is composed *after* any user-supplied `overrideHttpResponse`, so a user override on a gRPC `FORWARD_REPLACE` sees the raw framed protobuf upstream response (not the decoded JSON); the decode-to-JSON + header re-stamp runs last. Overriding the *request* side of `FORWARD_REPLACE` is applied before the gRPC re-encode, so an override that rewrites the JSON body is honoured. Editing the framed bytes directly in an override is not supported.
+
+### Streaming Limitations
+
+- **True client streaming and bidirectional streaming** are supported via the `Http2MultiplexHandler` multiplex pipeline (per-stream child channels), opt-in behind `grpcBidiStreamingEnabled`; when disabled the default `InboundHttp2ToHttpAdapter` path aggregates full messages and bidi actions return 501
 - **WAR deployment** returns 501 for `GRPC_STREAM_RESPONSE` actions (no `ChannelHandlerContext` available)
-- **Proto reflection** is not yet supported — descriptors must be provided via files or API upload
+- **Proto reflection** is supported — a `GrpcServerReflectionHandler` (core, with a `GrpcBidiReflectionHandler` on the multiplex path) answers v1 and v1alpha `ServerReflection` requests without a generated stub; descriptors may still be provided via files or API upload
 
 ## Module Boundaries
 
@@ -679,7 +843,7 @@ All overrides are cleared on `HttpState.reset()`. An empty `service` string sets
 | `SseEventDTO`, `HttpSseResponseDTO`, `JsonRpcBodyDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `HttpRequestTemplateObject` (jsonRpc fields) | `mockserver-core` | `org.mockserver.templates.engine.model` |
 | `GrpcStreamMessage`, `GrpcStreamResponse` | `mockserver-core` | `org.mockserver.model` |
-| `GrpcFrameCodec`, `GrpcJsonMessageConverter`, `GrpcProtoDescriptorStore`, `GrpcProtoFileCompiler`, `GrpcStatusMapper`, `GrpcWebTranslator`, `GrpcException` | `mockserver-core` | `org.mockserver.grpc` |
+| `GrpcFrameCodec`, `GrpcJsonMessageConverter`, `GrpcProtoDescriptorStore`, `GrpcProtoFileCompiler`, `GrpcStatusMapper`, `GrpcWebTranslator`, `GrpcForwardTranslator`, `GrpcException` | `mockserver-core` | `org.mockserver.grpc` |
 | `ConnectError`, `ConnectResponse`, `ConnectUnaryDetector` | `mockserver-core` | `org.mockserver.grpc.connect` |
 | `GrpcHealthRegistry`, `GrpcHealthCheckHandler`, `ServingStatus` | `mockserver-core` | `org.mockserver.grpc` |
 | `GrpcChaosProfile` | `mockserver-core` | `org.mockserver.model` |
@@ -688,7 +852,8 @@ All overrides are cleared on `HttpState.reset()`. An empty `service` string sets
 | `GrpcStreamResponseActionHandler` | `mockserver-core` | `org.mockserver.mock.action.http` |
 | `GrpcStreamMessageDTO`, `GrpcStreamResponseDTO` | `mockserver-core` | `org.mockserver.serialization.model` |
 | `GrpcToHttpRequestHandler`, `GrpcToHttpResponseHandler` | `mockserver-netty` | `org.mockserver.netty.grpc` |
-| `McpMockBuilder`, `A2aMockBuilder` | `mockserver-client-java` | `org.mockserver.client` |
+| `McpMockBuilder`, `A2aMockBuilder`, `RealtimeMockBuilder` | `mockserver-client-java` | `org.mockserver.client` |
+| `RealtimeProvider`, `RealtimeModality`, `RealtimeTurn`, `RealtimeStreamingPhysics`, `RealtimeEvent`, `OpenAiRealtimeCodec`, `GeminiLiveCodec` | `mockserver-core` | `org.mockserver.llm.realtime` |
 
 ## Test Coverage
 
@@ -713,13 +878,20 @@ All overrides are cleared on `HttpState.reset()`. An empty `service` string sets
 | `HttpWebSocketResponseDTOTest` | core | 5 | Unit |
 | `ForwardChainExpectationTest` | client-java | 10 | Unit |
 | `WebSocketMockingIntegrationTest` | netty | 6 | Integration |
+| `OpenAiRealtimeCodecTest` | core | 11 | Unit |
+| `GeminiLiveCodecTest` | core | 6 | Unit |
+| `RealtimeMockBuilderTest` | client-java | 4 | Unit |
+| `RealtimeMockingIntegrationTest` | netty | 3 | Integration |
 | `GrpcFrameCodecTest` | core | 6 | Unit |
 | `GrpcJsonMessageConverterTest` | core | 7 | Unit |
 | `GrpcProtoDescriptorStoreTest` | core | 7 | Unit |
 | `GrpcStatusMapperTest` | core | 9 | Unit |
 | `GrpcWebTranslatorTest` | core | 20 | Unit |
+| `GrpcForwardTranslatorTest` | core | 13 | Unit |
+| `HttpForwardActionHandlerGrpcTest` | core | 3 | Unit |
 | `GrpcStreamResponseDTOTest` | core | 3 | Unit |
 | `GrpcIntegrationTest` | netty | 11 | Integration |
+| `GrpcForwardProxyIntegrationTest` | netty | 3 | Integration |
 | `GrpcWebHandlerTest` | netty | 12 | Handler |
 | `ConnectErrorTest` | core | 6 | Unit |
 | `ConnectResponseTest` | core | 9 | Unit |
@@ -830,7 +1002,7 @@ flowchart LR
 | Class | Module | Purpose |
 |-------|--------|---------|
 | `FixtureRedactor` | core | Redacts sensitive headers (Authorization, api-key, Cookie, etc.) from expectations before writing to fixture files; operates on copies, never mutates live entries |
-| `SseBodyParser` | core | Parses raw `text/event-stream` bytes into `SseEvent` objects; applies a fixed inter-event delay (50ms default) since per-chunk timestamps are not captured |
+| `SseBodyParser` | core | Parses raw `text/event-stream` bytes into `SseEvent` objects; replays captured per-chunk delays when available, falling back to a fixed inter-event delay (50ms default) |
 | `SseAwareExpectationConverter` | core | Detects SSE-streamed responses (via `x-mockserver-streamed` header or `text/event-stream` content type) and converts them to `HttpSseResponse` actions; falls back to static response with warning for truncated captures |
 
 ### MCP Tools
@@ -840,9 +1012,27 @@ flowchart LR
 | `record_llm_fixtures` | Snapshots recorded proxy traffic into a fixture file: retrieves FORWARDED_REQUEST entries, converts SSE responses, redacts secrets, writes to the specified path |
 | `load_expectations_from_file` | Loads a fixture file and adds its expectations as active mocks for replay |
 
+### Expectation-authoring and record/replay control tools
+
+So an AI coding agent (Claude Code, Cursor, …) can stand up and drive mocks from the IDE without leaving the MCP protocol, `McpToolRegistry` exposes authoring and control tools that each delegate to the corresponding `HttpState` control-plane operation — there is no separate matching/verification path. The `/mockserver/mode` and `/mockserver/recordings/promote` REST handlers and their MCP tools share the same `HttpState.setMode(...)` / `HttpState.promoteRecordings(...)` methods.
+
+| Tool | Class | Delegates to | Purpose |
+|------|-------|--------------|---------|
+| `create_expectation` | MUTATE | `HttpState.add` | Create a mock from a simplified method/path/response DSL (plus chaos) |
+| `raw_expectation` | MUTATE | `HttpState.add` | Create a mock from the full MockServer expectation JSON (`PUT /mockserver/expectation` schema) |
+| `list_expectations` | READ | `HttpState.retrieve` (`ACTIVE_EXPECTATIONS`) | List the active expectations, optionally filtered by method/path, in full JSON incl. id |
+| `clear_expectations` | MUTATE | `HttpState.clear` | Clear expectations by request matcher or expectation id |
+| `verify_request` | READ | `HttpState.verify` | Verify a request pattern met its `VerificationTimes`; returns pass/fail + closest-match diff |
+| `retrieve_recorded_requests` | READ | `HttpState.retrieve` (`REQUESTS`) | Return recorded requests, optionally filtered |
+| `retrieve_request_responses` | READ | `HttpState.retrieve` (`REQUEST_RESPONSES`) | Return recorded request/response pairs |
+| `set_operating_mode` | MUTATE | `HttpState.setMode` | Switch the high-level mode SIMULATE / SPY / CAPTURE (`PUT /mockserver/mode`) |
+| `promote_recordings` | MUTATE | `HttpState.promoteRecordings` | Turn recorded (forwarded) traffic into active mocks with redaction + consolidation + parameterization (`PUT /mockserver/recordings/promote`) |
+
+The read-vs-mutate class drives control-plane authorization: when `controlPlaneAuthorizationEnabled=true`, a MUTATE tool requires the MUTATE role and a READ tool the READ role (see the control-plane note at the top of this page). A typical "record then mock" agent flow is `set_operating_mode SPY` → drive the app so unmatched requests are forwarded and recorded → `promote_recordings` → `list_expectations` to confirm.
+
 ### SSE Timing
 
-Per-chunk timestamps are not captured by the streaming relay (`StreamingBody` captures bytes in a bounded buffer without timing metadata). On replay, SSE events are sent with a fixed 50ms inter-event delay. This is noted as a future enhancement: adding per-chunk timestamps to `StreamingBody` would enable faithful timing reproduction.
+When the capture records per-chunk timing, the delays are carried on the `x-mockserver-chunk-delays-ms` header (a comma-separated list of millisecond gaps). `SseAwareExpectationConverter` parses that header and replays each SSE event with its captured delay, reproducing the original stream timing. When the header is absent, empty, or malformed, replay falls back to a fixed inter-event delay (50ms default).
 
 ### Secret Redaction
 

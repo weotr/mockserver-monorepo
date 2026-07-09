@@ -237,6 +237,44 @@ public class OpenAiChatCompletionsCodecTest {
         assertThat(root.get("choices").get(0).get("finish_reason").asText(), is("tool_calls"));
     }
 
+    private String concatStreamedContent(java.util.List<SseEvent> events) throws Exception {
+        StringBuilder text = new StringBuilder();
+        for (SseEvent e : events) {
+            if ("[DONE]".equals(e.getData())) {
+                continue;
+            }
+            JsonNode delta = OBJECT_MAPPER.readTree(e.getData()).get("choices").get(0).get("delta");
+            if (delta != null && delta.has("content")) {
+                // role-only first chunk carries content:"" so appending it is harmless
+                text.append(delta.get("content").asText());
+            }
+        }
+        return text.toString();
+    }
+
+    @Test
+    public void shouldEmitSubwordDeltasByDefaultAndWholeWordWhenDisabled() throws Exception {
+        // given
+        Completion completion = completion().withText("MockServer streams tokens quickly");
+
+        // when — explicit whole-word (opt-out) vs subword (the default, selected either
+        // by an explicit flag or simply by a null physics)
+        java.util.List<SseEvent> wholeWord = codec.encodeStreaming(completion, "gpt-4o",
+            StreamingPhysics.streamingPhysics().withSubwordStreaming(false));
+        java.util.List<SseEvent> subword = codec.encodeStreaming(completion, "gpt-4o",
+            StreamingPhysics.streamingPhysics().withSubwordStreaming(true));
+        java.util.List<SseEvent> defaultMode = codec.encodeStreaming(completion, "gpt-4o", null);
+
+        // then — subword mode produces strictly more events (finer deltas) than whole-word ...
+        assertThat(subword.size(), is(greaterThan(wholeWord.size())));
+        // ... and the default (null physics) now matches the subword granularity
+        assertThat(defaultMode.size(), is(subword.size()));
+        // ... but the reconstructed text is identical in all modes
+        assertThat(concatStreamedContent(subword), is("MockServer streams tokens quickly"));
+        assertThat(concatStreamedContent(wholeWord), is("MockServer streams tokens quickly"));
+        assertThat(concatStreamedContent(defaultMode), is("MockServer streams tokens quickly"));
+    }
+
     @Test
     public void shouldForceToolCallsFinishReasonWhenToolChoiceRequiredInStreaming() throws Exception {
         // given

@@ -19,6 +19,7 @@ interface FakeContext {
     subscriptions: Disposable[];
     extension: { packageJSON: { version: string } };
     extensionUri: { toString(): string };
+    globalStorageUri: { fsPath: string };
 }
 
 const registeredCommands: Map<string, Function> = new Map();
@@ -206,10 +207,15 @@ async function runTests(): Promise<void> {
 
     // Setup: activate the extension
     registeredCommands.clear();
+    const globalStorageDir = require("path").join(
+        require("os").tmpdir(),
+        `ms-globalstorage-${Date.now()}`
+    );
     const fakeContext: FakeContext = {
         subscriptions: [],
         extension: { packageJSON: { version: "9.9.9" } },
         extensionUri: { toString: () => "file:///ext" },
+        globalStorageUri: { fsPath: globalStorageDir },
     };
     extension.activate(fakeContext);
 
@@ -226,6 +232,306 @@ async function runTests(): Promise<void> {
             "mockserver.stop command not registered"
         );
     });
+
+    await test("activate registers mockserver.startBinary command", () => {
+        assert.ok(
+            registeredCommands.has("mockserver.startBinary"),
+            "mockserver.startBinary command not registered"
+        );
+    });
+
+    await test("activate registers mockserver.stopBinary command", () => {
+        assert.ok(
+            registeredCommands.has("mockserver.stopBinary"),
+            "mockserver.stopBinary command not registered"
+        );
+    });
+
+    // --- Binary-bundle (no-Docker) launch: pure resolution logic ---
+    const binary = require("../binaryBundle");
+
+    await test("resolveTarget maps Node platform/arch to published bundle os/arch", () => {
+        assert.deepStrictEqual(binary.resolveTarget("darwin", "arm64"), { os: "darwin", arch: "aarch64" });
+        assert.deepStrictEqual(binary.resolveTarget("darwin", "x64"), { os: "darwin", arch: "x86_64" });
+        assert.deepStrictEqual(binary.resolveTarget("linux", "x64"), { os: "linux", arch: "x86_64" });
+        assert.deepStrictEqual(binary.resolveTarget("linux", "arm64"), { os: "linux", arch: "aarch64" });
+        assert.deepStrictEqual(binary.resolveTarget("win32", "x64"), { os: "windows", arch: "x86_64" });
+    });
+
+    await test("resolveTarget rejects unsupported platform/arch and windows/aarch64", () => {
+        assert.throws(() => binary.resolveTarget("aix", "x64"), /No MockServer binary bundle/);
+        assert.throws(() => binary.resolveTarget("linux", "ppc64"), /No MockServer binary bundle/);
+        // No windows/aarch64 bundle is published.
+        assert.throws(() => binary.resolveTarget("win32", "arm64"), /windows\/aarch64/);
+    });
+
+    await test("archive file name and extension follow the published asset naming", () => {
+        const mac = { os: "darwin", arch: "aarch64" };
+        const win = { os: "windows", arch: "x86_64" };
+        assert.strictEqual(binary.archiveExtension("darwin"), ".tar.gz");
+        assert.strictEqual(binary.archiveExtension("windows"), ".zip");
+        assert.strictEqual(binary.bundleBaseName("7.3.0", mac), "mockserver-7.3.0-darwin-aarch64");
+        assert.strictEqual(binary.archiveFileName("7.3.0", mac), "mockserver-7.3.0-darwin-aarch64.tar.gz");
+        assert.strictEqual(binary.archiveFileName("7.3.0", win), "mockserver-7.3.0-windows-x86_64.zip");
+    });
+
+    await test("downloadUrl and checksumUrl point at the GitHub release asset", () => {
+        const t = { os: "linux", arch: "x86_64" };
+        assert.strictEqual(
+            binary.downloadUrl("7.3.0", t),
+            "https://github.com/mock-server/mockserver-monorepo/releases/download/mockserver-7.3.0/mockserver-7.3.0-linux-x86_64.tar.gz"
+        );
+        assert.strictEqual(binary.checksumUrl("7.3.0", t), binary.downloadUrl("7.3.0", t) + ".sha256");
+    });
+
+    await test("javaExecutableRelativePath is runtime/bin/java (java.exe on windows)", () => {
+        const path = require("path");
+        assert.strictEqual(binary.javaExecutableRelativePath("linux"), path.join("runtime", "bin", "java"));
+        assert.strictEqual(binary.javaExecutableRelativePath("darwin"), path.join("runtime", "bin", "java"));
+        assert.strictEqual(binary.javaExecutableRelativePath("windows"), path.join("runtime", "bin", "java.exe"));
+    });
+
+    await test("jarRelativePath is lib/mockserver.jar", () => {
+        const path = require("path");
+        assert.strictEqual(binary.jarRelativePath(), path.join("lib", "mockserver.jar"));
+    });
+
+    await test("bundleJavaAndJar resolves the java executable + jar from a bundle root (no launcher/shell)", () => {
+        const path = require("path");
+        const posix = binary.bundleJavaAndJar("/opt/ms", "linux");
+        assert.strictEqual(posix.javaExecutable, path.join("/opt/ms", "runtime", "bin", "java"));
+        assert.strictEqual(posix.jarPath, path.join("/opt/ms", "lib", "mockserver.jar"));
+        // Windows resolves java.exe (still spawned directly — never via cmd.exe).
+        const win = binary.bundleJavaAndJar("C:\\ms", "windows");
+        assert.strictEqual(win.javaExecutable, path.join("C:\\ms", "runtime", "bin", "java.exe"));
+        assert.strictEqual(win.jarPath, path.join("C:\\ms", "lib", "mockserver.jar"));
+    });
+
+    await test("serverArgs uses the backward-compatible -serverPort flag", () => {
+        assert.deepStrictEqual(binary.serverArgs(2080), ["-serverPort", "2080"]);
+    });
+
+    await test("parseSha256 extracts the digest from a sha256sum sidecar", () => {
+        const line = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08  mockserver-7.3.0-linux-x86_64.tar.gz\n";
+        assert.strictEqual(
+            binary.parseSha256(line),
+            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+        );
+        assert.throws(() => binary.parseSha256("not a checksum"), /SHA-256/);
+    });
+
+    await test("resolveConfiguredBundleRoot: directory is the root; a launcher file's root is its grandparent", () => {
+        const path = require("path");
+        // A directory is the bundle root as-is.
+        assert.strictEqual(binary.resolveConfiguredBundleRoot("/opt/ms", true), "/opt/ms");
+        // A launcher FILE (…/bin/mockserver) → root is the grandparent (…/opt/ms).
+        assert.strictEqual(
+            binary.resolveConfiguredBundleRoot(path.join("/opt/ms", "bin", "mockserver"), false),
+            "/opt/ms"
+        );
+        assert.strictEqual(
+            binary.resolveConfiguredBundleRoot(path.join("/opt/ms", "bin", "mockserver.bat"), false),
+            "/opt/ms"
+        );
+    });
+
+    await test("cachedBundleDir nests under bundles/<base> in global storage", () => {
+        const path = require("path");
+        const t = { os: "darwin", arch: "aarch64" };
+        assert.strictEqual(
+            binary.cachedBundleDir("/store", "7.3.0", t),
+            path.join("/store", "bundles", "mockserver-7.3.0-darwin-aarch64")
+        );
+    });
+
+    await test("parseJavaOpts splits on whitespace like the launcher's unquoted expansion", () => {
+        assert.deepStrictEqual(binary.parseJavaOpts(undefined), []);
+        assert.deepStrictEqual(binary.parseJavaOpts(""), []);
+        assert.deepStrictEqual(binary.parseJavaOpts("   "), []);
+        assert.deepStrictEqual(binary.parseJavaOpts("-Xmx512m"), ["-Xmx512m"]);
+        assert.deepStrictEqual(
+            binary.parseJavaOpts("  -Xmx512m   -Dfoo=bar\t-Dbaz=qux "),
+            ["-Xmx512m", "-Dfoo=bar", "-Dbaz=qux"]
+        );
+    });
+
+    await test("isValidVersion accepts release-shaped versions and rejects injection", () => {
+        assert.strictEqual(binary.isValidVersion("7.3.0"), true);
+        assert.strictEqual(binary.isValidVersion("7.3.0-SNAPSHOT_1"), true);
+        assert.strictEqual(binary.isValidVersion("7.3.0/../etc"), false);
+        assert.strictEqual(binary.isValidVersion("7 3"), false);
+        assert.strictEqual(binary.isValidVersion(""), false);
+        assert.strictEqual(binary.isValidVersion("../../evil"), false);
+    });
+
+    await test("checksumAbortReason is fail-closed: verified, mismatch, and missing-sidecar cases", () => {
+        const digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        // sidecar present + digests match → proceed
+        assert.strictEqual(binary.checksumAbortReason(digest, digest, false), undefined);
+        // digests match is case-insensitive
+        assert.strictEqual(binary.checksumAbortReason(digest.toUpperCase(), digest, false), undefined);
+        // sidecar present + mismatch → abort (even with consent flag set)
+        assert.ok(binary.checksumAbortReason(digest, "deadbeef", true), "mismatch must abort");
+        // sidecar absent + NO consent → abort (fail-closed)
+        const noSidecar = binary.checksumAbortReason(undefined, undefined, false);
+        assert.ok(noSidecar && /could not be verified/i.test(noSidecar), "missing sidecar without consent must abort");
+        // sidecar absent + explicit consent → proceed
+        assert.strictEqual(binary.checksumAbortReason(undefined, undefined, true), undefined);
+    });
+
+    await test("firstUnsafeArchiveEntry flags absolute and path-traversal entries", () => {
+        assert.strictEqual(
+            binary.firstUnsafeArchiveEntry(["mockserver-7.3.0-linux-x86_64/bin/mockserver", "runtime/lib/x.so"]),
+            undefined
+        );
+        assert.strictEqual(binary.firstUnsafeArchiveEntry(["/etc/passwd"]), "/etc/passwd");
+        assert.strictEqual(binary.firstUnsafeArchiveEntry(["../../etc/passwd"]), "../../etc/passwd");
+        assert.strictEqual(binary.firstUnsafeArchiveEntry(["ok/../../evil"]), "ok/../../evil");
+        assert.strictEqual(binary.firstUnsafeArchiveEntry(["C:\\Windows\\system32"]), "C:\\Windows\\system32");
+        assert.strictEqual(binary.firstUnsafeArchiveEntry(["", "  ", "safe/dir/file"]), undefined);
+    });
+
+    await test("sha256File computes the digest of a real file", async () => {
+        const fs = require("fs");
+        const os = require("os");
+        const path = require("path");
+        const tmp = path.join(os.tmpdir(), `ms-sha-${Date.now()}.bin`);
+        fs.writeFileSync(tmp, "");
+        try {
+            // SHA-256 of the empty string.
+            assert.strictEqual(
+                await binary.sha256File(tmp),
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            );
+        } finally {
+            fs.rmSync(tmp, { force: true });
+        }
+    });
+
+    // --- Binary launch spawns the bundled java DIRECTLY (no cmd.exe / no shell) ---
+    // These drive the real mockserver.startBinary handler with child_process.spawn
+    // patched, and assert the resolved command is the bundled java executable with
+    // `-jar <jar>` + server args — and crucially that cmd.exe is NEVER spawned. This
+    // is the behaviour that clears CodeQL js/shell-command-constructed-from-input:
+    // a bundle path is never handed to a shell.
+    {
+        const fs = require("fs");
+        const os = require("os");
+        const path = require("path");
+        const child_process = require("child_process");
+        const target = binary.resolveTarget(process.platform, process.arch);
+
+        // Lay out a minimal bundle tree (java executable + jar) under `root`.
+        function layoutBundle(root: string): { java: string; jar: string } {
+            const j = binary.bundleJavaAndJar(root, target.os);
+            fs.mkdirSync(path.dirname(j.javaExecutable), { recursive: true });
+            fs.mkdirSync(path.dirname(j.jarPath), { recursive: true });
+            fs.writeFileSync(j.javaExecutable, "");
+            fs.writeFileSync(j.jarPath, "");
+            return { java: j.javaExecutable, jar: j.jarPath };
+        }
+
+        // Run startBinary with spawn captured; returns the single spawn call.
+        async function runStartBinaryCapturingSpawn(): Promise<{ cmd: string; args: string[]; opts: any }> {
+            const originalSpawn = child_process.spawn;
+            const calls: Array<{ cmd: string; args: string[]; opts: any }> = [];
+            child_process.spawn = (cmd: string, args: string[], opts: any) => {
+                calls.push({ cmd, args, opts });
+                return {
+                    stdout: { on() {} },
+                    stderr: { on() {} },
+                    on() {},
+                    kill() {},
+                    pid: 4242,
+                };
+            };
+            try {
+                await registeredCommands.get("mockserver.startBinary")!();
+            } finally {
+                child_process.spawn = originalSpawn;
+            }
+            // Reset the tracked process so the next call isn't blocked by "already running".
+            extension.deactivate();
+            assert.strictEqual(calls.length, 1, `expected exactly one spawn, got ${calls.length}`);
+            return calls[0];
+        }
+
+        await test("startBinary (configured directory) spawns bundled java directly with -jar, never cmd.exe", async () => {
+            const root = path.join(os.tmpdir(), `ms-bundle-dir-${Date.now()}`);
+            const { java, jar } = layoutBundle(root);
+            configValues["binaryPath"] = root;
+            configValues["port"] = 3080;
+            let call: any;
+            try {
+                call = await runStartBinaryCapturingSpawn();
+            } finally {
+                delete configValues["binaryPath"];
+                delete configValues["port"];
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+            assert.notStrictEqual(call.cmd, "cmd.exe", "must NOT spawn cmd.exe");
+            assert.ok(!/cmd(\.exe)?$/i.test(call.cmd), `command must be java, not a shell: ${call.cmd}`);
+            assert.strictEqual(call.cmd, java, "command should be the bundled java executable");
+            assert.deepStrictEqual(call.args, ["-jar", jar, "-serverPort", "3080"]);
+        });
+
+        await test("startBinary (configured launcher FILE) resolves the bundle root and spawns java, not the .bat/shell", async () => {
+            const root = path.join(os.tmpdir(), `ms-bundle-file-${Date.now()}`);
+            const { java, jar } = layoutBundle(root);
+            // Point binaryPath at the launcher file (…/bin/mockserver[.bat]) — a FILE, not a dir.
+            const launcherFile = path.join(root, "bin", target.os === "windows" ? "mockserver.bat" : "mockserver");
+            fs.mkdirSync(path.dirname(launcherFile), { recursive: true });
+            fs.writeFileSync(launcherFile, "");
+            configValues["binaryPath"] = launcherFile;
+            let call: any;
+            try {
+                call = await runStartBinaryCapturingSpawn();
+            } finally {
+                delete configValues["binaryPath"];
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+            assert.notStrictEqual(call.cmd, "cmd.exe", "must NOT spawn cmd.exe");
+            assert.strictEqual(call.cmd, java, "command should be the bundled java executable, not the launcher");
+            assert.strictEqual(call.args[0], "-jar");
+            assert.strictEqual(call.args[1], jar);
+        });
+
+        await test("startBinary (cached bundle) spawns bundled java directly, never cmd.exe", async () => {
+            const cachedRoot = binary.cachedBundleDir(globalStorageDir, "9.9.9", target);
+            const { java, jar } = layoutBundle(cachedRoot);
+            let call: any;
+            try {
+                call = await runStartBinaryCapturingSpawn();
+            } finally {
+                fs.rmSync(globalStorageDir, { recursive: true, force: true });
+            }
+            assert.notStrictEqual(call.cmd, "cmd.exe", "must NOT spawn cmd.exe");
+            assert.strictEqual(call.cmd, java, "command should be the cached bundle's java executable");
+            assert.deepStrictEqual(call.args, ["-jar", jar, "-serverPort", "1080"]);
+        });
+
+        await test("startBinary threads MOCKSERVER_JAVA_OPTS into the java args (before -jar)", async () => {
+            const root = path.join(os.tmpdir(), `ms-bundle-opts-${Date.now()}`);
+            const { java, jar } = layoutBundle(root);
+            configValues["binaryPath"] = root;
+            const prev = process.env.MOCKSERVER_JAVA_OPTS;
+            process.env.MOCKSERVER_JAVA_OPTS = "-Xmx256m -Dx=y";
+            let call: any;
+            try {
+                call = await runStartBinaryCapturingSpawn();
+            } finally {
+                delete configValues["binaryPath"];
+                if (prev === undefined) {
+                    delete process.env.MOCKSERVER_JAVA_OPTS;
+                } else {
+                    process.env.MOCKSERVER_JAVA_OPTS = prev;
+                }
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+            assert.strictEqual(call.cmd, java);
+            assert.deepStrictEqual(call.args, ["-Xmx256m", "-Dx=y", "-jar", jar, "-serverPort", "1080"]);
+        });
+    }
 
     await test("activate registers mockserver.openDashboard command", () => {
         assert.ok(
@@ -404,6 +710,10 @@ async function runTests(): Promise<void> {
 
     await test("activate registers the mockserver.listWasm command", () => {
         assert.ok(registeredCommands.has("mockserver.listWasm"), "listWasm command not registered");
+    });
+
+    await test("activate registers the mockserver.testWasm command", () => {
+        assert.ok(registeredCommands.has("mockserver.testWasm"), "testWasm command not registered");
     });
 
     await test("activate registers the mockserver.refreshView command", () => {
@@ -1256,6 +1566,57 @@ async function runTests(): Promise<void> {
         await assert.rejects(
             () => client.retrieveWasmModules("http://localhost:1080", fakeFetch),
             /403: WASM support is disabled/
+        );
+    });
+
+    await test("testWasmModule POSTs base64 module + sample request and returns matched", async () => {
+        let captured: any = {};
+        const fakeFetch = (url: string, init: any) => {
+            captured = { url, init };
+            return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"matched":true}') });
+        };
+        const bytes = new Uint8Array([0, 97, 115, 109, 1, 2, 3]);
+        const matched = await client.testWasmModule(
+            "http://localhost:1080",
+            bytes,
+            { method: "POST", path: "/orders", queryStringParameters: { tenant: ["acme"] }, cookies: { session: "abc123" } },
+            fakeFetch
+        );
+        assert.strictEqual(matched, true, "should return the server's matched result");
+        assert.ok(captured.url.endsWith("/mockserver/wasm/test"), `url=${captured.url}`);
+        assert.strictEqual(captured.init.method, "POST");
+        assert.strictEqual(captured.init.headers["Content-Type"], "application/json");
+        const sent = JSON.parse(captured.init.body);
+        assert.strictEqual(
+            sent.module,
+            Buffer.from(bytes).toString("base64"),
+            "module should be base64-encoded"
+        );
+        assert.strictEqual(sent.request.method, "POST");
+        assert.strictEqual(sent.request.path, "/orders");
+        assert.deepStrictEqual(sent.request.queryStringParameters, { tenant: ["acme"] });
+        assert.deepStrictEqual(sent.request.cookies, { session: "abc123" });
+    });
+
+    await test("testWasmModule returns false when the server reports no match", async () => {
+        const fakeFetch = () =>
+            Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"matched":false}') });
+        const matched = await client.testWasmModule(
+            "http://localhost:1080",
+            new Uint8Array([0]),
+            { method: "GET", path: "/" },
+            fakeFetch
+        );
+        assert.strictEqual(matched, false);
+    });
+
+    await test("testWasmModule surfaces the 403 wasm-disabled message verbatim on a non-ok response", async () => {
+        const disabled = "WASM support is disabled; set wasmEnabled=true to enable";
+        const fakeFetch = () =>
+            Promise.resolve({ ok: false, status: 403, text: () => Promise.resolve(disabled) });
+        await assert.rejects(
+            () => client.testWasmModule("http://localhost:1080", new Uint8Array([0]), {}, fakeFetch),
+            new RegExp(`403: ${disabled}`)
         );
     });
 

@@ -1,90 +1,23 @@
 ---
 title: Agent Framework Recipes
-description: Minimal recipes for pointing LlamaIndex and the OpenAI Agents SDK at MockServer to mock LLM provider calls during testing, complementing the LangChain and LangGraph examples in AI Debugging.
-shortTitle: Agent Frameworks
-layout: page
-pageOrder: 4
-section: 'AI & MCP'
-subsection: true
+layout: null
 sitemap:
-  priority: 0.8
-  changefreq: 'monthly'
-  lastmod: 2026-06-20T00:00:00+00:00
+  exclude: true
 ---
-
-<p>These recipes extend the <a href="/mock_server/ai_debugging.html">AI Debugging</a> page, which shows how to route LangChain and LangGraph model calls through MockServer. The same approach works for LlamaIndex and the OpenAI Agents SDK: override the base URL so every LLM call goes to MockServer instead of the real provider, then set up expectations in your tests using the <a href="/mock_server/llm_response_mocking.html">LLM mock builder</a>.</p>
-
-<a id="llamaindex" class="anchor" href="#llamaindex">&nbsp;</a>
-
-<h2>LlamaIndex</h2>
-
-<p>LlamaIndex uses a global <code class="code inline">Settings</code> object. Override its <code class="code inline">llm</code> attribute with a model client whose base URL points at MockServer:</p>
-
-<pre class="prettyprint lang-python code"><code class="code">from llama_index.core import Settings
-from llama_index.llms.openai import OpenAI
-
-# Route every LLM call through MockServer instead of calling the provider directly.
-Settings.llm = OpenAI(
-    model="gpt-4o",
-    api_base="http://localhost:1080/v1",
-    api_key="sk-placeholder",  # MockServer does not validate the key
-)
-
-# Any LlamaIndex query or agent call now goes through MockServer.
-# Set up your expectations before running the query:
-#
-#   from your_test import mockserver_client
-#   mockserver_client.llm_mock("/v1/chat/completions") \
-#       .with_provider("OPENAI") \
-#       .responding_with(completion().with_text("The answer is 42.")) \
-#       .apply()
-#
-#   response = index.query("What is the answer?")
-</code></pre>
-
-<p>Alternatively, set the <code class="code inline">OPENAI_BASE_URL</code> environment variable before your process starts; LlamaIndex's OpenAI integration picks it up automatically:</p>
-
-<pre class="prettyprint code"><code class="code">OPENAI_BASE_URL=http://localhost:1080/v1 pytest tests/</code></pre>
-
-<p>For Anthropic models (<code class="code inline">llama_index.llms.anthropic</code>), set <code class="code inline">api_base="http://localhost:1080"</code> and use <code class="code inline">Provider.ANTHROPIC</code> in your LLM mock builder expectation.</p>
-
-<a id="openai-agents" class="anchor" href="#openai-agents">&nbsp;</a>
-
-<h2>OpenAI Agents SDK</h2>
-
-<p>The <a href="https://github.com/openai/openai-agents-python" target="_blank" rel="noopener noreferrer">OpenAI Agents SDK</a> (<code class="code inline">openai-agents</code> package) exposes <code class="code inline">set_default_openai_client</code> to replace the underlying <code class="code inline">AsyncOpenAI</code> instance used by all agents. Point that client at MockServer:</p>
-
-<pre class="prettyprint lang-python code"><code class="code">import asyncio
-from openai import AsyncOpenAI
-from agents import set_default_openai_client, Agent, Runner
-
-# Replace the default OpenAI client with one that calls MockServer.
-openai_client = AsyncOpenAI(
-    base_url="http://localhost:1080/v1",
-    api_key="sk-placeholder",
-)
-set_default_openai_client(openai_client)
-
-# Every model call made by agents now goes through MockServer.
-agent = Agent(name="support-bot", instructions="Answer concisely.", model="gpt-4o")
-
-async def main():
-    result = await Runner.run(agent, "What is 2 + 2?")
-    print(result.final_output)
-
-asyncio.run(main())</code></pre>
-
-<p>To use the environment variable approach instead, set <code class="code inline">OPENAI_BASE_URL</code> before the process starts; the SDK reads it through the underlying <code class="code inline">openai</code> library:</p>
-
-<pre class="prettyprint code"><code class="code">OPENAI_BASE_URL=http://localhost:1080/v1 pytest tests/</code></pre>
-
-<a id="proxy-fallback" class="anchor" href="#proxy-fallback">&nbsp;</a>
-
-<h2>Frameworks Without a Base-URL Override</h2>
-
-<p>Some frameworks or SDKs do not expose a base URL parameter. In that case, configure MockServer as an HTTPS proxy and set the standard proxy environment variables so all outbound traffic flows through it:</p>
-
-<pre class="prettyprint code"><code class="code">HTTPS_PROXY=http://localhost:1080
-ALL_PROXY=http://localhost:1080</code></pre>
-
-<p>See <a href="/mock_server/ai_traffic_inspection.html">AI Traffic Inspection</a> for the full setup, including how to trust MockServer's generated TLS certificate and how to set up forwarding expectations so the proxied requests reach their real destinations (or are intercepted by MockServer mocks).</p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Framework Recipes — MockServer</title>
+<meta http-equiv="refresh" content="0; url=/mock_server/ai_traffic_inspection.html#configure-tools">
+<meta name="robots" content="noindex, follow">
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; line-height: 1.6; color: #24292f; }
+  a { color: #1264a3; }
+</style>
+</head>
+<body>
+<p>This page has moved to <a href="/mock_server/ai_traffic_inspection.html#configure-tools">AI Traffic Inspection — Configure Your AI Tool, SDK, or Framework</a>.</p>
+</body>
+</html>

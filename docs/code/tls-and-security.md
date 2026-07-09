@@ -70,6 +70,23 @@ MockServer maintains an in-memory CA with default DN:
 
 Custom CA certificates can be loaded from PEM files via configuration.
 
+### Proxy Setup — CA Materialisation and Copy-Paste Block
+
+The `proxySetupLogging` property (env `MOCKSERVER_PROXY_SETUP_LOGGING`, default `false`) gates both the startup CA file write and the "Proxy Setup" log block. The block contains ready-to-paste environment variable exports for both Unix and Windows PowerShell:
+
+```
+HTTPS_PROXY=http://localhost:<port>
+NODE_EXTRA_CA_CERTS=<ca path>       # Node.js
+SSL_CERT_FILE=<ca path>             # Python (httpx, standard library)
+REQUESTS_CA_BUNDLE=<ca path>        # Python requests
+```
+
+When `proxySetupLogging` is enabled, MockServer writes the active CA certificate to `<directoryToSaveDynamicSSLCertificate>/mockserver-ca.pem` at startup and prints the block. The standalone launcher (executable JAR, Docker image, `mockserver` CLI) automatically enables `proxySetupLogging`, so proxy users see both without any extra configuration. Embedded usage (`new ClientAndServer(...)`) stays silent by default; when `proxySetupLogging` is disabled, the CA file is instead written on the first call to `GET /mockserver/proxyConfiguration`.
+
+The `GET /mockserver/proxyConfiguration` endpoint is always available regardless of `proxySetupLogging`. It returns JSON by default or a plain copy-paste text block with `Accept: text/plain`. It never exposes the private key.
+
+The `--proxy-setup` CLI flag (property `mockserver.proxySetup`, env `MOCKSERVER_PROXY_SETUP`, default `false`) is a convenience switch: when set, it forces `dynamicallyCreateCertificateAuthorityCertificate=true`, generating a unique local CA whose private key never leaves the machine. Without it, MockServer uses the built-in default CA whose private key is published in the git repository — safe only for isolated local development. The startup block includes a security warning when the default public CA is in use.
+
 ### Key Classes
 
 | Class | Package | Purpose |
@@ -135,6 +152,26 @@ When forwarding requests, MockServer's `NettyHttpClient` needs to trust upstream
 | `JVM` | Use the JVM's default truststore |
 | `CUSTOM` | Use a custom CA chain from configuration |
 
+### Per-Host Outbound mTLS
+
+Outbound client authentication (mTLS to the upstream) is global by default: the single
+`forwardProxyPrivateKey` / `forwardProxyCertificateChain` pair (or MockServer's own generated key/cert) is
+presented to every upstream. `forwardProxyClientCertificatesByHost` adds a per-host override — a
+comma-separated list of `host=certificateChainPath;privateKeyPath` entries. When MockServer opens an outbound
+TLS connection whose target host matches an entry (case-insensitive), that host's cert/key pair is presented;
+any host without an entry falls back to the global pair. The default is empty (global pair only, unchanged).
+
+Selection and caching live in `NettySslContextFactory.createClientSslContext(forwardProxyClient, enableHttp2, host)`:
+
+- The pure, unit-tested resolver `resolveForwardProxyClientCertificate(mapping, host)` parses the map and returns
+  the matching `[certificateChainPath, privateKeyPath]` (or `null` to fall back). Malformed entries (missing `=`
+  or `;`, or a blank cert/key) are skipped.
+- The `SslContext` cache is keyed by host **only for hosts that have a mapping**; every unmapped host shares one
+  global-pair context, so a forward proxy that sees many upstream hosts cannot grow the cache without bound.
+- The target host is taken from the upstream socket (`REMOTE_SOCKET`) at pipeline-init time in
+  `HttpClientInitializer`, the same host already used for SNI. The `CONNECT`-tunnel loopback
+  (`RelayConnectHandler`) is MockServer talking to itself, not an upstream, so it keeps the global pair.
+
 ### Forward Target SSRF Validation
 
 When `forwardProxyBlockPrivateNetworks` is `true` (default `false`), MockServer validates the target host before opening any outbound connection. `InetAddressValidator.validateForwardTarget` resolves the hostname and rejects addresses in these ranges:
@@ -161,11 +198,37 @@ A complete end-to-end mTLS example with self-generated certificates, Docker Comp
 
 When `tlsMutualAuthenticationRequired` is configured, `PortUnificationHandler` checks for TLS on the channel. If the connection is not TLS, it returns **426 Upgrade Required** and disconnects.
 
-Client certificates are extracted from the SSL session via `SniHandler.retrieveClientCertificates()` and stored as a channel attribute (`UPSTREAM_CLIENT_CERTIFICATES`).
+Client certificates are extracted from the SSL session via `SniHandler.retrieveClientCertificates()` and stored as a channel attribute (`UPSTREAM_CLIENT_CERTIFICATES`), then mapped onto the request's `clientCertificateChain` by `JDKCertificateToMockServerX509Certificate` (the same path is used for HTTP/3 — see [http3.md](http3.md)).
+
+### Matching Expectations on the Client Certificate
+
+Beyond authentication, an expectation can **match** on the presented client-certificate chain via the
+`clientCertificate` request matcher (`ClientCertificateMatcher`, `org.mockserver.matchers`). Matching is
+performed against the **leaf certificate** (index `0` — the client's own certificate) of the request's
+`clientCertificateChain`:
+
+- `subject` — leaf Common Name, full subject Distinguished Name, or any Subject Alternative Name.
+- `issuer` — leaf issuer Common Name or full issuer Distinguished Name.
+- `fingerprintSha256` — SHA-256 fingerprint of the leaf's DER encoding (colons/whitespace and case ignored).
+
+Each criterion is a `NottableString` (regex / `!` negation / optional). This is **matching only** — it does
+not perform or replace mTLS authentication (`MTLSAuthenticationHandler`, below), which independently
+validates the chain against the configured trust store. A non-blank `clientCertificate` criterion never
+matches a request that presented no client certificate. See
+[domain-model.md](domain-model.md) for the field table.
 
 ### Control Plane mTLS
 
-Control plane endpoints (`/mockserver/expectation`, `/mockserver/verify`, etc.) can require mTLS authentication. When configured, `HttpState.controlPlaneRequestAuthenticated()` validates the client certificate chain against the configured trust store.
+Control plane endpoints (`/mockserver/expectation`, `/mockserver/verify`, etc.) can require mTLS authentication. When configured, `HttpState.controlPlaneRequestAuthenticated()` delegates to `MTLSAuthenticationHandler`, which validates the presented client-certificate chain against the configured trust store (`controlPlaneTLSMutualAuthenticationCAChain`).
+
+For each presented certificate, paired with each configured CA, the handler:
+
+| Check | How | Failure |
+|-------|-----|---------|
+| PKIX path validation | Builds a single-certificate `CertPath` for the presented certificate and validates it against that CA as the sole `TrustAnchor` (`CertPathValidator` "PKIX", `setRevocationEnabled(false)`). This performs signature verification, validity-window (`notBefore`/`notAfter`) enforcement and basic X.509 path processing in one JDK-audited step. | Rejected (unknown issuer, bad signature, expired/not-yet-valid) |
+| Extended Key Usage | If the presented certificate carries an EKU extension it must include `clientAuth` (`id-kp-clientAuth` `1.3.6.1.5.5.7.3.2`) or `anyExtendedKeyUsage` (`2.5.29.37.0`). A certificate with **no** EKU extension is unrestricted and is allowed (RFC 5280 practice). | Rejected when EKU present but lacks clientAuth |
+
+A presented certificate authenticates if any (certificate, CA) pair passes both checks; otherwise the handler throws `AuthenticationException`. Revocation (CRL/OCSP) is intentionally disabled so validation never makes a network call, consistent with the rest of the codebase. Because a certificate with no EKU is accepted, existing client certificates (including those that carry `serverAuth`+`clientAuth`, as MockServer's own generated certificates do) keep working unchanged.
 
 ## Control Plane Authentication
 
@@ -251,7 +314,10 @@ Classes: `ControlPlaneRole` (enum, `o.m.authentication.authorization`) with `sat
 | `PUT /mockserver/configuration` (mutates live config) | yes | **yes** | Routed through the shared `HttpState.controlPlaneRequestAuthenticated` gate, so it takes the same read/mutate authorization as `handle`-dispatched mutations (classified `MUTATE`). A read-only principal is `403`'d; mutate/admin proceed. |
 | `GET /mockserver/configuration` | yes | yes | Same gate, classified `READ`. |
 | `GET /mockserver/openapi.yaml`, `GET /mockserver/llm/optimisationReport` | yes | yes | Reads; routed through the shared gate. |
+| `GET /mockserver/dashboard*` (dashboard SPA + assets) | yes | yes | Routed through the shared `controlPlaneRequestAuthenticated` gate in `HttpRequestHandler`, classified `READ` — the dashboard streams all captured traffic, so a read-only role may view it but an unauthenticated caller is `401`'d. Default (no auth configured) is a no-op: the gate returns true and the dashboard stays open. |
+| `/_mockserver_ui_websocket` (dashboard UI WebSocket upgrade) | yes | yes | Gated in `DashboardWebSocketHandler` via the non-writing `HttpState.evaluateControlPlaneAuthentication` (the upgrade must render a raw `401`/`403` handshake rejection, not a MockServer `HttpResponse`), classified `READ`. On a non-`ALLOWED` decision the upgrade is refused. Default (no auth configured) short-circuits to allow, so the open dashboard is unchanged. Browsers cannot attach a bearer token to a WebSocket, so a token/OIDC-authenticated dashboard must sit behind an authenticating proxy (or use mutual TLS). |
 | `GET /mockserver/status`, `GET /mockserver/ready` | **no** | **no** | Deliberately open: these are liveness/readiness probes and must be reachable by health-check infrastructure without credentials. |
+| `GET /mockserver/metrics` (Prometheus scrape) | **no** | **no** | Deliberately open: Prometheus/OTEL scrapers cannot present a control-plane certificate or bearer token while scraping, so the endpoint is served by `MetricsHandler` outside the `controlPlaneRequestAuthenticated` gate. Its labels expose operational metadata (`upstream_host`; LLM `provider`/`model` token & cost counters). Secure it by disabling (`metricsEnabled=false`, the default → `404`, nothing exposed), restricting at the network layer, or preferring PUSH export (OTLP / Prometheus Remote-Write) which has no scrape endpoint. **Do not add control-plane auth here.** The JSON snapshot `PUT /mockserver/retrieve?type=METRICS` *is* gated (dispatched through `HttpState.handle`). See [metrics.md → Scrape Endpoint](metrics.md). |
 | `PUT /mockserver/bind` | yes | **yes (MUTATE)** | Auth-gated in `HttpRequestHandler` via the same `controlPlaneRequestAuthenticated` call as every other mutation. An unauthenticated caller receives 401/403 before any port is rebound. Default (no auth configured) is a no-op: the gate returns true and binding proceeds. |
 | `PUT /mockserver/stop` | yes | **yes (MUTATE)** | Auth-gated identically to `/bind` — an unauthenticated caller cannot stop the server. Default (no auth configured) is a no-op: the gate returns true and `/stop` proceeds. |
 | MCP control plane (`POST /mockserver/mcp` over HTTP/1.1, HTTP/2, HTTP/3, and JSON-RPC batch) | yes | **yes — per-tool read/mutate** | MCP requests are **authenticated** (same mTLS/JWT/OIDC as every control-plane route). When `controlPlaneAuthorizationEnabled` is true, per-tool **read/mutate authorization** is enforced: `McpToolRegistry` classifies each tool as read or mutate (fail-closed — an unclassified tool defaults to MUTATE), and `McpRequestProcessor` calls `HttpState.controlPlaneToolAuthorized` before executing the tool. A read-only principal is `403`'d on mutating tools (`create_expectation`, `clear_expectations`, `reset`, etc.). When `controlPlaneAuthorizationEnabled` is false (the default), no authorization check runs. |
@@ -286,7 +352,7 @@ The MCP endpoint (`/mockserver/mcp`) enforces the same control-plane **authentic
 | `AuthenticationResult` | `o.m.authentication` | Immutable enriched outcome: authenticated flag, verified principal, principalSource, read-only claims/scopes |
 | `ChainedAuthenticationHandler` | `o.m.authentication` | Chains multiple `AuthenticationHandler` instances (logical AND — all must pass); combines results selecting the first verified principal and unioning scopes |
 | `AuthenticationException` | `o.m.authentication` | Thrown on authentication failure |
-| `MTLSAuthenticationHandler` | `o.m.authentication.mtls` | Validates client certificate chain against configured CA certificates via `X509Certificate.verify()` |
+| `MTLSAuthenticationHandler` | `o.m.authentication.mtls` | Validates client certificate chain against configured CA certificates via a PKIX `CertPath` (revocation disabled) plus a `clientAuth` Extended Key Usage check (absent EKU allowed) |
 | `JWTAuthenticationHandler` | `o.m.authentication.jwt` | Loads JWK keys from URL (`RemoteJWKSet`) or file (`ImmutableJWKSet`), extracts Bearer token from `Authorization` header, delegates to `JWTValidator` |
 | `OidcAuthenticationHandler` | `o.m.authentication.oidc` | Verifies an external-IdP OIDC Bearer token (signature + issuer + audience + exp/nbf + required scopes) and returns a verified-principal `AuthenticationResult`; resolves the JWK set directly or via OIDC discovery |
 | `ControlPlaneRole` | `o.m.authentication.authorization` | Coarse hierarchical role enum (`READ` < `MUTATE` < `ADMIN`) with `satisfies(required)` |
@@ -407,6 +473,9 @@ check handled earlier in `PortUnificationHandler` and is unaffected.
 | `certificateAuthorityCertificate` | (auto) | PEM file for custom CA certificate |
 | `forwardProxyTLSX509CertificatesTrustManagerType` | ANY | Trust mode for upstream connections |
 | `forwardProxyTLSCustomTrustX509Certificates` | (none) | PEM file for custom upstream trust |
+| `forwardProxyPrivateKey` | (none) | Global outbound mTLS client private key (PKCS#8/PKCS#1 PEM) |
+| `forwardProxyCertificateChain` | (none) | Global outbound mTLS client certificate chain (X.509 PEM) |
+| `forwardProxyClientCertificatesByHost` | (none) | Per-host outbound mTLS cert/key map: `host=certChainPath;keyPath,...`; falls back to the global pair |
 | `controlPlaneTLSMutualAuthenticationRequired` | false | Require mTLS for control plane |
 | `controlPlaneTLSMutualAuthenticationCAChain` | (none) | CA chain for control plane mTLS |
 | `controlPlaneJWTAuthenticationJWKSource` | (none) | JWK source URL for JWT validation |

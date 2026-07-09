@@ -32,6 +32,12 @@ ALL_COMPONENTS=(
   rubygems
   github
   binary
+  scoop
+  winget
+  chocolatey
+  homebrew
+  sdkman
+  asdf
   mcp
   client-go
   client-dotnet
@@ -42,6 +48,8 @@ ALL_COMPONENTS=(
   tc-dotnet
   tc-go
   tc-rust
+  tc-ruby
+  tc-php
   vscode
   jetbrains
 )

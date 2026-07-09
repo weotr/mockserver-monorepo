@@ -46,6 +46,10 @@ export interface StandardMatcher {
   jsonMatchType?: JsonMatchType;
   /** When bodyMatcherType is 'string', whether to use subString matching. */
   bodySubString?: boolean;
+  /** Sub-matchers composed by an `allOf` body — used only when bodyMatcherType is 'allOf'. */
+  bodyAllOf?: StandardBodyAllOfEntry[];
+  /** JWT request-matcher criteria (httpRequest.jwt); omitted entirely when nothing is set. */
+  jwt?: StandardJwtMatcher;
   secure: boolean;
   priority: number;
   times: number;
@@ -167,7 +171,52 @@ export type BodyMatcherType =
   | 'xpath'
   | 'regex'
   | 'parameters'
-  | 'wasm';
+  | 'wasm'
+  | 'allOf';
+
+/**
+ * The body matcher types that can be composed inside an `allOf` conjunction. A
+ * deliberately minimal subset of {@link BodyMatcherType} — the value-carrying,
+ * single-string matchers — so the composed sub-matchers map 1:1 onto a wire body
+ * object and a Java body factory without needing per-row option state.
+ */
+export type AllOfSubBodyType =
+  | 'string'
+  | 'json'
+  | 'json-schema'
+  | 'json-path'
+  | 'xml'
+  | 'xml-schema'
+  | 'xpath'
+  | 'regex';
+
+/** One component of an `allOf` body conjunction. */
+export interface StandardBodyAllOfEntry {
+  type: AllOfSubBodyType;
+  value: string;
+}
+
+/**
+ * JWT request-matcher criteria (httpRequest.jwt). Mirrors the server-side
+ * {@link org.mockserver.model.Jwt} model: the token is read from the named header
+ * (default `authorization`), the scheme prefix (default `Bearer`) is stripped, and
+ * the decoded claims / JOSE header are matched. Only non-blank fields are emitted;
+ * default header/scheme are omitted from the wire payload.
+ */
+export interface StandardJwtMatcher {
+  /** Header carrying the token (default `authorization`); omitted from JSON when blank/default. */
+  header?: string;
+  /** Scheme prefix stripped before decoding (default `Bearer`); omitted when blank/default. */
+  scheme?: string;
+  /** Claim criteria as `name=value` lines; value is a NottableString (`!` negates, regex allowed). */
+  claims?: string;
+  /** Convenience criterion for the `iss` claim. */
+  issuer?: string;
+  /** Convenience criterion for the `aud` claim. */
+  audience?: string;
+  /** Convenience criterion for the JOSE header `alg`. */
+  algorithm?: string;
+}
 
 export interface GraphQLMatcherOptions {
   selectionSetMatchType: SelectionSetMatchType;
@@ -483,6 +532,63 @@ export interface StandardActionPayload {
   /** Capture rules — extract request values into scenario state. Omitted from
    *  the payload when empty (backward compatible). */
   capture?: StandardCaptureRule[];
+  /**
+   * When editing an EXISTING expectation, the original expectation JSON exactly
+   * as it lives on the server. The form models only a subset of an expectation's
+   * fields; without this, re-registering would silently drop every unmodeled
+   * field (scenario bindings, response sequences, cross-protocol scenarios,
+   * request-matcher extras like keepAlive/socketAddress/protocol, …).
+   *
+   * When present, `buildExpectationJson` deep-merges the form output ONTO this
+   * original via {@link mergeUnmodeledFields}, so the form is authoritative for
+   * the fields it models and everything else passes through unchanged. Absent
+   * on the new-compose flow, which is therefore completely unaffected.
+   */
+  editOriginal?: Record<string, unknown>;
+  /**
+   * True when the form loaded (and therefore owns) the original's action slot,
+   * so the form's action replaces the original's. False when the original
+   * carries an action the form cannot represent (e.g. a `httpResponses`
+   * sequence): the original action is then preserved rather than clobbered by
+   * the form's default. Only meaningful alongside {@link editOriginal}.
+   */
+  editActionModeled?: boolean;
+  /**
+   * Scenario state-machine bindings, as entered in the Advanced form's optional
+   * Scenario section. Blank fields are omitted from the payload.
+   */
+  scenario?: StandardScenarioBinding;
+  /**
+   * True only when the Advanced form rendered the Scenario section, making the
+   * three scenario keys (scenarioName / scenarioState / newScenarioState) form
+   * AUTHORITATIVE — set from the form when non-empty, and removed from the merged
+   * result when cleared. On the Quick path (and any caller that leaves this
+   * false/undefined) the three keys stay UNMODELED and are preserved by
+   * {@link mergeUnmodeledFields} passthrough — so a quick edit of a
+   * scenario-bound expectation can never drop its bindings.
+   */
+  scenarioModeled?: boolean;
+  /**
+   * True when the Advanced form's JWT section faithfully owns the request's
+   * {@code httpRequest.jwt} on edit — i.e. the original jwt (if any) round-trips
+   * losslessly through the form model. When true the form is AUTHORITATIVE for
+   * jwt (an added/edited jwt is emitted; a cleared jwt is removed). When
+   * false/undefined the original jwt is left as {@link mergeUnmodeledFields}
+   * passthrough, so an unrelated edit of an expectation whose jwt the form cannot
+   * faithfully represent (e.g. object-form NottableString claims) never rewrites
+   * it. Mirrors the {@link #editActionModeled} pattern.
+   */
+  jwtModeled?: boolean;
+}
+
+/** The Advanced form's optional Scenario section. */
+export interface StandardScenarioBinding {
+  /** Scenario name this expectation is bound to (top-level `scenarioName`). */
+  name?: string;
+  /** State the scenario must be in for this to match (top-level `scenarioState`). */
+  requiredState?: string;
+  /** State the scenario moves to when matched (top-level `newScenarioState`). */
+  transitionTo?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +622,369 @@ export function escapeJava(s: string): string {
     .replace(/\n/g, '\\n')
     .replace(/\r/g, '\\r')
     .replace(/\t/g, '\\t');
+}
+
+// ---------------------------------------------------------------------------
+// JWT + allOf body — shared JSON/Java helpers (used by both the matcher JSON
+// builder and the Java code generator so the two stay in lockstep).
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the `httpRequest.jwt` wire object, or undefined when nothing meaningful
+ * is set. Default header (`authorization`) / scheme (`Bearer`) are omitted, matching
+ * the server-side {@link JwtSerializer}. Claim values, issuer, audience and algorithm
+ * are emitted as raw strings so a leading `!` (NottableString negation) or a regex is
+ * preserved for the server to interpret.
+ */
+export function buildJwtJson(jwt: StandardJwtMatcher | undefined): Record<string, unknown> | undefined {
+  if (!jwt) return undefined;
+  const out: Record<string, unknown> = {};
+  const header = jwt.header?.trim();
+  const scheme = jwt.scheme?.trim();
+  if (header && header !== 'authorization') out['header'] = header;
+  if (scheme && scheme !== 'Bearer') out['scheme'] = scheme;
+  const claims = parseKeyValueLines(jwt.claims ?? '', '=');
+  if (claims) {
+    const flat: Record<string, string> = {};
+    for (const [k, vs] of Object.entries(claims)) flat[k] = vs[0] ?? '';
+    if (Object.keys(flat).length > 0) out['claims'] = flat;
+  }
+  const issuer = jwt.issuer?.trim();
+  const audience = jwt.audience?.trim();
+  const algorithm = jwt.algorithm?.trim();
+  if (issuer) out['issuer'] = issuer;
+  if (audience) out['audience'] = audience;
+  if (algorithm) out['algorithm'] = algorithm;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Build the wire body object for one `allOf` sub-matcher entry. */
+export function allOfEntryToWire(entry: StandardBodyAllOfEntry): Record<string, unknown> {
+  const v = entry.value.trim();
+  switch (entry.type) {
+    case 'json': {
+      let jv: unknown;
+      try { jv = JSON.parse(v); } catch { jv = v; }
+      return { type: 'JSON', json: jv };
+    }
+    case 'json-schema': return { type: 'JSON_SCHEMA', jsonSchema: v };
+    case 'json-path': return { type: 'JSON_PATH', jsonPath: v };
+    case 'xml': return { type: 'XML', xml: v };
+    case 'xml-schema': return { type: 'XML_SCHEMA', xmlSchema: v };
+    case 'xpath': return { type: 'XPATH', xpath: v };
+    case 'regex': return { type: 'REGEX', regex: v };
+    case 'string':
+    default: return { type: 'STRING', string: entry.value };
+  }
+}
+
+/** The non-blank sub-matcher entries of an `allOf` body, or [] when none. */
+export function allOfEntries(matcher: StandardMatcher): StandardBodyAllOfEntry[] {
+  if (matcher.bodyMatcherType !== 'allOf') return [];
+  return (matcher.bodyAllOf ?? []).filter((e) => e.value.trim());
+}
+
+/** Unify a plain string and the `{ value, not }` NottableString object form into the
+ *  `!`-prefix string convention used by the composer's text fields. */
+function denottableToString(field: unknown): string {
+  if (typeof field === 'string') return field;
+  if (field && typeof field === 'object' && 'value' in (field as Record<string, unknown>)) {
+    const f = field as Record<string, unknown>;
+    const prefix = f['not'] === true ? '!' : '';
+    return prefix + String(f['value'] ?? '');
+  }
+  return field == null ? '' : String(field);
+}
+
+/** Round-trip one `bodyAllOf` wire sub-body back into a composer sub-matcher entry;
+ *  returns undefined for shapes the composer's allOf form cannot represent. */
+export function allOfEntryFromWire(wire: unknown): StandardBodyAllOfEntry | undefined {
+  if (!wire || typeof wire !== 'object') return undefined;
+  const b = wire as Record<string, unknown>;
+  switch (b['type']) {
+    case 'JSON': return { type: 'json', value: typeof b['json'] === 'string' ? (b['json'] as string) : JSON.stringify(b['json'], null, 2) };
+    case 'JSON_SCHEMA': return { type: 'json-schema', value: String(b['jsonSchema'] ?? '') };
+    case 'JSON_PATH': return { type: 'json-path', value: String(b['jsonPath'] ?? '') };
+    case 'XML': return { type: 'xml', value: String(b['xml'] ?? '') };
+    case 'XML_SCHEMA': return { type: 'xml-schema', value: String(b['xmlSchema'] ?? '') };
+    case 'XPATH': return { type: 'xpath', value: String(b['xpath'] ?? '') };
+    case 'REGEX': return { type: 'regex', value: String(b['regex'] ?? '') };
+    case 'STRING': return { type: 'string', value: typeof b['string'] === 'string' ? (b['string'] as string) : '' };
+    default: return undefined;
+  }
+}
+
+/** Order-insensitive structural equality via canonical (sorted-key) JSON. */
+function canonicalize(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(canonicalize);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+      out[k] = canonicalize((v as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return v;
+}
+
+function deepEqualCanonical(a: unknown, b: unknown): boolean {
+  return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
+}
+
+/**
+ * Whether the Advanced JWT form can faithfully own the request's jwt on edit.
+ * True when there is no jwt (the form owns the empty slot, so a newly added jwt
+ * is emitted), or when the original jwt round-trips losslessly through the form
+ * model — `buildJwtJson(jwtFromRequest(req))` deep-equals the original jwt. When
+ * false the original jwt is preserved as passthrough (the form's lossy prefill —
+ * e.g. object-form NottableString claims flattened to `name=value`, dropping
+ * `optional`/negation structure — must not silently rewrite it on an unrelated
+ * edit). Mirrors the composer's `editActionModeled` faithfulness gate.
+ */
+export function jwtFaithfullyModeled(httpRequest: unknown): boolean {
+  if (!isPlainObject(httpRequest)) return true;
+  const originalJwt = httpRequest['jwt'];
+  if (originalJwt == null) return true;
+  const rebuilt = buildJwtJson(jwtFromRequest(httpRequest));
+  return deepEqualCanonical(rebuilt, originalJwt);
+}
+
+/** Round-trip the `httpRequest.jwt` wire object back into the composer's JWT form model,
+ *  or undefined when there is no jwt criterion. */
+export function jwtFromRequest(req: Record<string, unknown>): StandardJwtMatcher | undefined {
+  const raw = req['jwt'];
+  if (!raw || typeof raw !== 'object') return undefined;
+  const j = raw as Record<string, unknown>;
+  const out: StandardJwtMatcher = {};
+  if (typeof j['header'] === 'string') out.header = j['header'];
+  if (typeof j['scheme'] === 'string') out.scheme = j['scheme'];
+  if (j['claims'] && typeof j['claims'] === 'object' && !Array.isArray(j['claims'])) {
+    const lines: string[] = [];
+    for (const [k, v] of Object.entries(j['claims'] as Record<string, unknown>)) {
+      lines.push(`${k}=${denottableToString(v)}`);
+    }
+    if (lines.length > 0) out.claims = lines.join('\n');
+  }
+  if (j['issuer'] != null) out.issuer = denottableToString(j['issuer']);
+  if (j['audience'] != null) out.audience = denottableToString(j['audience']);
+  if (j['algorithm'] != null) out.algorithm = denottableToString(j['algorithm']);
+  return out;
+}
+
+/** Java body-factory expression for one `allOf` sub-matcher entry. */
+function allOfEntryToJava(entry: StandardBodyAllOfEntry): string {
+  const v = escapeJava(entry.value.trim());
+  switch (entry.type) {
+    case 'json': return `json("${v}")`;
+    case 'json-schema': return `jsonSchema("${v}")`;
+    case 'json-path': return `jsonPath("${v}")`;
+    case 'xml': return `xml("${v}")`;
+    case 'xml-schema': return `xmlSchema("${v}")`;
+    case 'xpath': return `xpath("${v}")`;
+    case 'regex': return `regex("${v}")`;
+    case 'string':
+    default: return `exact("${escapeJava(entry.value)}")`;
+  }
+}
+
+/** Java `jwt()...` builder expression (multi-line, 8-space continuation). */
+function jwtToJava(jwt: StandardJwtMatcher): string {
+  const parts: string[] = ['jwt()'];
+  const header = jwt.header?.trim();
+  const scheme = jwt.scheme?.trim();
+  if (header && header !== 'authorization') parts.push(`.withHeader("${escapeJava(header)}")`);
+  if (scheme && scheme !== 'Bearer') parts.push(`.withScheme("${escapeJava(scheme)}")`);
+  const claims = parseKeyValueLines(jwt.claims ?? '', '=');
+  if (claims) {
+    for (const [k, vs] of Object.entries(claims)) {
+      parts.push(`.withClaim("${escapeJava(k)}", "${escapeJava(vs[0] ?? '')}")`);
+    }
+  }
+  const issuer = jwt.issuer?.trim();
+  const audience = jwt.audience?.trim();
+  const algorithm = jwt.algorithm?.trim();
+  if (issuer) parts.push(`.withIssuer("${escapeJava(issuer)}")`);
+  if (audience) parts.push(`.withAudience("${escapeJava(audience)}")`);
+  if (algorithm) parts.push(`.withAlgorithm("${escapeJava(algorithm)}")`);
+  return parts.join('\n        ');
+}
+
+interface WhenArgs {
+  useFullWhen: boolean;
+  timesExpr: string;
+  ttlExpr: string;
+  priority: number;
+}
+
+/** The exact java.util.concurrent.TimeUnit constant names — an editOriginal with an
+ *  exotic/misspelled timeUnit must not emit non-compiling Java, so fall back to SECONDS. */
+const JAVA_TIME_UNITS: ReadonlySet<string> = new Set([
+  'NANOSECONDS', 'MICROSECONDS', 'MILLISECONDS', 'SECONDS', 'MINUTES', 'HOURS', 'DAYS',
+]);
+
+/**
+ * Derive the arguments for the 4-arg `when(request, Times, TimeToLive, priority)`
+ * overload from the built expectation JSON. `useFullWhen` is false when all three
+ * are at their neutral defaults, so the plain `when(request)` overload is used.
+ *
+ * Exported for direct unit testing of the timeUnit hardening (an exotic timeUnit
+ * is normalised away by the edit-overlay merge before it reaches this function in
+ * normal use, so the SECONDS fallback is only observable by calling this directly).
+ */
+export function whenArgsFromJson(json: Record<string, unknown>): WhenArgs {
+  const timesVal = json['times'];
+  let timesExpr = 'Times.unlimited()';
+  let timesLimited = false;
+  if (timesVal && typeof timesVal === 'object' && (timesVal as Record<string, unknown>)['unlimited'] !== true) {
+    const rt = (timesVal as Record<string, unknown>)['remainingTimes'];
+    if (typeof rt === 'number') { timesExpr = `Times.exactly(${rt})`; timesLimited = true; }
+  }
+  const ttlVal = json['timeToLive'];
+  let ttlExpr = 'TimeToLive.unlimited()';
+  let ttlLimited = false;
+  if (ttlVal && typeof ttlVal === 'object' && (ttlVal as Record<string, unknown>)['unlimited'] !== true) {
+    const t = (ttlVal as Record<string, unknown>)['timeToLive'];
+    if (typeof t === 'number') {
+      const rawUnit = (ttlVal as Record<string, unknown>)['timeUnit'];
+      const unit = typeof rawUnit === 'string' && JAVA_TIME_UNITS.has(rawUnit) ? rawUnit : 'SECONDS';
+      ttlExpr = `TimeToLive.exactly(TimeUnit.${unit}, ${t}L)`;
+      ttlLimited = true;
+    }
+  }
+  const priority = typeof json['priority'] === 'number' ? (json['priority'] as number) : 0;
+  return { useFullWhen: timesLimited || ttlLimited || priority !== 0, timesExpr, ttlExpr, priority };
+}
+
+/** The org.mockserver.mock.ResponseMode enum constants. */
+const JAVA_RESPONSE_MODES: ReadonlySet<string> = new Set(['SEQUENTIAL', 'RANDOM', 'WEIGHTED', 'SWITCH']);
+
+/** The org.mockserver.model.CrossProtocolTrigger enum constants. */
+const JAVA_CROSS_PROTOCOL_TRIGGERS: ReadonlySet<string> = new Set([
+  'DNS_QUERY', 'WEBSOCKET_CONNECT', 'GRPC_REQUEST', 'HTTP_REQUEST',
+]);
+
+/**
+ * Top-level preserved wire keys the Java client API genuinely cannot set on a
+ * ForwardChainExpectation (no fluent setter exists): `rateLimit` (no
+ * withRateLimit) and `timestamp` (server-assigned). When present alongside a
+ * representable action they are named in an honest trailing NOTE rather than
+ * silently dropped — the JSON / curl / client-library tabs remain faithful.
+ */
+const JAVA_UNREPRESENTABLE_TOPLEVEL: readonly string[] = ['rateLimit', 'timestamp'];
+
+/** A `crossProtocolScenario()...` builder expression (from a wire object). */
+function crossProtocolScenarioToJava(cp: Record<string, unknown>): string {
+  const parts: string[] = ['crossProtocolScenario()'];
+  const trigger = typeof cp['trigger'] === 'string' ? cp['trigger'] : '';
+  if (trigger && JAVA_CROSS_PROTOCOL_TRIGGERS.has(trigger)) {
+    parts.push(`    .withTrigger(CrossProtocolTrigger.${trigger})`);
+  }
+  if (typeof cp['scenarioName'] === 'string') parts.push(`    .withScenarioName("${escapeJava(cp['scenarioName'] as string)}")`);
+  if (typeof cp['targetState'] === 'string') parts.push(`    .withTargetState("${escapeJava(cp['targetState'] as string)}")`);
+  if (typeof cp['matchPattern'] === 'string') parts.push(`    .withMatchPattern("${escapeJava(cp['matchPattern'] as string)}")`);
+  return parts.join('\n');
+}
+
+/**
+ * A `response()...` builder expression from a WIRE httpResponse object (used for
+ * the members of a preserved `httpResponses` sequence, which come from the edit
+ * overlay JSON rather than the form's static state). Covers the response fields a
+ * sequence commonly carries; any field without a mapping is named in `notes`.
+ */
+function wireResponseToJava(resp: Record<string, unknown>, notes: Set<string>): string {
+  const parts: string[] = ['response()'];
+  const handled = new Set<string>();
+  if (typeof resp['statusCode'] === 'number') { parts.push(`    .withStatusCode(${resp['statusCode']})`); handled.add('statusCode'); }
+  if (typeof resp['reasonPhrase'] === 'string') { parts.push(`    .withReasonPhrase("${escapeJava(resp['reasonPhrase'] as string)}")`); handled.add('reasonPhrase'); }
+  const headers = resp['headers'];
+  if (headers && typeof headers === 'object' && !Array.isArray(headers)) {
+    for (const [k, vs] of Object.entries(headers as Record<string, unknown>)) {
+      const values = (Array.isArray(vs) ? vs : [vs]).map((v) => `"${escapeJava(String(v))}"`).join(', ');
+      parts.push(`    .withHeader("${escapeJava(k)}", ${values})`);
+    }
+    handled.add('headers');
+  }
+  const cookies = resp['cookies'];
+  if (cookies && typeof cookies === 'object' && !Array.isArray(cookies)) {
+    for (const [k, v] of Object.entries(cookies as Record<string, unknown>)) {
+      parts.push(`    .withCookie("${escapeJava(k)}", "${escapeJava(String(v))}")`);
+    }
+    handled.add('cookies');
+  }
+  if (typeof resp['body'] === 'string') { parts.push(`    .withBody("${escapeJava(resp['body'] as string)}")`); handled.add('body'); }
+  const delay = resp['delay'];
+  if (delay && typeof delay === 'object' && !Array.isArray(delay)) {
+    const d = delay as Record<string, unknown>;
+    const rawUnit = typeof d['timeUnit'] === 'string' ? d['timeUnit'] : 'MILLISECONDS';
+    const unit = JAVA_TIME_UNITS.has(rawUnit as string) ? rawUnit : 'MILLISECONDS';
+    if (typeof d['value'] === 'number') { parts.push(`    .withDelay(TimeUnit.${unit}, ${d['value']})`); handled.add('delay'); }
+  }
+  for (const k of Object.keys(resp)) if (!handled.has(k)) notes.add(`httpResponses[].${k}`);
+  return parts.join('\n');
+}
+
+/**
+ * Fluent modifier lines that sit on the ForwardChainExpectation returned by
+ * `when(...)`, before the terminal action: namespace, percentage, scenario
+ * bindings, capture rules, response-sequence selection controls and
+ * cross-protocol scenarios. Read from the built JSON so they faithfully mirror
+ * exactly what is emitted to the server (including fields preserved via an edit
+ * overlay).
+ */
+function chainModifierLines(json: Record<string, unknown>): string[] {
+  const out: string[] = [];
+  if (typeof json['namespace'] === 'string' && (json['namespace'] as string).trim()) {
+    out.push(`  .withNamespace("${escapeJava(json['namespace'] as string)}")`);
+  }
+  if (typeof json['percentage'] === 'number') {
+    out.push(`  .withPercentage(${json['percentage']})`);
+  }
+  // Response-sequence selection controls — fluent on the ForwardChainExpectation,
+  // before the terminal .respond(List<HttpResponse>).
+  if (typeof json['responseMode'] === 'string' && JAVA_RESPONSE_MODES.has(json['responseMode'] as string)) {
+    out.push(`  .withResponseMode(ResponseMode.${json['responseMode']})`);
+  }
+  if (Array.isArray(json['responseWeights']) && (json['responseWeights'] as unknown[]).length > 0) {
+    out.push(`  .withResponseWeights(Arrays.asList(${(json['responseWeights'] as unknown[]).map((n) => Number(n)).join(', ')}))`);
+  }
+  if (typeof json['switchAfter'] === 'number') {
+    out.push(`  .withSwitchAfter(${json['switchAfter']})`);
+  }
+  const crossProtocol = json['crossProtocolScenarios'];
+  if (Array.isArray(crossProtocol)) {
+    for (const cp of crossProtocol as unknown[]) {
+      out.push('  .withCrossProtocolScenario(');
+      out.push('    ' + crossProtocolScenarioToJava(cp as Record<string, unknown>).split('\n').join('\n    '));
+      out.push('  )');
+    }
+  }
+  if (typeof json['scenarioName'] === 'string' && json['scenarioName']) {
+    out.push(`  .withScenarioName("${escapeJava(json['scenarioName'] as string)}")`);
+  }
+  if (typeof json['scenarioState'] === 'string' && json['scenarioState']) {
+    out.push(`  .withScenarioState("${escapeJava(json['scenarioState'] as string)}")`);
+  }
+  if (typeof json['newScenarioState'] === 'string' && json['newScenarioState']) {
+    out.push(`  .withNewScenarioState("${escapeJava(json['newScenarioState'] as string)}")`);
+  }
+  const capture = json['capture'];
+  if (Array.isArray(capture) && capture.length > 0) {
+    const args = (capture as unknown[]).map((c) => {
+      const cc = (c ?? {}) as Record<string, unknown>;
+      const source = typeof cc['source'] === 'string' ? cc['source'] : '';
+      const expr = typeof cc['expression'] === 'string' ? (cc['expression'] as string) : '';
+      const into = typeof cc['into'] === 'string' ? (cc['into'] as string) : '';
+      return `capture(CaptureRule.Source.${source}, "${escapeJava(expr)}", "${escapeJava(into)}")`;
+    });
+    if (args.length === 1) {
+      out.push(`  .withCapture(${args[0]})`);
+    } else {
+      out.push('  .withCapture(');
+      out.push(args.map((a) => '    ' + a).join(',\n'));
+      out.push('  )');
+    }
+  }
+  return out;
 }
 
 interface ParsedDnsRecord {
@@ -594,7 +1063,15 @@ export function buildExpectationJson(
     const pathParams = parseKeyValueLines(matcher.pathParams, '=');
     if (pathParams) httpRequest['pathParameters'] = pathParams;
 
-    if (matcher.body.trim()) {
+    if (matcher.bodyMatcherType === 'allOf') {
+      // Composite conjunction — driven by the bodyAllOf sub-matcher list, not the
+      // single `body` string. Emitted only when at least one non-blank sub-matcher
+      // exists (blank rows are dropped so placeholder rows produce no output).
+      const entries = allOfEntries(matcher);
+      if (entries.length > 0) {
+        httpRequest['body'] = { type: 'ALL_OF', bodyAllOf: entries.map(allOfEntryToWire) };
+      }
+    } else if (matcher.body.trim()) {
       if (matcher.bodyMatcherType === 'binary' || matcher.bodyBinary) {
         httpRequest['body'] = { type: 'BINARY', base64Bytes: matcher.body.trim() };
       } else if (matcher.bodyMatcherType === 'graphql') {
@@ -644,6 +1121,8 @@ export function buildExpectationJson(
         }
       }
     }
+    const jwtJson = buildJwtJson(matcher.jwt);
+    if (jwtJson) httpRequest['jwt'] = jwtJson;
     if (matcher.secure) httpRequest['secure'] = true;
   }
 
@@ -950,6 +1429,20 @@ export function buildExpectationJson(
     if (captureRules.length > 0) out['capture'] = captureRules;
   }
 
+  // Scenario bindings — only emitted (and only made form-authoritative) on the
+  // Advanced path, which sets `scenarioModeled`. On the Quick path these keys
+  // stay unmodeled and are preserved by mergeUnmodeledFields passthrough. Blank
+  // fields are omitted, so new-compose with an empty Scenario section produces
+  // byte-identical output to before this section existed.
+  if (action.scenarioModeled) {
+    const name = action.scenario?.name?.trim();
+    const requiredState = action.scenario?.requiredState?.trim();
+    const transitionTo = action.scenario?.transitionTo?.trim();
+    if (name) out['scenarioName'] = name;
+    if (requiredState) out['scenarioState'] = requiredState;
+    if (transitionTo) out['newScenarioState'] = transitionTo;
+  }
+
   if (matcher.id.trim()) out['id'] = matcher.id.trim();
   if (matcher.priority !== 0) out['priority'] = matcher.priority;
   if (matcher.times > 0) {
@@ -959,7 +1452,304 @@ export function buildExpectationJson(
     out['timeToLive'] = { timeUnit: 'SECONDS', timeToLive: matcher.ttlSeconds, unlimited: false };
   }
 
+  // Editing an existing expectation: overlay the form output onto the retained
+  // original so fields the form does not model are preserved (not silently
+  // dropped) while the form stays authoritative for what it does model. The
+  // new-compose flow sets no `editOriginal`, so this is a no-op there and both
+  // the preview (StandardReview → buildExpectationJson) and the wire payload
+  // (registerExpectation → buildExpectationJson) show the identical merged JSON.
+  if (action.editOriginal) {
+    return mergeUnmodeledFields(action.editOriginal, out, {
+      actionModeled: action.editActionModeled,
+      scenarioModeled: action.scenarioModeled,
+      jwtModeled: action.jwtModeled,
+    });
+  }
+
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Edit-overlay merge — preserve fields the Composer form does not model
+// ---------------------------------------------------------------------------
+
+/**
+ * Top-level expectation keys the Composer form fully models (apart from the
+ * request matcher, handled by a nested merge, and the action family, handled as
+ * a mutually-exclusive group below). For each of these keys the form output is
+ * authoritative: present ⇒ taken from the form; absent from the form output ⇒
+ * removed from the merged result (so a removal the form can express is honoured).
+ */
+export const FORM_MODELED_TOP_LEVEL_KEYS: readonly string[] = [
+  'chaos', 'beforeActions', 'afterActions', 'steps', 'capture',
+  'id', 'priority', 'times', 'timeToLive',
+];
+
+/**
+ * Scenario binding keys the Advanced form models — but ONLY when its Scenario
+ * section was rendered (signalled by `scenarioModeled`). They are handled
+ * separately from {@link FORM_MODELED_TOP_LEVEL_KEYS} precisely because the Quick
+ * path must NOT treat them as modeled: on that path they stay unmodeled and are
+ * preserved by passthrough, so a quick edit never drops a scenario binding.
+ */
+export const FORM_MODELED_SCENARIO_KEYS: readonly string[] = [
+  'scenarioName', 'scenarioState', 'newScenarioState',
+];
+
+/**
+ * The mutually-exclusive action / response slot. When the form recognised (and
+ * therefore loaded) the original action, the whole group is replaced by the
+ * form's action — so switching action type, or clearing sub-fields, works. When
+ * the form did NOT model the original action (e.g. a `httpResponses` sequence),
+ * the group is preserved so an unrelated edit (a status-code or matcher tweak)
+ * cannot silently delete it. Includes fields the form cannot model but that
+ * occupy the same slot, so they never coexist with a form-emitted action.
+ */
+export const ACTION_FAMILY_KEYS: readonly string[] = [
+  'httpResponse', 'httpForward', 'httpOverrideForwardedRequest',
+  'httpResponseClassCallback', 'httpResponseTemplate', 'httpError',
+  'httpForwardWithFallback', 'httpWebSocketResponse', 'httpSseResponse',
+  'binaryResponse', 'dnsResponse', 'httpForwardTemplate',
+  'httpForwardClassCallback', 'grpcStreamResponse',
+  // Same slot, not modeled by the form (must be listed so the mutual-exclusion
+  // slot-clear holds structurally against every action Expectation.java accepts):
+  'httpResponseObjectCallback', 'httpForwardObjectCallback',
+  'httpForwardValidateAction', 'httpLlmResponse',
+  'httpResponses', 'responseMode', 'responseWeights', 'switchAfter',
+  'grpcBidiResponse',
+];
+
+/**
+ * `httpRequest` sub-fields the matcher form UNCONDITIONALLY models. Everything
+ * else on the original request (keepAlive, socketAddress, protocol,
+ * clientCertificate, clientCertificateChain, …) is passed through unchanged so
+ * editing a modeled field does not drop an unmodeled one.
+ *
+ * `jwt` is modeled too, but only CONDITIONALLY (via {@link MergeUnmodeledOptions.jwtModeled}):
+ * the form owns it only when it can faithfully round-trip the original — see
+ * {@link jwtFaithfullyModeled}. It is therefore handled separately in
+ * {@link mergeUnmodeledFields} rather than listed here.
+ */
+export const FORM_MODELED_REQUEST_KEYS: readonly string[] = [
+  'method', 'path', 'headers', 'queryStringParameters', 'cookies',
+  'pathParameters', 'body', 'secure', 'dnsName', 'dnsType', 'dnsClass',
+];
+
+export interface MergeUnmodeledOptions {
+  /**
+   * True (default) when the form owns the original's action slot, so the form's
+   * action replaces the original's. Pass false when the original carries an
+   * action the form could not load, to preserve that action instead.
+   */
+  actionModeled?: boolean;
+  /**
+   * True only when the Advanced form's Scenario section was rendered, making the
+   * scenario keys ({@link FORM_MODELED_SCENARIO_KEYS}) form-authoritative (set
+   * from the form, deleted when cleared). Default false: the keys are left as
+   * unmodeled passthrough (the Quick path), so bindings are never dropped.
+   */
+  scenarioModeled?: boolean;
+  /**
+   * True when the JWT form faithfully owns `httpRequest.jwt` (see
+   * {@link jwtFaithfullyModeled}): the form is authoritative — an added/edited
+   * jwt is emitted, a cleared jwt is removed. Default false: the original jwt is
+   * left as passthrough so an unrelated edit never rewrites a jwt the form cannot
+   * faithfully represent.
+   */
+  jwtModeled?: boolean;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Top-level keys the edit form models but whose SERVER DEFAULT it prefills as its
+ * neutral value: priority `0`, times `{unlimited:true}`, timeToLive `{unlimited:true}`.
+ * `buildExpectationJson` omits these when the form is at its default (priority 0,
+ * times 0, ttl 0), so a blanket delete-when-omitted merge would strip an original
+ * that already carried the explicit default — producing a spurious diff for a
+ * semantic no-op (server default ≡ explicit default form).
+ *
+ * These are therefore handled specially in {@link mergeUnmodeledFields}: on an
+ * untouched round-trip (original already at default) the original's explicit key
+ * is PRESERVED verbatim; only a genuine reset of a NON-default value re-emits the
+ * default — as an explicit `{unlimited:true}` form for times / timeToLive (so the
+ * intent is visible and re-editable), or as a deletion for priority (0 and absent
+ * are identical to the server, and a preserved existing test pins that shape).
+ */
+interface DefaultPreservingKey {
+  key: string;
+  /** True when `v` (the original's value for `key`) is the server default form. */
+  isDefault: (v: unknown) => boolean;
+  /**
+   * The explicit default form to emit when the user resets a non-default value to
+   * default. Undefined ⇒ delete the key on reset (priority 0 ≡ absent to the server).
+   */
+  resetForm?: () => unknown;
+}
+
+function priorityIsDefault(v: unknown): boolean {
+  return v == null || v === 0;
+}
+
+/** Absent or an explicit `{ unlimited: true }` object is the server "unlimited" default. */
+function unlimitedIsDefault(v: unknown): boolean {
+  if (v == null) return true;
+  return isPlainObject(v) && v['unlimited'] === true;
+}
+
+const DEFAULT_PRESERVING_KEYS: readonly DefaultPreservingKey[] = [
+  { key: 'priority', isDefault: priorityIsDefault },
+  { key: 'times', isDefault: unlimitedIsDefault, resetForm: () => ({ unlimited: true }) },
+  { key: 'timeToLive', isDefault: unlimitedIsDefault, resetForm: () => ({ unlimited: true }) },
+];
+
+const DEFAULT_PRESERVING_KEY_SET: ReadonlySet<string> = new Set(
+  DEFAULT_PRESERVING_KEYS.map((d) => d.key),
+);
+
+/**
+ * Deep-merge the form-generated expectation JSON (`formJson`) onto the retained
+ * `original`, so that:
+ *  - fields the form models are authoritative from the form (including removals
+ *    the form can express — a modeled key absent from `formJson` is deleted);
+ *  - top-level and request-matcher fields the form does NOT model pass through
+ *    unchanged.
+ *
+ * The action/response slot is treated as one mutually-exclusive group (see
+ * {@link ACTION_FAMILY_KEYS}); when `actionModeled` is false the original action
+ * is preserved rather than replaced by the form's default.
+ *
+ * Pure and side-effect free: `original` and `formJson` are not mutated.
+ */
+export function mergeUnmodeledFields(
+  original: Record<string, unknown>,
+  formJson: Record<string, unknown>,
+  opts: MergeUnmodeledOptions = {},
+): Record<string, unknown> {
+  const actionModeled = opts.actionModeled !== false;
+  const scenarioModeled = opts.scenarioModeled === true;
+  const result: Record<string, unknown> = structuredClone(original);
+
+  // Request matcher — nested merge: modeled sub-fields authoritative, the rest
+  // (keepAlive / socketAddress / protocol / clientCertificate / …) pass through.
+  // buildExpectationJson always emits an httpRequest.
+  if (isPlainObject(formJson['httpRequest'])) {
+    const formReq = formJson['httpRequest'];
+    const mergedReq: Record<string, unknown> = isPlainObject(result['httpRequest'])
+      ? structuredClone(result['httpRequest'])
+      : {};
+    for (const k of FORM_MODELED_REQUEST_KEYS) {
+      if (k in formReq) mergedReq[k] = formReq[k];
+      else delete mergedReq[k];
+    }
+    // jwt is form-authoritative only when the form faithfully owns it
+    // (jwtModeled). Otherwise the original's jwt survives via the clone above,
+    // so a lossy prefill can never rewrite an unfaithfully-representable jwt.
+    if (opts.jwtModeled) {
+      if ('jwt' in formReq) mergedReq['jwt'] = formReq['jwt'];
+      else delete mergedReq['jwt'];
+    }
+    result['httpRequest'] = mergedReq;
+  }
+
+  // Simple form-modeled top-level keys — set when the form emits them, delete
+  // when it omits them. The default-preserving keys (priority / times /
+  // timeToLive) are handled separately below so an untouched round-trip of an
+  // explicit server default does not produce a spurious diff.
+  for (const k of FORM_MODELED_TOP_LEVEL_KEYS) {
+    if (DEFAULT_PRESERVING_KEY_SET.has(k)) continue;
+    if (k in formJson) result[k] = formJson[k];
+    else delete result[k];
+  }
+
+  // Default-preserving keys — see {@link DEFAULT_PRESERVING_KEYS}. The form is
+  // authoritative whenever it emits a (non-default) value; otherwise the form is
+  // at its default and we distinguish an untouched round-trip from a deliberate
+  // reset using the ORIGINAL's value:
+  //   • original already at default (absent or explicit default) → preserve the
+  //     clone untouched, so the diff is EMPTY for a semantic no-op;
+  //   • original was a real non-default value → the user reset it, so emit the
+  //     explicit default form (times / timeToLive) or delete it (priority).
+  for (const { key, isDefault, resetForm } of DEFAULT_PRESERVING_KEYS) {
+    if (key in formJson) {
+      result[key] = formJson[key];
+    } else if (key in original && !isDefault(original[key])) {
+      if (resetForm) result[key] = resetForm();
+      else delete result[key];
+    }
+    // else: leave the clone as-is (preserve the original's explicit default / absence).
+  }
+
+  // Scenario binding keys — form-authoritative ONLY on the Advanced path
+  // (scenarioModeled). Otherwise the keys are left as they were cloned from the
+  // original, i.e. preserved by passthrough (the Quick path never emits them).
+  if (scenarioModeled) {
+    for (const k of FORM_MODELED_SCENARIO_KEYS) {
+      if (k in formJson) result[k] = formJson[k];
+      else delete result[k];
+    }
+  }
+
+  // Action / response family. `steps` (handled above) is also an action slot,
+  // so the form "provides an action" when it emits either an action-family key
+  // or a steps pipeline.
+  const formProvidesAction =
+    ACTION_FAMILY_KEYS.some((k) => k in formJson) || 'steps' in formJson;
+  if (actionModeled && formProvidesAction) {
+    for (const k of ACTION_FAMILY_KEYS) delete result[k];
+    for (const k of ACTION_FAMILY_KEYS) if (k in formJson) result[k] = formJson[k];
+  }
+  // else: leave the original action family untouched (preserve unmodeled action).
+
+  return result;
+}
+
+/**
+ * Names of the fields that {@link mergeUnmodeledFields} would preserve from
+ * `original` because the Composer form does not model them — used to show the
+ * "Preserving N fields not shown in this form: …" indicator in the editor.
+ * Nested request-matcher extras are reported as `httpRequest.<field>`.
+ */
+export function unmodeledFieldNames(
+  original: Record<string, unknown>,
+  opts: MergeUnmodeledOptions = {},
+): string[] {
+  const actionModeled = opts.actionModeled !== false;
+  const scenarioModeled = opts.scenarioModeled === true;
+  const jwtModeled = opts.jwtModeled === true;
+  const modeledTop = new Set<string>([...FORM_MODELED_TOP_LEVEL_KEYS, 'httpRequest']);
+  // When the Advanced Scenario section is rendered, the three scenario keys are
+  // modeled and must NOT be reported as preserved-passthrough. On the Quick path
+  // they remain unmodeled and keep appearing in the "Preserving N fields" chip.
+  if (scenarioModeled) for (const k of FORM_MODELED_SCENARIO_KEYS) modeledTop.add(k);
+  const actionFamily = new Set<string>(ACTION_FAMILY_KEYS);
+  const names: string[] = [];
+  for (const key of Object.keys(original)) {
+    if (key === 'httpRequest') {
+      const req = original['httpRequest'];
+      if (isPlainObject(req)) {
+        for (const sub of Object.keys(req)) {
+          if (FORM_MODELED_REQUEST_KEYS.includes(sub)) continue;
+          // jwt is modeled (and hence not preserved-passthrough) only when the
+          // form faithfully owns it; otherwise it IS preserved, so report it.
+          if (sub === 'jwt' && jwtModeled) continue;
+          names.push(`httpRequest.${sub}`);
+        }
+      }
+      continue;
+    }
+    if (actionFamily.has(key)) {
+      // Replaced by the form when it owns the slot; preserved (and hence
+      // reported) only when the original action is unmodeled.
+      if (!actionModeled) names.push(key);
+      continue;
+    }
+    if (modeledTop.has(key)) continue;
+    names.push(key);
+  }
+  return names;
 }
 
 /**
@@ -1311,7 +2101,12 @@ function matcherToJava(matcher: StandardMatcher): string {
     }
   }
 
-  if (matcher.body.trim()) {
+  if (matcher.bodyMatcherType === 'allOf') {
+    const entries = allOfEntries(matcher);
+    if (entries.length > 0) {
+      lines.push(`    .withBody(allOf(${entries.map(allOfEntryToJava).join(', ')}))`);
+    }
+  } else if (matcher.body.trim()) {
     if (matcher.bodyMatcherType === 'binary' || matcher.bodyBinary) {
       lines.push(`    .withBody(binary(Base64.getDecoder().decode("${escapeJava(matcher.body.trim())}")))`);
     } else if (matcher.bodyMatcherType === 'graphql') {
@@ -1360,6 +2155,10 @@ function matcherToJava(matcher: StandardMatcher): string {
         lines.push(`    .withBody("${escapeJava(matcher.body)}")`);
       }
     }
+  }
+  const jwtJson = buildJwtJson(matcher.jwt);
+  if (jwtJson) {
+    lines.push(`    .withJwt(${jwtToJava(matcher.jwt!)})`);
   }
   if (matcher.secure) lines.push('    .withSecure(true)');
   return lines.join('\n');
@@ -1671,6 +2470,346 @@ function chaosToJava(chaos: StandardChaosDraft): string {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// LLM response Java codegen — transpile a PRESERVED httpLlmResponse action
+// (carried through an edit overlay because the standard composer form cannot
+// model it) into the type-safe org.mockserver.model fluent builder chain,
+// ending in `.respondWithLlm(...)`. Driven from the built expectation JSON (the
+// same object the JSON / curl / client-library tabs render) so the Java tab is
+// faithful rather than a whole-action fallback notice.
+//
+// The Java LLM client is fully typed: HttpLlmResponse.llmResponse() with
+// withProvider/withModel/withCompletion/withEmbedding/withRerank/withModeration/
+// withContentFilter/withConversationPredicates/withChaos, and the model builders
+// Completion, Usage, StreamingPhysics, ToolUse, ConversationPredicates,
+// NormalizationOptions, EmbeddingResponse, RerankResponse, ModerationResponse,
+// LlmContentFilter and LlmChaosProfile — so every field the wire JSON carries has
+// a setter. Any key without one is named in a single honest NOTE comment.
+// ---------------------------------------------------------------------------
+
+interface LlmJavaCall {
+  method: string;
+  /** A single-line argument expression, or a nested builder to render multi-line. */
+  arg: string | LlmJavaChain;
+}
+interface LlmJavaChain {
+  factory: string;
+  calls: LlmJavaCall[];
+}
+
+/** Render a fluent builder chain, one `.withX(...)` per line, nesting sub-builders. */
+function renderLlmChain(chain: LlmJavaChain, indent: string): string[] {
+  const lines: string[] = [indent + chain.factory];
+  for (const call of chain.calls) {
+    if (typeof call.arg === 'string') {
+      lines.push(`${indent}    .${call.method}(${call.arg})`);
+    } else {
+      lines.push(`${indent}    .${call.method}(`);
+      for (const l of renderLlmChain(call.arg, indent + '        ')) lines.push(l);
+      lines.push(`${indent}    )`);
+    }
+  }
+  return lines;
+}
+
+/** A Java `double` literal — integral values get a `.0` so they bind to a Double
+ *  parameter (Java will not widen an int literal to Double). Mirrors chaosToJava. */
+function javaDoubleLiteral(n: number): string {
+  return n % 1 === 0 ? n.toFixed(1) : String(n);
+}
+
+const asJsonObject = (v: unknown): Record<string, unknown> | undefined =>
+  v != null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+
+/**
+ * Transpile a preserved `httpLlmResponse` action JSON object into the
+ * `.respondWithLlm(llmResponse()...)` terminal-action snippet plus the imports it
+ * needs. `note` names any fields the builder chain could not carry (normally none).
+ */
+function llmResponseToJava(llm: Record<string, unknown>): { code: string; imports: string[]; note?: string } {
+  const imports = new Set<string>(['import static org.mockserver.model.HttpLlmResponse.llmResponse;']);
+  const calls: LlmJavaCall[] = [];
+  const handled = new Set<string>();
+  const unmapped: string[] = [];
+
+  const str = (o: Record<string, unknown>, k: string): string | undefined =>
+    typeof o[k] === 'string' ? (o[k] as string) : undefined;
+  const num = (o: Record<string, unknown>, k: string): number | undefined =>
+    typeof o[k] === 'number' ? (o[k] as number) : undefined;
+  const bool = (o: Record<string, unknown>, k: string): boolean | undefined =>
+    typeof o[k] === 'boolean' ? (o[k] as boolean) : undefined;
+
+  // provider / model on the response
+  const provider = str(llm, 'provider');
+  if (provider && provider.trim()) {
+    imports.add('import org.mockserver.model.Provider;');
+    calls.push({ method: 'withProvider', arg: `Provider.${provider.trim()}` });
+    handled.add('provider');
+  }
+  const model = str(llm, 'model');
+  if (model !== undefined) {
+    calls.push({ method: 'withModel', arg: `"${escapeJava(model)}"` });
+    handled.add('model');
+  }
+
+  // completion — the main text/tool/usage/streaming payload
+  const completion = asJsonObject(llm['completion']);
+  if (completion) {
+    imports.add('import static org.mockserver.model.Completion.completion;');
+    const cCalls: LlmJavaCall[] = [];
+    const cHandled = new Set<string>();
+    const text = str(completion, 'text');
+    if (text !== undefined) { cCalls.push({ method: 'withText', arg: `"${escapeJava(text)}"` }); cHandled.add('text'); }
+    const toolCalls = completion['toolCalls'];
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      imports.add('import static org.mockserver.model.ToolUse.toolUse;');
+      for (const raw of toolCalls) {
+        const tc = asJsonObject(raw);
+        if (!tc) continue;
+        let expr = `toolUse("${escapeJava(str(tc, 'name') ?? '')}")`;
+        const id = str(tc, 'id');
+        if (id !== undefined) expr += `.withId("${escapeJava(id)}")`;
+        const args = str(tc, 'arguments');
+        if (args !== undefined) expr += `.withArguments("${escapeJava(args)}")`;
+        cCalls.push({ method: 'withToolCall', arg: expr });
+      }
+      cHandled.add('toolCalls');
+    }
+    const stopReason = str(completion, 'stopReason');
+    if (stopReason !== undefined) { cCalls.push({ method: 'withStopReason', arg: `"${escapeJava(stopReason)}"` }); cHandled.add('stopReason'); }
+    const usage = asJsonObject(completion['usage']);
+    if (usage) {
+      imports.add('import static org.mockserver.model.Usage.usage;');
+      const uCalls: LlmJavaCall[] = [];
+      const usageFields = [
+        ['inputTokens', 'withInputTokens'], ['outputTokens', 'withOutputTokens'],
+        ['cachedInputTokens', 'withCachedInputTokens'], ['cacheCreationTokens', 'withCacheCreationTokens'],
+        ['reasoningTokens', 'withReasoningTokens'],
+      ] as const;
+      for (const [k, m] of usageFields) {
+        const v = num(usage, k);
+        if (v !== undefined) uCalls.push({ method: m, arg: `${v}` });
+      }
+      const usageKeys = usageFields.map(([k]) => k as string);
+      for (const k of Object.keys(usage).filter((k) => !usageKeys.includes(k))) unmapped.push(`completion.usage.${k}`);
+      cCalls.push({ method: 'withUsage', arg: { factory: 'usage()', calls: uCalls } });
+      cHandled.add('usage');
+    }
+    const streaming = bool(completion, 'streaming');
+    if (streaming !== undefined) { cCalls.push({ method: 'withStreaming', arg: `${streaming}` }); cHandled.add('streaming'); }
+    const sp = asJsonObject(completion['streamingPhysics']);
+    if (sp) {
+      imports.add('import static org.mockserver.model.StreamingPhysics.streamingPhysics;');
+      const spCalls: LlmJavaCall[] = [];
+      const spHandled = new Set<string>();
+      const ttft = asJsonObject(sp['timeToFirstToken']);
+      if (ttft && num(ttft, 'value') !== undefined) {
+        imports.add('import org.mockserver.model.Delay;');
+        imports.add('import java.util.concurrent.TimeUnit;');
+        const rawUnit = str(ttft, 'timeUnit');
+        const unit = rawUnit && JAVA_TIME_UNITS.has(rawUnit) ? rawUnit : 'MILLISECONDS';
+        spCalls.push({ method: 'withTimeToFirstToken', arg: `new Delay(TimeUnit.${unit}, ${num(ttft, 'value')})` });
+        spHandled.add('timeToFirstToken');
+      }
+      const tps = num(sp, 'tokensPerSecond');
+      if (tps !== undefined) { spCalls.push({ method: 'withTokensPerSecond', arg: `${tps}` }); spHandled.add('tokensPerSecond'); }
+      const jitter = num(sp, 'jitter');
+      if (jitter !== undefined) { spCalls.push({ method: 'withJitter', arg: javaDoubleLiteral(jitter) }); spHandled.add('jitter'); }
+      const seed = num(sp, 'seed');
+      if (seed !== undefined) { spCalls.push({ method: 'withSeed', arg: `${seed}L` }); spHandled.add('seed'); }
+      const subword = bool(sp, 'subwordStreaming');
+      if (subword !== undefined) { spCalls.push({ method: 'withSubwordStreaming', arg: `${subword}` }); spHandled.add('subwordStreaming'); }
+      for (const k of Object.keys(sp).filter((k) => !spHandled.has(k))) unmapped.push(`completion.streamingPhysics.${k}`);
+      cCalls.push({ method: 'withStreamingPhysics', arg: { factory: 'streamingPhysics()', calls: spCalls } });
+      cHandled.add('streamingPhysics');
+    }
+    const outputSchema = str(completion, 'outputSchema');
+    if (outputSchema !== undefined) { cCalls.push({ method: 'withOutputSchema', arg: `"${escapeJava(outputSchema)}"` }); cHandled.add('outputSchema'); }
+    const enforce = bool(completion, 'enforceOutputSchema');
+    if (enforce !== undefined) { cCalls.push({ method: 'withEnforceOutputSchema', arg: `${enforce}` }); cHandled.add('enforceOutputSchema'); }
+    const cModel = str(completion, 'model');
+    if (cModel !== undefined) { cCalls.push({ method: 'withModel', arg: `"${escapeJava(cModel)}"` }); cHandled.add('model'); }
+    const toolChoice = str(completion, 'toolChoice');
+    if (toolChoice !== undefined) { cCalls.push({ method: 'withToolChoice', arg: `"${escapeJava(toolChoice)}"` }); cHandled.add('toolChoice'); }
+    const reasoningText = str(completion, 'reasoningText');
+    if (reasoningText !== undefined) { cCalls.push({ method: 'withReasoningText', arg: `"${escapeJava(reasoningText)}"` }); cHandled.add('reasoningText'); }
+    const reasoningSignature = str(completion, 'reasoningSignature');
+    if (reasoningSignature !== undefined) { cCalls.push({ method: 'withReasoningSignature', arg: `"${escapeJava(reasoningSignature)}"` }); cHandled.add('reasoningSignature'); }
+    for (const k of Object.keys(completion).filter((k) => !cHandled.has(k))) unmapped.push(`completion.${k}`);
+    calls.push({ method: 'withCompletion', arg: { factory: 'completion()', calls: cCalls } });
+    handled.add('completion');
+  }
+
+  // conversationPredicates (+ normalization)
+  const cp = asJsonObject(llm['conversationPredicates']);
+  if (cp) {
+    imports.add('import static org.mockserver.model.ConversationPredicates.conversationPredicates;');
+    const cpCalls: LlmJavaCall[] = [];
+    const cpHandled = new Set<string>();
+    const turnIndex = num(cp, 'turnIndex');
+    if (turnIndex !== undefined) { cpCalls.push({ method: 'withTurnIndex', arg: `${turnIndex}` }); cpHandled.add('turnIndex'); }
+    for (const [k, m] of [
+      ['latestMessageContains', 'withLatestMessageContains'],
+      ['latestMessageMatches', 'withLatestMessageMatches'],
+      ['containsToolResultFor', 'withContainsToolResultFor'],
+      ['semanticMatchAgainst', 'withSemanticMatchAgainst'],
+    ] as const) {
+      const v = str(cp, k);
+      if (v !== undefined) { cpCalls.push({ method: m, arg: `"${escapeJava(v)}"` }); cpHandled.add(k); }
+    }
+    const role = str(cp, 'latestMessageRole');
+    if (role !== undefined) {
+      imports.add('import org.mockserver.llm.ParsedMessage;');
+      cpCalls.push({ method: 'withLatestMessageRole', arg: `ParsedMessage.Role.${role}` });
+      cpHandled.add('latestMessageRole');
+    }
+    const norm = asJsonObject(cp['normalization']);
+    if (norm) {
+      imports.add('import static org.mockserver.model.NormalizationOptions.normalizationOptions;');
+      const nCalls: LlmJavaCall[] = [];
+      const nHandled = new Set<string>();
+      for (const [k, m] of [
+        ['collapseWhitespace', 'withCollapseWhitespace'], ['lowercase', 'withLowercase'],
+        ['sortJsonKeys', 'withSortJsonKeys'], ['dropBuiltInVolatileFields', 'withDropBuiltInVolatileFields'],
+      ] as const) {
+        const v = bool(norm, k);
+        if (v !== undefined) { nCalls.push({ method: m, arg: `${v}` }); nHandled.add(k); }
+      }
+      const dropFields = norm['dropVolatileFields'];
+      if (Array.isArray(dropFields)) {
+        imports.add('import java.util.Arrays;');
+        const items = dropFields.filter((x) => typeof x === 'string').map((x) => `"${escapeJava(x as string)}"`).join(', ');
+        nCalls.push({ method: 'withDropVolatileFields', arg: `Arrays.asList(${items})` });
+        nHandled.add('dropVolatileFields');
+      }
+      for (const k of Object.keys(norm).filter((k) => !nHandled.has(k))) unmapped.push(`conversationPredicates.normalization.${k}`);
+      cpCalls.push({ method: 'withNormalization', arg: { factory: 'normalizationOptions()', calls: nCalls } });
+      cpHandled.add('normalization');
+    }
+    for (const k of Object.keys(cp).filter((k) => !cpHandled.has(k))) unmapped.push(`conversationPredicates.${k}`);
+    calls.push({ method: 'withConversationPredicates', arg: { factory: 'conversationPredicates()', calls: cpCalls } });
+    handled.add('conversationPredicates');
+  }
+
+  // embedding / rerank
+  const emb = asJsonObject(llm['embedding']);
+  if (emb) {
+    imports.add('import static org.mockserver.model.EmbeddingResponse.embedding;');
+    const eCalls: LlmJavaCall[] = [];
+    const dims = num(emb, 'dimensions');
+    if (dims !== undefined) eCalls.push({ method: 'withDimensions', arg: `${dims}` });
+    const det = bool(emb, 'deterministicFromInput');
+    if (det !== undefined) eCalls.push({ method: 'withDeterministicFromInput', arg: `${det}` });
+    const seed = num(emb, 'seed');
+    if (seed !== undefined) eCalls.push({ method: 'withSeed', arg: `${seed}L` });
+    for (const k of Object.keys(emb).filter((k) => !['dimensions', 'deterministicFromInput', 'seed'].includes(k))) unmapped.push(`embedding.${k}`);
+    calls.push({ method: 'withEmbedding', arg: { factory: 'embedding()', calls: eCalls } });
+    handled.add('embedding');
+  }
+  const rer = asJsonObject(llm['rerank']);
+  if (rer) {
+    imports.add('import static org.mockserver.model.RerankResponse.rerank;');
+    const rCalls: LlmJavaCall[] = [];
+    const topN = num(rer, 'topN');
+    if (topN !== undefined) rCalls.push({ method: 'withTopN', arg: `${topN}` });
+    const det = bool(rer, 'deterministicFromInput');
+    if (det !== undefined) rCalls.push({ method: 'withDeterministicFromInput', arg: `${det}` });
+    const seed = num(rer, 'seed');
+    if (seed !== undefined) rCalls.push({ method: 'withSeed', arg: `${seed}L` });
+    for (const k of Object.keys(rer).filter((k) => !['topN', 'deterministicFromInput', 'seed'].includes(k))) unmapped.push(`rerank.${k}`);
+    calls.push({ method: 'withRerank', arg: { factory: 'rerank()', calls: rCalls } });
+    handled.add('rerank');
+  }
+
+  // moderation
+  const mod = asJsonObject(llm['moderation']);
+  if (mod) {
+    imports.add('import static org.mockserver.model.ModerationResponse.moderationResponse;');
+    const mCalls: LlmJavaCall[] = [];
+    const flagged = mod['flaggedCategories'];
+    if (Array.isArray(flagged)) {
+      for (const cat of flagged) if (typeof cat === 'string') mCalls.push({ method: 'withFlaggedCategory', arg: `"${escapeJava(cat)}"` });
+    }
+    const mModel = str(mod, 'model');
+    if (mModel !== undefined) mCalls.push({ method: 'withModel', arg: `"${escapeJava(mModel)}"` });
+    for (const k of Object.keys(mod).filter((k) => !['flaggedCategories', 'model'].includes(k))) unmapped.push(`moderation.${k}`);
+    calls.push({ method: 'withModeration', arg: { factory: 'moderationResponse()', calls: mCalls } });
+    handled.add('moderation');
+  }
+
+  // contentFilter
+  const cf = asJsonObject(llm['contentFilter']);
+  if (cf) {
+    imports.add('import static org.mockserver.model.LlmContentFilter.llmContentFilter;');
+    const cfCalls: LlmJavaCall[] = [];
+    for (const [k, m] of [['hate', 'withHate'], ['sexual', 'withSexual'], ['violence', 'withViolence'], ['selfHarm', 'withSelfHarm']] as const) {
+      const v = str(cf, k);
+      if (v !== undefined) cfCalls.push({ method: m, arg: `"${escapeJava(v)}"` });
+    }
+    for (const k of Object.keys(cf).filter((k) => !['hate', 'sexual', 'violence', 'selfHarm'].includes(k))) unmapped.push(`contentFilter.${k}`);
+    calls.push({ method: 'withContentFilter', arg: { factory: 'llmContentFilter()', calls: cfCalls } });
+    handled.add('contentFilter');
+  }
+
+  // chaos
+  const chaos = asJsonObject(llm['chaos']);
+  if (chaos) {
+    imports.add('import static org.mockserver.model.LlmChaosProfile.llmChaosProfile;');
+    const chCalls: LlmJavaCall[] = [];
+    const chHandled = new Set<string>();
+    const intField = (k: string, m: string) => { const v = num(chaos, k); if (v !== undefined) { chCalls.push({ method: m, arg: `${v}` }); chHandled.add(k); } };
+    const longField = (k: string, m: string) => { const v = num(chaos, k); if (v !== undefined) { chCalls.push({ method: m, arg: `${v}L` }); chHandled.add(k); } };
+    const dblField = (k: string, m: string) => { const v = num(chaos, k); if (v !== undefined) { chCalls.push({ method: m, arg: javaDoubleLiteral(v) }); chHandled.add(k); } };
+    const strField = (k: string, m: string) => { const v = str(chaos, k); if (v !== undefined) { chCalls.push({ method: m, arg: `"${escapeJava(v)}"` }); chHandled.add(k); } };
+    const boolField = (k: string, m: string) => { const v = bool(chaos, k); if (v !== undefined) { chCalls.push({ method: m, arg: `${v}` }); chHandled.add(k); } };
+    intField('errorStatus', 'withErrorStatus');
+    strField('retryAfter', 'withRetryAfter');
+    dblField('errorProbability', 'withErrorProbability');
+    const truncateMode = str(chaos, 'truncateMode');
+    if (truncateMode !== undefined) {
+      imports.add('import org.mockserver.model.LlmChaosProfile;');
+      chCalls.push({ method: 'withTruncateMode', arg: `LlmChaosProfile.TruncateMode.${truncateMode}` });
+      chHandled.add('truncateMode');
+    }
+    dblField('truncateAtFraction', 'withTruncateAtFraction');
+    boolField('malformedSse', 'withMalformedSse');
+    longField('seed', 'withSeed');
+    strField('quotaName', 'withQuotaName');
+    intField('quotaLimit', 'withQuotaLimit');
+    longField('quotaWindowMillis', 'withQuotaWindowMillis');
+    intField('quotaErrorStatus', 'withQuotaErrorStatus');
+    longField('tokenQuotaLimit', 'withTokenQuotaLimit');
+    longField('tokenQuotaWindowMillis', 'withTokenQuotaWindowMillis');
+    strField('errorKind', 'withErrorKind');
+    dblField('contentFilterBlockProbability', 'withContentFilterBlockProbability');
+    for (const k of Object.keys(chaos).filter((k) => !chHandled.has(k))) unmapped.push(`chaos.${k}`);
+    calls.push({ method: 'withChaos', arg: { factory: 'llmChaosProfile()', calls: chCalls } });
+    handled.add('chaos');
+  }
+
+  // delay (Action base) — .withDelay(TimeUnit, long)
+  const delay = asJsonObject(llm['delay']);
+  if (delay && num(delay, 'value') !== undefined) {
+    imports.add('import java.util.concurrent.TimeUnit;');
+    const rawUnit = str(delay, 'timeUnit');
+    const unit = rawUnit && JAVA_TIME_UNITS.has(rawUnit) ? rawUnit : 'SECONDS';
+    calls.push({ method: 'withDelay', arg: `TimeUnit.${unit}, ${num(delay, 'value')}` });
+    handled.add('delay');
+  }
+
+  // primary (Action base)
+  if (llm['primary'] === true) { calls.push({ method: 'withPrimary', arg: 'true' }); handled.add('primary'); }
+
+  for (const k of Object.keys(llm).filter((k) => !handled.has(k))) unmapped.push(k);
+
+  const chain: LlmJavaChain = { factory: 'llmResponse()', calls };
+  const code = ['.respondWithLlm(', ...renderLlmChain(chain, '    '), ')'].join('\n');
+  const note = unmapped.length > 0
+    ? `// NOTE: the Java builder preview omits httpLlmResponse field(s) it cannot carry: ${unmapped.join(', ')} -- see the JSON tab.`
+    : undefined;
+  return { code, imports: Array.from(imports), note };
+}
+
 /**
  * Compute the exact set of imports the generated Java snippet needs, based on the matcher
  * and action actually emitted. Returned sorted (static imports first) and de-duplicated so
@@ -1680,6 +2819,13 @@ function collectJavaImports(
   matcher: StandardMatcher,
   action: StandardActionPayload,
   hasChaos: boolean,
+  json: Record<string, unknown>,
+  /**
+   * When set, the emitted terminal action is a preserved `httpLlmResponse`
+   * (see {@link llmResponseToJava}) rather than the form's modeled `action`.
+   * These imports replace the `switch (action.type)` action-family imports.
+   */
+  llmActionImports?: string[],
 ): string[] {
   const imp = new Set<string>();
   const isDns = !!(matcher.dns && matcher.dns.dnsName.trim());
@@ -1726,9 +2872,36 @@ function collectJavaImports(
         imp.add('import static org.mockserver.model.StringBody.subString;');
       }
     }
+    // allOf composite body — the AllOfBody factory plus each sub-matcher's factory.
+    if (matcher.bodyMatcherType === 'allOf') {
+      const entries = allOfEntries(matcher);
+      if (entries.length > 0) {
+        imp.add('import static org.mockserver.model.AllOfBody.allOf;');
+        for (const e of entries) {
+          switch (e.type) {
+            case 'json': imp.add('import static org.mockserver.model.JsonBody.json;'); break;
+            case 'json-schema': imp.add('import static org.mockserver.model.JsonSchemaBody.jsonSchema;'); break;
+            case 'json-path': imp.add('import static org.mockserver.model.JsonPathBody.jsonPath;'); break;
+            case 'xml': imp.add('import static org.mockserver.model.XmlBody.xml;'); break;
+            case 'xml-schema': imp.add('import static org.mockserver.model.XmlSchemaBody.xmlSchema;'); break;
+            case 'xpath': imp.add('import static org.mockserver.model.XPathBody.xpath;'); break;
+            case 'regex': imp.add('import static org.mockserver.model.RegexBody.regex;'); break;
+            case 'string': imp.add('import static org.mockserver.model.StringBody.exact;'); break;
+          }
+        }
+      }
+    }
+    // JWT request-matcher criteria.
+    if (buildJwtJson(matcher.jwt)) {
+      imp.add('import static org.mockserver.model.Jwt.jwt;');
+    }
   }
 
-  // Action
+  // Action — a preserved httpLlmResponse carries its own imports; otherwise the
+  // form's modeled action drives the action-family imports.
+  if (llmActionImports) {
+    for (const i of llmActionImports) imp.add(i);
+  } else
   switch (action.type) {
     case 'static':
       imp.add('import static org.mockserver.model.HttpResponse.response;');
@@ -1865,6 +3038,43 @@ function collectJavaImports(
     }
   }
 
+  // Cross-cutting expectation modifiers driven by the built JSON.
+  // 4-arg when(request, Times, TimeToLive, priority) when any is non-default.
+  const when = whenArgsFromJson(json);
+  if (when.useFullWhen) {
+    imp.add('import org.mockserver.matchers.Times;');
+    imp.add('import org.mockserver.matchers.TimeToLive;');
+    if (when.ttlExpr.includes('TimeUnit.')) imp.add('import java.util.concurrent.TimeUnit;');
+  }
+  // Capture rules → .withCapture(capture(CaptureRule.Source.X, "...", "..."))
+  if (Array.isArray(json['capture']) && (json['capture'] as unknown[]).length > 0) {
+    imp.add('import static org.mockserver.model.CaptureRule.capture;');
+    imp.add('import org.mockserver.model.CaptureRule;');
+  }
+  // Preserved response SEQUENCE → .respond(Arrays.asList(response()..., ...)) with
+  // the selection controls (responseMode / responseWeights / switchAfter).
+  if (Array.isArray(json['httpResponses'])) {
+    imp.add('import static org.mockserver.model.HttpResponse.response;');
+    imp.add('import java.util.Arrays;');
+    if ((json['httpResponses'] as unknown[]).some((r) => {
+      const d = (r as Record<string, unknown> | null)?.['delay'];
+      return d && typeof d === 'object';
+    })) {
+      imp.add('import java.util.concurrent.TimeUnit;');
+    }
+  }
+  if (typeof json['responseMode'] === 'string') imp.add('import org.mockserver.mock.ResponseMode;');
+  if (Array.isArray(json['responseWeights']) && (json['responseWeights'] as unknown[]).length > 0) {
+    imp.add('import java.util.Arrays;');
+  }
+  // Cross-protocol scenarios → .withCrossProtocolScenario(crossProtocolScenario()...)
+  if (Array.isArray(json['crossProtocolScenarios']) && (json['crossProtocolScenarios'] as unknown[]).length > 0) {
+    imp.add('import static org.mockserver.model.CrossProtocolScenario.crossProtocolScenario;');
+    if ((json['crossProtocolScenarios'] as unknown[]).some((c) => typeof (c as Record<string, unknown>)?.['trigger'] === 'string')) {
+      imp.add('import org.mockserver.model.CrossProtocolTrigger;');
+    }
+  }
+
   const all = Array.from(imp);
   const statics = all.filter((i) => i.startsWith('import static ')).sort();
   const plains = all.filter((i) => !i.startsWith('import static ')).sort();
@@ -1925,19 +3135,92 @@ function stepToJava(step: StandardExpectationStep): string {
   return lines.join('\n');
 }
 
+/**
+ * Preserved action-family keys the Java builder tab CAN represent faithfully from
+ * the built JSON, even though the standard composer form cannot model them:
+ * `httpLlmResponse` is transpiled into the fully-typed `llmResponse()` builder
+ * chain by {@link llmResponseToJava}. These must be excluded from the
+ * unrepresentable-fallback test so the Java tab emits real code rather than a
+ * whole-action notice.
+ */
+const JAVA_REPRESENTABLE_PRESERVED_KEYS: ReadonlySet<string> = new Set([
+  'httpLlmResponse', 'httpResponses', 'responseMode', 'responseWeights', 'switchAfter',
+]);
+
+/**
+ * When editing an expectation whose ORIGINAL action the form could not model
+ * (e.g. an `httpResponses` sequence, an `*ObjectCallback`),
+ * {@link buildExpectationJson} PRESERVES that original action verbatim, but the
+ * fluent Java builder preview builds from the form's action model — which is the
+ * form's default, NOT the preserved action. Emitting that snippet would show Java
+ * that does something DIFFERENT from the registered expectation.
+ *
+ * Returns the preserved action-family key name (so the caller can name it in an
+ * honest notice) when the Java preview cannot faithfully represent the action;
+ * otherwise undefined. Signal: `editOriginal` present AND the form did NOT model
+ * the action (`editActionModeled === false`, the same flag the merge keys on),
+ * AND the original actually carries an action-family key to preserve that the Java
+ * tab cannot transpile ({@link JAVA_REPRESENTABLE_PRESERVED_KEYS} are excluded —
+ * `httpLlmResponse` is emitted as a real builder chain). The JSON / curl /
+ * client-library tabs render the merged JSON and stay faithful regardless.
+ */
+export function unrepresentableJavaActionKey(action: StandardActionPayload): string | undefined {
+  if (!action.editOriginal || action.editActionModeled !== false) return undefined;
+  return ACTION_FAMILY_KEYS.find((k) => k in action.editOriginal! && !JAVA_REPRESENTABLE_PRESERVED_KEYS.has(k));
+}
+
 export function standardToJava(matcher: StandardMatcher, action: StandardActionPayload): string {
+  const unrepresentable = unrepresentableJavaActionKey(action);
+  if (unrepresentable) {
+    return [
+      `// This expectation uses ${unrepresentable}, which the Java builder API`,
+      '// preview cannot represent. Use the JSON or curl tab — the registered',
+      '// JSON shown there is the exact, faithful payload that will be sent.',
+    ].join('\n');
+  }
+
   const hasChaos = !!(action.chaos && buildChaosJson(action.chaos));
   const hasSteps = !!(action.steps && action.steps.length > 0);
   const sideEffects = (action.sideEffects ?? []).filter((se) => se.path.trim());
   const beforeActions = sideEffects.filter((se) => se.position === 'before');
   const afterActions = sideEffects.filter((se) => se.position === 'after');
+  // Build the exact expectation JSON once and drive the cross-cutting modifiers
+  // (times / timeToLive / priority via the 4-arg when(...), plus the namespace,
+  // scenario and capture setters) from it, so the Java tab faithfully mirrors the
+  // JSON tab — including fields carried through an edit overlay.
+  const json = buildExpectationJson(matcher, action);
+  // A preserved httpLlmResponse action (carried verbatim through an edit overlay
+  // because the standard composer form cannot model it) is transpiled into the
+  // type-safe llmResponse() builder chain rather than the form's default action.
+  const preservedLlm = asJsonObject(json['httpLlmResponse']);
+  const llmEmit = preservedLlm ? llmResponseToJava(preservedLlm) : undefined;
+  // A preserved response SEQUENCE (httpResponses) is emitted as the typed
+  // terminal `.respond(Arrays.asList(response()..., ...))`; the selection
+  // controls (responseMode / responseWeights / switchAfter) ride on the chain
+  // modifiers above.
+  const preservedSequence = Array.isArray(json['httpResponses']) ? (json['httpResponses'] as unknown[]) : undefined;
+  const sequenceNotes = new Set<string>();
   const lines: string[] = [];
-  for (const imp of collectJavaImports(matcher, action, hasChaos)) lines.push(imp);
+  for (const imp of collectJavaImports(matcher, action, hasChaos, json, llmEmit?.imports)) lines.push(imp);
   lines.push('');
   lines.push('mockServerClient');
-  lines.push('  .when(');
-  lines.push('    ' + matcherToJava(matcher).split('\n').join('\n    '));
-  lines.push('  )');
+  const when = whenArgsFromJson(json);
+  const matcherJava = '    ' + matcherToJava(matcher).split('\n').join('\n    ');
+  if (when.useFullWhen) {
+    lines.push('  .when(');
+    lines.push(matcherJava + ',');
+    lines.push('    ' + when.timesExpr + ',');
+    lines.push('    ' + when.ttlExpr + ',');
+    lines.push('    ' + when.priority);
+    lines.push('  )');
+  } else {
+    lines.push('  .when(');
+    lines.push(matcherJava);
+    lines.push('  )');
+  }
+  // Namespace / scenario / capture modifiers sit on the ForwardChainExpectation
+  // returned by when(...), before the terminal action.
+  for (const modifier of chainModifierLines(json)) lines.push(modifier);
 
   if (hasSteps) {
     // Steps pipeline — emit .withSteps(step().with...(), step().with...(), ...)
@@ -1967,16 +3250,41 @@ export function standardToJava(matcher: StandardMatcher, action: StandardActionP
     lines.push('    ' + sideEffectToJava(se).split('\n').join('\n    '));
     lines.push('  )');
   }
-  // Emit the terminal action. actionToJava bundles the call (.respond(/.forward(/.error(...) with
-  // its argument indented 4 spaces; dedent the inner argument lines by 2 so that, after the 2-space
-  // wrapper that nests the call under mockServerClient, the argument aligns at the same depth (4
-  // spaces) as the matcher inside .when( ... ) — keeping request() and response()/template() flush.
-  const actionLines = actionToJava(action).split('\n');
+  // Emit the terminal action. actionToJava (or llmResponseToJava for a preserved
+  // httpLlmResponse) bundles the call (.respond(/.forward(/.respondWithLlm(...) with
+  // its argument indented 4 spaces; dedent the inner argument lines by 2 so that, after
+  // the 2-space wrapper that nests the call under mockServerClient, the argument aligns at
+  // the same depth (4 spaces) as the matcher inside .when( ... ) — keeping request() and
+  // response()/llmResponse() flush.
+  let terminalCode: string;
+  if (llmEmit) {
+    terminalCode = llmEmit.code;
+  } else if (preservedSequence) {
+    const responses = preservedSequence
+      .map((r) => wireResponseToJava((r ?? {}) as Record<string, unknown>, sequenceNotes))
+      .map((r) => '    ' + r.split('\n').join('\n    '));
+    terminalCode = ['.respond(Arrays.asList(', responses.join(',\n'), '))'].join('\n');
+  } else {
+    terminalCode = actionToJava(action);
+  }
+  const actionLines = terminalCode.split('\n');
   const alignedAction = actionLines
     .map((ln, i) => (i === 0 || i === actionLines.length - 1 ? ln : ln.replace(/^ {2}/, '')))
     .map((ln) => '  ' + ln)
     .join('\n');
   lines.push(alignedAction + ';');
+  // Honest one-line notice naming any preserved LLM field the typed builder cannot
+  // carry (normally none — every wire field has a setter).
+  if (llmEmit?.note) lines.push(llmEmit.note);
+  if (sequenceNotes.size > 0) {
+    lines.push(`// NOTE: the Java preview omits response-sequence field(s) it cannot carry: ${Array.from(sequenceNotes).join(', ')} -- see the JSON tab.`);
+  }
+  // Honest NOTE for preserved top-level fields the Java client API cannot set
+  // (rateLimit / timestamp) — never a silent drop.
+  const unrep = JAVA_UNREPRESENTABLE_TOPLEVEL.filter((k) => k in json && json[k] != null);
+  if (unrep.length > 0) {
+    lines.push(`// NOTE: the Java client API cannot set these preserved field(s): ${unrep.join(', ')} -- see the JSON tab.`);
+  }
   return lines.join('\n');
 }
 
@@ -1996,7 +3304,7 @@ export function standardToCurl(
 }
 
 // ---------------------------------------------------------------------------
-// Client-library codegen — Node, Python, Go, C# (native client APIs)
+// Client-library codegen — Node / Python / Go / C# / Ruby / Rust
 //
 // Every MockServer client ultimately registers the same expectation JSON that
 // the JSON tab shows. Rather than reimplement each language's fluent builder
@@ -2005,161 +3313,21 @@ export function standardToCurl(
 //
 // Fidelity note: the Node client is JSON-native (mockAnyResponse takes the raw
 // object), so it represents EVERY field faithfully regardless of client version.
-// Python/Go/C# hydrate into typed model objects, so a field the installed client
-// version's model does not yet declare (e.g. a newly added one) is dropped on
-// hydration — the JSON tab remains the authoritative, lossless source.
+// Python/Go/C#/Ruby/Rust hydrate into typed model objects, so a field the
+// installed client version's model does not yet declare (e.g. a newly added one)
+// is dropped on hydration — the JSON tab remains the authoritative, lossless
+// source.
+//
+// The emitters and their shared helpers live in per-language modules under
+// ./codegen/; they are re-exported here under their original names so every
+// existing import site (and test) that pulls them from './standardCodegen.ts' keeps
+// working unchanged.
 // ---------------------------------------------------------------------------
 
-export function clientHostPort(baseUrl: string): { host: string; port: number } {
-  try {
-    const u = new URL(baseUrl);
-    return {
-      host: u.hostname || 'localhost',
-      port: u.port ? Number(u.port) : (u.protocol === 'https:' ? 443 : 1080),
-    };
-  } catch {
-    return { host: 'localhost', port: 1080 };
-  }
-}
-
-/** Re-indents every line of `block` after the first by `pad` spaces (the first line is already
- *  positioned by the caller). */
-export function indentAfterFirst(block: string, pad: number): string {
-  return block.split('\n').join('\n' + ' '.repeat(pad));
-}
-
-/** Renders a JSON-compatible value as a Python literal (true/false/null → True/False/None). */
-export function toPythonLiteral(value: unknown, indent: number): string {
-  const pad = ' '.repeat(indent);
-  const pad2 = ' '.repeat(indent + 4);
-  if (value === null || value === undefined) return 'None';
-  if (typeof value === 'boolean') return value ? 'True' : 'False';
-  if (typeof value === 'number') return String(value);
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    if (value.length === 0) return '[]';
-    return '[\n' + value.map((v) => pad2 + toPythonLiteral(v, indent + 4)).join(',\n') + '\n' + pad + ']';
-  }
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length === 0) return '{}';
-  return '{\n' + entries.map(([k, v]) => pad2 + JSON.stringify(k) + ': ' + toPythonLiteral(v, indent + 4)).join(',\n') + '\n' + pad + '}';
-}
-
-export function standardToNode(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
-  const { host, port } = clientHostPort(baseUrl);
-  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
-  return [
-    "const { mockServerClient } = require('mockserver-client');",
-    '',
-    `mockServerClient("${host}", ${port})`,
-    `  .mockAnyResponse(${indentAfterFirst(json, 2)})`,
-    '  .then(',
-    '    () => console.log("expectation created"),',
-    '    (error) => console.error(error)',
-    '  );',
-  ].join('\n');
-}
-
-export function standardToPython(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
-  const { host, port } = clientHostPort(baseUrl);
-  const dict = toPythonLiteral(buildExpectationJson(matcher, action), 0);
-  return [
-    'from mockserver import MockServerClient, Expectation',
-    '',
-    `MockServerClient("${host}", ${port}).upsert(`,
-    `    Expectation.from_dict(${indentAfterFirst(dict, 4)})`,
-    ')',
-  ].join('\n');
-}
-
-export function standardToGo(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
-  const { host, port } = clientHostPort(baseUrl);
-  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
-  // A Go raw string literal cannot contain a backtick; if the JSON has one (e.g. a path/body
-  // value), break out of the raw string and concatenate a quoted backtick — the standard idiom.
-  const goRaw = json.replace(/`/g, '` + "`" + `');
-  return [
-    'package main',
-    '',
-    'import (',
-    '\t"encoding/json"',
-    '',
-    '\tmockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"',
-    ')',
-    '',
-    'func main() {',
-    `\tclient := mockserver.New("${host}", ${port})`,
-    '',
-    '\texpectationJSON := `' + goRaw + '`',
-    '\tvar expectation mockserver.Expectation',
-    '\tif err := json.Unmarshal([]byte(expectationJSON), &expectation); err != nil {',
-    '\t\tpanic(err)',
-    '\t}',
-    '\tif _, err := client.Upsert(expectation); err != nil {',
-    '\t\tpanic(err)',
-    '\t}',
-    '}',
-  ].join('\n');
-}
-
-export function standardToCsharp(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
-  const { host, port } = clientHostPort(baseUrl);
-  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
-  // C# verbatim string: escape embedded double quotes by doubling them.
-  const verbatim = json.replace(/"/g, '""');
-  return [
-    'using System.Text.Json;',
-    'using MockServer.Client;',
-    'using MockServer.Client.Models;',
-    '',
-    `using var client = new MockServerClient("${host}", ${port});`,
-    '',
-    `var expectation = JsonSerializer.Deserialize<Expectation>(@"${verbatim}");`,
-    'client.Upsert(expectation!);',
-  ].join('\n');
-}
-
-export function standardToRuby(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
-  const { host, port } = clientHostPort(baseUrl);
-  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
-  // Pass the JSON through JSON.parse via a non-interpolating squiggly heredoc (<<~'JSON'),
-  // which sidesteps all Ruby string-literal escaping. Indent the body so <<~ dedents it.
-  const heredoc = json.split('\n').map((l) => '  ' + l).join('\n');
-  return [
-    "require 'json'",
-    "require 'mockserver-client'",
-    '',
-    `client = MockServer::Client.new('${host}', ${port})`,
-    '',
-    "expectation = <<~'JSON'",
-    heredoc,
-    'JSON',
-    '',
-    'client.upsert(MockServer::Expectation.from_hash(JSON.parse(expectation)))',
-  ].join('\n');
-}
-
-/** Wraps `s` in a Rust raw string literal, using as many `#`s as needed so the content can't
- *  prematurely terminate it. */
-export function rustRawString(s: string): string {
-  let hashes = '#';
-  while (s.includes('"' + hashes)) hashes += '#';
-  return `r${hashes}"${s}"${hashes}`;
-}
-
-export function standardToRust(matcher: StandardMatcher, action: StandardActionPayload, baseUrl: string): string {
-  const { host, port } = clientHostPort(baseUrl);
-  const json = JSON.stringify(buildExpectationJson(matcher, action), null, 2);
-  return [
-    '// Cargo.toml: mockserver-client = "7" and serde_json = "1"',
-    'use mockserver_client::{ClientBuilder, Expectation};',
-    '',
-    'fn main() -> mockserver_client::Result<()> {',
-    `    let client = ClientBuilder::new("${host}", ${port}).build()?;`,
-    '',
-    `    let expectation: Expectation = serde_json::from_str(${rustRawString(json)})?;`,
-    '    client.upsert(&[expectation])?;',
-    '    Ok(())',
-    '}',
-  ].join('\n');
-}
+export { clientHostPort, indentAfterFirst, toPythonLiteral, rustRawString } from './codegen/shared.ts';
+export { standardToNode } from './codegen/node.ts';
+export { standardToPython } from './codegen/python.ts';
+export { standardToGo } from './codegen/go.ts';
+export { standardToCsharp } from './codegen/csharp.ts';
+export { standardToRuby } from './codegen/ruby.ts';
+export { standardToRust } from './codegen/rust.ts';

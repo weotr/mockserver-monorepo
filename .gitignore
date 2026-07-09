@@ -117,9 +117,14 @@ mockserver_keystore_*_jks
 !/*/PKCS8CertificateAuthorityPrivateKey.pem
 /**/Certificate.pem
 /**/PKCS8PrivateKey.pem
+/mockserver-ca.pem
+/**/mockserver-ca.pem
+/**/mockserver-ca*.pem.tmp
 /*/mockserverInitialization*.json
 persistedExpectations.json
 mockserverInitialization.json
+recordedRequests.ndjson
+/**/recordedRequests.ndjson
 /*.pem
 _test*.java
 go_client
@@ -189,6 +194,7 @@ docker/root/ca-bundle.pem
 docker/snapshot/ca-bundle.pem
 docker/root-snapshot/ca-bundle.pem
 docker/clustered/ca-bundle.pem
+docker/aot/ca-bundle.pem
 
 # soft links #
 ##############
@@ -212,3 +218,7 @@ examples/go/create_expectation/create_expectation
 examples/go/modify_proxied_response/modify_proxied_response
 examples/go/scenario/scenario
 examples/go/callback/callback
+
+# JVM heap dumps (e.g. from the LLM-capture launcher's -XX:+HeapDumpOnOutOfMemoryError) #
+########################################################################################
+*.hprof

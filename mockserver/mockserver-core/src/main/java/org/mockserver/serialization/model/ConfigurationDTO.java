@@ -37,8 +37,12 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     private Integer maxExpectations;
     private Integer maxLogEntries;
+    private Long maxEventLogSizeInBytes;
+    private Integer maxLoggedBodyBytes;
     private Integer ringBufferSize;
     private Integer maxWebSocketExpectations;
+    private Integer webSocketProxyMaxRecordedFrames;
+    private Integer webSocketProxyIdleTimeoutSeconds;
     private Boolean outputMemoryUsageCsv;
     private String memoryUsageCsvDirectory;
 
@@ -60,6 +64,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Integer maxHeaderSize;
     private Integer maxChunkSize;
     private Boolean useSemicolonAsQueryParameterSeparator;
+    private Boolean startupWarmup;
     private Boolean assumeAllRequestsAreHttp;
 
     private Boolean forwardBinaryRequestsWithoutWaitingForResponse;
@@ -80,6 +85,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean velocityDisallowClassLoading;
     private String velocityDisallowedText;
     private String mustacheDisallowedText;
+    private Long templateFakerSeed;
 
     private String initializationClass;
     private String initializationJsonPath;
@@ -95,8 +101,13 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Boolean persistExpectations;
     private String persistedExpectationsPath;
 
+    private String auditLogFile;
+
     private Boolean persistRecordedExpectations;
     private String persistedRecordedExpectationsPath;
+
+    private Boolean persistRecordedRequestsToDisk;
+    private String persistedRecordedRequestsPath;
 
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
     private Boolean attachMismatchDiagnosticToResponse;
@@ -142,6 +153,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String tlsProtocols;
     private Boolean dynamicallyCreateCertificateAuthorityCertificate;
     private String directoryToSaveDynamicSSLCertificate;
+    private Boolean proxySetup;
+    private Boolean proxySetupLogging;
     private Boolean preventCertificateDynamicUpdate;
     private String sslCertificateDomainName;
     private Set<String> sslSubjectAlternativeNameDomains;
@@ -157,6 +170,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String forwardProxyTLSCustomTrustX509Certificates;
     private String forwardProxyPrivateKey;
     private String forwardProxyCertificateChain;
+    private String forwardProxyClientCertificatesByHost;
 
     private Long slowRequestThresholdMillis;
     private Boolean metricsRequestDurationRouteLabels;
@@ -204,6 +218,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Long http3InitialMaxStreamsBidirectional;
     private Long http3QpackMaxTableCapacity;
     private Boolean http3ConnectUdpEnabled;
+    private String http3ConnectUdpAllowedTargets;
     private Long http3AltSvcMaxAge;
     private Boolean http3AdvertiseAltSvc;
     private Boolean useNativeTransport;
@@ -219,6 +234,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Integer forwardProxyRetryCount;
     private Long forwardProxyRetryBackoffMillis;
     private Boolean forwardProxyHttp2Enabled;
+    private Boolean forwardProxyHttp2Upgrade;
     private Boolean forwardProxyCircuitBreakerEnabled;
     private Integer forwardProxyCircuitBreakerFailureThreshold;
     private Long forwardProxyCircuitBreakerWindowMillis;
@@ -226,6 +242,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private Integer maxRequestBodySize;
     private Integer maxResponseBodySize;
     private Integer maxLlmConversationBodySize;
+    private Boolean driftDetectionEnabled;
+    private Double driftSampleRate;
     private Boolean driftSemanticAnalysisEnabled;
     private Long driftResponseTimeThresholdMs;
     private Boolean driftAlertWebhookEnabled;
@@ -261,6 +279,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
     private String clusterName;
     private String clusterTransportConfig;
     private Boolean clusterSharedTimesEnabled;
+    private Boolean clusterVerifyFanIn;
+    private String clusterVerifyFanInPeers;
+    private String clusterFanInPeerAuthToken;
     private Boolean controlPlaneOidcAuthenticationRequired;
     private String controlPlaneOidcIssuer;
     private String controlPlaneOidcJwksUri;
@@ -310,8 +331,12 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
             this.maxExpectations = configuration.maxExpectations();
             this.maxLogEntries = configuration.maxLogEntries();
+            this.maxEventLogSizeInBytes = configuration.maxEventLogSizeInBytes();
+            this.maxLoggedBodyBytes = configuration.maxLoggedBodyBytes();
             this.ringBufferSize = configuration.ringBufferSize();
             this.maxWebSocketExpectations = configuration.maxWebSocketExpectations();
+            this.webSocketProxyMaxRecordedFrames = configuration.webSocketProxyMaxRecordedFrames();
+            this.webSocketProxyIdleTimeoutSeconds = configuration.webSocketProxyIdleTimeoutSeconds();
             this.outputMemoryUsageCsv = configuration.outputMemoryUsageCsv();
             this.memoryUsageCsvDirectory = configuration.memoryUsageCsvDirectory();
 
@@ -335,6 +360,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.maxHeaderSize = configuration.maxHeaderSize();
             this.maxChunkSize = configuration.maxChunkSize();
             this.useSemicolonAsQueryParameterSeparator = configuration.useSemicolonAsQueryParameterSeparator();
+            this.startupWarmup = configuration.startupWarmup();
             this.assumeAllRequestsAreHttp = configuration.assumeAllRequestsAreHttp();
 
             this.forwardBinaryRequestsWithoutWaitingForResponse = configuration.forwardBinaryRequestsWithoutWaitingForResponse();
@@ -354,6 +380,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.velocityDisallowClassLoading = configuration.velocityDisallowClassLoading();
             this.velocityDisallowedText = configuration.velocityDisallowedText();
             this.mustacheDisallowedText = configuration.mustacheDisallowedText();
+            this.templateFakerSeed = configuration.templateFakerSeed();
 
             this.initializationClass = configuration.initializationClass();
             this.initializationJsonPath = configuration.initializationJsonPath();
@@ -369,8 +396,13 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.persistExpectations = configuration.persistExpectations();
             this.persistedExpectationsPath = configuration.persistedExpectationsPath();
 
+            this.auditLogFile = configuration.auditLogFile();
+
             this.persistRecordedExpectations = configuration.persistRecordedExpectations();
             this.persistedRecordedExpectationsPath = configuration.persistedRecordedExpectationsPath();
+
+            this.persistRecordedRequestsToDisk = configuration.persistRecordedRequestsToDisk();
+            this.persistedRecordedRequestsPath = configuration.persistedRecordedRequestsPath();
 
             this.maximumNumberOfRequestToReturnInVerificationFailure = configuration.maximumNumberOfRequestToReturnInVerificationFailure();
             this.attachMismatchDiagnosticToResponse = configuration.attachMismatchDiagnosticToResponse();
@@ -424,6 +456,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.tlsProtocols = configuration.tlsProtocols();
             this.dynamicallyCreateCertificateAuthorityCertificate = configuration.dynamicallyCreateCertificateAuthorityCertificate();
             this.directoryToSaveDynamicSSLCertificate = configuration.directoryToSaveDynamicSSLCertificate();
+            this.proxySetup = configuration.proxySetup();
+            this.proxySetupLogging = configuration.proxySetupLogging();
             this.preventCertificateDynamicUpdate = configuration.preventCertificateDynamicUpdate();
             this.sslCertificateDomainName = configuration.sslCertificateDomainName();
             this.sslSubjectAlternativeNameDomains = configuration.sslSubjectAlternativeNameDomains();
@@ -442,6 +476,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.forwardProxyTLSCustomTrustX509Certificates = configuration.forwardProxyTLSCustomTrustX509Certificates();
             this.forwardProxyPrivateKey = configuration.forwardProxyPrivateKey();
             this.forwardProxyCertificateChain = configuration.forwardProxyCertificateChain();
+            this.forwardProxyClientCertificatesByHost = configuration.forwardProxyClientCertificatesByHost();
 
             this.slowRequestThresholdMillis = configuration.slowRequestThresholdMillis();
             this.metricsRequestDurationRouteLabels = configuration.metricsRequestDurationRouteLabels();
@@ -489,6 +524,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.http3InitialMaxStreamsBidirectional = configuration.http3InitialMaxStreamsBidirectional();
             this.http3QpackMaxTableCapacity = configuration.http3QpackMaxTableCapacity();
             this.http3ConnectUdpEnabled = configuration.http3ConnectUdpEnabled();
+            this.http3ConnectUdpAllowedTargets = configuration.http3ConnectUdpAllowedTargets();
             this.http3AltSvcMaxAge = configuration.http3AltSvcMaxAge();
             this.http3AdvertiseAltSvc = configuration.http3AdvertiseAltSvc();
             this.useNativeTransport = configuration.useNativeTransport();
@@ -504,6 +540,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.forwardProxyRetryCount = configuration.forwardProxyRetryCount();
             this.forwardProxyRetryBackoffMillis = configuration.forwardProxyRetryBackoffMillis();
             this.forwardProxyHttp2Enabled = configuration.forwardProxyHttp2Enabled();
+            this.forwardProxyHttp2Upgrade = configuration.forwardProxyHttp2Upgrade();
             this.forwardProxyCircuitBreakerEnabled = configuration.forwardProxyCircuitBreakerEnabled();
             this.forwardProxyCircuitBreakerFailureThreshold = configuration.forwardProxyCircuitBreakerFailureThreshold();
             this.forwardProxyCircuitBreakerWindowMillis = configuration.forwardProxyCircuitBreakerWindowMillis();
@@ -511,6 +548,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.maxRequestBodySize = configuration.maxRequestBodySize();
             this.maxResponseBodySize = configuration.maxResponseBodySize();
             this.maxLlmConversationBodySize = configuration.maxLlmConversationBodySize();
+            this.driftDetectionEnabled = configuration.driftDetectionEnabled();
+            this.driftSampleRate = configuration.driftSampleRate();
             this.driftSemanticAnalysisEnabled = configuration.driftSemanticAnalysisEnabled();
             this.driftResponseTimeThresholdMs = configuration.driftResponseTimeThresholdMs();
             this.driftAlertWebhookEnabled = configuration.driftAlertWebhookEnabled();
@@ -546,6 +585,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
             this.clusterName = configuration.clusterName();
             this.clusterTransportConfig = configuration.clusterTransportConfig();
             this.clusterSharedTimesEnabled = configuration.clusterSharedTimesEnabled();
+            this.clusterVerifyFanIn = configuration.clusterVerifyFanIn();
+            this.clusterVerifyFanInPeers = configuration.clusterVerifyFanInPeers();
+            this.clusterFanInPeerAuthToken = configuration.clusterFanInPeerAuthToken();
             this.controlPlaneOidcAuthenticationRequired = configuration.controlPlaneOidcAuthenticationRequired();
             this.controlPlaneOidcIssuer = configuration.controlPlaneOidcIssuer();
             this.controlPlaneOidcJwksUri = configuration.controlPlaneOidcJwksUri();
@@ -580,11 +622,23 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (maxLogEntries != null && (maxLogEntries < 0 || maxLogEntries > 1000000)) {
             throw new IllegalArgumentException("maxLogEntries must be between 0 and 1000000, got: " + maxLogEntries);
         }
+        if (maxEventLogSizeInBytes != null && maxEventLogSizeInBytes < 0) {
+            throw new IllegalArgumentException("maxEventLogSizeInBytes must be greater than or equal to 0, got: " + maxEventLogSizeInBytes);
+        }
+        if (maxLoggedBodyBytes != null && maxLoggedBodyBytes < 0) {
+            throw new IllegalArgumentException("maxLoggedBodyBytes must be greater than or equal to 0, got: " + maxLoggedBodyBytes);
+        }
         if (ringBufferSize != null && (ringBufferSize < 0 || ringBufferSize > 1073741824)) {
             throw new IllegalArgumentException("ringBufferSize must be between 0 and 1073741824, got: " + ringBufferSize);
         }
         if (maxWebSocketExpectations != null && (maxWebSocketExpectations < 0 || maxWebSocketExpectations > 100000)) {
             throw new IllegalArgumentException("maxWebSocketExpectations must be between 0 and 100000, got: " + maxWebSocketExpectations);
+        }
+        if (webSocketProxyMaxRecordedFrames != null && (webSocketProxyMaxRecordedFrames < 0 || webSocketProxyMaxRecordedFrames > 1000000)) {
+            throw new IllegalArgumentException("webSocketProxyMaxRecordedFrames must be between 0 and 1000000, got: " + webSocketProxyMaxRecordedFrames);
+        }
+        if (webSocketProxyIdleTimeoutSeconds != null && (webSocketProxyIdleTimeoutSeconds < 0 || webSocketProxyIdleTimeoutSeconds > 86400)) {
+            throw new IllegalArgumentException("webSocketProxyIdleTimeoutSeconds must be between 0 and 86400, got: " + webSocketProxyIdleTimeoutSeconds);
         }
         if (forwardProxyTLSX509CertificatesTrustManagerType != null) {
             try {
@@ -633,8 +687,12 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
         configuration.maxExpectations(maxExpectations);
         configuration.maxLogEntries(maxLogEntries);
+        configuration.maxEventLogSizeInBytes(maxEventLogSizeInBytes);
+        configuration.maxLoggedBodyBytes(maxLoggedBodyBytes);
         configuration.ringBufferSize(ringBufferSize);
         configuration.maxWebSocketExpectations(maxWebSocketExpectations);
+        configuration.webSocketProxyMaxRecordedFrames(webSocketProxyMaxRecordedFrames);
+        configuration.webSocketProxyIdleTimeoutSeconds(webSocketProxyIdleTimeoutSeconds);
         configuration.outputMemoryUsageCsv(outputMemoryUsageCsv);
         configuration.memoryUsageCsvDirectory(memoryUsageCsvDirectory);
 
@@ -658,6 +716,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.maxHeaderSize(maxHeaderSize);
         configuration.maxChunkSize(maxChunkSize);
         configuration.useSemicolonAsQueryParameterSeparator(useSemicolonAsQueryParameterSeparator);
+        configuration.startupWarmup(startupWarmup);
         configuration.assumeAllRequestsAreHttp(assumeAllRequestsAreHttp);
 
         configuration.forwardBinaryRequestsWithoutWaitingForResponse(forwardBinaryRequestsWithoutWaitingForResponse);
@@ -678,6 +737,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.velocityDisallowClassLoading(velocityDisallowClassLoading);
         configuration.velocityDisallowedText(velocityDisallowedText);
         configuration.mustacheDisallowedText(mustacheDisallowedText);
+        configuration.templateFakerSeed(templateFakerSeed);
 
         configuration.initializationClass(initializationClass);
         configuration.initializationJsonPath(initializationJsonPath);
@@ -693,8 +753,13 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.persistExpectations(persistExpectations);
         configuration.persistedExpectationsPath(persistedExpectationsPath);
 
+        configuration.auditLogFile(auditLogFile);
+
         configuration.persistRecordedExpectations(persistRecordedExpectations);
         configuration.persistedRecordedExpectationsPath(persistedRecordedExpectationsPath);
+
+        configuration.persistRecordedRequestsToDisk(persistRecordedRequestsToDisk);
+        configuration.persistedRecordedRequestsPath(persistedRecordedRequestsPath);
 
         configuration.maximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
         configuration.attachMismatchDiagnosticToResponse(attachMismatchDiagnosticToResponse);
@@ -747,6 +812,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.tlsProtocols(tlsProtocols);
         configuration.dynamicallyCreateCertificateAuthorityCertificate(dynamicallyCreateCertificateAuthorityCertificate);
         configuration.directoryToSaveDynamicSSLCertificate(directoryToSaveDynamicSSLCertificate);
+        configuration.proxySetup(proxySetup);
+        configuration.proxySetupLogging(proxySetupLogging);
         configuration.preventCertificateDynamicUpdate(preventCertificateDynamicUpdate);
         configuration.sslCertificateDomainName(sslCertificateDomainName);
         if (sslSubjectAlternativeNameDomains != null) {
@@ -768,6 +835,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.forwardProxyTLSCustomTrustX509Certificates(forwardProxyTLSCustomTrustX509Certificates);
         configuration.forwardProxyPrivateKey(forwardProxyPrivateKey);
         configuration.forwardProxyCertificateChain(forwardProxyCertificateChain);
+        configuration.forwardProxyClientCertificatesByHost(forwardProxyClientCertificatesByHost);
 
         configuration.slowRequestThresholdMillis(slowRequestThresholdMillis);
         configuration.metricsRequestDurationRouteLabels(metricsRequestDurationRouteLabels);
@@ -815,6 +883,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.http3InitialMaxStreamsBidirectional(http3InitialMaxStreamsBidirectional);
         configuration.http3QpackMaxTableCapacity(http3QpackMaxTableCapacity);
         configuration.http3ConnectUdpEnabled(http3ConnectUdpEnabled);
+        configuration.http3ConnectUdpAllowedTargets(http3ConnectUdpAllowedTargets);
         configuration.http3AltSvcMaxAge(http3AltSvcMaxAge);
         configuration.http3AdvertiseAltSvc(http3AdvertiseAltSvc);
         configuration.useNativeTransport(useNativeTransport);
@@ -830,6 +899,7 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.forwardProxyRetryCount(forwardProxyRetryCount);
         configuration.forwardProxyRetryBackoffMillis(forwardProxyRetryBackoffMillis);
         configuration.forwardProxyHttp2Enabled(forwardProxyHttp2Enabled);
+        configuration.forwardProxyHttp2Upgrade(forwardProxyHttp2Upgrade);
         configuration.forwardProxyCircuitBreakerEnabled(forwardProxyCircuitBreakerEnabled);
         configuration.forwardProxyCircuitBreakerFailureThreshold(forwardProxyCircuitBreakerFailureThreshold);
         configuration.forwardProxyCircuitBreakerWindowMillis(forwardProxyCircuitBreakerWindowMillis);
@@ -837,6 +907,8 @@ public class ConfigurationDTO implements DTO<Configuration> {
         configuration.maxRequestBodySize(maxRequestBodySize);
         configuration.maxResponseBodySize(maxResponseBodySize);
         configuration.maxLlmConversationBodySize(maxLlmConversationBodySize);
+        configuration.driftDetectionEnabled(driftDetectionEnabled);
+        configuration.driftSampleRate(driftSampleRate);
         configuration.driftSemanticAnalysisEnabled(driftSemanticAnalysisEnabled);
         configuration.driftResponseTimeThresholdMs(driftResponseTimeThresholdMs);
         configuration.driftAlertWebhookEnabled(driftAlertWebhookEnabled);
@@ -876,6 +948,11 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (clusterSharedTimesEnabled != null) {
             configuration.clusterSharedTimesEnabled(clusterSharedTimesEnabled);
         }
+        if (clusterVerifyFanIn != null) {
+            configuration.clusterVerifyFanIn(clusterVerifyFanIn);
+        }
+        configuration.clusterVerifyFanInPeers(clusterVerifyFanInPeers);
+        configuration.clusterFanInPeerAuthToken(clusterFanInPeerAuthToken);
         configuration.controlPlaneOidcAuthenticationRequired(controlPlaneOidcAuthenticationRequired);
         configuration.controlPlaneOidcIssuer(controlPlaneOidcIssuer);
         configuration.controlPlaneOidcJwksUri(controlPlaneOidcJwksUri);
@@ -963,11 +1040,23 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (maxLogEntries != null) {
             target.maxLogEntries(maxLogEntries);
         }
+        if (maxEventLogSizeInBytes != null) {
+            target.maxEventLogSizeInBytes(maxEventLogSizeInBytes);
+        }
+        if (maxLoggedBodyBytes != null) {
+            target.maxLoggedBodyBytes(maxLoggedBodyBytes);
+        }
         if (ringBufferSize != null) {
             target.ringBufferSize(ringBufferSize);
         }
         if (maxWebSocketExpectations != null) {
             target.maxWebSocketExpectations(maxWebSocketExpectations);
+        }
+        if (webSocketProxyMaxRecordedFrames != null) {
+            target.webSocketProxyMaxRecordedFrames(webSocketProxyMaxRecordedFrames);
+        }
+        if (webSocketProxyIdleTimeoutSeconds != null) {
+            target.webSocketProxyIdleTimeoutSeconds(webSocketProxyIdleTimeoutSeconds);
         }
         if (outputMemoryUsageCsv != null) {
             target.outputMemoryUsageCsv(outputMemoryUsageCsv);
@@ -1023,6 +1112,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (useSemicolonAsQueryParameterSeparator != null) {
             target.useSemicolonAsQueryParameterSeparator(useSemicolonAsQueryParameterSeparator);
         }
+        if (startupWarmup != null) {
+            target.startupWarmup(startupWarmup);
+        }
         if (assumeAllRequestsAreHttp != null) {
             target.assumeAllRequestsAreHttp(assumeAllRequestsAreHttp);
         }
@@ -1071,6 +1163,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (mustacheDisallowedText != null) {
             target.mustacheDisallowedText(mustacheDisallowedText);
         }
+        if (templateFakerSeed != null) {
+            target.templateFakerSeed(templateFakerSeed);
+        }
         if (initializationClass != null) {
             target.initializationClass(initializationClass);
         }
@@ -1107,11 +1202,20 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (persistedExpectationsPath != null) {
             target.persistedExpectationsPath(persistedExpectationsPath);
         }
+        if (auditLogFile != null) {
+            target.auditLogFile(auditLogFile);
+        }
         if (persistRecordedExpectations != null) {
             target.persistRecordedExpectations(persistRecordedExpectations);
         }
         if (persistedRecordedExpectationsPath != null) {
             target.persistedRecordedExpectationsPath(persistedRecordedExpectationsPath);
+        }
+        if (persistRecordedRequestsToDisk != null) {
+            target.persistRecordedRequestsToDisk(persistRecordedRequestsToDisk);
+        }
+        if (persistedRecordedRequestsPath != null) {
+            target.persistedRecordedRequestsPath(persistedRecordedRequestsPath);
         }
         if (maximumNumberOfRequestToReturnInVerificationFailure != null) {
             target.maximumNumberOfRequestToReturnInVerificationFailure(maximumNumberOfRequestToReturnInVerificationFailure);
@@ -1227,6 +1331,12 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (directoryToSaveDynamicSSLCertificate != null) {
             target.directoryToSaveDynamicSSLCertificate(directoryToSaveDynamicSSLCertificate);
         }
+        if (proxySetup != null) {
+            target.proxySetup(proxySetup);
+        }
+        if (proxySetupLogging != null) {
+            target.proxySetupLogging(proxySetupLogging);
+        }
         if (preventCertificateDynamicUpdate != null) {
             target.preventCertificateDynamicUpdate(preventCertificateDynamicUpdate);
         }
@@ -1268,6 +1378,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (forwardProxyCertificateChain != null) {
             target.forwardProxyCertificateChain(forwardProxyCertificateChain);
+        }
+        if (forwardProxyClientCertificatesByHost != null) {
+            target.forwardProxyClientCertificatesByHost(forwardProxyClientCertificatesByHost);
         }
         if (slowRequestThresholdMillis != null) {
             target.slowRequestThresholdMillis(slowRequestThresholdMillis);
@@ -1407,6 +1520,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (http3ConnectUdpEnabled != null) {
             target.http3ConnectUdpEnabled(http3ConnectUdpEnabled);
         }
+        if (http3ConnectUdpAllowedTargets != null) {
+            target.http3ConnectUdpAllowedTargets(http3ConnectUdpAllowedTargets);
+        }
         if (http3AltSvcMaxAge != null) {
             target.http3AltSvcMaxAge(http3AltSvcMaxAge);
         }
@@ -1452,6 +1568,9 @@ public class ConfigurationDTO implements DTO<Configuration> {
         if (forwardProxyHttp2Enabled != null) {
             target.forwardProxyHttp2Enabled(forwardProxyHttp2Enabled);
         }
+        if (forwardProxyHttp2Upgrade != null) {
+            target.forwardProxyHttp2Upgrade(forwardProxyHttp2Upgrade);
+        }
         if (forwardProxyCircuitBreakerEnabled != null) {
             target.forwardProxyCircuitBreakerEnabled(forwardProxyCircuitBreakerEnabled);
         }
@@ -1472,6 +1591,12 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (maxLlmConversationBodySize != null) {
             target.maxLlmConversationBodySize(maxLlmConversationBodySize);
+        }
+        if (driftDetectionEnabled != null) {
+            target.driftDetectionEnabled(driftDetectionEnabled);
+        }
+        if (driftSampleRate != null) {
+            target.driftSampleRate(driftSampleRate);
         }
         if (driftSemanticAnalysisEnabled != null) {
             target.driftSemanticAnalysisEnabled(driftSemanticAnalysisEnabled);
@@ -1577,6 +1702,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         }
         if (clusterSharedTimesEnabled != null) {
             target.clusterSharedTimesEnabled(clusterSharedTimesEnabled);
+        }
+        if (clusterVerifyFanIn != null) {
+            target.clusterVerifyFanIn(clusterVerifyFanIn);
+        }
+        if (clusterVerifyFanInPeers != null) {
+            target.clusterVerifyFanInPeers(clusterVerifyFanInPeers);
+        }
+        if (clusterFanInPeerAuthToken != null) {
+            target.clusterFanInPeerAuthToken(clusterFanInPeerAuthToken);
         }
         if (controlPlaneOidcAuthenticationRequired != null) {
             target.controlPlaneOidcAuthenticationRequired(controlPlaneOidcAuthenticationRequired);
@@ -1831,6 +1965,24 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Long getMaxEventLogSizeInBytes() {
+        return maxEventLogSizeInBytes;
+    }
+
+    public ConfigurationDTO setMaxEventLogSizeInBytes(Long maxEventLogSizeInBytes) {
+        this.maxEventLogSizeInBytes = maxEventLogSizeInBytes;
+        return this;
+    }
+
+    public Integer getMaxLoggedBodyBytes() {
+        return maxLoggedBodyBytes;
+    }
+
+    public ConfigurationDTO setMaxLoggedBodyBytes(Integer maxLoggedBodyBytes) {
+        this.maxLoggedBodyBytes = maxLoggedBodyBytes;
+        return this;
+    }
+
     public Integer getRingBufferSize() {
         return ringBufferSize;
     }
@@ -1846,6 +1998,24 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMaxWebSocketExpectations(Integer maxWebSocketExpectations) {
         this.maxWebSocketExpectations = maxWebSocketExpectations;
+        return this;
+    }
+
+    public Integer getWebSocketProxyMaxRecordedFrames() {
+        return webSocketProxyMaxRecordedFrames;
+    }
+
+    public ConfigurationDTO setWebSocketProxyMaxRecordedFrames(Integer webSocketProxyMaxRecordedFrames) {
+        this.webSocketProxyMaxRecordedFrames = webSocketProxyMaxRecordedFrames;
+        return this;
+    }
+
+    public Integer getWebSocketProxyIdleTimeoutSeconds() {
+        return webSocketProxyIdleTimeoutSeconds;
+    }
+
+    public ConfigurationDTO setWebSocketProxyIdleTimeoutSeconds(Integer webSocketProxyIdleTimeoutSeconds) {
+        this.webSocketProxyIdleTimeoutSeconds = webSocketProxyIdleTimeoutSeconds;
         return this;
     }
 
@@ -2011,6 +2181,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Boolean getStartupWarmup() {
+        return startupWarmup;
+    }
+
+    public ConfigurationDTO setStartupWarmup(Boolean startupWarmup) {
+        this.startupWarmup = startupWarmup;
+        return this;
+    }
+
     public Boolean getAssumeAllRequestsAreHttp() {
         return assumeAllRequestsAreHttp;
     }
@@ -2155,6 +2334,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Long getTemplateFakerSeed() {
+        return templateFakerSeed;
+    }
+
+    public ConfigurationDTO setTemplateFakerSeed(Long templateFakerSeed) {
+        this.templateFakerSeed = templateFakerSeed;
+        return this;
+    }
+
     public String getInitializationClass() {
         return initializationClass;
     }
@@ -2263,6 +2451,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public String getAuditLogFile() {
+        return auditLogFile;
+    }
+
+    public ConfigurationDTO setAuditLogFile(String auditLogFile) {
+        this.auditLogFile = auditLogFile;
+        return this;
+    }
+
     public Boolean getPersistRecordedExpectations() {
         return persistRecordedExpectations;
     }
@@ -2278,6 +2475,24 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setPersistedRecordedExpectationsPath(String persistedRecordedExpectationsPath) {
         this.persistedRecordedExpectationsPath = persistedRecordedExpectationsPath;
+        return this;
+    }
+
+    public Boolean getPersistRecordedRequestsToDisk() {
+        return persistRecordedRequestsToDisk;
+    }
+
+    public ConfigurationDTO setPersistRecordedRequestsToDisk(Boolean persistRecordedRequestsToDisk) {
+        this.persistRecordedRequestsToDisk = persistRecordedRequestsToDisk;
+        return this;
+    }
+
+    public String getPersistedRecordedRequestsPath() {
+        return persistedRecordedRequestsPath;
+    }
+
+    public ConfigurationDTO setPersistedRecordedRequestsPath(String persistedRecordedRequestsPath) {
+        this.persistedRecordedRequestsPath = persistedRecordedRequestsPath;
         return this;
     }
 
@@ -2633,6 +2848,24 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Boolean getProxySetup() {
+        return proxySetup;
+    }
+
+    public ConfigurationDTO setProxySetup(Boolean proxySetup) {
+        this.proxySetup = proxySetup;
+        return this;
+    }
+
+    public Boolean getProxySetupLogging() {
+        return proxySetupLogging;
+    }
+
+    public ConfigurationDTO setProxySetupLogging(Boolean proxySetupLogging) {
+        this.proxySetupLogging = proxySetupLogging;
+        return this;
+    }
+
     public Boolean getPreventCertificateDynamicUpdate() {
         return preventCertificateDynamicUpdate;
     }
@@ -2760,6 +2993,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setForwardProxyCertificateChain(String forwardProxyCertificateChain) {
         this.forwardProxyCertificateChain = forwardProxyCertificateChain;
+        return this;
+    }
+
+    public String getForwardProxyClientCertificatesByHost() {
+        return forwardProxyClientCertificatesByHost;
+    }
+
+    public ConfigurationDTO setForwardProxyClientCertificatesByHost(String forwardProxyClientCertificatesByHost) {
+        this.forwardProxyClientCertificatesByHost = forwardProxyClientCertificatesByHost;
         return this;
     }
 
@@ -3177,6 +3419,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public String getHttp3ConnectUdpAllowedTargets() {
+        return http3ConnectUdpAllowedTargets;
+    }
+
+    public ConfigurationDTO setHttp3ConnectUdpAllowedTargets(String http3ConnectUdpAllowedTargets) {
+        this.http3ConnectUdpAllowedTargets = http3ConnectUdpAllowedTargets;
+        return this;
+    }
+
     public Long getHttp3AltSvcMaxAge() {
         return http3AltSvcMaxAge;
     }
@@ -3312,6 +3563,15 @@ public class ConfigurationDTO implements DTO<Configuration> {
         return this;
     }
 
+    public Boolean getForwardProxyHttp2Upgrade() {
+        return forwardProxyHttp2Upgrade;
+    }
+
+    public ConfigurationDTO setForwardProxyHttp2Upgrade(Boolean forwardProxyHttp2Upgrade) {
+        this.forwardProxyHttp2Upgrade = forwardProxyHttp2Upgrade;
+        return this;
+    }
+
     public Boolean getForwardProxyCircuitBreakerEnabled() {
         return forwardProxyCircuitBreakerEnabled;
     }
@@ -3372,6 +3632,24 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setMaxLlmConversationBodySize(Integer maxLlmConversationBodySize) {
         this.maxLlmConversationBodySize = maxLlmConversationBodySize;
+        return this;
+    }
+
+    public Boolean getDriftDetectionEnabled() {
+        return driftDetectionEnabled;
+    }
+
+    public ConfigurationDTO setDriftDetectionEnabled(Boolean driftDetectionEnabled) {
+        this.driftDetectionEnabled = driftDetectionEnabled;
+        return this;
+    }
+
+    public Double getDriftSampleRate() {
+        return driftSampleRate;
+    }
+
+    public ConfigurationDTO setDriftSampleRate(Double driftSampleRate) {
+        this.driftSampleRate = driftSampleRate;
         return this;
     }
 
@@ -3684,6 +3962,33 @@ public class ConfigurationDTO implements DTO<Configuration> {
 
     public ConfigurationDTO setClusterTransportConfig(String clusterTransportConfig) {
         this.clusterTransportConfig = clusterTransportConfig;
+        return this;
+    }
+
+    public Boolean getClusterVerifyFanIn() {
+        return clusterVerifyFanIn;
+    }
+
+    public ConfigurationDTO setClusterVerifyFanIn(Boolean clusterVerifyFanIn) {
+        this.clusterVerifyFanIn = clusterVerifyFanIn;
+        return this;
+    }
+
+    public String getClusterVerifyFanInPeers() {
+        return clusterVerifyFanInPeers;
+    }
+
+    public ConfigurationDTO setClusterVerifyFanInPeers(String clusterVerifyFanInPeers) {
+        this.clusterVerifyFanInPeers = clusterVerifyFanInPeers;
+        return this;
+    }
+
+    public String getClusterFanInPeerAuthToken() {
+        return clusterFanInPeerAuthToken;
+    }
+
+    public ConfigurationDTO setClusterFanInPeerAuthToken(String clusterFanInPeerAuthToken) {
+        this.clusterFanInPeerAuthToken = clusterFanInPeerAuthToken;
         return this;
     }
 

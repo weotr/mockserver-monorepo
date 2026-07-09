@@ -101,6 +101,48 @@ public class FullHttpResponseToMockServerHttpResponseTest {
     }
 
     @Test
+    public void shouldFoldTrailersIntoHeaders() {
+        // gRPC servers deliver the terminal grpc-status / grpc-message in HTTP trailers; these must
+        // survive into the response model (otherwise a non-OK gRPC status is silently lost).
+        FullHttpResponse nettyResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        nettyResponse.headers().add("content-type", "application/grpc");
+        nettyResponse.trailingHeaders().add("grpc-status", "5");
+        nettyResponse.trailingHeaders().add("grpc-message", "not found");
+
+        try {
+            HttpResponse result = mapper.mapFullHttpResponseToMockServerResponse(nettyResponse);
+
+            assertThat(result.getFirstHeader("content-type"), equalTo("application/grpc"));
+            assertThat(result.getFirstHeader("grpc-status"), equalTo("5"));
+            assertThat(result.getFirstHeader("grpc-message"), equalTo("not found"));
+        } finally {
+            nettyResponse.release();
+        }
+    }
+
+    @Test
+    public void shouldNotDuplicateTrailerWhenAlsoPresentAsHeader() {
+        // a trailer whose name is already a header must not be folded in (no duplicate values)
+        FullHttpResponse nettyResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        nettyResponse.headers().add("x-dup", "header-value");
+        nettyResponse.trailingHeaders().add("x-dup", "trailer-value");
+
+        try {
+            HttpResponse result = mapper.mapFullHttpResponseToMockServerResponse(nettyResponse);
+
+            List<Header> headers = result.getHeaderList();
+            for (Header h : headers) {
+                if (h.getName().getValue().equalsIgnoreCase("x-dup")) {
+                    assertThat(h.getValues().size(), equalTo(1));
+                    assertThat(h.getValues().get(0).getValue(), equalTo("header-value"));
+                }
+            }
+        } finally {
+            nettyResponse.release();
+        }
+    }
+
+    @Test
     public void shouldMapMultipleHeaderValues() {
         // given
         FullHttpResponse nettyResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
@@ -121,6 +163,58 @@ public class FullHttpResponseToMockServerHttpResponseTest {
                 }
             }
             assertThat("headerName1 should be present", found, is(true));
+        } finally {
+            nettyResponse.release();
+        }
+    }
+
+    @Test
+    public void shouldStripHttp2ExtensionHeadersButKeepOrdinaryHeaders() {
+        // given - a response decoded from HTTP/2: InboundHttp2ToHttpAdapter injects the synthetic
+        // x-http2-* extension-header family (most importantly x-http2-stream-id carrying the UPSTREAM
+        // stream id). These must never enter the model or they leak the upstream stream id back onto
+        // an HTTP/2 client leg on write-back, causing a PROTOCOL_ERROR / GOAWAY hang (and log noise).
+        FullHttpResponse nettyResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        nettyResponse.headers().add("x-http2-stream-id", "3");
+        nettyResponse.headers().add("x-http2-scheme", "https");
+        nettyResponse.headers().add("x-http2-path", "/upstream");
+        nettyResponse.headers().add("content-type", "application/json");
+        nettyResponse.headers().add("x-custom-header", "customValue");
+
+        try {
+            // when
+            HttpResponse result = mapper.mapFullHttpResponseToMockServerResponse(nettyResponse);
+
+            // then - none of the x-http2-* extension headers survive into the model
+            assertThat(result.getFirstHeader("x-http2-stream-id"), is(emptyOrNullString()));
+            assertThat(result.getFirstHeader("x-http2-scheme"), is(emptyOrNullString()));
+            assertThat(result.getFirstHeader("x-http2-path"), is(emptyOrNullString()));
+            for (Header header : result.getHeaderList()) {
+                assertThat(header.getName().getValue().toLowerCase(), not(startsWith("x-http2-")));
+            }
+            // and ordinary headers are preserved unchanged
+            assertThat(result.getFirstHeader("content-type"), equalTo("application/json"));
+            assertThat(result.getFirstHeader("x-custom-header"), equalTo("customValue"));
+        } finally {
+            nettyResponse.release();
+        }
+    }
+
+    @Test
+    public void shouldStripHttp2StreamIdHeaderCaseInsensitively() {
+        // given - header names arrive in mixed case; the strip must be case-insensitive
+        FullHttpResponse nettyResponse = new DefaultFullHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+        nettyResponse.headers().add("X-Http2-Stream-Id", "7");
+        nettyResponse.headers().add("headerName1", "headerValue1");
+
+        try {
+            // when
+            HttpResponse result = mapper.mapFullHttpResponseToMockServerResponse(nettyResponse);
+
+            // then
+            assertThat(result.getFirstHeader("X-Http2-Stream-Id"), is(emptyOrNullString()));
+            assertThat(result.getFirstHeader("x-http2-stream-id"), is(emptyOrNullString()));
+            assertThat(result.getFirstHeader("headerName1"), equalTo("headerValue1"));
         } finally {
             nettyResponse.release();
         }

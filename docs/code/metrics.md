@@ -30,7 +30,7 @@ When metrics are disabled, the scrape endpoint returns a `404 Not Found` respons
 
 ### Metric Names
 
-The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Prometheus `Gauge` type); separate collectors add the build-info and JVM-runtime metrics described below:
+The `Metrics.Name` enum defines 24 request/action/websocket gauges (all Prometheus `Gauge` type); separate collectors add the build-info and JVM-runtime metrics described below. Five of these gauges are genuinely monotonic counts and nineteen are levels — see [Monotonic counters vs levels](#monotonic-counters-vs-levels) for why the legacy `_count` gauges are retained and how the monotonic five additionally dual-publish proper `_total` Prometheus `Counter`s for correct `rate()`/`increase()`.
 
 #### Request & Expectation Matching
 
@@ -84,13 +84,45 @@ mock_server_expectation_matched_total == 0
 | `websocket_callback_response_handlers_count` | Registered response callback handlers |
 | `websocket_callback_forward_handlers_count` | Registered forward callback handlers |
 
+### Monotonic counters vs levels
+
+Despite every `Metrics.Name` value ending in `_count`, only five are genuinely **monotonic** (ever-increasing totals); the rest are **levels** that go up *and* down. This matters for PromQL: `rate()` / `increase()` are only meaningful on monotonic series.
+
+| Metric | Kind | Why |
+|--------|------|-----|
+| `requests_received_count` | Monotonic | Incremented once per request received; never decremented |
+| `expectations_not_matched_count` | Monotonic | Incremented once per unmatched request |
+| `response_expectations_matched_count` | Monotonic | Incremented once per matched response |
+| `forward_expectations_matched_count` | Monotonic | Incremented once per matched forward |
+| `llm_chaos_injected_count` | Monotonic | Incremented once per injected LLM chaos fault |
+| `*_actions_count` (16 series) | Level | Track the number of currently-registered expectations by action type — `increment` on add, `decrement` on remove (see `RequestMatchers`) |
+| `websocket_callback_*_count` (3 series) | Level | `set(...)` to the live registry size as callback clients/handlers connect and disconnect |
+
+**Why the legacy `_count` series stays a `Gauge`.** The Prometheus Java client (1.8.0) **forces a mandatory `_total` suffix** onto every `Counter`'s exposition sample line — a counter registered as `requests_received_count` is scraped as `requests_received_count_total` (in both the classic `0.0.4` text format and OpenMetrics; the `# TYPE` line uses the `_total` name in the classic format). Converting these five gauges to counters *in place* would therefore **rename** them from `<name>_count` to `<name>_count_total`, silently breaking every consumer that reads them by name: the dashboard UI (`MetricsView` reads `requests_received_count`, `response_expectations_matched_count`, `expectations_not_matched_count`, `forward_expectations_matched_count`, and the `_actions_count` family by exact name, stripping the `_count` suffix for display) and any existing Grafana dashboard. So the legacy `_count` gauges are **retained unchanged** for back-compat. The naming contract is pinned by `MetricsTest.monotonicCountMetricsKeepExactCountNamesAndAreNotSilentlyRenamed` and the `_total`-suffix constraint by `MetricsTest.prometheusClientForcesTotalSuffixOnCounters`.
+
+**Dual-published `_total` counters (recommended for `rate()`/`increase()`).** Rather than rename, MockServer **additively** publishes a proper Prometheus `Counter` alongside each of the five legacy `_count` gauges, so both series coexist in every scrape:
+
+| Legacy gauge (retained, back-compat) | New counter (use for `rate()`/`increase()`) |
+|--------------------------------------|---------------------------------------------|
+| `requests_received_count` | `mock_server_requests_received_total` |
+| `expectations_not_matched_count` | `mock_server_expectations_not_matched_total` |
+| `response_expectations_matched_count` | `mock_server_response_expectations_matched_total` |
+| `forward_expectations_matched_count` | `mock_server_forward_expectations_matched_total` |
+| `llm_chaos_injected_count` | `mock_server_llm_chaos_injected_total` |
+
+The counters are registered from the single source of truth `Metrics.MONOTONIC_TOTAL_COUNTER_NAMES` (each builder name gains the client-forced `_total` suffix) and incremented in lock-step with the legacy gauge from the same `Metrics.increment(Name)` call site, so the two never diverge on the increment path. They mirror to OTLP as observable monotonic Sums (`OtelMetricsExporter.registerMonotonicTotalCounters`), matching the newer counters. Coexistence is pinned by `MetricsTest.dualPublishesTotalCounterAlongsideLegacyCountGauge`. Prefer the `_total` counters in PromQL — e.g. `rate(mock_server_requests_received_total[5m])` — because they are true monotonic counters that `rate()`/`increase()` model correctly across a scrape.
+
+This mirrors the *newer* metrics (`mock_server_slow_requests`, `mock_server_forward_requests`, `mock_server_http_chaos_injected`, …) which are registered as `Counter`s from the outset and are *designed* around the `_total` suffix — the UI and OTLP mirror reference them as `..._total`.
+
+**Reset semantics.** All 24 gauges (monotonic and level alike) are zeroed by `Metrics.clear()` on a server reset, and the request/expectation subset by `clearRequestAndExpectationMetrics()`. The dual-published `_total` counters follow **counter semantics like the other counters** (`mock_server_slow_requests`, `mock_server_http_chaos_injected`, …): they are *not* zeroed by `clear()`/`clearRequestAndExpectationMetrics()`, only reset on process restart (or `resetAdditionalMetricsForTesting()`). So across a MockServer reset the legacy gauge drops to 0 while the `_total` counter keeps climbing — which is the correct, intended Prometheus counter behaviour and is acceptable: `rate()`/`increase()` on either series stay correct, since a drop to zero is itself modelled as a counter reset.
+
 ### Build Info Metric
 
 `BuildInfoCollector` registers a `mock_server_build_info` gauge with labels:
 
 | Label | Description |
 |-------|-------------|
-| `version` | Full version (e.g. `7.2.0`) |
+| `version` | Full version (e.g. `7.4.0`) |
 | `major_minor_version` | Major.minor version (e.g. `6.1`) |
 | `group_id` | Maven group ID (`org.mock-server`) |
 | `artifact_id` | Maven artifact ID (`mockserver-netty`) |
@@ -126,14 +158,17 @@ It is registered (once) when `metricsEnabled`. Timing is captured per `NettyResp
 
 ### Per-Upstream Forward/Proxy Observability
 
-Two Prometheus metrics give per-upstream visibility into forwarded and proxied requests — which upstream a request hit and how it performed. Both are registered once when `metricsEnabled` is `true`.
+Three Prometheus metrics give per-upstream visibility into forwarded and proxied requests — which upstream a request hit, how it performed, and which protocol the forward leg negotiated. All are registered once when `metricsEnabled` is `true`.
 
 | Metric Name | Type | Labels | Description |
 |-------------|------|--------|-------------|
 | `mock_server_forward_request_duration_seconds` | Histogram (classic, 0.5 ms–10 s buckets) | `upstream_host` | Latency of forwarded/proxied requests, by upstream host |
 | `mock_server_forward_requests` | Counter | `upstream_host`, `status_class` | Count of forwarded/proxied requests, by upstream host and status class (`1xx`..`5xx`, or `unknown`) |
+| `mock_server_forward_upstream_protocol` | Counter | `upstream_host`, `protocol` | Count of forward/proxy upstream connections by upstream host and the protocol actually negotiated to the upstream (`http2` via ALPN, or `http1_1`) |
 
 Recording happens in `HttpActionHandler` on every forward/proxy completion: matched FORWARD actions, the unmatched proxy-pass path (streaming and non-streaming), and `proxyPassMappings` reverse-proxy routes. The latency is taken from the precise client-side `Timing` (`getTotalTimeInMillis()`) already computed by `NettyHttpClient` — it is *not* re-measured — falling back to a coarse wall-clock delta only when no `Timing` is attached.
+
+The protocol counter is incremented in `HttpClientInitializer` at the ALPN-resolution point of each forward client connection (`configureHttp1Pipeline` → `http1_1`, `configureHttp2Pipeline` → `http2`), with a matching DEBUG log (`forward upstream connection to {host} negotiated {protocol}`). It is the authoritative way to confirm whether `forwardProxyHttp2Upgrade` is taking effect, since the *recorded* request only carries the inbound protocol, not the upstream-negotiated one — a forward shown as `http1_1` to a backend that withholds its streaming SSE head over HTTP/1.1 explains a high forward time-to-first-byte.
 
 The `upstream_host` label is resolved from the matched forward action's host (the real upstream even behind an HTTP forward-proxy), falling back to the resolved socket address host; a null/blank host is recorded as `unknown`. **Cardinality is deliberately bounded to the host** (never the full URL or path) plus the five status classes, so the series count scales with the number of distinct upstreams, not with request volume or path variety. `Metrics.observeForwardRequest(host, statusCode, latencySeconds)` is a static no-op when metrics are disabled (the histogram/counter are `null`), so the forward hot path pays nothing when metrics are off.
 
@@ -373,6 +408,68 @@ on server reset. A sample's error flag is set when the upstream status is `null`
 
 `MetricsHandler` serves the `/mockserver/metrics` endpoint. It uses `ExpositionFormats` to render all registered metrics from `PrometheusRegistry.defaultRegistry`, respecting the client's `Accept` header for content negotiation.
 
+#### Security: unauthenticated by design, disableable
+
+The scrape endpoint is deliberately **not** routed through `HttpState.controlPlaneRequestAuthenticated` — unlike `/mockserver/dashboard` and `/mockserver/openapi.yaml`, which the same `HttpRequestHandler` dispatch block *does* gate. Prometheus/OTEL scrapers cannot present a control-plane client certificate or bearer token while scraping, so gating the endpoint would break metrics collection. This is intentional and must not be "fixed" by adding auth. (The JSON metrics snapshot `PUT /mockserver/retrieve?type=METRICS` goes through `HttpState.handle` and *is* behind the control-plane auth gate like every other `retrieve` — only the Prometheus scrape endpoint is open.)
+
+Because the endpoint is open, its labels can leak operational metadata to anyone with network reach: the forward/proxy series carry an `upstream_host` label (host only), and the LLM counters (`mock_server_llm_input_tokens`, `mock_server_llm_output_tokens`, `mock_server_llm_cost_usd`) are labelled by `provider`/`model`. To secure it: (a) leave it disabled with `metricsEnabled=false` (the default) — when disabled, `MetricsHandler.renderMetrics` short-circuits to a `404 Not Found` and exposes nothing (pinned by `MetricsHandlerTest.shouldReflectOriginOnDisabledNotFound`); (b) restrict access at the network layer (loopback bind / firewall / Kubernetes `NetworkPolicy`); or (c) prefer PUSH-based export — OTLP metrics (`OtelMetricsExporter`) or Prometheus Remote-Write (`PrometheusRemoteWriteExporter`, both below) — which expose **no** scrape endpoint at all. See the consumer-facing [API Security → Securing the metrics scrape endpoint](../../jekyll-www.mock-server.com/mock_server/control_plane_authorisation.html) note and [tls-and-security.md](tls-and-security.md).
+
+### Grafana Dashboard & Kubernetes Scraping
+
+A standalone, importable Grafana dashboard for the server metric family ships at
+[`examples/grafana/mockserver-server.json`](../../examples/grafana/mockserver-server.json)
+(see its [README](../../examples/grafana/README.md)). It charts request
+throughput and match outcomes (via the `_total` counters), request-latency
+percentiles, the `_actions_count` expectation levels, per-upstream forward/proxy
+health, dropped-log-events, HTTP/LLM chaos counters, and the JVM runtime gauges —
+every panel references a metric documented on this page. It exposes a `datasource`
+template variable, so it imports against any Prometheus data source. (This is
+distinct from the k6 load-injection dashboard under
+`examples/kubernetes/load-injection-observability`, which mixes in load-generator
+series.)
+
+In Kubernetes, the MockServer Helm chart can create a **Prometheus Operator
+`ServiceMonitor`** for the scrape endpoint — set `serviceMonitor.enabled=true`
+(disabled by default; requires the `monitoring.coreos.com/v1` CRDs and
+`metricsEnabled=true`). See [helm.md](../infrastructure/helm.md) and
+`helm/mockserver/values.yaml`.
+
+## Prometheus Remote Write (push)
+
+As an alternative (or complement) to being scraped, MockServer can **push** its metrics to a Prometheus **Remote-Write** endpoint on an interval. This suits short-lived pods, agentless setups, and vendor endpoints that ingest remote write — Prometheus (`--web.enable-remote-write-receiver`), Grafana Cloud / Mimir, **New Relic**, VictoriaMetrics, and Thanos Receive. It is off by default and fail-soft: a push failure logs one line and never affects request handling.
+
+```mermaid
+flowchart LR
+    REG["PrometheusRegistry.defaultRegistry"] -->|scrape| RW["PrometheusRemoteWriteExporter"]
+    RW --> ENC["RemoteWriteV1Encoder\n(protobuf via CodedOutputStream)"]
+    ENC --> SNP["Snappy block compress"]
+    SNP --> HTTP["JDK HttpClient POST\nauth + custom headers"]
+    HTTP --> BE["Prometheus / New Relic / Mimir /\nVictoriaMetrics / Thanos"]
+```
+
+The exporter reuses the **same snapshot** the scrape endpoint serves — `PrometheusRegistry.defaultRegistry.scrape()` — so the pushed series are byte-for-byte the metrics at `/mockserver/metrics` (whole registry, no curated subset). Each snapshot data point becomes one Remote-Write `TimeSeries` (`__name__` + labels + a single sample at push time). Counter→`<name>_total`, gauge→`<name>`, classic histogram→cumulative `<name>_bucket{le}` (incl. `le="+Inf"`) plus `_count`/`_sum`, summary→quantile series plus `_count`/`_sum`; unknown/native-only snapshot types are skipped with a DEBUG log (never dropped silently for the supported types). The `WriteRequest` protobuf is hand-encoded with `com.google.protobuf.CodedOutputStream` (no protoc/codegen is added to the build — the v1 wire schema is frozen), then compressed with the raw **Snappy block** format Remote Write requires (`org.xerial.snappy.Snappy.compress`), and POSTed with the JDK `java.net.http.HttpClient`.
+
+Both Remote-Write **v1** (default, universally supported) and **v2** are selectable via `prometheusRemoteWriteProtocolVersion`. v2 (`RemoteWriteV2Encoder`) interns all label names/values into a per-request `symbols` string table (index 0 is the empty string) referenced by `labels_refs`, and carries per-series `Metadata` (type + help/unit refs); it sends `Content-Type: application/x-protobuf;proto=io.prometheus.write.v2.Request` and `X-Prometheus-Remote-Write-Version: 2.0.0`. Both encoders sort each series' full label set lexicographically by name (required by the spec, or strict receivers reject the series). The encoder is chosen by `PrometheusRemoteWriteExporter.selectEncoder(...)`, which fails safe to v1 on any unknown/blank value.
+
+Remote write is inherently **cumulative** (the Prometheus data model); the OTLP delta option (see [telemetry.md](telemetry.md)) does not apply here.
+
+### Configuration
+
+| Property | Default | Description |
+|----------|---------|-------------|
+| `prometheusRemoteWriteEnabled` | `false` | Enable periodic Remote-Write push |
+| `prometheusRemoteWriteUrl` | (empty) | Full endpoint URL, e.g. `http://prometheus:9090/api/v1/write`. Enabled-but-blank logs a warning and does nothing |
+| `prometheusRemoteWriteProtocolVersion` | `v1` | Remote-Write protocol version: `v1` (universal) or `v2` (symbol-interned, carries metadata). Unknown/blank falls back to `v1` |
+| `prometheusRemoteWriteIntervalSeconds` | `60` | Push interval (clamped to ≥ 1) |
+| `prometheusRemoteWriteBearerToken` | (empty) | Sends `Authorization: Bearer <token>`; takes precedence over basic auth |
+| `prometheusRemoteWriteBasicAuthUsername` | (empty) | HTTP basic-auth username (used when no bearer token) |
+| `prometheusRemoteWriteBasicAuthPassword` | (empty) | HTTP basic-auth password |
+| `prometheusRemoteWriteHeaders` | (empty) | Extra headers as a `key=value,key2=value2` list (e.g. New Relic `Api-Key=...`, Mimir `X-Scope-OrgID=tenant`); applied after the resolved auth header |
+
+Auth resolution: a bearer token wins if set; otherwise basic auth (if a username is set); then the custom headers are applied last (so a user-supplied header can override). Token/password/header **values are never logged** (the startup line reports only whether auth is configured). Each POST carries `Content-Type: application/x-protobuf`, `Content-Encoding: snappy`, and `X-Prometheus-Remote-Write-Version: 0.1.0`.
+
+Lifecycle mirrors the OTLP exporter: `PrometheusRemoteWriteExporter.startIfEnabled()` is created by `LifeCycle` and stopped on shutdown; a single daemon scheduler pushes with a fixed **delay** (so a slow push cannot pile up).
+
 ## Memory Monitoring
 
 `MemoryMonitoring` provides CSV-based memory usage tracking, enabled via the `outputMemoryUsageCsv` configuration property.
@@ -419,6 +516,10 @@ on server reset. A sample's error flag is set when the upstream status is `null`
 | `LlmCostBudgetMonitor` | mockserver-core | `org.mockserver.mock.action.http.LlmCostBudgetMonitor` |
 | `MetricLabels` | mockserver-core | `org.mockserver.metrics.MetricLabels` (route templatizing for load metrics) |
 | `OtelMetricsExporter` | mockserver-core | `org.mockserver.metrics.OtelMetricsExporter` (OTLP mirror of load metrics) |
+| `PrometheusRemoteWriteExporter` | mockserver-core | `org.mockserver.metrics.PrometheusRemoteWriteExporter` (periodic Remote-Write push) |
+| `RemoteWriteV1Encoder` | mockserver-core | `org.mockserver.metrics.remotewrite.RemoteWriteV1Encoder` (MetricSnapshots → Remote-Write v1 protobuf) |
+| `RemoteWriteV2Encoder` | mockserver-core | `org.mockserver.metrics.remotewrite.RemoteWriteV2Encoder` (Remote-Write v2 protobuf with symbol table + metadata) |
+| `SnappyBlock` | mockserver-core | `org.mockserver.metrics.remotewrite.SnappyBlock` (raw Snappy block compression) |
 | `LoadScenarioOrchestrator` | mockserver-core | `org.mockserver.mock.action.http.LoadScenarioOrchestrator` (records load metric samples) |
 | `SloSampleStore` | mockserver-core | `org.mockserver.slo.SloSampleStore` (see [slo-verdicts.md](slo-verdicts.md)) |
 | `MemoryMonitoring` | mockserver-core | `org.mockserver.memory.MemoryMonitoring` |
@@ -431,4 +532,6 @@ on server reset. A sample's error flag is set when the upstream status is `null`
 |---------|-----------|---------|---------|
 | `io.prometheus` | `prometheus-metrics-core` | 1.7.0 | Prometheus client library (Gauge, MultiCollector, PrometheusRegistry) |
 | `io.prometheus` | `prometheus-metrics-exposition-formats` | 1.7.0 | Prometheus exposition format writers |
-| `io.prometheus` | `prometheus-metrics-model` | 1.7.0 | Prometheus metric snapshots and labels |
+| `io.prometheus` | `prometheus-metrics-model` | 1.7.0 | Prometheus metric snapshots and labels (also the Remote-Write snapshot source) |
+| `com.google.protobuf` | `protobuf-java` | 4.35.1 | `CodedOutputStream` used to hand-encode the Remote-Write `WriteRequest` (already a core dep; no protoc/codegen added) |
+| `org.xerial.snappy` | `snappy-java` | 1.1.10.7 | Raw Snappy **block** compression for the Remote-Write body |

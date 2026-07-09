@@ -155,6 +155,14 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
     // mock_server_dropped_log_events Prometheus counter) makes the cliff observable.
     private final AtomicLong droppedLogEvents = new AtomicLong(0);
     private final AtomicBoolean droppedLogEventWarned = new AtomicBoolean(false);
+    // Header name added to the in-memory (and, if it ran before disk-write, persisted) copy of a
+    // request/response body that was truncated by maxLoggedBodyBytes; its value is the original
+    // (pre-truncation) body length in bytes.
+    private static final String TRUNCATED_BODY_HEADER = "x-mockserver-body-truncated";
+    // Optional per-entry hook invoked (off the matching/forwarding path) for each recorded exchange
+    // (FORWARDED_REQUEST or EXPECTATION_RESPONSE) log entry, used to persist recorded requests to
+    // disk. Null when disk persistence is disabled.
+    private Consumer<LogEntry> recordedRequestConsumer;
 
     public MockServerEventLog(Configuration configuration, MockServerLogger mockServerLogger, Scheduler scheduler, boolean asynchronousEventProcessing) {
         super(scheduler);
@@ -163,7 +171,11 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         this.matcherBuilder = new MatcherBuilder(configuration, mockServerLogger);
         this.requestDefinitionSerializer = new RequestDefinitionSerializer(mockServerLogger);
         this.asynchronousEventProcessing = asynchronousEventProcessing;
-        this.eventLog = new CircularConcurrentLinkedDeque<>(configuration.maxLogEntries(), LogEntry::clear);
+        this.eventLog = new CircularConcurrentLinkedDeque<>(
+            configuration.maxLogEntries(),
+            configuration.maxEventLogSizeInBytes(),
+            LogEntry::estimatedHeapSize,
+            LogEntry::clear);
         startRingBuffer();
     }
 
@@ -262,11 +274,97 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         disruptor.start();
     }
 
+    /**
+     * Register a hook invoked once per recorded exchange (FORWARDED_REQUEST or EXPECTATION_RESPONSE)
+     * log entry, off the request-matching / forwarding hot path, so a recorded proxied or mocked
+     * exchange can be persisted to disk without coupling file I/O into this class. The hook receives
+     * the entry with FULL (un-truncated) bodies because {@link #processLogEntry} invokes it BEFORE
+     * applying {@code maxLoggedBodyBytes} truncation.
+     */
+    public void setRecordedRequestConsumer(Consumer<LogEntry> recordedRequestConsumer) {
+        this.recordedRequestConsumer = recordedRequestConsumer;
+    }
+
+    /**
+     * Re-inject a recorded request/response pair loaded from a persisted NDJSON archive back into the
+     * live event log so it is retrievable exactly like an in-memory recording (via
+     * {@code retrieveRecordedRequests} / {@code retrieveRequestResponses} and the derived export
+     * formats). The entry is logged as a FORWARDED_REQUEST and marked
+     * {@link LogEntry#setSkipRecordedRequestPersistence(boolean)} so re-loading an archive is
+     * idempotent and never appends the same exchanges back to the (possibly same) file.
+     */
+    public void importRecordedRequestResponse(HttpRequest httpRequest, HttpResponse httpResponse) {
+        if (httpRequest == null) {
+            return;
+        }
+        add(new LogEntry()
+            .setType(FORWARDED_REQUEST)
+            .setLogLevel(Level.INFO)
+            .setHttpRequest(httpRequest)
+            .setHttpResponse(httpResponse)
+            .setExpectation(httpRequest, httpResponse)
+            .setSkipRecordedRequestPersistence(true)
+            .setMessageFormat("re-imported recorded request:{}and response:{}from persisted archive")
+            .setArguments(httpRequest, httpResponse));
+    }
+
     private void processLogEntry(LogEntry logEntry) {
         logEntry = logEntry.cloneAndClear();
+        // Disk capture runs FIRST so persisted recorded requests keep full fidelity even when
+        // maxLoggedBodyBytes truncates the in-memory copy below. (Recommended combo: disk-capture ON
+        // with maxLoggedBodyBytes=0, so memory is bounded by the byte budget and disk is complete.)
+        // Both mocked (EXPECTATION_RESPONSE) and forwarded/proxied (FORWARDED_REQUEST) exchanges are
+        // captured, so the archive is a complete record of served traffic, not proxy traffic only.
+        // Entries injected by the re-import path carry skipRecordedRequestPersistence=true so reloading
+        // an archive never appends the same exchanges back to the (possibly same) file.
+        if (recordedRequestConsumer != null
+            && !logEntry.isSkipRecordedRequestPersistence()
+            && (logEntry.getType() == FORWARDED_REQUEST || logEntry.getType() == EXPECTATION_RESPONSE)) {
+            recordedRequestConsumer.accept(logEntry);
+        }
+        // Secondary memory valve: cap the body bytes retained per entry. Builds NEW copies (never
+        // mutates the shared live request/response) because LogEntry.clone() copies them by reference.
+        if (configuration.maxLoggedBodyBytes() > 0) {
+            truncateBodiesForLog(logEntry);
+        }
+        // add() weighs the (possibly truncated) entry via LogEntry::estimatedHeapSize for the byte
+        // budget — truncation has already run, and the estimate is computed lazily inside add().
         eventLog.add(logEntry);
         notifyListeners(this, false);
         writeToSystemOut(logger, logEntry, configuration);
+    }
+
+    /**
+     * Replace the request and/or response on the (already-cloned) log entry with body-truncated COPIES
+     * when their raw body exceeds {@code maxLoggedBodyBytes}. The original request/response objects are
+     * shared by reference with the live proxied exchange (LogEntry.clone() copies them by reference), so
+     * we must build fresh clones — {@link HttpRequest#clone()} / {@link HttpResponse#clone()} also clone
+     * the headers map, so adding the truncation marker header never mutates the live objects. The header
+     * value is the original body length so a reader can tell the body was clipped.
+     */
+    private void truncateBodiesForLog(LogEntry logEntry) {
+        int maxLoggedBodyBytes = configuration.maxLoggedBodyBytes();
+        RequestDefinition requestDefinition = logEntry.getHttpRequest();
+        if (requestDefinition instanceof HttpRequest) {
+            HttpRequest httpRequest = (HttpRequest) requestDefinition;
+            byte[] body = httpRequest.getBodyAsRawBytes();
+            if (body != null && body.length > maxLoggedBodyBytes) {
+                logEntry.setHttpRequest(httpRequest
+                    .clone()
+                    .withBody(Arrays.copyOf(body, maxLoggedBodyBytes))
+                    .withHeader(TRUNCATED_BODY_HEADER, String.valueOf(body.length)));
+            }
+        }
+        HttpResponse httpResponse = logEntry.getHttpResponse();
+        if (httpResponse != null) {
+            byte[] body = httpResponse.getBodyAsRawBytes();
+            if (body != null && body.length > maxLoggedBodyBytes) {
+                logEntry.setHttpResponse(httpResponse
+                    .clone()
+                    .withBody(Arrays.copyOf(body, maxLoggedBodyBytes))
+                    .withHeader(TRUNCATED_BODY_HEADER, String.valueOf(body.length)));
+            }
+        }
     }
 
     private void drainDisruptor() {
@@ -728,6 +826,21 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
     }
 
     public void verify(Verification verification, Consumer<String> resultConsumer) {
+        verify(verification, 0, resultConsumer);
+    }
+
+    /**
+     * Evaluate a request-count verification, adding {@code additionalRemoteMatchCount} to this
+     * node's local match count before comparing against the {@link org.mockserver.verify.VerificationTimes}.
+     * <p>
+     * Used by the T1.9 cluster verify fan-in: {@code HttpState} sums the match count reported by
+     * every cluster peer's LOCAL log and passes the total remote count here, so a count-based
+     * verification behind a load balancer is evaluated against the fleet-wide total rather than
+     * only the traffic that reached this node. {@code additionalRemoteMatchCount} is {@code 0} on
+     * the ordinary single-node / non-fan-in path (identical behaviour to before). Only applies to
+     * request verification; response-aware verification always receives {@code 0}.
+     */
+    public void verify(Verification verification, int additionalRemoteMatchCount, Consumer<String> resultConsumer) {
         drainDisruptor();
         final String logCorrelationId = UUIDService.getUUID();
         if (verification != null) {
@@ -750,10 +863,11 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
             final SingleVerificationEvaluation singleEvaluation = (logResult, consumer) -> {
                 if (verification.getHttpResponse() != null) {
                     // response-aware verification: count recorded request-response pairs
+                    // (cluster fan-in of response-aware verify is a deferred boundary — always local)
                     verifyResponse(verification, logCorrelationId, logResult, consumer);
                 } else {
-                    // original request-only verification
-                    verifyRequest(verification, logCorrelationId, logResult, consumer);
+                    // original request-only verification (plus any cluster-peer remote match count)
+                    verifyRequest(verification, additionalRemoteMatchCount, logCorrelationId, logResult, consumer);
                 }
             };
             eventuallyVerify(verification.getTimeout(), singleEvaluation, resultConsumer);
@@ -762,11 +876,12 @@ public class MockServerEventLog extends MockServerEventLogNotifier {
         }
     }
 
-    private void verifyRequest(Verification verification, String logCorrelationId, boolean logResult, Consumer<String> resultConsumer) {
+    private void verifyRequest(Verification verification, int additionalRemoteMatchCount, String logCorrelationId, boolean logResult, Consumer<String> resultConsumer) {
         retrieveRequests(verification, logCorrelationId, httpRequests -> {
             try {
-                if (!verification.getTimes().matches(httpRequests.size())) {
-                    final int matchedCount = httpRequests.size();
+                final int totalMatchedCount = httpRequests.size() + additionalRemoteMatchCount;
+                if (!verification.getTimes().matches(totalMatchedCount)) {
+                    final int matchedCount = totalMatchedCount;
                     boolean matchByExpectationId = verification.getExpectationId() != null;
                     retrieveAllRequests(matchByExpectationId, allRequests -> {
                         String failureMessage;

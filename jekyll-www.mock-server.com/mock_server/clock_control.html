@@ -31,7 +31,7 @@ sitemap:
 <button id="button_clock_freeze" class="accordion">freeze the clock at a specific instant</button>
 <div class="panel">
     <p>Freeze the server clock at a given ISO-8601 instant. If <code class="inline_code">instant</code> is omitted, the clock freezes at the current real time.</p>
-    <button class="accordion inner">Java: MockServerClient</button>
+    <button class="accordion inner">Java</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">// freeze at a specific instant
 new MockServerClient("localhost", 1080)
@@ -40,6 +40,62 @@ new MockServerClient("localhost", 1080)
 // freeze at the current real time
 new MockServerClient("localhost", 1080)
     .freezeClock();</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+    .freezeClock("2025-01-15T09:30:00Z")
+    .then(
+        function () {
+            console.log("clock frozen");
+        },
+        function (error) {
+            console.log(error);
+        }
+    );</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+client.freeze_clock("2025-01-15T09:30:00Z")</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.freeze_clock('2025-01-15T09:30:00Z')</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+client.FreezeClock("2025-01-15T09:30:00Z")</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+client.FreezeClock("2025-01-15T09:30:00Z");</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.freeze_clock(Some("2025-01-15T09:30:00Z")).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;freezeClock('2025-01-15T09:30:00Z');</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -61,10 +117,66 @@ new MockServerClient("localhost", 1080)
 <button id="button_clock_advance" class="accordion">advance the frozen clock by a duration</button>
 <div class="panel">
     <p>Advance the frozen clock forward by the specified number of milliseconds. If the clock is not already frozen, it is first frozen at the current real time, then advanced.</p>
-    <button class="accordion inner">Java: MockServerClient</button>
+    <button class="accordion inner">Java</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .advanceClock(Duration.ofHours(1));</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+    .advanceClock(3600000)
+    .then(
+        function () {
+            console.log("clock advanced");
+        },
+        function (error) {
+            console.log(error);
+        }
+    );</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+client.advance_clock(3600000)</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.advance_clock(3600000)</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+client.AdvanceClock(3600000)</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+client.AdvanceClock(3600000);</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.advance_clock(3600000).unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;advanceClock(3600000);</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -86,10 +198,66 @@ new MockServerClient("localhost", 1080)
 <button id="button_clock_reset" class="accordion">reset the clock to real time</button>
 <div class="panel">
     <p>Reset the server clock back to real wall-clock time.</p>
-    <button class="accordion inner">Java: MockServerClient</button>
+    <button class="accordion inner">Java</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">new MockServerClient("localhost", 1080)
     .resetClock();</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+    .resetClock()
+    .then(
+        function () {
+            console.log("clock reset");
+        },
+        function (error) {
+            console.log(error);
+        }
+    );</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+client.reset_clock()</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+client.reset_clock</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+client.ResetClock()</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+client.ResetClock();</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+client.reset_clock().unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$client-&gt;resetClock();</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
@@ -110,10 +278,66 @@ new MockServerClient("localhost", 1080)
 <button id="button_clock_status" class="accordion">query the current clock status</button>
 <div class="panel">
     <p>Check whether the clock is frozen and what time it currently reports.</p>
-    <button class="accordion inner">Java: MockServerClient</button>
+    <button class="accordion inner">Java</button>
     <div class="panel">
         <pre class="prettyprint lang-java code"><code class="code">String clockJson = new MockServerClient("localhost", 1080)
     .clockStatus();</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+mockServerClient("localhost", 1080)
+    .clockStatus()
+    .then(
+        function (clock) {
+            console.log(clock);
+        },
+        function (error) {
+            console.log(error);
+        }
+    );</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+print(client.clock_status())</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+puts client.clock_status</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client := mockserver.New("localhost", 1080)
+clockJson, _ := client.ClockStatus()</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var clockJson = client.ClockStatus();</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let clock_json = client.clock_status().unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$clockJson = $client-&gt;clockStatus();</code></pre>
     </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">

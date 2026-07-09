@@ -1,5 +1,5 @@
 ---
-title: Inspect AI Agent Traffic - LLM & MCP Proxy
+title: "Inspect AI Agent Traffic<br/>(LLM & MCP Proxy)"
 description: Proxy HTTPS traffic from Claude Code, LangChain, or any AI tool through MockServer to inspect LLM API calls, token usage, tool calls, and SSE streams.
 shortTitle: AI Traffic Inspection
 layout: page
@@ -10,20 +10,36 @@ sitemap:
   priority: 0.8
   changefreq: 'monthly'
   lastmod: 2026-05-27T00:00:00+00:00
+keywords: inspect llm traffic, proxy claude code, mitm llm api, record ai agent traffic, ai traffic inspection, llm proxy, https proxy ai
+schema_faq:
+  - question: "How do I see what an AI agent sends to the LLM API?"
+    answer: "Start MockServer and set HTTPS_PROXY=http://localhost:1080 plus the appropriate CA trust variable (NODE_EXTRA_CA_CERTS for Node.js tools such as Claude Code, SSL_CERT_FILE for Python). Run your agent normally. MockServer intercepts, decodes, and logs every HTTPS request and response. Open http://localhost:1080/mockserver/dashboard and click Traffic to see each LLM call with model name, token counts, tool calls, and the full conversation."
+  - question: "How do I proxy Claude Code traffic through MockServer?"
+    answer: "Set two environment variables before starting Claude Code: export HTTPS_PROXY=http://localhost:1080 and export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem. Get the CA path from the MockServer startup log or by running curl http://localhost:1080/mockserver/proxyConfiguration -H 'Accept: text/plain'. All HTTPS calls to api.anthropic.com and any HTTP/streamable-HTTP MCP servers will then flow through MockServer and appear in the Traffic view."
+  - question: "Can I inspect HTTPS LLM traffic without changing my code?"
+    answer: "Yes. MockServer acts as a transparent HTTPS proxy using TLS MITM interception. Set the HTTPS_PROXY environment variable and trust the MockServer CA certificate — no application code changes are required. MockServer dynamically generates certificates for each upstream hostname and forwards traffic transparently, including SSE-streamed completions which are relayed incrementally with no buffering delay."
+  - question: "How do I trust the MockServer CA certificate?"
+    answer: "Fetch the CA path from the running instance: curl http://localhost:1080/mockserver/proxyConfiguration -H 'Accept: text/plain'. This prints ready-to-paste exports including the file path MockServer wrote to disk at startup. For Node.js tools set NODE_EXTRA_CA_CERTS to that path; for Python tools set SSL_CERT_FILE and REQUESTS_CA_BUNDLE. For shared or persistent setups, start MockServer with --proxy-setup to generate a unique local CA whose private key never leaves the machine."
 ---
 
 <p>When you use an AI coding agent such as Claude Code or OpenCode, or an AI library such as LangChain or LangGraph, you often have no visibility into the HTTPS traffic it sends to LLM APIs (Anthropic, OpenAI, etc.) and MCP servers. Running MockServer as an HTTPS proxy gives you a complete record of every request and response — including model selection, token counts, tool calls, and streamed completions — with no changes to application code.</p>
 
 <p>Because MockServer performs TLS man-in-the-middle (MITM) interception, it can decrypt and log HTTPS traffic while forwarding it transparently. Streaming responses (Server-Sent Events used by LLM APIs) are relayed incrementally so the agent remains fully responsive — there is no buffering delay.</p>
 
+<div class="alert" style="background-color: #e7f3fe; border-left: 4px solid #2196F3; padding: 12px 16px; margin: 16px 0;">
+    <p><strong>Running unattended — in CI or on a remote build agent?</strong> Jump straight to <a href="#headless-scripted-capture">Headless &amp; Scripted Capture (CI / Remote Machine)</a> for a complete, copy-paste script that starts MockServer, runs your AI tool through the proxy in headless mode, retrieves the captured traffic, and shuts everything down — with no one at the keyboard. The walkthrough below explains each step interactively first.</p>
+</div>
+
 <h2>How It Works</h2>
 
 <ol>
     <li><a href="#start-mockserver">Start MockServer as a proxy</a> on a local port</li>
     <li><a href="#trust-ca">Trust the MockServer CA certificate</a> so TLS connections succeed</li>
-    <li><a href="#configure-tools">Configure your AI tool</a> to send traffic through the proxy</li>
+    <li><a href="#configure-tools">Configure your AI tool, SDK, or framework</a> to send traffic through the proxy</li>
     <li><a href="#view-traffic">View the captured traffic</a> in the dashboard or via the retrieve API</li>
 </ol>
+
+<p style="width: 80%; margin: 1em auto;"><img src="../images/mockserver_ai_traffic_inspection.png" alt="AI traffic inspection flow: proxy the AI tool's call, record the traffic, then inspect and export it from the dashboard or retrieve API." style="max-width:100%;"></p>
 
 <a id="start-mockserver" class="anchor" href="#start-mockserver">&nbsp;</a>
 
@@ -41,6 +57,10 @@ sitemap:
 
 <pre class="prettyprint code"><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar -serverPort 1080</code></pre>
 
+<p>For a shared or persistent setup, add <code class="code inline">--proxy-setup</code> to generate a unique, secure CA whose private key never leaves your machine:</p>
+
+<pre class="prettyprint code"><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar -serverPort 1080 --proxy-setup</code></pre>
+
 <p>Once started, MockServer listens on port 1080. Any HTTPS request sent through it will be intercepted, logged, and forwarded to the real destination.</p>
 
 <a id="trust-ca" class="anchor" href="#trust-ca">&nbsp;</a>
@@ -49,34 +69,52 @@ sitemap:
 
 <p>MockServer intercepts TLS by dynamically generating certificates for each upstream hostname, signed by its own Certificate Authority (CA). Your AI tool must trust this CA, otherwise TLS handshakes will fail.</p>
 
-<p>The MockServer CA certificate (PEM format) is available at:</p>
+<p><strong>The CA certificate is always accessible via the endpoint below.</strong> When running via the standalone JAR, Docker image, or <code class="code inline">mockserver</code> CLI, MockServer also writes it to <code class="code inline">./mockserver-ca.pem</code> at startup (absolute path logged) and prints a ready-to-paste "Proxy Setup" block. For embedded usage (<code class="code inline">new ClientAndServer(...)</code> in tests), the file is written on the first endpoint call instead.</p>
 
-<ul>
-    <li><strong>From the GitHub repository:</strong> <a target="_blank" href="https://github.com/mock-server/mockserver-monorepo/blob/master/mockserver/mockserver-core/src/main/resources/org/mockserver/socket/CertificateAuthorityCertificate.pem" rel="noopener noreferrer">CertificateAuthorityCertificate.pem</a></li>
-    <li><strong>From the classpath</strong> (if using the Java API): <code class="code inline">/org/mockserver/socket/CertificateAuthorityCertificate.pem</code></li>
-</ul>
+<p>Fetch the CA path and copy-paste exports at any time from the running server:</p>
 
-<p>Save the certificate to a local file (e.g. <code class="code inline">mockserver-ca.pem</code>) and point your tools at it as shown below.</p>
+<pre class="prettyprint code"><code class="code"># Plain copy-paste text block (CA path + env var exports):
+curl http://localhost:1080/mockserver/proxyConfiguration -H "Accept: text/plain"
+
+# Structured JSON (CA PEM, paths, env var strings, security status):
+curl http://localhost:1080/mockserver/proxyConfiguration</code></pre>
 
 <p>See <a href="/mock_server/HTTPS_TLS.html#verify_trust_chain">HTTPS &amp; TLS — Ensure MockServer Certificates Are Trusted</a> for full details on adding the CA to operating systems, JVMs, and HTTP clients.</p>
 
-<p><strong>Security note:</strong> The default CA private key is public knowledge (it is in the MockServer git repository), which means the default CA should only be used in isolated development environments. For shared or semi-permanent setups, enable <code class="code inline">dynamicallyCreateCertificateAuthorityCertificate</code> to generate a unique local CA whose private key is never published.</p>
+<div class="alert" style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; margin: 16px 0;">
+    <p><strong>Security warning: the default CA private key is published in the MockServer git repository.</strong> Anyone on the network can impersonate any HTTPS host to a client that trusts this CA. The default CA is safe only for isolated local development where no other party can reach the proxy port.</p>
+    <p>For any shared, persistent, or team-facing setup, start MockServer with <code class="code inline">--proxy-setup</code> to generate a unique, local CA whose private key never leaves the machine:</p>
+    <pre class="prettyprint code"><code class="code">java -jar mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar -serverPort 1080 --proxy-setup</code></pre>
+    <p>Or with Docker:</p>
+    <pre class="prettyprint code"><code class="code">docker run -d --rm -p 1080:1080 mockserver/mockserver --proxy-setup</code></pre>
+    <p>The startup log will tell you whether you are using the default public CA or a unique generated one.</p>
+</div>
 
 <a id="configure-tools" class="anchor" href="#configure-tools">&nbsp;</a>
 
-<h2>3. Configure Your AI Tool</h2>
+<h2>3. Configure Your AI Tool, SDK, or Framework</h2>
 
-<p>Most AI tools and libraries route HTTPS traffic through the proxy and CA specified by standard environment variables. Set these before starting your tool:</p>
+<p>There are two ways to route AI traffic through MockServer. The <strong>transparent HTTPS proxy</strong> (Method A) observes and forwards real traffic to the actual provider — and can also intercept requests with mock expectations when needed. A <strong>base-URL override</strong> (Method B) redirects all SDK calls directly to MockServer instead of the real provider, which is typically used to mock LLM responses in tests rather than observe live traffic.</p>
+
+<h3>Method A — Transparent HTTPS Proxy</h3>
+
+<p>Works for any tool with no code change: route outbound traffic through MockServer using <code class="code inline">HTTPS_PROXY</code> and trust the CA certificate from §2. After starting MockServer, copy the proxy setup block from the startup log — or fetch it on demand from any running instance:</p>
+
+<pre class="prettyprint code"><code class="code">curl http://localhost:1080/mockserver/proxyConfiguration -H "Accept: text/plain"</code></pre>
+
+<p>The output contains ready-to-paste exports for Unix and PowerShell. The CA path in those exports points to the file MockServer already wrote to disk. Example (Unix):</p>
 
 <pre class="prettyprint code"><code class="code">export HTTPS_PROXY=http://localhost:1080
 export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem   # Node.js tools (Claude Code, OpenCode)
-export SSL_CERT_FILE=/path/to/mockserver-ca.pem          # Python tools (LangChain, httpx)</code></pre>
+export SSL_CERT_FILE=/path/to/mockserver-ca.pem          # Python tools (LangChain, httpx)
+export REQUESTS_CA_BUNDLE=/path/to/mockserver-ca.pem     # Python requests library</code></pre>
 
 <p>Select your tool for specific instructions:</p>
 
 <button id="button_claude_code_proxy" class="accordion">Claude Code</button>
 <div class="panel">
     <p>Claude Code is a Node.js process. It honours <code class="code inline">HTTPS_PROXY</code> for outbound traffic and <code class="code inline">NODE_EXTRA_CA_CERTS</code> to extend the Node.js CA trust store without replacing it.</p>
+    <p>Copy the path from the startup log (or from <code class="code inline">curl http://localhost:1080/mockserver/proxyConfiguration -H "Accept: text/plain"</code>) and substitute it below:</p>
     <pre class="prettyprint code"><code class="code">export HTTPS_PROXY=http://localhost:1080
 export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem</code></pre>
     <p>Start Claude Code in a terminal where these variables are set:</p>
@@ -90,6 +128,7 @@ export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem</code></pre>
     <p>OpenCode is also a Node.js process and uses the same standard variables:</p>
     <pre class="prettyprint code"><code class="code">export HTTPS_PROXY=http://localhost:1080
 export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem</code></pre>
+    <p>Copy the exact path from the MockServer startup log or from <code class="code inline">GET /mockserver/proxyConfiguration</code>.</p>
     <p>Start OpenCode in a terminal where these variables are set:</p>
     <pre class="prettyprint code"><code class="code">opencode</code></pre>
     <p>Alternatively, set them in your OpenCode launch configuration or shell profile to apply them globally.</p>
@@ -97,9 +136,11 @@ export NODE_EXTRA_CA_CERTS=/path/to/mockserver-ca.pem</code></pre>
 
 <button id="button_langchain_proxy" class="accordion">LangChain / LangGraph / Python AI SDKs</button>
 <div class="panel">
-    <p>Python's <code class="code inline">httpx</code> and <code class="code inline">requests</code> libraries (used by the Anthropic and OpenAI Python SDKs) honour <code class="code inline">HTTPS_PROXY</code> and <code class="code inline">SSL_CERT_FILE</code>:</p>
+    <p>Python's <code class="code inline">httpx</code> and <code class="code inline">requests</code> libraries (used by the Anthropic and OpenAI Python SDKs) honour <code class="code inline">HTTPS_PROXY</code>, <code class="code inline">SSL_CERT_FILE</code>, and <code class="code inline">REQUESTS_CA_BUNDLE</code>:</p>
     <pre class="prettyprint code"><code class="code">export HTTPS_PROXY=http://localhost:1080
-export SSL_CERT_FILE=/path/to/mockserver-ca.pem</code></pre>
+export SSL_CERT_FILE=/path/to/mockserver-ca.pem
+export REQUESTS_CA_BUNDLE=/path/to/mockserver-ca.pem</code></pre>
+    <p>Copy the exact path from the MockServer startup log or from <code class="code inline">GET /mockserver/proxyConfiguration</code>.</p>
     <p>If you instantiate an <code class="code inline">httpx</code> client directly, pass the proxy and CA bundle explicitly:</p>
     <pre class="prettyprint lang-python code"><code class="code">import anthropic
 import httpx
@@ -122,6 +163,67 @@ client = openai.OpenAI(
 )</code></pre>
     <p>LangChain and LangGraph applications use whatever HTTP client the underlying SDK uses, so setting <code class="code inline">HTTPS_PROXY</code> and <code class="code inline">SSL_CERT_FILE</code> at the process level is normally sufficient. The same applies to any other Python AI framework or SDK.</p>
 </div>
+
+<h3>Method B — Base-URL Override</h3>
+
+<p>When an SDK or framework exposes a base URL setting, point it directly at <code class="code inline">http://localhost:1080</code> — plain HTTP to localhost, so no CA trust setup is required. This redirects all calls to MockServer instead of the real provider; it is typically used to mock LLM responses in tests using the <a href="/mock_server/llm_response_mocking.html">LLM mock builder</a>.</p>
+
+<button id="button_llamaindex_proxy" class="accordion">LlamaIndex</button>
+<div class="panel">
+    <p>LlamaIndex uses a global <code class="code inline">Settings</code> object. Override its <code class="code inline">llm</code> attribute with a model client whose base URL points at MockServer:</p>
+    <pre class="prettyprint lang-python code"><code class="code">from llama_index.core import Settings
+from llama_index.llms.openai import OpenAI
+
+# Route every LLM call through MockServer instead of calling the provider directly.
+Settings.llm = OpenAI(
+    model="gpt-4o",
+    api_base="http://localhost:1080/v1",
+    api_key="sk-placeholder",  # MockServer does not validate the key
+)
+
+# Any LlamaIndex query or agent call now goes through MockServer.
+# Set up your expectations before running the query:
+#
+#   from your_test import mockserver_client
+#   mockserver_client.llm_mock("/v1/chat/completions") \
+#       .with_provider("OPENAI") \
+#       .responding_with(completion().with_text("The answer is 42.")) \
+#       .apply()
+#
+#   response = index.query("What is the answer?")
+</code></pre>
+    <p>Alternatively, set the <code class="code inline">OPENAI_BASE_URL</code> environment variable before your process starts; LlamaIndex's OpenAI integration picks it up automatically:</p>
+    <pre class="prettyprint code"><code class="code">OPENAI_BASE_URL=http://localhost:1080/v1 pytest tests/</code></pre>
+    <p>For Anthropic models (<code class="code inline">llama_index.llms.anthropic</code>), set <code class="code inline">api_base="http://localhost:1080"</code> and use <code class="code inline">Provider.ANTHROPIC</code> in your LLM mock builder expectation.</p>
+</div>
+
+<button id="button_openai_agents_proxy" class="accordion">OpenAI Agents SDK</button>
+<div class="panel">
+    <p>The <a href="https://github.com/openai/openai-agents-python" target="_blank" rel="noopener noreferrer">OpenAI Agents SDK</a> (<code class="code inline">openai-agents</code> package) exposes <code class="code inline">set_default_openai_client</code> to replace the underlying <code class="code inline">AsyncOpenAI</code> instance used by all agents. Point that client at MockServer:</p>
+    <pre class="prettyprint lang-python code"><code class="code">import asyncio
+from openai import AsyncOpenAI
+from agents import set_default_openai_client, Agent, Runner
+
+# Replace the default OpenAI client with one that calls MockServer.
+openai_client = AsyncOpenAI(
+    base_url="http://localhost:1080/v1",
+    api_key="sk-placeholder",
+)
+set_default_openai_client(openai_client)
+
+# Every model call made by agents now goes through MockServer.
+agent = Agent(name="support-bot", instructions="Answer concisely.", model="gpt-4o")
+
+async def main():
+    result = await Runner.run(agent, "What is 2 + 2?")
+    print(result.final_output)
+
+asyncio.run(main())</code></pre>
+    <p>To use the environment variable approach instead, set <code class="code inline">OPENAI_BASE_URL</code> before the process starts; the SDK reads it through the underlying <code class="code inline">openai</code> library:</p>
+    <pre class="prettyprint code"><code class="code">OPENAI_BASE_URL=http://localhost:1080/v1 pytest tests/</code></pre>
+</div>
+
+<p>If your framework or SDK does not expose a base URL parameter, use Method A (the transparent HTTPS proxy) instead — it works for any tool without code changes and is described in full above.</p>
 
 <a id="view-traffic" class="anchor" href="#view-traffic">&nbsp;</a>
 
@@ -204,6 +306,17 @@ client = openai.OpenAI(
 
 <p>The same exports are also available via the <a href="/mock_server/mockserver_clients.html">retrieve API</a>.</p>
 
+<h3>Export Captured LLM Sessions as an Eval / Fine-Tune Dataset</h3>
+
+<p>Captured LLM traffic can be exported directly as a dataset for eval and fine-tune tooling &mdash; the prompt comes from each request and the expected answer from the response. These are new <code class="code inline">format=</code> values on the optimisation report endpoint, and every export is <strong>redacted by default</strong> (auth headers, credential query parameters, configured body fields, and secret shapes in message text are masked):</p>
+
+<pre class="prettyprint code"><code class="code"># OpenAI-evals JSONL   |   chat fine-tune JSONL   |   promptfoo test suite
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=openai-evals"
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=fine-tune"
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=promptfoo"</code></pre>
+
+<p>You can also diff two recorded runs at the prompt level (what prompt text, tool calls, or token/cost changed) with <code class="code inline">PUT /mockserver/llm/diffRuns</code>. See <a href="/mock_server/ai_optimisation.html">AI Cost Optimisation</a> for both.</p>
+
 <h3>Retrieve API</h3>
 
 <p>Retrieve all proxied request-response pairs as JSON:</p>
@@ -231,11 +344,192 @@ curl -s -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES
 <pre class="prettyprint code"><code class="code">curl -s -X PUT http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES \
   -d '{"headers": {"host": [{"value": "api.anthropic.com"}]}}'</code></pre>
 
+<a id="headless-scripted-capture" class="anchor" href="#headless-scripted-capture">&nbsp;</a>
+
+<h2>Headless &amp; Scripted Capture (CI / Remote Machine)</h2>
+
+<p>The sections above cover capturing traffic interactively — a developer running an AI tool in their terminal with MockServer already running nearby. This section automates the same capture end-to-end for headless, unattended use: CI pipelines, remote build agents, and batch capture runs where no one is sitting at a keyboard.</p>
+
+<p>The entire flow runs on a single host — the remote machine where both MockServer and opencode execute. The script below starts MockServer as an LLM-capture proxy, waits until it is ready, runs <code class="code inline">opencode run</code> in headless (non-interactive) mode through the proxy, retrieves the captured traffic, and stops MockServer — all automatically, even if an earlier step fails.</p>
+
+<h3>Complete Capture Script</h3>
+
+<pre class="prettyprint lang-bash code"><code class="code">#!/usr/bin/env bash
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# headless-capture.sh — run opencode through MockServer and collect LLM traffic
+# Usage: ./headless-capture.sh "Your prompt here"
+# ---------------------------------------------------------------------------
+
+PROMPT="${1:-Summarise the files in this directory.}"
+CAPTURE_DIR="${CAPTURE_DIR:-./mockserver-capture}"
+MOCKSERVER_PORT="${MOCKSERVER_PORT:-1080}"
+MOCKSERVER_JAR="mockserver-netty-no-dependencies-{{ site.mockserver_version }}.jar"
+MOCKSERVER_LOG="$CAPTURE_DIR/mockserver.log"
+
+mkdir -p "$CAPTURE_DIR"
+
+# --- Cleanup: always stop MockServer on exit ---
+MOCKSERVER_PID=""
+cleanup() {
+    if [ -n "$MOCKSERVER_PID" ]; then
+        echo "Stopping MockServer (PID $MOCKSERVER_PID)..."
+        curl -sf -X PUT "http://localhost:$MOCKSERVER_PORT/mockserver/stop" >/dev/null 2>&1 \
+            || kill "$MOCKSERVER_PID" 2>/dev/null || true
+        wait "$MOCKSERVER_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+# --- 1. Start MockServer ---
+# --proxy-setup generates a unique local CA whose private key never leaves this machine.
+# Required on any remote or shared host — do not omit it (see §2 security warning).
+java \
+    -Dmockserver.persistRecordedRequestsToDisk=true \
+    -Dmockserver.persistedRecordedRequestsPath="$CAPTURE_DIR/recordedRequests.ndjson" \
+    -Dmockserver.maxEventLogSizeInBytes=268435456 \
+    -Dmockserver.maxSocketTimeoutInMillis=300000 \
+    -Dmockserver.forwardProxyHttp2Upgrade=true \
+    -Dmockserver.redactSecretsInLog=true \
+    -jar "$MOCKSERVER_JAR" \
+    -serverPort "$MOCKSERVER_PORT" \
+    --proxy-setup \
+    -logLevel WARN \
+    > "$MOCKSERVER_LOG" 2>&1 &
+MOCKSERVER_PID=$!
+echo "MockServer started (PID $MOCKSERVER_PID), log: $MOCKSERVER_LOG"
+
+# --- 2. Wait for MockServer to be ready ---
+echo "Waiting for MockServer on port $MOCKSERVER_PORT..."
+until curl -sf -X PUT "http://localhost:$MOCKSERVER_PORT/mockserver/status" >/dev/null 2>&1; do
+    sleep 1
+done
+echo "MockServer is ready."
+
+# --- 3. Locate the CA certificate ---
+# MockServer writes the active CA to ./mockserver-ca.pem at startup (see §2).
+# Fall back to fetching it from GET /mockserver/proxyConfiguration if needed.
+CA_PEM="./mockserver-ca.pem"
+if [ ! -f "$CA_PEM" ]; then
+    echo "CA not found at $CA_PEM — fetching from /mockserver/proxyConfiguration..."
+    curl -sf "http://localhost:$MOCKSERVER_PORT/mockserver/proxyConfiguration" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin)['caCertificatePem'])" \
+        > "$CA_PEM"
+fi
+cp "$CA_PEM" "$CAPTURE_DIR/mockserver-ca.pem"
+
+# --- 4. Run opencode in headless mode through the proxy ---
+# 'opencode run "<message>"' executes a single non-interactive prompt and exits.
+# Add -m provider/model to pin a model, e.g. -m anthropic/claude-opus-4-5.
+# To run multiple prompts, wrap this block in a loop over an array of messages.
+# '|| echo ...' lets the retrieve step below still run if opencode exits non-zero,
+# so a failed or interrupted run does not lose the captured traffic.
+echo "Running opencode: $PROMPT"
+HTTPS_PROXY="http://localhost:$MOCKSERVER_PORT" \
+HTTP_PROXY="http://localhost:$MOCKSERVER_PORT" \
+NODE_EXTRA_CA_CERTS="$CA_PEM" \
+SSL_CERT_FILE="$CA_PEM" \
+NODE_USE_ENV_PROXY=1 \
+    opencode run "$PROMPT" || echo "opencode exited non-zero — continuing to retrieve captured traffic."
+echo "opencode run complete."
+
+# --- 5. Retrieve the captured traffic ---
+# The NDJSON archive (recordedRequests.ndjson) is written continuously throughout
+# the run — one compact JSON object per line — and is the durable source of truth.
+# It is safe to stream-process with jq and survives even if the retrieve step below fails.
+#
+# The retrieve API gives a single consolidated snapshot: JSON for reloading into
+# MockServer or post-processing, HAR for browser DevTools and HAR analysers.
+echo "Retrieving captured traffic..."
+curl -sf -X PUT \
+    "http://localhost:$MOCKSERVER_PORT/mockserver/retrieve?type=REQUEST_RESPONSES&amp;format=JSON" \
+    -o "$CAPTURE_DIR/capture.json"
+
+curl -sf -X PUT \
+    "http://localhost:$MOCKSERVER_PORT/mockserver/retrieve?type=REQUEST_RESPONSES&amp;format=HAR" \
+    -o "$CAPTURE_DIR/capture.har"
+
+echo "Capture saved to $CAPTURE_DIR/"
+ls -lh "$CAPTURE_DIR/"
+
+# cleanup() runs here via trap EXIT, stopping MockServer.</code></pre>
+
+<h3>What Gets Saved</h3>
+
+<table class="table">
+    <thead>
+        <tr><th>File</th><th>Format</th><th>Written</th><th>When to use</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="code inline">recordedRequests.ndjson</code></td>
+            <td>NDJSON — one compact JSON object per line</td>
+            <td>Continuously, as each exchange completes</td>
+            <td>Durable archive; survives a crash or failed retrieve step; stream-process with <code class="code inline">jq</code></td>
+        </tr>
+        <tr>
+            <td><code class="code inline">capture.json</code></td>
+            <td>MockServer JSON array</td>
+            <td>On demand, at retrieve step</td>
+            <td>Reload into MockServer; post-process with <code class="code inline">jq</code>; pass to <code class="code inline">record_llm_fixtures</code></td>
+        </tr>
+        <tr>
+            <td><code class="code inline">capture.har</code></td>
+            <td>HAR (HTTP Archive)</td>
+            <td>On demand, at retrieve step</td>
+            <td>Open in browser DevTools or HAR analysers</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">mockserver.log</code></td>
+            <td>Plain text (WARN level)</td>
+            <td>Continuously</td>
+            <td>Diagnose startup or proxy errors</td>
+        </tr>
+        <tr>
+            <td><code class="code inline">mockserver-ca.pem</code></td>
+            <td>PEM certificate</td>
+            <td>At MockServer startup</td>
+            <td>Trust-store reference for later analysis tools</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>Reloading the NDJSON Archive</h3>
+
+<p>The <code class="code inline">recordedRequests.ndjson</code> archive is durable: it captures every recorded exchange — both proxied/forwarded and mocked responses — and survives ring-buffer eviction (when the in-memory log fills up under <code class="code inline">maxLogEntries</code> / <code class="code inline">maxEventLogSizeInBytes</code>) and MockServer restarts. To make an archived session queryable again — retrievable exactly like live in-memory recordings — reload it with the <code class="code inline">import</code> endpoint using <code class="code inline">format=recording</code>:</p>
+
+<pre class="prettyprint code"><code class="code"># reload the archive MockServer is already configured to persist (reads persistedRecordedRequestsPath)
+curl -X PUT "http://localhost:1080/mockserver/import?format=recording&amp;source=disk"
+
+# or reload a specific archive file supplied in the request body
+curl -X PUT "http://localhost:1080/mockserver/import?format=recording" \
+    --data-binary @recordedRequests.ndjson
+
+# then retrieve the reloaded exchanges like any other recording
+curl -X PUT "http://localhost:1080/mockserver/retrieve?type=REQUEST_RESPONSES&amp;format=JSON"</code></pre>
+
+<p>Re-import is idempotent — reloaded exchanges are <strong>not</strong> written back to the archive, so reloading the same file does not grow it. As with HAR and Postman import, sensitive data is masked by default; add <code class="code inline">&amp;redactSensitiveData=false</code> to keep values verbatim.</p>
+
+<h3>Running on a Remote Machine</h3>
+
+<p>Run the script directly on the remote host via SSH or as a CI job step — no local display or browser is needed. After it completes, copy the capture directory back:</p>
+
+<pre class="prettyprint code"><code class="code">scp -r user@remote-host:/path/to/mockserver-capture ./local-capture/</code></pre>
+
+<p>Alternatively, if you want a snapshot while the script is still running, call the retrieve <code class="code inline">curl</code> commands from a control machine against the remote host's port 1080 directly — no file copy required.</p>
+
+<div class="alert" style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; margin: 16px 0;">
+    <p><strong>Security: do not expose port 1080 publicly.</strong> Bind MockServer to <code class="code inline">localhost</code> or a private network interface and access it over an SSH tunnel if you need it from another machine:</p>
+    <pre class="prettyprint code"><code class="code">ssh -L 1080:localhost:1080 user@remote-host</code></pre>
+    <p>Always use <code class="code inline">--proxy-setup</code> on any remote or shared host (the script above includes it). Without it, the default CA private key is publicly known — any party on the network can impersonate any HTTPS host to a client that trusts this CA. See the <a href="#trust-ca">security warning in §2</a> and <a href="/mock_server/configuration_properties.html#proxy_configuration">proxy configuration properties</a>.</p>
+</div>
+
 <h2>Streamed Response Capture</h2>
 
 <p>LLM APIs stream completions as Server-Sent Events. MockServer relays each chunk immediately to the client (so the agent sees live output) and simultaneously captures up to <a href="/mock_server/configuration_properties.html#button_configuration_streaming_responses_enabled">256 KB</a> of the stream body in the event log. When a streamed response body exceeds this limit, the logged body is truncated and marked with the response header <code class="code inline">x-mockserver-stream-truncated: true</code>; the full stream still reaches the client.</p>
 
-<p>The streaming relay applies to HTTP/1.1 proxied responses only. Streaming is auto-detected from the <code class="code inline">Content-Type: text/event-stream</code> response header. Ordinary chunked responses (without <code class="code inline">text/event-stream</code>) are aggregated normally. Non-streaming responses are handled identically to before — this feature adds no overhead for ordinary JSON responses.</p>
+<p>The streaming relay applies to HTTP/1.1 and HTTP/2 proxied responses (enable HTTP/2 relay with <code class="code inline">-Dmockserver.forwardProxyHttp2Upgrade=true</code>). Streaming is detected from the response <code class="code inline">Content-Type: text/event-stream</code> header; when the upstream omits this header, MockServer also infers streaming from the client's request intent — an <code class="code inline">Accept: text/event-stream</code> request header or a <code class="code inline">"stream": true</code> field in the request body. Ordinary chunked responses (without any streaming signal) are aggregated normally. Non-streaming responses are handled identically to before — this feature adds no overhead for ordinary JSON responses.</p>
 
 <p>Relevant configuration properties:</p>
 

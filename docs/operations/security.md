@@ -89,6 +89,7 @@ Dependencies that interact with the OS kernel or native libraries, added for spe
 | `io.netty:netty-transport-native-epoll` (classifier: `linux-x86_64`) | `${netty.version}` | `mockserver-netty` (runtime) | Native JNI library that activates `Epoll.isAvailable()` on Linux x86_64. Bundled in the distribution jar-with-dependencies and Docker images. Inert on non-Linux platforms. | Yes (follows Netty BOM) |
 | `io.netty:netty-transport-native-epoll` (classifier: `linux-aarch_64`) | `${netty.version}` | `mockserver-netty` (runtime) | Native JNI library that activates `Epoll.isAvailable()` on Linux aarch64 (ARM64). Bundled in the distribution jar-with-dependencies and Docker images. Inert on non-Linux/non-ARM platforms. | Yes (follows Netty BOM) |
 | `io.netty:netty-codec-http3` | `${netty.version}` | `mockserver-netty` (compile) | HTTP/3 codec for experimental QUIC support (graduated from the Netty incubator into mainline Netty 4.2). Transitively pulls `netty-codec-native-quic` with native classifiers for linux-x86_64, linux-aarch_64, osx-x86_64, osx-aarch_64, windows-x86_64. The native artifact contains a BoringSSL JNI binding. Fail-soft at runtime: if the native cannot be loaded, `Quic.isAvailable()` returns false and the HTTP/3 server is not started. | Yes (follows Netty BOM) |
+| `org.xerial.snappy:snappy-java` | `1.1.10.7` | `mockserver-core` | Raw Snappy **block** compression for the Prometheus Remote-Write push body (`SnappyBlock` / `PrometheusRemoteWriteExporter`) — remote write mandates the block (not framed) format. Ships a self-extracting JNI native for common platforms with a pure-Java fallback; **not** shade-relocated (relocation would break the native resource path). Only exercised when `prometheusRemoteWriteEnabled=true`. | Yes (targets Java 7+) |
 
 ### Embedded Data Grid Dependencies (Optional Module)
 
@@ -281,9 +282,9 @@ Container scanners (Trivy, Grype, the ArtifactHub Helm security report) will alw
 
 ### Recommendations for Consumers
 
-- **For maximum security:** Pin to a specific release version (e.g., `7.2.0`), not `latest` or `SNAPSHOT`
+- **For maximum security:** Pin to a specific release version (e.g., `7.4.0`), not `latest` or `SNAPSHOT`
 - **For Renovate/Dependabot users:** Configure version constraints to only match release versions, not SNAPSHOTs
-- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:7.2.0`) rather than `latest`
+- **For Docker users:** Use versioned tags (e.g., `mockserver/mockserver:7.4.0`) rather than `latest`
 - **Subscribe to releases:** Watch the [GitHub releases page](https://github.com/mock-server/mockserver-monorepo/releases) for new versions with resolved security issues
 
 ## Vulnerability Reporting

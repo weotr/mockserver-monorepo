@@ -14,7 +14,9 @@ import java.util.Optional;
  * <p>
  * Detection order:
  * <ol>
- *   <li>Well-known provider hosts (exact or wildcard match)</li>
+ *   <li>Well-known provider hosts (exact or wildcard match), including the OpenAI
+ *       Codex backend ({@code chatgpt.com}) used by coding CLIs such as opencode,
+ *       which serves the Responses API at {@code /backend-api/codex/responses}</li>
  *   <li>Configured {@code mockserver.llmBaseUrl} Ollama host match</li>
  *   <li>Fallback to configured {@code mockserver.llmProvider} — only when the
  *       request path looks like an LLM endpoint (contains any of
@@ -49,11 +51,44 @@ public final class LlmProviderSniffer {
     // Path-shape patterns for offline analysis detection (sniffByPath), mirroring
     // the dashboard's llmTraffic.ts. Matched against the original (case-sensitive)
     // path because the model name and method are case-sensitive.
+    // Gemini path shapes, including Vertex AI's publisher-model path
+    // (/publishers/google/models/<model>:generateContent). The model name and method
+    // token are case-sensitive, so this is matched against the original path.
     private static final java.util.regex.Pattern GEMINI_PATH_PATTERN = java.util.regex.Pattern.compile(
         "/v1beta/models/[^/]+:(generateContent|streamGenerateContent)"
-            + "|/v1/models/gemini-[^/]+:(generateContent|streamGenerateContent)");
+            + "|/v1/models/gemini-[^/]+:(generateContent|streamGenerateContent)"
+            + "|/publishers/google/models/[^/]+:(generateContent|streamGenerateContent)");
     private static final java.util.regex.Pattern OLLAMA_CHAT_PATTERN = java.util.regex.Pattern.compile(
         "(^|/)api/chat(/?$|\\?)");
+    // OpenAI Responses API path: the standard hosted path (/v1/responses) and the
+    // OpenAI Codex backend used by coding CLIs such as opencode, which serves the
+    // same Responses wire format at chatgpt.com/backend-api/codex/responses.
+    // The codex/responses arm is anchored to a path-segment boundary so a host such
+    // as /mycodex/responses cannot match. Matched case-insensitively (callers
+    // lower-case the path before matching).
+    private static final java.util.regex.Pattern OPENAI_RESPONSES_PATH_PATTERN = java.util.regex.Pattern.compile(
+        "/v1/responses|(^|/)codex/responses(?:[/?]|$)");
+    // Vertex AI Gemini host: global aiplatform.googleapis.com or regional
+    // <region>-aiplatform.googleapis.com. Fully anchored (the region label has no
+    // dot) so an arbitrary host cannot be glued in front. Compiled once.
+    private static final java.util.regex.Pattern VERTEX_HOST_PATTERN = java.util.regex.Pattern.compile(
+        "(?:[a-z0-9-]+-)?aiplatform\\.googleapis\\.com");
+    // Bedrock Runtime invocation paths: any model id, both invoke and Converse APIs
+    // (invoke, invoke-with-response-stream, converse, converse-stream). Not anchored
+    // to anthropic.* — non-Anthropic models use the same path shape.
+    private static final java.util.regex.Pattern BEDROCK_PATH_PATTERN = java.util.regex.Pattern.compile(
+        "/model/[^/]+/(invoke|invoke-with-response-stream|converse|converse-stream)");
+    // Cohere rerank (/v1/rerank) and chat (/v1/chat as a terminal segment, NOT
+    // /v1/chat/completions). Path-only /v1/rerank is shared with Voyage, so on an
+    // unknown host it defaults to Cohere; the host check disambiguates the two.
+    private static final java.util.regex.Pattern COHERE_PATH_PATTERN = java.util.regex.Pattern.compile(
+        "/v1/rerank|/v1/chat(/?$|\\?)");
+    // Body-shape markers requiring the JSON value to actually be an array, so a
+    // string-valued field (e.g. embeddings "input":"hi") does not match.
+    private static final java.util.regex.Pattern INPUT_ARRAY_PATTERN = java.util.regex.Pattern.compile(
+        "\"input\"\\s*:\\s*\\[");
+    private static final java.util.regex.Pattern MESSAGES_ARRAY_PATTERN = java.util.regex.Pattern.compile(
+        "\"messages\"\\s*:\\s*\\[");
 
     /**
      * Sniff the LLM provider from a forwarded request's target host.
@@ -84,8 +119,130 @@ public final class LlmProviderSniffer {
      * mis-classified.
      */
     public static Optional<Provider> detectForAnalysis(HttpRequest request) {
+        return detectForAnalysis(request, null);
+    }
+
+    /**
+     * Detect the LLM provider for OFFLINE analysis, using the response body as an
+     * additional, more resilient signal. Detection order, cheapest/most-specific
+     * first:
+     * <ol>
+     *   <li>well-known host ({@link #sniff})</li>
+     *   <li>recognised URL path shape ({@link #sniffByPath})</li>
+     *   <li><b>request/response body shape</b> ({@link #sniffByBodyShape}) — the
+     *       resilient fallback that recognises LLM traffic from the wire format
+     *       itself, so a coding CLI that routes through an unknown host or a
+     *       non-standard path (e.g. a future endpoint rename, a private gateway,
+     *       a new tool) is still classified without a code change.</li>
+     * </ol>
+     * The body shape is the slowest-moving signal — it is the provider's API
+     * contract — so keying on it (rather than only on host/path, the dimension
+     * that varies most between tools and versions) is what keeps capture working
+     * as the LLM APIs and CLI harnesses evolve.
+     */
+    public static Optional<Provider> detectForAnalysis(HttpRequest request, org.mockserver.model.HttpResponse response) {
         Optional<Provider> byHost = sniff(request);
-        return byHost.isPresent() ? byHost : sniffByPath(request);
+        if (byHost.isPresent()) {
+            return byHost;
+        }
+        Optional<Provider> byPath = sniffByPath(request);
+        if (byPath.isPresent()) {
+            return byPath;
+        }
+        return sniffByBodyShape(request, response);
+    }
+
+    /**
+     * Provider detection from the request/response <em>body shape</em> alone — no
+     * host or path required. This is the resilient fallback for {@link
+     * #detectForAnalysis}: the wire format is the provider's API contract and moves
+     * far more slowly than the host/path a given CLI happens to use, so recognising
+     * LLM traffic by its body keeps the Traffic / LLM Traces / LLM Optimise views
+     * working when a tool changes endpoints or a new tool appears.
+     *
+     * <p>Keys on the most stable, provider-distinctive markers and stays
+     * conservative (returns empty rather than guess) so non-LLM traffic is not
+     * mis-classified. Read-only analysis use only — never the live forward path.
+     */
+    public static Optional<Provider> sniffByBodyShape(HttpRequest request, org.mockserver.model.HttpResponse response) {
+        // Response markers are the most distinctive — check them first.
+        String resBody = response != null ? safeBody(response.getBodyAsString()) : null;
+        if (resBody != null) {
+            // OpenAI Chat Completions: object "chat.completion" / "chat.completion.chunk".
+            // Require the JSON value's opening quote so a stray substring can't match.
+            if (resBody.contains("\"chat.completion")) {
+                return Optional.of(Provider.OPENAI);
+            }
+            // OpenAI Responses API: response.* streaming events or object "response".
+            if (resBody.contains("response.output_text")
+                || resBody.contains("response.created")
+                || resBody.contains("response.completed")
+                || resBody.contains("\"object\":\"response\"")
+                || resBody.contains("\"object\": \"response\"")) {
+                return Optional.of(Provider.OPENAI_RESPONSES);
+            }
+            // Anthropic Messages: streaming content_block / message_start, or a
+            // non-streamed message envelope with a stop_reason.
+            if (resBody.contains("content_block")
+                || resBody.contains("message_start")
+                || (resBody.contains("\"type\":\"message\"") && resBody.contains("stop_reason"))) {
+                return Optional.of(Provider.ANTHROPIC);
+            }
+            // Gemini: candidates[] plus usage metadata.
+            if (resBody.contains("\"candidates\"") && resBody.contains("usageMetadata")) {
+                return Optional.of(Provider.GEMINI);
+            }
+            // Cohere rerank: results[] with a relevance_score per document.
+            if (resBody.contains("relevance_score") && resBody.contains("\"results\"")) {
+                return Optional.of(Provider.COHERE);
+            }
+        }
+
+        // Request markers — used when the response is absent or unrecognised.
+        if (request == null) {
+            return Optional.empty();
+        }
+        // Anthropic requires the anthropic-version header on every request.
+        String anthropicVersion = request.getFirstHeader("anthropic-version");
+        if (anthropicVersion != null && !anthropicVersion.isEmpty()) {
+            return Optional.of(Provider.ANTHROPIC);
+        }
+        String reqBody = safeBody(request.getBodyAsString());
+        if (reqBody == null) {
+            return Optional.empty();
+        }
+        boolean hasModel = reqBody.contains("\"model\"");
+        // A "messages" ARRAY (not a bare substring) is the Chat Completions / Anthropic
+        // marker; require the opening bracket so a stray "messages" value can't match.
+        boolean hasMessagesArray = MESSAGES_ARRAY_PATTERN.matcher(reqBody).find();
+        // OpenAI Responses: the hallmark top-level "input" ARRAY of message items, or a
+        // Responses-distinctive field. A STRING-valued "input" is OpenAI embeddings /
+        // moderations ({"model":...,"input":"hi"}) and must NOT match here.
+        boolean inputArray = INPUT_ARRAY_PATTERN.matcher(reqBody).find();
+        boolean responsesDistinctive = reqBody.contains("\"instructions\"")
+            || reqBody.contains("\"previous_response_id\"");
+        if (hasModel && !hasMessagesArray && (inputArray || responsesDistinctive)) {
+            return Optional.of(Provider.OPENAI_RESPONSES);
+        }
+        // Gemini: top-level "contents" array (+ a Gemini-specific companion field).
+        if (reqBody.contains("\"contents\"")
+            && (reqBody.contains("\"parts\"") || reqBody.contains("generationConfig"))) {
+            return Optional.of(Provider.GEMINI);
+        }
+        // OpenAI Chat Completions: model + a messages array. (Anthropic is already
+        // caught by its required header and by the response-shape check above.)
+        if (hasModel && hasMessagesArray) {
+            return Optional.of(Provider.OPENAI);
+        }
+        // Cohere rerank request: a query plus the documents to score.
+        if (reqBody.contains("\"query\"") && reqBody.contains("\"documents\"")) {
+            return Optional.of(Provider.COHERE);
+        }
+        return Optional.empty();
+    }
+
+    private static String safeBody(String body) {
+        return body == null || body.isEmpty() ? null : body;
     }
 
     /**
@@ -106,10 +263,10 @@ public final class LlmProviderSniffer {
         if (lower.contains("/openai/deployments/") && lower.contains("/chat/completions")) {
             return Optional.of(Provider.AZURE_OPENAI);
         }
-        if (lower.contains("/model/anthropic.") && lower.contains("/invoke")) {
+        if (BEDROCK_PATH_PATTERN.matcher(lower).find()) {
             return Optional.of(Provider.BEDROCK);
         }
-        if (lower.contains("/v1/responses")) {
+        if (OPENAI_RESPONSES_PATH_PATTERN.matcher(lower).find()) {
             return Optional.of(Provider.OPENAI_RESPONSES);
         }
         if (lower.contains("/chat/completions")) {
@@ -117,6 +274,11 @@ public final class LlmProviderSniffer {
         }
         if (GEMINI_PATH_PATTERN.matcher(path).find()) {
             return Optional.of(Provider.GEMINI);
+        }
+        // Cohere rerank/chat. /v1/rerank is shared with Voyage; on a path alone (no
+        // host) it defaults to Cohere — the host check distinguishes the two.
+        if (COHERE_PATH_PATTERN.matcher(lower).find()) {
+            return Optional.of(Provider.COHERE);
         }
         if (OLLAMA_CHAT_PATTERN.matcher(path).find()) {
             return Optional.of(Provider.OLLAMA);
@@ -163,8 +325,47 @@ public final class LlmProviderSniffer {
         if (lowerHost.equals("api.anthropic.com")) {
             return Optional.of(Provider.ANTHROPIC);
         }
+        // OpenAI Codex backend used by coding CLIs (e.g. opencode): chatgpt.com serves
+        // the Responses API at /backend-api/codex/responses. Path-gated so non-LLM
+        // chatgpt.com traffic (oauth, account, etc.) is never misclassified.
+        if (lowerHost.equals("chatgpt.com") || lowerHost.endsWith(".chatgpt.com")) {
+            if (path != null && OPENAI_RESPONSES_PATH_PATTERN.matcher(path.toLowerCase()).find()) {
+                return Optional.of(Provider.OPENAI_RESPONSES);
+            }
+        }
         if (lowerHost.equals("generativelanguage.googleapis.com")) {
             return Optional.of(Provider.GEMINI);
+        }
+        // Vertex AI Gemini: aiplatform.googleapis.com or <region>-aiplatform.googleapis.com.
+        // matches() anchors the whole string, so an arbitrary host cannot be glued in front.
+        if (VERTEX_HOST_PATTERN.matcher(lowerHost).matches()) {
+            return Optional.of(Provider.GEMINI);
+        }
+        if (lowerHost.equals("api.cohere.com")) {
+            return Optional.of(Provider.COHERE);
+        }
+        if (lowerHost.equals("api.voyageai.com")) {
+            return Optional.of(Provider.VOYAGE);
+        }
+        // OpenAI-chat-compatible providers — identical Chat Completions wire format on
+        // their own host, so the host is the only distinguishing signal (path is the
+        // shared /chat/completions). Classifying them here means proxy observability
+        // records their traffic as LLM (with provider-correct pricing) instead of
+        // dropping it as non-LLM.
+        if (lowerHost.equals("api.mistral.ai")) {
+            return Optional.of(Provider.MISTRAL);
+        }
+        if (lowerHost.equals("api.x.ai")) {
+            return Optional.of(Provider.XAI);
+        }
+        if (lowerHost.equals("api.deepseek.com")) {
+            return Optional.of(Provider.DEEPSEEK);
+        }
+        if (lowerHost.equals("api.groq.com")) {
+            return Optional.of(Provider.GROQ);
+        }
+        if (lowerHost.equals("openrouter.ai")) {
+            return Optional.of(Provider.OPENROUTER);
         }
         if (isBedrockHost(lowerHost)) {
             return Optional.of(Provider.BEDROCK);

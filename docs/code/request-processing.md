@@ -57,6 +57,10 @@ required?"}
     LOG_NO --> WRITE
 ```
 
+### Injected-vs-real latency timing
+
+Every response's `httpResponse.timing` block (`org.mockserver.model.Timing`) records how long the exchange took, split so the dashboard can distinguish latency **MockServer injected** from **real** processing/upstream time. Proxied responses already carry the real `connectionTimeInMillis` / `timeToFirstByteInMillis` / `totalTimeInMillis` measured by `NettyHttpClient`. Three additive fields attribute the injected portion at its natural site: `injectedChaosLatencyMillis` (a chaos-profile latency fault — set in `HttpActionHandler.writeResponseActionResponse` for mock responses and `writeForwardActionResponse` for forwarded ones), `injectedDelayMillis` (the matched action's configured `delay`), and `breakpointHeldMillis` (time held at a response-phase breakpoint). Mock-served responses — which previously had no timing block — now get a minimal one (measured `totalTimeInMillis` plus the injected fields) **only when MockServer actually injected latency** (a chaos fault, a configured delay, or a breakpoint hold); a plain mock with no injection is left without a timing block so its serialised form — and therefore recorded log messages and retrieved responses — is unchanged. When present, the UI derives "real" time as total minus the injected sum. Measurement overhead is a few `System.nanoTime()` deltas and one `Timing` object per response; injected values are sampled once from the `Delay` (exact for static delays, an independent draw for distribution delays). The fields are additive and serialise via the existing `HttpResponseSerializer`, so older clients simply ignore them. Deferred: breakpoint-hold timing is captured only on the mock response path; the forward-path breakpoints (which already surface real upstream timing) do not yet record it.
+
 ## HttpState -- The Control Plane Brain
 
 `HttpState` (`mockserver-core/.../mock/HttpState.java`) is the central orchestrator. It owns:
@@ -140,7 +144,7 @@ The retrieve and clear endpoints accept type parameters:
 |-------|-------------|
 | `REQUESTS` | Received requests matching the filter |
 | `REQUEST_RESPONSES` | Request/response pairs |
-| `RECORDED_EXPECTATIONS` | Expectations recorded from proxy forwarding |
+| `RECORDED_EXPECTATIONS` | Expectations recorded from proxy forwarding (supports `?consolidate=true` / `?parameterize=true` — see [Record-to-Expectations](#record-to-expectations-rest--consolidation--promotion)) |
 | `ACTIVE_EXPECTATIONS` | Currently active expectations |
 | `LOGS` | Log messages |
 
@@ -316,6 +320,37 @@ The endpoint goes through `controlPlaneRequestAuthenticated()` — mTLS / JWT re
 
 The `create_expectations_from_recorded_traffic` MCP tool converts `FORWARDED_REQUEST` log entries into active mock expectations. It reuses the existing `RECORDED_EXPECTATIONS` retrieve mechanism (`MockServerEventLog.retrieveRecordedExpectations()` which filters for `FORWARDED_REQUEST` entries and maps them to `Expectation` objects via `LogEntry.getExpectation()`). The tool deserializes the retrieved expectations, upgrades them from `Times.once()` to `Times.unlimited()` for persistent mocking, and adds them via `HttpState.add()`. Optional `method` and `path` parameters filter the recorded traffic, and `preview=true` returns the expectations as JSON without activating them.
 
+### Record-to-Expectations (REST) — Consolidation & Promotion
+
+`PUT /mockserver/recordings/promote` is the REST equivalent of the MCP tool above. It takes an optional request-matcher filter in the JSON body (empty body = all recorded traffic), **redacts secrets first** (`ImportRedaction`, on by default), **consolidates/parameterizes** the recorded traffic (`RecordedExpectationPostProcessor.consolidate()`; `?consolidate` / `?parameterize`, both on by default — `?consolidate=false` promotes verbatim but still upgraded to `Times.unlimited()`), then **activates** the result via `HttpState.add()` and returns it as `201 Created`.
+
+Unlike the raw MCP tool (a verbatim 1:1 dump — 50 hits to `GET /users/123` become 50 brittle `Times.once()` expectations), `consolidate()` collapses exchanges by request shape into a single `Times.unlimited()` expectation, infers `/users/{id}` path parameters from varying id segments, strips volatile request headers (reusing `HarImporter.volatileRequestHeaders()`), and sequences differing responses for the same request shape into one `ResponseMode.SEQUENTIAL` multi-response expectation. The same engine is exposed on the retrieve path (`?type=RECORDED_EXPECTATIONS&consolidate=true[&parameterize=true]`) and on HAR import (`?format=har&consolidate=true`); see [event-system.md → Record &rarr; Mock](event-system.md#record--mock-consolidation-promotion-har-import) for the full model. Default retrieve output (no query parameter, config flag off) is unchanged.
+
+### Migration Importers (WireMock / Mountebank / Mockoon)
+
+**Outcome.** `PUT /mockserver/import` converts a competitor mock tool's stub definitions into MockServer expectations in one request, so a team can migrate off a stagnating tool without hand-rewriting stubs. Three formats join the existing HAR/Postman/Pact importers, each selected by `?format=` or auto-detected from the JSON shape, and each surfacing a **structured warning per unmappable construct** so nothing is silently dropped.
+
+| `?format=` | Importer (`org.mockserver.imports`) | Source shape (auto-detect key) |
+|-----------|-------------------------------------|--------------------------------|
+| `wiremock` | `WireMockImporter` | single stub, `mappings[]`, or bare array (`mappings`, `request.urlPath/urlPattern`, `response.jsonBody/fault`) |
+| `mountebank` | `MountebankImporter` | imposter, `imposters[]`, or bare array (`imposters`, or `protocol`+`stubs`) |
+| `mockoon` | `MockoonImporter` | environment export (`routes[]`) |
+
+```mermaid
+flowchart LR
+    BODY["import body\n(?format or auto-detect)"] --> IMP["WireMock / Mountebank / Mockoon\nImporter.importExpectations()"]
+    IMP --> RES["ImportResult\nexpectations + warnings"]
+    RES --> RED["ImportRedaction\n.redactPreservingActions()"]
+    RED --> ADD["HttpState.add()"]
+    ADD --> BODYOUT["201 body\n{ expectations, warnings }"]
+```
+
+**Model.** Each importer returns an `ImportResult` (`List<Expectation>` + `List<ImportWarning>`); an `ImportWarning` carries `item` (source locator, e.g. `stub[2]`), `construct` (the foreign construct), and `detail`. The three new formats return their result body as `{ "expectations": [...], "warnings": [...] }` (the legacy HAR/Postman/Pact formats keep returning a bare expectation array). `HttpState` handles all six formats in the same `PUT /mockserver/import` branch.
+
+**Redaction.** The migration importers redact through `ImportRedaction.redactPreservingActions(...)` rather than the shared `ImportRedaction.redact(...)`. The wholesale `redact(...)` (used by HAR/Postman) rebuilds each expectation through `FixtureRedactor.redact(...)`, which only carries over *response* actions and resets `Times`/`TimeToLive` — lossy for the migration importers, which also emit `httpForward` (proxy), `httpError` (fault), sequential/random multi-responses, and `Times` (Mountebank `repeat`). `redactPreservingActions(...)` redacts the request and each response individually via the granular `FixtureRedactor.redactRequestDefinition`/`redactResponseObject` clones and re-attaches them to a rebuilt expectation that keeps the original action type, `Times`, `TimeToLive`, priority, id, scenario state, and response mode.
+
+**Coverage & boundaries.** The mappings are documented per importer in the Javadoc of each class and in the [Importing Expectations](https://www.mock-server.com/mock_server/importing_expectations.html) consumer page. Notable boundaries reported as warnings rather than dropped: WireMock `matchesXPath`/`equalToXml`, `delayDistribution`, response `transformers`; Mountebank `tcp`/`smtp` imposters, `and`/`or`/`not` compound predicates, JavaScript `inject`; Mockoon `crud` route type, cookie/path rule targets, `null`/`empty_array` rule operators, and `OR`-combined rules (only the first rule maps).
+
 ### LLM Record/Replay (MCP)
 
 The `record_llm_fixtures` MCP tool extends the record-to-expectations workflow for LLM/MCP traffic. After retrieving `RECORDED_EXPECTATIONS`, it applies two additional processing steps:
@@ -449,12 +484,12 @@ Each `Expectation` binds a request matcher to exactly one action. There are 19 a
 | Type | Handler | Description |
 |------|---------|-------------|
 | `RESPONSE` | `HttpResponseActionHandler` | Returns a static `HttpResponse`. When the response body is a `FileBody` carrying a `templateType` (`VELOCITY`/`MUSTACHE`), the file contents are rendered as a template against the request before being returned |
-| `RESPONSE_TEMPLATE` | `HttpResponseTemplateActionHandler` | Evaluates a template (Velocity/Mustache/JavaScript) to generate the response. The template text may be supplied inline (`template`) or loaded from a file (`templateFile`); inline takes precedence — see `HttpTemplate.getTemplateContent()` |
+| `RESPONSE_TEMPLATE` | `HttpResponseTemplateActionHandler` | Evaluates a template (Velocity/Mustache/JavaScript) to generate the response. The template text may be supplied inline (`template`) or loaded from a file (`templateFile`); inline takes precedence — see `HttpTemplate.getTemplateContent()`. If the rendered output is not a valid `HttpResponse` (fails JSON-schema validation, or throws while transforming), `HttpTemplateOutputDeserializer` logs a request-correlated `TEMPLATE_GENERATION_FAILED` event carrying the validation error and the offending rendered output, and the action degrades to a `404 Not Found` (unchanged client semantics — the failure is surfaced in the log, not swallowed as a success-looking `EXPECTATION_RESPONSE`) |
 | `RESPONSE_CLASS_CALLBACK` | `HttpResponseClassCallbackActionHandler` | Loads a Java class implementing `ExpectationResponseCallback`, invokes `handle(request)` |
 | `RESPONSE_OBJECT_CALLBACK` | `HttpResponseObjectCallbackActionHandler` | Sends request to a WebSocket-connected client, awaits response callback |
-| `SSE_RESPONSE` | `HttpSseResponseActionHandler` | Streams Server-Sent Events with per-event delays, optional `closeConnection` flag |
-| `WEBSOCKET_RESPONSE` | `HttpWebSocketResponseActionHandler` | Upgrades to WebSocket and sends a sequence of `WebSocketMessage` frames with per-message delays. When subprotocol is `graphql-transport-ws`/`graphql-ws` with a `graphqlSubscriptionFilter`, installs `GraphQLSubscriptionHandler` for the graphql-transport-ws protocol state machine |
-| `GRPC_STREAM_RESPONSE` | `GrpcStreamResponseActionHandler` | Streams gRPC-framed protobuf messages with per-message delays and grpc-status trailers (Netty only; returns 501 in WAR) |
+| `SSE_RESPONSE` | `HttpSseResponseActionHandler` | Streams Server-Sent Events with per-event delays, optional `closeConnection` flag. An optional `templateType` (`VELOCITY`/`MUSTACHE`/`JAVASCRIPT`) renders each event's `data` payload as a response template per event — see *Templated streaming payloads* below |
+| `WEBSOCKET_RESPONSE` | `HttpWebSocketResponseActionHandler` | Upgrades to WebSocket and sends a sequence of `WebSocketMessage` frames with per-message delays. An optional `templateType` renders each text frame per message (binary frames are never templated). When subprotocol is `graphql-transport-ws`/`graphql-ws` with a `graphqlSubscriptionFilter`, installs `GraphQLSubscriptionHandler` for the graphql-transport-ws protocol state machine |
+| `GRPC_STREAM_RESPONSE` | `GrpcStreamResponseActionHandler` | Streams gRPC-framed protobuf messages with per-message delays and grpc-status trailers (Netty only; returns 501 in WAR). A per-message `templateType` renders the message `json` as a response template before protobuf encoding |
 | `GRPC_BIDI_RESPONSE` | `GrpcBidiRouterHandler` / `GrpcBidiStreamHandler` | Bidirectional gRPC streaming via the multiplex pipeline (requires `grpcBidiStreamingEnabled=true`; returns 501 otherwise or in WAR) |
 | `BINARY_RESPONSE` | (inline in `BinaryRequestProxyingHandler`) | Returns raw binary bytes when a `BinaryRequestDefinition` matches |
 | `DNS_RESPONSE` | (inline in `DnsRequestHandler`) | Returns DNS response records when a `DnsRequestDefinition` matches a UDP DNS query |
@@ -578,6 +613,12 @@ When an expectation is configured with `httpResponses` (a list of `HttpResponse`
 
 The cycling/selection logic is in `Expectation.getPrimaryAction()` -> `selectFromResponses()`. The `matchCount` is tracked per-expectation via an `AtomicInteger` and is runtime-only state (`@JsonIgnore`). `responseWeights` and `switchAfter` are serialized fields that round-trip in expectation JSON; weights are ignored unless `responseMode` is `WEIGHTED`, and `switchAfter` is ignored unless `responseMode` is `SWITCH`.
 
+**Force a variant per request (`x-mockserver-response-index`):** an incoming request may carry the `x-mockserver-response-index` header (0-based; `Expectation.FORCE_RESPONSE_INDEX_HEADER`) to force which `httpResponses` entry it is served, overriding `responseMode` for that one request. Selection resolves via the `Expectation.getPrimaryAction(Integer)` overload: a valid in-bounds index (per `isForcedResponseServe`) returns that exact response with **peek semantics** — the request is still a real match (it consumes a `Times` unit and increments `matchCount`), but it does **not** advance the response-sequence rotation.
+
+The rotation position lives on its own counter, `rotationCount`, separate from `matchCount`. At **match time** (`consumeMatch(Integer)` / `consumeMatchLocally(Integer)`, called from `RequestMatchers` which has the request in hand), a NORMAL request advances `rotationCount` and snapshots it into a per-thread `lastRotationSnapshot`; a FORCED request increments only `matchCount` and snapshots the *un-advanced* `rotationCount`. `selectFromResponses()` derives both `SEQUENTIAL` and `SWITCH` positions from that thread-local snapshot. Because a forced request never touches `rotationCount`, the collision-free invariant (each normal match gets a distinct, monotonic position snapshotted at match time) holds unconditionally under concurrency — there is no resolution-time compensation read that could race normal traffic. Invalid, non-integer, or out-of-bounds values are ignored (normal selection applies) — never an error — and single-response expectations ignore the header.
+
+The control header is **not** stripped from the request object during dispatch (that object is shared with the `RECEIVED_REQUEST` log entry, which stores requests by reference, so mutating it would non-deterministically drop the header from recordings). Instead it is filtered out only when the outbound forward/proxy request is built, in `MockServerHttpRequestToFullHttpRequest.setHeader` (and, for WebSocket passthrough, in `WebSocketProxyRelayHandler.isSuppressedRelayHeader`) (alongside the hop-by-hop header filter). **Recorded traffic therefore deterministically retains the header, and forwarded/proxied upstream requests never carry it.** Matching is unaffected because the header is still present on the request throughout matching and action resolution.
+
 ### Rate Limiting (`rateLimit` clause)
 
 An expectation may carry a declarative, protocol-agnostic `rateLimit` clause (a sibling of `chaos` — see [docs/code/domain-model.md](domain-model.md)). When a matched expectation is over-limit for the current window, MockServer returns a deterministic `errorStatus` (default `429`) response — carrying `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining` (`0`), and `X-RateLimit-Reset` (unix seconds) — **instead of** the normal response; within the limit the normal response is returned unchanged. An expectation without a `rateLimit` clause behaves and serializes byte-for-byte identically to before.
@@ -632,7 +673,9 @@ Three template engines are supported for `RESPONSE_TEMPLATE` and `FORWARD_TEMPLA
 |--------|-------|-------------------|
 | Velocity | `VelocityTemplateEngine` | `$request` |
 | Mustache | `MustacheTemplateEngine` | `request` (with `#jsonPath` and `#xPath` lambdas) |
-| JavaScript | `JavaScriptTemplateEngine` | `request` (Nashorn, Java 17+) |
+| JavaScript | `JavaScriptTemplateEngine` | `request` (GraalJS / GraalVM Polyglot — see note below) |
+
+> **JavaScript requires the optional GraalJS engine.** Velocity and Mustache are always available, but the GraalVM Polyglot (`org.graalvm.polyglot:polyglot` + `js`) dependency is `<optional>true</optional>` and is **not** bundled in the standard netty jar-with-dependencies or Docker image (`POLYGLOT_AVAILABLE=false` there). If a `JAVASCRIPT` template is actually used without GraalJS on the classpath, `JavaScriptTemplateEngine` **fails loudly** with a clear `RuntimeException` ("JavaScript response templates require the GraalJS engine, which is not on the classpath...") instead of silently degrading. Add the dependency, or run the `graaljs` Docker image variant, to enable it.
 
 All engines receive built-in dynamic variables from `TemplateFunctions.BUILT_IN_FUNCTIONS` (`now`, `now_epoch`, `now_iso_8601`, `uuid`, `rand_int`, `rand_bytes`, etc.) and five helper objects from `TemplateFunctions.BUILT_IN_HELPERS`:
 
@@ -653,6 +696,16 @@ The template text for `RESPONSE_TEMPLATE` and `FORWARD_TEMPLATE` can be stored i
 #### Templated response body files (`FileBody` + `templateType`)
 
 A static `RESPONSE` whose body is a `FileBody` can mark the file as a template by setting `templateType` to `VELOCITY` or `MUSTACHE`. `HttpResponseActionHandler.handle(httpResponse, httpRequest)` reads the file, renders it through `TemplateEngine.renderTemplate(...)` (raw text render — no `HttpResponseDTO` deserialization), and replaces the body with the rendered string (preserving the declared content type). This differs from `RESPONSE_TEMPLATE`: the file is just the **body** payload (rendered as-is), while the surrounding status code, headers, etc. come from the static response. `JAVASCRIPT` is intentionally **not** supported for body files (JS templates return structured objects, not text) — use `RESPONSE_TEMPLATE` with a JavaScript template for that. The request is only available on the primary/secondary `RESPONSE` dispatch paths, so the no-request `handle(httpResponse)` overload returns the `FileBody` verbatim.
+
+#### Templated streaming payloads (SSE / WebSocket / gRPC stream + `templateType`)
+
+Streaming responses can render each pushed payload from a response template instead of a fixed string. Set an optional `templateType` (`VELOCITY`, `MUSTACHE` or `JAVASCRIPT`) on `httpSseResponse` / `httpWebSocketResponse` (action-level, applies to every event/message), or per-message on a gRPC `grpcStreamResponse` message. The shared `StreamTemplateRenderer` (`mock/action/http/`) renders each payload against the **triggering request** using exactly the same engines and request/template context (`request.*`, `jsonPath`, the built-in helpers, `faker`, `scenario`) as `HttpResponseTemplateActionHandler`, and caches the engines lazily per handler instance:
+
+- **SSE** — `HttpSseResponseActionHandler` renders each `SseEvent`'s `data` payload just before the event is written, producing a rendered copy so a reused expectation renders freshly per request (the stored event is never mutated).
+- **WebSocket** — `HttpWebSocketResponseActionHandler` renders each text `WebSocketMessage` before the frame is written (and before stream-frame breakpoint interception, so breakpoints observe the rendered bytes). Binary frames are never templated.
+- **gRPC server-stream** — `GrpcStreamResponseActionHandler` renders the message `json` against the request before protobuf encoding when the message carries a `templateType`.
+
+Text-based engines (Velocity/Mustache) render the payload directly via `renderTemplate(...)`. JavaScript uses `TemplateEngine.renderTemplateText(...)` (new): the JS engine executes the template's `handle(request)` function and coerces the return value to text (a returned string is used verbatim, any other value is `JSON.stringify`'d) — this is what makes JS usable for a text fragment, since the response-object `renderTemplate` path is unsupported for JS. When `templateType` is absent every payload is emitted byte-for-byte unchanged (opt-in, non-breaking). If a `JAVASCRIPT` template is requested without GraalJS on the classpath, rendering fails loudly with the same clear `RuntimeException` as the response-template path rather than degrading silently. (Reactive WebSocket responses — matcher-triggered `matchers` responses and GraphQL-subscription `next` payloads — are not yet templated; only the eager `messages` list is.)
 
 ### Generating a response body from an inline JSON Schema
 
@@ -724,7 +777,7 @@ sequenceDiagram
 
 ### Streaming Forward Path
 
-When the upstream response is a streaming response (detected from `Content-Type: text/event-stream`), and `streamingResponsesEnabled` is `true` (default), MockServer relays chunks incrementally rather than buffering the entire body. Only SSE responses are detected as streaming; ordinary chunked responses are aggregated normally.
+When the upstream response is a streaming response, and `streamingResponsesEnabled` is `true` (default), MockServer relays chunks incrementally rather than buffering the entire body. A response is treated as streaming when **either** its `Content-Type` is `text/event-stream` **or** the forwarded request declared streaming intent (`Accept: text/event-stream`, or a JSON body with `"stream": true`) — the latter (`EXPECT_STREAMING_RESPONSE`) covers content-type-less streaming backends such as the OpenAI Codex endpoint, and is threaded onto the HTTP/1.1 forward, HTTP/2 forward (parent → per-stream child), and transparent CONNECT-relay loopback paths alike (see [netty-pipeline.md](netty-pipeline.md#streamingawarehttpobjectaggregator)). Ordinary chunked responses without either signal are aggregated normally.
 
 ```mermaid
 sequenceDiagram
@@ -759,7 +812,7 @@ Key behavioural points:
 - The `CompletableFuture<HttpResponse>` completes at **response-head time** (not after the full body is received), so the global socket timeout (`maxSocketTimeoutInMillis`) no longer applies to the streamed portion. A per-stream `IdleStateHandler` enforces `streamIdleTimeoutSeconds` between chunks instead.
 - The full stream always reaches the client. The capture buffer is bounded to `maxStreamingCaptureBytes` (default 256 KB). When exceeded, the logged body is truncated and the `FORWARDED_REQUEST` log entry carries `x-mockserver-stream-truncated: true`.
 - Non-streaming responses are unaffected — `StreamingAwareHttpObjectAggregator` detects the response type and delegates to the standard `HttpObjectAggregator` path for non-streaming responses.
-- `FORWARD_REPLACE` (`overrideHttpResponse`) is incompatible with streaming because the response override/modifier/template needs the full response body. When a response override, response modifier, or response template is present, `HttpOverrideForwardedRequestActionHandler` passes `disableStreaming=true` through `HttpForwardAction.sendRequest` to `NettyHttpClient.sendRequest`, which sets the `DISABLE_RESPONSE_STREAMING` channel attribute. `StreamingAwareHttpObjectAggregator.channelRead` checks this attribute and always delegates to the standard `HttpObjectAggregator` path when it is set, ensuring the response is fully aggregated regardless of `streamingResponsesEnabled`.
+- `FORWARD_REPLACE` (`overrideHttpResponse`) disables streaming **only when the response modification needs the full response body**: a body/schema response override, a JSON body patch/merge-patch modifier, or a response template. In those cases `HttpOverrideForwardedRequestActionHandler` passes `disableStreaming=true` through `HttpForwardAction.sendRequest` to `NettyHttpClient.sendRequest`, which sets the `DISABLE_RESPONSE_STREAMING` channel attribute; `StreamingAwareHttpObjectAggregator.channelRead` then always delegates to the standard `HttpObjectAggregator` path so the response is fully aggregated regardless of `streamingResponsesEnabled`. A **header-only** modification (status / headers / cookies with no body change — decided by `HttpOverrideForwardedRequestActionHandler.isHeaderOnlyResponseModification`) is instead applied to the streamed response **head** while the body chunks are relayed untouched, so streaming is preserved — e.g. adding a CORS or trace header to an SSE / LLM upstream no longer breaks the stream.
 - WAR deployments (`ctx == null`) always use the buffered path.
 
 ### ProxyPass (Reverse Proxy)

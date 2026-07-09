@@ -87,6 +87,41 @@ describe('ExpectationPanel', () => {
     expect(state.view).toBe('composer');
   });
 
+  it('Test expectation opens the matcher playground seeded with the row JSON', async () => {
+    const user = userEvent.setup();
+    const value = { id: 'exp-test', httpRequest: { method: 'GET', path: '/to-test' }, httpResponse: { statusCode: 200 } };
+    useDashboardStore.setState({ activeExpectations: [{ key: 'exp-test', value }] });
+
+    render(<ExpectationPanel />);
+    await user.click(screen.getByLabelText('Test expectation'));
+
+    // The matcher playground opens...
+    expect(screen.getByText('Matcher Test Playground')).toBeInTheDocument();
+    // ...seeded with this expectation's exact JSON.
+    const candidate = screen.getByLabelText('Candidate expectation JSON') as HTMLTextAreaElement;
+    expect(candidate.value).toContain('/to-test');
+  });
+
+  it('empty-state composer link navigates to the composer view', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({ activeExpectations: [], view: 'dashboard' });
+
+    render(<ExpectationPanel />);
+    await user.click(screen.getByRole('button', { name: /add one in the Mocks composer/i }));
+
+    expect(useDashboardStore.getState().view).toBe('composer');
+  });
+
+  it('empty-state import link opens the OpenAPI import dialog', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({ activeExpectations: [] });
+
+    render(<ExpectationPanel />);
+    await user.click(screen.getByRole('button', { name: /import an OpenAPI spec/i }));
+
+    expect(screen.getByText('Import OpenAPI')).toBeInTheDocument();
+  });
+
   it('Duplicate loads an id-stripped copy into the Composer, preserving priority', async () => {
     const user = userEvent.setup();
     const value = {
@@ -204,5 +239,74 @@ describe('ExpectationPanel', () => {
     });
     // The row is kept on failure.
     expect(useDashboardStore.getState().activeExpectations).toHaveLength(1);
+  });
+
+  describe('bulk select + delete', () => {
+    const twoExpectations = () => [
+      { key: 'exp-a', value: { id: 'exp-a', httpRequest: { method: 'GET', path: '/a' } } },
+      { key: 'exp-b', value: { id: 'exp-b', httpRequest: { method: 'GET', path: '/b' } } },
+    ];
+
+    it('reveals checkboxes and a bulk toolbar when Select mode is enabled', async () => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({ activeExpectations: twoExpectations() });
+      render(<ExpectationPanel />);
+
+      // No per-row select checkboxes until Select mode is on.
+      expect(screen.queryByLabelText('Select expectation 1')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Select expectations' }));
+
+      expect(screen.getByTestId('expectation-bulk-toolbar')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select expectation 1')).toBeInTheDocument();
+      expect(screen.getByLabelText('Select expectation 2')).toBeInTheDocument();
+    });
+
+    it('bulk-deletes the selected expectations, drops the rows and notifies', async () => {
+      const user = userEvent.setup();
+      const del = vi.spyOn(expectationsLib, 'deleteExpectation').mockResolvedValue(undefined);
+      useDashboardStore.setState({ activeExpectations: twoExpectations() });
+      render(<ExpectationPanel />);
+
+      await user.click(screen.getByRole('button', { name: 'Select expectations' }));
+      // Select all via the toolbar checkbox.
+      await user.click(screen.getByLabelText('Select all expectations'));
+      expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /Delete selected/ }));
+      // Confirmation gate — nothing deleted yet.
+      expect(del).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Delete selected' }));
+
+      await waitFor(() => expect(del).toHaveBeenCalledTimes(2));
+      const ids = del.mock.calls.map((c) => c[1]).sort();
+      expect(ids).toEqual(['exp-a', 'exp-b']);
+
+      await waitFor(() =>
+        expect(useDashboardStore.getState().activeExpectations).toHaveLength(0),
+      );
+      expect(useDashboardStore.getState().notification).toMatchObject({ severity: 'success' });
+    });
+
+    it('reports a partial failure as a warning and keeps the failed row', async () => {
+      const user = userEvent.setup();
+      vi.spyOn(expectationsLib, 'deleteExpectation').mockImplementation(async (_p, id) => {
+        if (id === 'exp-b') throw new Error('nope');
+      });
+      useDashboardStore.setState({ activeExpectations: twoExpectations() });
+      render(<ExpectationPanel />);
+
+      await user.click(screen.getByRole('button', { name: 'Select expectations' }));
+      await user.click(screen.getByLabelText('Select all expectations'));
+      await user.click(screen.getByRole('button', { name: /Delete selected/ }));
+      await user.click(screen.getByRole('button', { name: 'Delete selected' }));
+
+      await waitFor(() =>
+        expect(useDashboardStore.getState().notification).toMatchObject({ severity: 'warning' }),
+      );
+      // Only the successfully-deleted row is dropped.
+      const remaining = useDashboardStore.getState().activeExpectations;
+      expect(remaining.map((e) => e.key)).toEqual(['exp-b']);
+    });
   });
 });

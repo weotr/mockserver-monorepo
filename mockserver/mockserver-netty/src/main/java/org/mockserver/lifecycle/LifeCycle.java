@@ -55,7 +55,15 @@ public abstract class LifeCycle implements Stoppable {
     // ForwardClientEventLoopIsolationTest / ForwardConnectionPoolLoopbackCallbackTest (mockserver-netty)
     // and NettyHttpClientConnectionPoolTest (mockserver-core) lock the invariant, but the failsafe
     // phase remains the backstop. See docs/operations/performance-tuning.md.
-    protected final EventLoopGroup forwardClientGroup;
+    //
+    // LAZY: this group is created on the FIRST forward/proxy use (via getForwardClientEventLoopGroup()),
+    // NOT in the constructor — a pure-mock deployment that never forwards never allocates it (saving
+    // clientNioEventLoopThreadCount selectors/threads at startup). volatile for safe double-checked-lock
+    // publication; all creation and shutdown of this field happen under forwardClientGroupLock so a
+    // first-forward racing a stop() can never leak an un-terminated group (see the accessor and
+    // stopAsync()). Read reflectively by name in the ForwardClientEventLoop* guard tests.
+    protected volatile EventLoopGroup forwardClientGroup;
+    private final Object forwardClientGroupLock = new Object();
     protected final HttpState httpState;
     private final Configuration configuration;
     protected ServerBootstrap serverServerBootstrap;
@@ -70,6 +78,8 @@ public abstract class LifeCycle implements Stoppable {
     // optional OTel exporters — null unless the corresponding config is enabled
     private final org.mockserver.metrics.OtelMetricsExporter otelMetricsExporter;
     private final org.mockserver.telemetry.GenAiSpanExporter genAiSpanExporter;
+    // optional Prometheus remote-write push exporter — null unless enabled
+    private final org.mockserver.metrics.PrometheusRemoteWriteExporter prometheusRemoteWriteExporter;
 
     protected LifeCycle(Configuration configuration) {
         this.configuration = configuration != null ? configuration : configuration();
@@ -80,13 +90,14 @@ public abstract class LifeCycle implements Stoppable {
         boolean nativeTransport = this.configuration.useNativeTransport();
         this.bossGroup = NettyTransport.newEventLoopGroup(5, new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-bossEventLoop"), nativeTransport);
         this.workerGroup = NettyTransport.newEventLoopGroup(this.configuration.nioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-workerEventLoop"), nativeTransport);
-        // Outbound forward/proxy (loopback) HTTP client gets its OWN event-loop group, disjoint from
-        // the server worker group above (see field javadoc). Sized by clientNioEventLoopThreadCount.
-        this.forwardClientGroup = NettyTransport.newEventLoopGroup(this.configuration.clientNioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-forwardClientEventLoop"), nativeTransport);
+        // NOTE: the outbound forward/proxy (loopback) client's event-loop group (forwardClientGroup) is
+        // NOT created here — it is created lazily on first forward via getForwardClientEventLoopGroup(),
+        // so a pure-mock server never allocates it. It remains disjoint from workerGroup (see field javadoc).
         this.scheduler = new Scheduler(this.configuration, this.mockServerLogger);
         this.httpState = new HttpState(this.configuration, this.mockServerLogger, this.scheduler);
         this.otelMetricsExporter = org.mockserver.metrics.OtelMetricsExporter.startIfEnabled();
         this.genAiSpanExporter = org.mockserver.telemetry.GenAiSpanExporter.startIfEnabled();
+        this.prometheusRemoteWriteExporter = org.mockserver.metrics.PrometheusRemoteWriteExporter.startIfEnabled();
         installSemanticMatchingIfEnabled(this.workerGroup);
         installLlmCompletionServiceIfAvailable(this.workerGroup);
         installSemanticDriftIfEnabled(this.workerGroup);
@@ -371,17 +382,34 @@ public abstract class LifeCycle implements Stoppable {
                 if (genAiSpanExporter != null) {
                     genAiSpanExporter.stop();
                 }
+                if (prometheusRemoteWriteExporter != null) {
+                    prometheusRemoteWriteExporter.stop();
+                }
                 org.mockserver.llm.semantic.SemanticMatching.clear();
+
+                // The forward-client group is created lazily, so it may never have been created (a
+                // pure-mock server). Read it under the same lock the accessor creates it under: this is
+                // the synchronization point that prevents a first-forward racing this stop from leaking
+                // an un-terminated group — if the accessor wins the lock later it sees stopping==true and
+                // shuts its own group down immediately.
+                final EventLoopGroup forwardGroupToStop;
+                synchronized (forwardClientGroupLock) {
+                    forwardGroupToStop = forwardClientGroup;
+                }
 
                 // Shut down all event loops to terminate all threads.
                 bossGroup.shutdownGracefully(5, 5, MILLISECONDS);
                 workerGroup.shutdownGracefully(5, 5, MILLISECONDS);
-                forwardClientGroup.shutdownGracefully(5, 5, MILLISECONDS);
+                if (forwardGroupToStop != null) {
+                    forwardGroupToStop.shutdownGracefully(5, 5, MILLISECONDS);
+                }
 
                 // Wait until all threads are terminated.
                 bossGroup.terminationFuture().syncUninterruptibly();
                 workerGroup.terminationFuture().syncUninterruptibly();
-                forwardClientGroup.terminationFuture().syncUninterruptibly();
+                if (forwardGroupToStop != null) {
+                    forwardGroupToStop.terminationFuture().syncUninterruptibly();
+                }
 
                 stopFuture.complete(message);
             }).start();
@@ -422,9 +450,38 @@ public abstract class LifeCycle implements Stoppable {
      * @return the dedicated event-loop group for the outbound forward/proxy (loopback) HTTP client,
      * kept disjoint from the server worker group so a pooled channel reused inside a synchronous
      * local callback is never pinned to a blocked server worker thread (see field javadoc).
+     * <p>
+     * Created lazily on the first call (double-checked locking on {@link #forwardClientGroupLock}) so a
+     * pure-mock server that never forwards never allocates it. The group is always a NEW group sized by
+     * {@code clientNioEventLoopThreadCount} — never the {@code workerGroup} — preserving the disjoint-group
+     * self-deadlock invariant documented on the field. If the server is already stopping when the first
+     * forward arrives, the group is created but immediately shut down so it can never leak past
+     * {@link #stopAsync()} (its {@code isShuttingDown()} then makes {@code NettyHttpClient.sendRequest()}
+     * no-op cleanly); all creation and the {@code stopAsync()} teardown read/write the field under the
+     * same lock, so a first-forward racing a stop can never leak an un-terminated group.
      */
     protected EventLoopGroup getForwardClientEventLoopGroup() {
-        return forwardClientGroup;
+        EventLoopGroup group = forwardClientGroup;
+        if (group != null) {
+            return group;
+        }
+        synchronized (forwardClientGroupLock) {
+            if (forwardClientGroup == null) {
+                // Always a NEW, distinct group (never workerGroup) — the disjointness invariant.
+                EventLoopGroup created = NettyTransport.newEventLoopGroup(
+                    configuration.clientNioEventLoopThreadCount(),
+                    new Scheduler.SchedulerThreadFactory(getClass().getSimpleName() + "-forwardClientEventLoop"),
+                    configuration.useNativeTransport());
+                if (stopping.get()) {
+                    // stopAsync()'s teardown pass for this group may already have run; shut this one
+                    // down immediately so it is never left un-terminated. No thread has started yet
+                    // (no task submitted), so this terminates promptly.
+                    created.shutdownGracefully(0, 0, MILLISECONDS);
+                }
+                forwardClientGroup = created;
+            }
+            return forwardClientGroup;
+        }
     }
 
     public Scheduler getScheduler() {
@@ -541,6 +598,117 @@ public abstract class LifeCycle implements Stoppable {
                     .setLogLevel(INFO)
                     .setMessageFormat(message)
             );
+        }
+        logProxySetup(ports);
+        startupWarmup(ports);
+    }
+
+    /**
+     * Pay the one-off "first request" cost in the background so the first real request a caller (or a
+     * readiness poll such as Testcontainers) makes is fast.
+     * <p>
+     * The very first request handled by a freshly started server is a few hundred milliseconds slower
+     * than every subsequent one because the request-handling path (Netty HTTP codec, Jackson
+     * serialisation, response writers) is only loaded/initialised lazily on first use. We exercise that
+     * path once, off the start-up thread, by sending a single plain-HTTP {@code PUT /mockserver/status}
+     * to the first bound port over loopback. {@code /status} is a control-plane endpoint that answers
+     * without touching the mock-matching or recorded-request paths, so it does NOT create any log
+     * events, recorded requests, or verification-visible state.
+     * <p>
+     * Fail-soft by design: this must never delay port binding (it runs on a daemon thread started after
+     * bind), never throw, and never leak a hanging thread (short connect/read timeouts). Any failure is
+     * swallowed at TRACE — warm-up is a pure latency optimisation, so a failure to warm up is not an
+     * error. Gated by {@code startupWarmup} (default true).
+     */
+    private void startupWarmup(List<Integer> ports) {
+        if (configuration == null || !Boolean.TRUE.equals(configuration.startupWarmup())) {
+            return;
+        }
+        if (ports == null || ports.isEmpty() || ports.get(0) == null || ports.get(0) <= 0) {
+            return;
+        }
+        final int port = ports.get(0);
+        Thread warmupThread = new Thread(() -> {
+            java.net.HttpURLConnection connection = null;
+            try {
+                // Plain HTTP against the first bound port — MockServer uses unified protocol detection,
+                // so /status answers over plain HTTP on any port (including TLS-capable ports). If that
+                // assumption ever fails to hold in a given environment the fail-soft catch below covers
+                // it: the only cost is that this instance is not warmed up.
+                java.net.URL url = new java.net.URL("http", "127.0.0.1", port, "/mockserver/status");
+                connection = (java.net.HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("PUT");
+                connection.setConnectTimeout(2000);
+                connection.setReadTimeout(2000);
+                connection.setDoOutput(false);
+                connection.connect();
+                // Read and discard the response body to exercise the full write path and free the socket.
+                try (java.io.InputStream inputStream = connection.getResponseCode() < 400
+                    ? connection.getInputStream()
+                    : connection.getErrorStream()) {
+                    if (inputStream != null) {
+                        byte[] buffer = new byte[4096];
+                        while (inputStream.read(buffer) != -1) {
+                            // drain
+                        }
+                    }
+                }
+            } catch (Throwable throwable) {
+                if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(TRACE)) {
+                    mockServerLogger.logEvent(
+                        new LogEntry()
+                            .setType(SERVER_CONFIGURATION)
+                            .setLogLevel(TRACE)
+                            .setMessageFormat("exception during start-up warm-up request (ignored):{}")
+                            .setThrowable(throwable)
+                    );
+                }
+            } finally {
+                if (connection != null) {
+                    connection.disconnect();
+                }
+            }
+        }, "MockServer-startup-warmup");
+        warmupThread.setDaemon(true);
+        warmupThread.start();
+    }
+
+    /**
+     * When proxySetupLogging is enabled, materialise the active Certificate Authority certificate to a
+     * stable file and print an OS-specific copy-paste block describing how to route TLS traffic through
+     * MockServer and trust its CA. When proxySetupLogging is disabled (the default — e.g. embedded
+     * {@code ClientAndServer} usage) nothing is written or logged. When the public baked-in CA is in
+     * effect the block is logged at WARN with a security warning; with a unique/custom CA it is logged at
+     * INFO. Fail-soft: any error here never prevents the server from starting.
+     */
+    private void logProxySetup(List<Integer> ports) {
+        try {
+            if (configuration == null || !Boolean.TRUE.equals(configuration.proxySetupLogging())) {
+                return;
+            }
+            org.mockserver.socket.tls.KeyAndCertificateFactory keyAndCertificateFactory =
+                org.mockserver.socket.tls.KeyAndCertificateFactoryFactory.createKeyAndCertificateFactory(configuration, mockServerLogger);
+            String caCertificatePath = keyAndCertificateFactory.writeCertificateAuthorityToDisk();
+            org.mockserver.socket.tls.ProxySetupInfo proxySetupInfo =
+                new org.mockserver.socket.tls.ProxySetupInfo(caCertificatePath, ports, configuration, System.getProperty("os.name"));
+            if (mockServerLogger != null) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(SERVER_CONFIGURATION)
+                        .setLogLevel(proxySetupInfo.usingDefaultCa() ? WARN : INFO)
+                        .setMessageFormat(proxySetupInfo.copyPasteText())
+                );
+            }
+        } catch (Throwable throwable) {
+            if (mockServerLogger != null && mockServerLogger.isEnabledForInstance(DEBUG)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(SERVER_CONFIGURATION)
+                        .setLogLevel(DEBUG)
+                        .setMessageFormat("exception while preparing proxy setup information:{}")
+                        .setThrowable(throwable)
+                );
+            }
         }
     }
 

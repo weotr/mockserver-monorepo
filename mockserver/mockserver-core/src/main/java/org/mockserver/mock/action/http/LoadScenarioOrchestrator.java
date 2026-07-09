@@ -3,6 +3,8 @@ package org.mockserver.mock.action.http;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.load.IterationContext;
 import org.mockserver.load.LoadCapture;
+import org.mockserver.load.LoadCheck;
+import org.mockserver.load.LoadResponseExtractor;
 import org.mockserver.load.LoadFeeder;
 import org.mockserver.load.LoadPacing;
 import org.mockserver.load.LoadProfile;
@@ -237,7 +239,9 @@ public class LoadScenarioOrchestrator {
 
     /** Stop a specific scenario's active run by name. Idempotent; no-op if not active. */
     public void stop(String name) {
-        RunningScenario run = runs.remove(name);
+        // Peek (don't remove) — terminate() performs the gap-free CAS de-registration itself, so a
+        // status poll never sees the run absent from both the active and terminal maps.
+        RunningScenario run = runs.get(name);
         if (run != null) {
             terminate(run, LoadScenarioState.STOPPED);
         }
@@ -356,14 +360,29 @@ public class LoadScenarioOrchestrator {
     }
 
     /**
-     * Terminate a run (already removed from {@link #runs}): mark it stopped, capture its terminal
-     * status, clear gauge readers if it was the last run. The run's durable metric series are RETAINED
-     * (scrapeable) until the scenario is next triggered or removed from the registry.
+     * Transition a run to a terminal state with no observable status gap: publish its terminal status
+     * BEFORE de-registering it from {@link #runs}, so a concurrent {@link #statusFor(String)} (which
+     * reads {@code runs} first, then {@code terminalStatuses}) never sees a window where the name is
+     * absent from both maps. The de-registration is a CAS ({@code runs.remove(name, run)}): only the
+     * winner records the terminal status and clears gauges; a loser (a run already replaced by a
+     * concurrent re-trigger) retracts the status it speculatively wrote. Returns {@code true} iff this
+     * call won the CAS. The run's durable metric series are RETAINED (scrapeable) until the scenario is
+     * next triggered or removed from the registry.
      */
-    private void terminate(RunningScenario run, LoadScenarioState terminalState) {
+    private boolean terminate(RunningScenario run, LoadScenarioState terminalState) {
         run.stopped.set(true);
+        String name = run.scenario.getName();
         LoadScenarioStatus status = run.snapshot(terminalState, clock.getAsLong());
-        terminalStatuses.put(run.scenario.getName(), status);
+        // Publish first: while the run is still in `runs`, statusFor() returns its live snapshot (runs
+        // is checked before terminalStatuses), so this terminal record is shadowed until the CAS below
+        // removes the run — closing the window where the name was in neither map.
+        terminalStatuses.put(name, status);
+        if (!runs.remove(name, run)) {
+            // A concurrent re-trigger already replaced this run under the same name; retract our
+            // speculative terminal so it cannot mask the newer run's state.
+            terminalStatuses.remove(name, status);
+            return false;
+        }
         if (runs.isEmpty()) {
             Metrics.setLoadGaugeReaders(null, null);
         } else {
@@ -371,7 +390,8 @@ public class LoadScenarioOrchestrator {
         }
         stopSharedTickIfIdle();
         LOG.info("load scenario '{}' {} ({} requests sent)",
-            run.scenario.getName(), terminalState.name().toLowerCase(), run.requestsSent.get());
+            name, terminalState.name().toLowerCase(), run.requestsSent.get());
+        return true;
     }
 
     /**
@@ -485,10 +505,9 @@ public class LoadScenarioOrchestrator {
      */
     private void abortOnThresholdFail(RunningScenario run) {
         run.abortedByThreshold = true;
-        if (runs.remove(run.scenario.getName(), run)) {
+        if (terminate(run, LoadScenarioState.STOPPED)) {
             LOG.info("load scenario '{}' aborted by threshold breach ({} requests sent)",
                 run.scenario.getName(), run.requestsSent.get());
-            terminate(run, LoadScenarioState.STOPPED);
         }
     }
 
@@ -573,14 +592,12 @@ public class LoadScenarioOrchestrator {
     }
 
     private void completeInternal(RunningScenario run) {
-        // Atomically de-register this run iff it is still the current run for its name (a concurrent
-        // re-trigger may have already replaced it). Only the winner records the terminal status.
-        if (runs.remove(run.scenario.getName(), run)) {
-            // Final threshold evaluation so a normally-completed run carries PASS (all satisfied) or
-            // FAIL (any breached); a run with no thresholds keeps its null verdict.
-            run.evaluateThresholds(clock.getAsLong());
-            terminate(run, LoadScenarioState.COMPLETED);
-        }
+        // Final threshold evaluation so a normally-completed run carries PASS (all satisfied) or FAIL
+        // (any breached); a run with no thresholds keeps its null verdict. terminate() then performs
+        // the atomic, gap-free de-registration (CAS on runs.remove): a concurrent re-trigger that has
+        // already replaced this run simply loses the CAS and the terminal record is retracted.
+        run.evaluateThresholds(clock.getAsLong());
+        terminate(run, LoadScenarioState.COMPLETED);
     }
 
     /**
@@ -834,6 +851,10 @@ public class LoadScenarioOrchestrator {
                 || (response.getStatusCode() != null && response.getStatusCode() >= 500);
             String errorKind = classifyError(throwable, response);
             recordResult(run, host, stepLabel, route, method, requestBytes, traceId, stepCustomLabels, response, scheduledNanos, error, errorKind);
+            // Evaluate this step's per-step response checks (k6 'check' parity) against the completed
+            // response, recording pass/fail outcomes and feeding the CHECK_FAILURE_RATE threshold.
+            // Best-effort and never throws out of the dispatch path.
+            applyChecks(run, step, stepLabel, response);
             // Apply this step's cross-step captures to the per-iteration map BEFORE the next step is
             // scheduled, so a subsequent step's template can read what this response yielded. Best-effort
             // and never throws out of the dispatch path: a missing value or extraction error falls back
@@ -879,7 +900,8 @@ public class LoadScenarioOrchestrator {
 
     /**
      * Extract a single {@link LoadCapture}'s value from the response, or null when nothing matches.
-     * Reuses Jayway JsonPath (already a project dependency) for {@code BODY_JSONPATH}.
+     * Delegates to the shared {@link LoadResponseExtractor} primitives (the same extraction code the
+     * per-step {@link LoadCheck}s reuse) so JSONPath / header / body-regex extraction lives in one place.
      */
     private static String extractCapture(LoadCapture capture, HttpResponse response) {
         if (response == null) {
@@ -887,63 +909,50 @@ public class LoadScenarioOrchestrator {
         }
         String expression = capture.getExpression();
         switch (capture.getSource()) {
-            case BODY_JSONPATH: {
-                if (isBlank(expression)) {
-                    return null;
-                }
-                String body = response.getBodyAsString();
-                if (isBlank(body)) {
-                    return null;
-                }
-                Object result = com.jayway.jsonpath.JsonPath.compile(expression).read(body);
-                return stringifyJsonPath(result);
-            }
-            case HEADER: {
-                if (isBlank(expression)) {
-                    return null;
-                }
-                String header = response.getFirstHeader(expression);
-                return isBlank(header) ? null : header;
-            }
-            case BODY_REGEX: {
-                if (isBlank(expression)) {
-                    return null;
-                }
-                String body = response.getBodyAsString();
-                if (isBlank(body)) {
-                    return null;
-                }
-                java.util.regex.Matcher matcher = java.util.regex.Pattern.compile(expression).matcher(body);
-                if (matcher.find() && matcher.groupCount() >= 1) {
-                    return matcher.group(1);
-                }
-                return null;
-            }
+            case BODY_JSONPATH:
+                return LoadResponseExtractor.jsonPath(response, expression);
+            case HEADER:
+                return LoadResponseExtractor.header(response, expression);
+            case BODY_REGEX:
+                return LoadResponseExtractor.regexGroup1(response, expression);
             default:
                 return null;
         }
     }
 
     /**
-     * Render a JSONPath result as a plain string: a scalar becomes its {@code toString()}; a
-     * single-element collection (the common definite-path-returning-a-list case) is unwrapped to its
-     * element; an empty collection is treated as no match. Mirrors {@code CaptureProcessor}.
+     * Evaluate a step's {@link LoadCheck}s against the completed response, recording each pass/fail on
+     * the run (per-check aggregates + run totals for {@code CHECK_FAILURE_RATE}) and emitting the
+     * {@code mock_server_load_checks} metric. Best-effort and side-effect-only: a malformed
+     * expression or any evaluation error is logged at debug and counts as a FAIL (a check that cannot be
+     * evaluated has not been satisfied). Never throws out of the dispatch path. Skipped entirely when
+     * the response is null (a connection error is already surfaced by the error metrics), so checks only
+     * ever assert against a real response — the case latency/error metrics miss.
      */
-    private static String stringifyJsonPath(Object result) {
-        if (result == null) {
-            return null;
+    private void applyChecks(RunningScenario run, LoadStep step, String stepLabel, HttpResponse response) {
+        List<LoadCheck> checks = step != null ? step.getChecks() : null;
+        if (checks == null || checks.isEmpty() || response == null) {
+            return;
         }
-        if (result instanceof java.util.Collection) {
-            java.util.Collection<?> collection = (java.util.Collection<?>) result;
-            if (collection.isEmpty()) {
-                return null;
+        for (LoadCheck check : checks) {
+            if (check == null || !check.isValid()) {
+                continue;
             }
-            if (collection.size() == 1) {
-                Object only = collection.iterator().next();
-                return only != null ? String.valueOf(only) : null;
+            boolean passed;
+            try {
+                passed = check.evaluate(response);
+            } catch (Throwable throwable) {
+                passed = false;
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("load scenario '{}' check on step '{}' failed to evaluate - counting as fail: {}",
+                        run.scenario.getName(), stepLabel, throwable.getMessage());
+                }
+            }
+            run.recordCheck(stepLabel, check, passed);
+            if (isCurrent(run)) {
+                Metrics.incrementLoadCheck(run.scenario.getName(), run.runId, stepLabel, passed ? "pass" : "fail");
             }
         }
-        return String.valueOf(result);
     }
 
     private static boolean isBlank(String value) {
@@ -1333,6 +1342,20 @@ public class LoadScenarioOrchestrator {
          */
         final AtomicLong droppedIterations = new AtomicLong(0);
         /**
+         * Total per-step {@link LoadCheck}s that passed / failed across the whole run, backing the
+         * {@code CHECK_FAILURE_RATE} threshold's observed value (failed / (passed + failed)). Both are
+         * incremented once per evaluated check on the completion callback (possibly from several worker
+         * threads concurrently), so they are atomic.
+         */
+        final AtomicLong checksPassed = new AtomicLong(0);
+        final AtomicLong checksFailed = new AtomicLong(0);
+        /**
+         * Per-distinct-check pass/fail aggregates keyed by (step + source + comparator + value), so the
+         * end-of-run report can surface each check's individual pass/fail counts. Populated lazily on the
+         * completion callback; iterated only when a status snapshot is built.
+         */
+        final Map<String, CheckCounters> checkAggregates = new ConcurrentHashMap<>();
+        /**
          * Authoritative per-run latency histogram (milliseconds, ~3 significant digits, auto-resizing).
          * Every completed iteration's coordinated-omission-corrected latency is recorded here (successes
          * and failures alike), and the status DTO's percentiles are read from a consistent {@code copy()}
@@ -1422,6 +1445,46 @@ public class LoadScenarioOrchestrator {
         }
 
         /**
+         * Record one evaluated per-step check outcome: bump the run totals (for CHECK_FAILURE_RATE) and
+         * the per-distinct-check aggregate (for the report). Called on the completion callback, possibly
+         * concurrently across worker threads.
+         */
+        void recordCheck(String stepLabel, LoadCheck check, boolean passed) {
+            if (passed) {
+                checksPassed.incrementAndGet();
+            } else {
+                checksFailed.incrementAndGet();
+            }
+            String source = check.getSource() != null ? check.getSource().name() : "";
+            String comparator = check.getComparator() != null ? check.getComparator().name() : "";
+            String detail = check.getSource() == LoadCheck.Source.HEADER ? check.getHeaderName()
+                : check.getSource() == LoadCheck.Source.BODY_JSONPATH ? check.getJsonPath()
+                : "";
+            String key = stepLabel + '|' + source + '|' + (detail != null ? detail : "")
+                + '|' + comparator + '|' + (check.getValue() != null ? check.getValue() : "");
+            CheckCounters counters = checkAggregates.computeIfAbsent(key,
+                k -> new CheckCounters(stepLabel, source, detail, comparator, check.getValue()));
+            if (passed) {
+                counters.passed.incrementAndGet();
+            } else {
+                counters.failed.incrementAndGet();
+            }
+        }
+
+        /** Build the immutable per-check result list for a status snapshot (empty when no checks ran). */
+        List<CheckResult> checkResults() {
+            if (checkAggregates.isEmpty()) {
+                return Collections.emptyList();
+            }
+            List<CheckResult> results = new ArrayList<>(checkAggregates.size());
+            for (CheckCounters counters : checkAggregates.values()) {
+                results.add(new CheckResult(counters.step, counters.source, counters.detail,
+                    counters.comparator, counters.value, counters.passed.get(), counters.failed.get()));
+            }
+            return Collections.unmodifiableList(results);
+        }
+
+        /**
          * Evaluate this run's in-run thresholds from PER-RUN data (this run's HDR histogram and
          * counters — never the global SLO sample store), recording the verdict and per-threshold
          * results on the run. A null/empty threshold list leaves the verdict null (no change to
@@ -1475,6 +1538,13 @@ public class LoadScenarioOrchestrator {
             double errorRate = completed <= 0 ? 0.0 : Math.min(1.0, failedCount / (double) completed);
             long elapsedMillis = Math.max(0L, now - startedAt);
             double throughputRps = sent / Math.max(0.001, elapsedMillis / 1000.0);
+            // Check-failure rate: failed per-step checks as a fraction of all evaluated checks, in
+            // [0,1]; 0 when no checks ran (so a CHECK_FAILURE_RATE threshold on a run with no checks
+            // simply reports 0 and cannot spuriously FAIL).
+            long checksPassedCount = checksPassed.get();
+            long checksFailedCount = checksFailed.get();
+            long checksTotal = checksPassedCount + checksFailedCount;
+            double checkFailureRate = checksTotal <= 0 ? 0.0 : Math.min(1.0, checksFailedCount / (double) checksTotal);
 
             List<ThresholdResult> results = new ArrayList<>(thresholds.size());
             boolean allSatisfied = true;
@@ -1499,6 +1569,9 @@ public class LoadScenarioOrchestrator {
                         break;
                     case THROUGHPUT_RPS:
                         observed = throughputRps;
+                        break;
+                    case CHECK_FAILURE_RATE:
+                        observed = checkFailureRate;
                         break;
                     default:
                         observed = 0.0;
@@ -1708,7 +1781,8 @@ public class LoadScenarioOrchestrator {
                 scenario.getStartDelayMillis(),
                 verdict == null ? null : (verdict ? "PASS" : "FAIL"),
                 abortedByThreshold,
-                thresholdResults
+                thresholdResults,
+                checkResults()
             );
         }
     }
@@ -1735,6 +1809,57 @@ public class LoadScenarioOrchestrator {
             this.threshold = threshold;
             this.observed = observed;
             this.satisfied = satisfied;
+        }
+    }
+
+    /** Mutable per-distinct-check pass/fail aggregate, keyed in {@link RunningScenario#checkAggregates}. */
+    private static final class CheckCounters {
+        final String step;
+        final String source;
+        final String detail;
+        final String comparator;
+        final String value;
+        final AtomicLong passed = new AtomicLong(0);
+        final AtomicLong failed = new AtomicLong(0);
+
+        CheckCounters(String step, String source, String detail, String comparator, String value) {
+            this.step = step;
+            this.source = source;
+            this.detail = detail;
+            this.comparator = comparator;
+            this.value = value;
+        }
+    }
+
+    /**
+     * One per-distinct-check aggregate result, surfaced in the status DTO and end-of-run report so a
+     * client/dashboard/CI can see how many times each per-step {@link LoadCheck} passed and failed.
+     */
+    public static final class CheckResult {
+        /** The step label the check ran on (step name or index). */
+        public final String step;
+        /** The {@link LoadCheck.Source} name (e.g. {@code STATUS}). */
+        public final String source;
+        /** The header name (HEADER) or JSONPath (BODY_JSONPATH), or empty for STATUS. */
+        public final String detail;
+        /** The {@link LoadCheck.Comparator} name (e.g. {@code EQUALS}). */
+        public final String comparator;
+        /** The expected comparand value. */
+        public final String value;
+        /** Number of times this check passed. */
+        public final long passed;
+        /** Number of times this check failed. */
+        public final long failed;
+
+        public CheckResult(String step, String source, String detail, String comparator, String value,
+                           long passed, long failed) {
+            this.step = step;
+            this.source = source;
+            this.detail = detail;
+            this.comparator = comparator;
+            this.value = value;
+            this.passed = passed;
+            this.failed = failed;
         }
     }
 
@@ -1797,6 +1922,12 @@ public class LoadScenarioOrchestrator {
         public final boolean abortedByThreshold;
         /** Per-threshold results behind the {@link #verdict} (empty when no thresholds / not evaluated). */
         public final List<ThresholdResult> thresholdResults;
+        /**
+         * Per-distinct-check pass/fail aggregates for the run's per-step {@link LoadCheck}s (empty when
+         * no checks ran). Surfaced in the end-of-run report so a CI/dashboard sees which response
+         * assertions held.
+         */
+        public final List<CheckResult> checkResults;
 
         public LoadScenarioStatus(String name, LoadScenarioState state, long elapsedMillis, int currentVus,
                                   long requestsSent, long succeeded, long failed,
@@ -1807,7 +1938,8 @@ public class LoadScenarioOrchestrator {
                                   int stageIndex, String stageType, double currentTarget,
                                   long startDelayMillis,
                                   String verdict, boolean abortedByThreshold,
-                                  List<ThresholdResult> thresholdResults) {
+                                  List<ThresholdResult> thresholdResults,
+                                  List<CheckResult> checkResults) {
             this.name = name;
             this.state = state;
             this.elapsedMillis = elapsedMillis;
@@ -1832,6 +1964,7 @@ public class LoadScenarioOrchestrator {
             this.verdict = verdict;
             this.abortedByThreshold = abortedByThreshold;
             this.thresholdResults = thresholdResults != null ? thresholdResults : Collections.emptyList();
+            this.checkResults = checkResults != null ? checkResults : Collections.emptyList();
         }
     }
 }

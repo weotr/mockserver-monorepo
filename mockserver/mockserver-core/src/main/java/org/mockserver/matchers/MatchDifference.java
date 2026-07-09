@@ -26,6 +26,8 @@ public class MatchDifference {
         BODY("body"),
         SECURE("secure"),
         PROTOCOL("protocol"),
+        CLIENT_CERTIFICATE("clientCertificate"),
+        JWT("jwt"),
         KEEP_ALIVE("keep-alive"),
         OPERATION("operation"),
         OPENAPI("openapi"),

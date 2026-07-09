@@ -205,6 +205,28 @@ public class MainCliTest {
     }
 
     @Test
+    public void shouldPreserveExplicitProxySetupLoggingOptOutOnStandaloneLaunch() {
+        // The standalone launcher auto-enables proxySetupLogging only when the user has NOT configured
+        // it in any source. An explicit value here (set via the setter, which is what
+        // proxySetupLoggingConfigured() detects — the same guard branch that also honours a
+        // mockserver.properties opt-out) must be preserved, not clobbered to true.
+        final int freePort = PortFactory.findFreePort();
+        MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);
+        boolean originalProxySetupLogging = ConfigurationProperties.proxySetupLogging();
+
+        try {
+            ConfigurationProperties.proxySetupLogging(false); // explicit user opt-out
+            Main.main("run", "-p", String.valueOf(freePort));
+            assertThat("mockServerClient.hasStarted", mockServerClient.hasStarted(), is(true));
+            assertThat("explicit proxySetupLogging=false must be preserved by the standalone launcher",
+                ConfigurationProperties.proxySetupLogging(), is(false));
+        } finally {
+            ConfigurationProperties.proxySetupLogging(originalProxySetupLogging);
+            stopQuietly(mockServerClient);
+        }
+    }
+
+    @Test
     public void shouldStartWithLongLogLevelFlag() {
         final int freePort = PortFactory.findFreePort();
         MockServerClient mockServerClient = new MockServerClient("127.0.0.1", freePort);

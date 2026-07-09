@@ -97,6 +97,7 @@ public class Configuration {
     private Long http3InitialMaxStreamsBidirectional;
     private Long http3QpackMaxTableCapacity;
     private Boolean http3ConnectUdpEnabled;
+    private String http3ConnectUdpAllowedTargets;
     private Long http3AltSvcMaxAge;
     private Boolean http3AdvertiseAltSvc;
     private Map<String, String> logLevelOverrides;
@@ -108,8 +109,12 @@ public class Configuration {
     // memory usage
     private Integer maxExpectations;
     private Integer maxLogEntries;
+    private Long maxEventLogSizeInBytes;
+    private Integer maxLoggedBodyBytes;
     private Integer ringBufferSize;
     private Integer maxWebSocketExpectations;
+    private Integer webSocketProxyMaxRecordedFrames;
+    private Integer webSocketProxyIdleTimeoutSeconds;
     private Boolean outputMemoryUsageCsv;
     private String memoryUsageCsvDirectory;
 
@@ -134,6 +139,7 @@ public class Configuration {
     private Integer forwardProxyRetryCount;
     private Long forwardProxyRetryBackoffMillis;
     private Boolean forwardProxyHttp2Enabled;
+    private Boolean forwardProxyHttp2Upgrade;
     private Boolean forwardProxyCircuitBreakerEnabled;
     private Integer forwardProxyCircuitBreakerFailureThreshold;
     private Long forwardProxyCircuitBreakerWindowMillis;
@@ -153,6 +159,8 @@ public class Configuration {
     private Integer maxRequestBodySize;
     private Integer maxResponseBodySize;
     private Integer maxLlmConversationBodySize;
+    private Boolean driftDetectionEnabled;
+    private Double driftSampleRate;
     private Boolean driftSemanticAnalysisEnabled;
     private Long driftResponseTimeThresholdMs;
     private Boolean driftAlertWebhookEnabled;
@@ -162,7 +170,9 @@ public class Configuration {
     private Boolean controlPlaneAuditEnabled;
     private Integer controlPlaneAuditMaxEntries;
     private Boolean controlPlaneAuditReads;
+    private String auditLogFile;
     private Boolean useSemicolonAsQueryParameterSeparator;
+    private Boolean startupWarmup;
     private Boolean assumeAllRequestsAreHttp;
     private Boolean http2Enabled;
 
@@ -203,6 +213,7 @@ public class Configuration {
     private Boolean velocityDisallowClassLoading;
     private String velocityDisallowedText;
     private String mustacheDisallowedText;
+    private Long templateFakerSeed;
 
     // mock initialization
     private String initializationClass;
@@ -225,6 +236,9 @@ public class Configuration {
     private Boolean persistRecordedExpectations;
     private String persistedRecordedExpectationsPath;
 
+    private Boolean persistRecordedRequestsToDisk;
+    private String persistedRecordedRequestsPath;
+
     // state backend (G10 phase 2a)
     private String stateBackend;
     private String blobStoreType;
@@ -245,6 +259,9 @@ public class Configuration {
     private String clusterName;
     private String clusterTransportConfig;
     private Boolean clusterSharedTimesEnabled;
+    private Boolean clusterVerifyFanIn;
+    private String clusterVerifyFanInPeers;
+    private String clusterFanInPeerAuthToken;
 
     // verification
     private Integer maximumNumberOfRequestToReturnInVerificationFailure;
@@ -324,6 +341,10 @@ public class Configuration {
     private Boolean dynamicallyCreateCertificateAuthorityCertificate;
     private String directoryToSaveDynamicSSLCertificate;
 
+    // proxy setup convenience
+    private Boolean proxySetup;
+    private Boolean proxySetupLogging;
+
     // inbound - dynamic private key & x509
     private Boolean preventCertificateDynamicUpdate;
     private String sslCertificateDomainName;
@@ -354,6 +375,7 @@ public class Configuration {
     // outbound - fixed private key & x509
     private String forwardProxyPrivateKey;
     private String forwardProxyCertificateChain;
+    private String forwardProxyClientCertificatesByHost;
 
     // service mesh / sidecar
     private Boolean transparentProxyEnabled;
@@ -1431,6 +1453,18 @@ public class Configuration {
         return this;
     }
 
+    public String http3ConnectUdpAllowedTargets() {
+        if (http3ConnectUdpAllowedTargets == null) {
+            return ConfigurationProperties.http3ConnectUdpAllowedTargets();
+        }
+        return http3ConnectUdpAllowedTargets;
+    }
+
+    public Configuration http3ConnectUdpAllowedTargets(String http3ConnectUdpAllowedTargets) {
+        this.http3ConnectUdpAllowedTargets = http3ConnectUdpAllowedTargets;
+        return this;
+    }
+
     public Long http3AltSvcMaxAge() {
         if (http3AltSvcMaxAge == null) {
             return ConfigurationProperties.http3AltSvcMaxAge();
@@ -1547,6 +1581,50 @@ public class Configuration {
         return this;
     }
 
+    public Long maxEventLogSizeInBytes() {
+        if (maxEventLogSizeInBytes == null) {
+            return ConfigurationProperties.maxEventLogSizeInBytes();
+        }
+        return maxEventLogSizeInBytes;
+    }
+
+    /**
+     * <p>
+     * Maximum total size in bytes of the in-memory event log before older entries are evicted from memory (the oldest first).
+     * </p>
+     * <p>
+     * The default is 0, which disables the size-based limit (the event log is bounded only by {@link #maxLogEntries}).
+     * </p>
+     *
+     * @param maxEventLogSizeInBytes maximum total size in bytes of the in-memory event log (0 disables the limit)
+     */
+    public Configuration maxEventLogSizeInBytes(Long maxEventLogSizeInBytes) {
+        this.maxEventLogSizeInBytes = maxEventLogSizeInBytes;
+        return this;
+    }
+
+    public Integer maxLoggedBodyBytes() {
+        if (maxLoggedBodyBytes == null) {
+            return ConfigurationProperties.maxLoggedBodyBytes();
+        }
+        return maxLoggedBodyBytes;
+    }
+
+    /**
+     * <p>
+     * Maximum number of bytes of a request or response body retained in each log entry; bodies larger than this are truncated.
+     * </p>
+     * <p>
+     * The default is 0, which means unlimited (bodies are retained in full).
+     * </p>
+     *
+     * @param maxLoggedBodyBytes maximum number of body bytes retained per log entry (0 means unlimited)
+     */
+    public Configuration maxLoggedBodyBytes(Integer maxLoggedBodyBytes) {
+        this.maxLoggedBodyBytes = maxLoggedBodyBytes;
+        return this;
+    }
+
     /**
      * <p>
      * Number of slots in the in-memory log event ring buffer (LMAX Disruptor) that buffers log events
@@ -1585,6 +1663,56 @@ public class Configuration {
      */
     public Configuration maxWebSocketExpectations(Integer maxWebSocketExpectations) {
         this.maxWebSocketExpectations = maxWebSocketExpectations;
+        return this;
+    }
+
+    public Integer webSocketProxyMaxRecordedFrames() {
+        if (webSocketProxyMaxRecordedFrames == null) {
+            return ConfigurationProperties.webSocketProxyMaxRecordedFrames();
+        }
+        return webSocketProxyMaxRecordedFrames;
+    }
+
+    /**
+     * <p>
+     * Maximum number of WebSocket frames recorded per proxied (passthrough) WebSocket connection. When MockServer
+     * proxies a WebSocket upgrade to a real upstream server (no matching mock expectation), the relayed frames are
+     * captured into a per-connection transcript written to the event log as a {@code FORWARDED_REQUEST} on close, so
+     * {@code retrieveRecordedRequests} and the dashboard show the WebSocket traffic. Once this cap is reached the
+     * remaining frames are relayed but not recorded (the transcript is flagged truncated), bounding memory.
+     * </p>
+     * <p>
+     * The default is 1000. Set to 0 to disable frame recording (the upgrade handshake is still recorded).
+     * </p>
+     *
+     * @param webSocketProxyMaxRecordedFrames maximum number of relayed WebSocket frames recorded per proxied connection
+     */
+    public Configuration webSocketProxyMaxRecordedFrames(Integer webSocketProxyMaxRecordedFrames) {
+        this.webSocketProxyMaxRecordedFrames = webSocketProxyMaxRecordedFrames;
+        return this;
+    }
+
+    public Integer webSocketProxyIdleTimeoutSeconds() {
+        if (webSocketProxyIdleTimeoutSeconds == null) {
+            return ConfigurationProperties.webSocketProxyIdleTimeoutSeconds();
+        }
+        return webSocketProxyIdleTimeoutSeconds;
+    }
+
+    /**
+     * <p>
+     * Idle timeout (in seconds) for a proxied (passthrough) WebSocket connection. When positive, a relayed WebSocket
+     * connection whose two directions have both been idle for this many seconds is closed, reaping abandoned relays.
+     * </p>
+     * <p>
+     * The default is 0 (disabled) — legitimately idle long-lived WebSocket connections are left to TCP keep-alive and
+     * peer-close propagation.
+     * </p>
+     *
+     * @param webSocketProxyIdleTimeoutSeconds idle timeout in seconds for proxied WebSocket relays (0 disables)
+     */
+    public Configuration webSocketProxyIdleTimeoutSeconds(Integer webSocketProxyIdleTimeoutSeconds) {
+        this.webSocketProxyIdleTimeoutSeconds = webSocketProxyIdleTimeoutSeconds;
         return this;
     }
 
@@ -2023,6 +2151,30 @@ public class Configuration {
         return this;
     }
 
+    public Boolean forwardProxyHttp2Upgrade() {
+        if (forwardProxyHttp2Upgrade == null) {
+            return ConfigurationProperties.forwardProxyHttp2Upgrade();
+        }
+        return forwardProxyHttp2Upgrade;
+    }
+
+    /**
+     * If false (the default) a forwarded or proxied request is only sent upstream over HTTP/2 when the
+     * inbound request itself used HTTP/2 and {@code forwardProxyHttp2Enabled} is set. If true, a secure
+     * (TLS) forward is sent upstream over HTTP/2 via ALPN even when the inbound client is HTTP/1.1, with
+     * automatic fallback to HTTP/1.1 if the upstream does not negotiate h2.
+     * <p>
+     * Useful when an upstream sends a streaming (Server-Sent Events) response head immediately over
+     * HTTP/2 but withholds it over HTTP/1.1. HTTP/2 only flows over TLS+ALPN (no h2c cleartext path — a
+     * non-secure request stays HTTP/1.1). HTTP/2 forward connections are not pooled.
+     *
+     * @param forwardProxyHttp2Upgrade forward a secure request upstream over HTTP/2 even when the inbound client is HTTP/1.1
+     */
+    public Configuration forwardProxyHttp2Upgrade(Boolean forwardProxyHttp2Upgrade) {
+        this.forwardProxyHttp2Upgrade = forwardProxyHttp2Upgrade;
+        return this;
+    }
+
     public Boolean forwardProxyCircuitBreakerEnabled() {
         if (forwardProxyCircuitBreakerEnabled == null) {
             return ConfigurationProperties.forwardProxyCircuitBreakerEnabled();
@@ -2282,6 +2434,46 @@ public class Configuration {
         return this;
     }
 
+    public Boolean driftDetectionEnabled() {
+        if (driftDetectionEnabled == null) {
+            return ConfigurationProperties.driftDetectionEnabled();
+        }
+        return driftDetectionEnabled;
+    }
+
+    /**
+     * Master switch for mock-drift analysis on forwarded responses. When true (the
+     * default), every eligible forwarded upstream response is compared against
+     * matching response-type stub expectations to record drift. When false, drift
+     * analysis (and its extra per-forward expectation lookup) is skipped entirely.
+     *
+     * @param driftDetectionEnabled true to enable mock-drift analysis
+     */
+    public Configuration driftDetectionEnabled(Boolean driftDetectionEnabled) {
+        this.driftDetectionEnabled = driftDetectionEnabled;
+        return this;
+    }
+
+    public Double driftSampleRate() {
+        if (driftSampleRate == null) {
+            return ConfigurationProperties.driftSampleRate();
+        }
+        return driftSampleRate;
+    }
+
+    /**
+     * Fraction of eligible forwarded responses to analyse for drift, in [0.0, 1.0].
+     * Default 1.0 (analyse every eligible forward). A value below 1.0 analyses only
+     * that fraction of forwarded responses. Out-of-range values are treated safely by
+     * the sampler (&le; 0 never analyses, &ge; 1 always analyses).
+     *
+     * @param driftSampleRate fraction of forwarded responses to analyse, in [0.0, 1.0]
+     */
+    public Configuration driftSampleRate(Double driftSampleRate) {
+        this.driftSampleRate = driftSampleRate;
+        return this;
+    }
+
     public Boolean driftSemanticAnalysisEnabled() {
         if (driftSemanticAnalysisEnabled == null) {
             return ConfigurationProperties.driftSemanticAnalysisEnabled();
@@ -2365,6 +2557,28 @@ public class Configuration {
      */
     public Configuration controlPlaneAuditReads(Boolean controlPlaneAuditReads) {
         this.controlPlaneAuditReads = controlPlaneAuditReads;
+        return this;
+    }
+
+    public String auditLogFile() {
+        if (auditLogFile == null) {
+            return ConfigurationProperties.auditLogFile();
+        }
+        return auditLogFile;
+    }
+
+    /**
+     * Optional path to a durable control-plane audit log file. When set (and
+     * {@code controlPlaneAuditEnabled} is true), each recorded audit entry is
+     * additionally appended as one JSON object per line ("NDJSON") to this file — a
+     * restart-surviving trail that outlives the bounded in-memory ring buffer.
+     * Empty/null (the default) disables the file sink; behaviour is unchanged.
+     * The path is resolved once, on the first entry written.
+     *
+     * @param auditLogFile path to append NDJSON audit entries to, or null/empty to disable
+     */
+    public Configuration auditLogFile(String auditLogFile) {
+        this.auditLogFile = auditLogFile;
         return this;
     }
 
@@ -2483,6 +2697,27 @@ public class Configuration {
      */
     public Configuration useSemicolonAsQueryParameterSeparator(Boolean useSemicolonAsQueryParameterSeparator) {
         this.useSemicolonAsQueryParameterSeparator = useSemicolonAsQueryParameterSeparator;
+        return this;
+    }
+
+    public Boolean startupWarmup() {
+        if (startupWarmup == null) {
+            return ConfigurationProperties.startupWarmup();
+        }
+        return startupWarmup;
+    }
+
+    /**
+     * If true (the default) MockServer sends itself a single warm-up request immediately after it starts listening, on a background thread.
+     * <p>
+     * The very first request handled by a freshly started MockServer is noticeably slower than every request after it (typically a few hundred milliseconds) because the request-handling code (the HTTP codec, JSON serialisation and response writers) is only loaded and initialised when it is first used. The warm-up request pays that one-off cost in the background so the first request from your test or application is fast.
+     * <p>
+     * The warm-up runs in the background and never delays start up. Disable it (set to false) only if you want to avoid the single extra loopback request during start up — for example in a tightly locked-down environment where MockServer must not connect to itself.
+     *
+     * @param startupWarmup true (the default) to send a background warm-up request after start up
+     */
+    public Configuration startupWarmup(Boolean startupWarmup) {
+        this.startupWarmup = startupWarmup;
         return this;
     }
 
@@ -2921,6 +3156,27 @@ public class Configuration {
         return this;
     }
 
+    public Long templateFakerSeed() {
+        if (templateFakerSeed == null) {
+            return ConfigurationProperties.templateFakerSeed();
+        }
+        return templateFakerSeed;
+    }
+
+    /**
+     * Seed for the template {@code faker} sample-data helper (net.datafaker).
+     * <p>
+     * The default is 0, which leaves faker unseeded so it produces different, time/random-based
+     * sample values on every render. Set a non-zero value to seed faker deterministically so
+     * faker-driven templates generate reproducible fixtures across runs.
+     *
+     * @param templateFakerSeed faker seed, 0 to leave faker unseeded (random)
+     */
+    public Configuration templateFakerSeed(Long templateFakerSeed) {
+        this.templateFakerSeed = templateFakerSeed;
+        return this;
+    }
+
     public String initializationClass() {
         if (initializationClass == null) {
             return ConfigurationProperties.initializationClass();
@@ -3236,6 +3492,44 @@ public class Configuration {
         return this;
     }
 
+    public Boolean persistRecordedRequestsToDisk() {
+        if (persistRecordedRequestsToDisk == null) {
+            return ConfigurationProperties.persistRecordedRequestsToDisk();
+        }
+        return persistRecordedRequestsToDisk;
+    }
+
+    /**
+     * Enable the persisting of recorded requests (captured traffic) to disk
+     * <p>
+     * The default is false
+     *
+     * @param persistRecordedRequestsToDisk the persisting of recorded requests to disk
+     */
+    public Configuration persistRecordedRequestsToDisk(Boolean persistRecordedRequestsToDisk) {
+        this.persistRecordedRequestsToDisk = persistRecordedRequestsToDisk;
+        return this;
+    }
+
+    public String persistedRecordedRequestsPath() {
+        if (persistedRecordedRequestsPath == null) {
+            return ConfigurationProperties.persistedRecordedRequestsPath();
+        }
+        return persistedRecordedRequestsPath;
+    }
+
+    /**
+     * The file path used to save persisted recorded requests, which is updated whenever a new request is captured
+     * <p>
+     * The default is "recordedRequests.ndjson"
+     *
+     * @param persistedRecordedRequestsPath file path used to save persisted recorded requests
+     */
+    public Configuration persistedRecordedRequestsPath(String persistedRecordedRequestsPath) {
+        this.persistedRecordedRequestsPath = persistedRecordedRequestsPath;
+        return this;
+    }
+
     /**
      * Returns the state backend type. Currently only "memory" is supported
      * (default). Phase 2b will add "infinispan" for clustered state.
@@ -3522,6 +3816,94 @@ public class Configuration {
      */
     public Configuration clusterSharedTimesEnabled(boolean clusterSharedTimesEnabled) {
         this.clusterSharedTimesEnabled = clusterSharedTimesEnabled;
+        return this;
+    }
+
+    /**
+     * Returns whether {@code verify}/{@code verifySequence} and
+     * {@code retrieve} of {@code REQUESTS}/{@code REQUEST_RESPONSES} aggregate
+     * (scatter-gather) across cluster members. Default is {@code false}
+     * (per-node behaviour — each node sees only the traffic that hit it).
+     * <p>
+     * Only meaningful in a clustered deployment behind a load balancer, where
+     * the event log is per-node. When {@code true}, a verify/retrieve on any
+     * node queries every configured peer's LOCAL log (see
+     * {@link #clusterVerifyFanInPeers()}), merges the results, and evaluates
+     * the verification against the fleet-wide total. Count-based request
+     * verification ({@code exactly}/{@code atLeast}/{@code atMost}/
+     * {@code between}) and {@code REQUESTS}/{@code REQUEST_RESPONSES} retrieve
+     * are aggregated; cross-node {@code verifySequence} ordering is a
+     * documented boundary and stays node-local. See
+     * {@code org.mockserver.cluster.ClusterFanIn}.
+     */
+    public boolean clusterVerifyFanIn() {
+        if (clusterVerifyFanIn == null) {
+            return ConfigurationProperties.clusterVerifyFanIn();
+        }
+        return clusterVerifyFanIn;
+    }
+
+    /**
+     * Enables or disables cluster verify/retrieve fan-in.
+     *
+     * @param clusterVerifyFanIn {@code true} to aggregate verify/retrieve
+     *                           across cluster peers; {@code false} (default)
+     *                           for per-node behaviour
+     */
+    public Configuration clusterVerifyFanIn(boolean clusterVerifyFanIn) {
+        this.clusterVerifyFanIn = clusterVerifyFanIn;
+        return this;
+    }
+
+    /**
+     * Returns the comma-separated list of peer control-plane base URLs (e.g.
+     * {@code http://node-b:1080,http://node-c:1080}) queried when
+     * {@link #clusterVerifyFanIn()} is enabled. Should list the OTHER nodes in
+     * the fleet (excluding this node). Default is empty (no peers — fan-in is
+     * a no-op even when enabled).
+     */
+    public String clusterVerifyFanInPeers() {
+        if (clusterVerifyFanInPeers == null) {
+            return ConfigurationProperties.clusterVerifyFanInPeers();
+        }
+        return clusterVerifyFanInPeers;
+    }
+
+    /**
+     * Sets the comma-separated list of peer control-plane base URLs for
+     * verify/retrieve fan-in.
+     *
+     * @param clusterVerifyFanInPeers comma-separated peer base URLs
+     */
+    public Configuration clusterVerifyFanInPeers(String clusterVerifyFanInPeers) {
+        this.clusterVerifyFanInPeers = clusterVerifyFanInPeers;
+        return this;
+    }
+
+    /**
+     * Returns the credential the verify/retrieve fan-in peer accessor presents on
+     * cross-node queries. It is sent verbatim as the control-plane
+     * {@code Authorization} header (e.g. {@code Bearer <jwt>}), so an authenticated
+     * cluster (control-plane bearer/JWT/OIDC) accepts the fan-in query rather than
+     * rejecting it with 401/403. Default is empty (no credential — unchanged
+     * behaviour). All nodes must share the same token / trust.
+     */
+    public String clusterFanInPeerAuthToken() {
+        if (clusterFanInPeerAuthToken == null) {
+            return ConfigurationProperties.clusterFanInPeerAuthToken();
+        }
+        return clusterFanInPeerAuthToken;
+    }
+
+    /**
+     * Sets the credential the verify/retrieve fan-in peer accessor presents on
+     * cross-node queries (sent verbatim as the control-plane {@code Authorization}
+     * header, so include the scheme, e.g. {@code Bearer <jwt>}).
+     *
+     * @param clusterFanInPeerAuthToken the control-plane Authorization header value
+     */
+    public Configuration clusterFanInPeerAuthToken(String clusterFanInPeerAuthToken) {
+        this.clusterFanInPeerAuthToken = clusterFanInPeerAuthToken;
         return this;
     }
 
@@ -4505,10 +4887,51 @@ public class Configuration {
     }
 
     public Boolean dynamicallyCreateCertificateAuthorityCertificate() {
+        // proxySetup is the convenience on-switch: when enabled it forces dynamic CA generation so a
+        // unique private CA is used instead of the public CA private key published in the repository.
+        if (Boolean.TRUE.equals(proxySetup())) {
+            return true;
+        }
         if (dynamicallyCreateCertificateAuthorityCertificate == null) {
             return ConfigurationProperties.dynamicallyCreateCertificateAuthorityCertificate();
         }
         return dynamicallyCreateCertificateAuthorityCertificate;
+    }
+
+    public Boolean proxySetup() {
+        if (proxySetup == null) {
+            return ConfigurationProperties.proxySetup();
+        }
+        return proxySetup;
+    }
+
+    /**
+     * Convenience on-switch for using MockServer as a TLS-intercepting proxy. When enabled MockServer
+     * forces dynamic creation of a unique private Certificate Authority and prints an OS-specific
+     * copy-paste proxy setup block on startup.
+     *
+     * @param proxySetup enable proxy setup convenience mode
+     */
+    public Configuration proxySetup(Boolean proxySetup) {
+        this.proxySetup = proxySetup;
+        return this;
+    }
+
+    public Boolean proxySetupLogging() {
+        if (proxySetupLogging == null) {
+            return ConfigurationProperties.proxySetupLogging();
+        }
+        return proxySetupLogging;
+    }
+
+    /**
+     * Whether to print the OS-specific copy-paste proxy setup block on startup. Enabled by default.
+     *
+     * @param proxySetupLogging enable the proxy setup startup logging block
+     */
+    public Configuration proxySetupLogging(Boolean proxySetupLogging) {
+        this.proxySetupLogging = proxySetupLogging;
+        return this;
     }
 
     /**
@@ -4888,6 +5311,26 @@ public class Configuration {
     public Configuration forwardProxyCertificateChain(String forwardProxyCertificateChain) {
         fileExists(forwardProxyCertificateChain);
         this.forwardProxyCertificateChain = forwardProxyCertificateChain;
+        return this;
+    }
+
+    public String forwardProxyClientCertificatesByHost() {
+        if (forwardProxyClientCertificatesByHost == null) {
+            return ConfigurationProperties.forwardProxyClientCertificatesByHost();
+        }
+        return forwardProxyClientCertificatesByHost;
+    }
+
+    /**
+     * Per-host outbound mTLS certificate/key map for forwarded or proxied requests, as a comma-separated list of
+     * {@code host=certificateChainPath;privateKeyPath} entries. A matching upstream host (case-insensitive) is sent
+     * that host's cert/key pair for client authentication; any host without an entry falls back to the global
+     * {@code forwardProxyPrivateKey} / {@code forwardProxyCertificateChain} pair. The default is empty.
+     *
+     * @param forwardProxyClientCertificatesByHost comma-separated host=certificateChainPath;privateKeyPath entries
+     */
+    public Configuration forwardProxyClientCertificatesByHost(String forwardProxyClientCertificatesByHost) {
+        this.forwardProxyClientCertificatesByHost = forwardProxyClientCertificatesByHost;
         return this;
     }
 

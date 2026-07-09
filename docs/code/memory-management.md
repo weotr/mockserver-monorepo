@@ -21,7 +21,8 @@ graph TB
             default min(maxLogEntries, 16384)"]
             EL["CircularConcurrentLinkedDeque
             Persistent event store
-            Max size: maxLogEntries"]
+            Count bound: maxLogEntries
+            Byte bound: maxEventLogSizeInBytes"]
         end
         subgraph "Expectation Storage"
             PQ["CircularPriorityQueue
@@ -61,6 +62,8 @@ maxExpectations  = min(heapAvailableInKB / 10, 15000)
 | Component | File | Method |
 |-----------|------|--------|
 | Heap available probe | `ConfigurationProperties.java` | `heapAvailableInKB()` |
+| Undefined-max-robust heap calc | `ConfigurationProperties.java` | `computeHeapAvailableInKB(long, long, long, long)` |
+| Heap-based default with floor | `ConfigurationProperties.java` | `heapBasedDefaultOrFloor(long, long, int, int)` |
 | `maxLogEntries()` default | `ConfigurationProperties.java` | `maxLogEntries()` |
 | `maxExpectations()` default | `ConfigurationProperties.java` | `maxExpectations()` |
 | Ring buffer sizing | `Configuration.java` | `ringBufferSize()` (resolves field → property → `min(maxLogEntries, 16384)`) |
@@ -100,6 +103,18 @@ On small heaps (< 256 MB), if you have both a large number of expectations AND h
 ### Timing Sensitivity
 
 `heapAvailableInKB()` measures the *current* free heap at the moment the property is first read. During JVM startup, the heap may be more heavily used (class loading, initialisation) than during steady state. This means the computed default can be lower than what the JVM can actually sustain. After garbage collection runs and startup objects are freed, significantly more heap may be available.
+
+### Undefined Heap Max (JMX `getMax()` = -1)
+
+The JMX spec allows `MemoryUsage.getMax()` to return **-1 (undefined)**. In some environments the aggregated heap-pool max reports as `-1`/`0` — verified on a **GraalVM native image** of the shaded jar, and possible in exotic JVM/WAR setups. Left unguarded, `(max - used) / 1024 - 20480` would then be a large **negative** number, driving `maxExpectations`/`maxLogEntries` to `<= 0` — so the expectation store and log ring buffer silently drop everything (`PUT /mockserver/expectation` returns 201 but the expectation never matches; "Log event ring buffer full" at startup).
+
+`heapAvailableInKB()` is therefore robust to an undefined heap max (see `computeHeapAvailableInKB(...)`):
+
+1. When the aggregated JMX heap max is `<= 0`, it falls back to `Runtime.maxMemory()` for the ceiling and `totalMemory() - freeMemory()` for used. (`Runtime.maxMemory()` may be `Long.MAX_VALUE` when the heap is unbounded — the subtraction stays non-negative and the very large result is clamped by the `min(..., cap)` in the callers.)
+2. When neither JMX nor `Runtime` yields a usable ceiling, it returns `0`.
+3. The result is **floored at 0** — never negative.
+
+The getters then apply a lower bound so a `0` heap-derived value still yields a functional store (see `heapBasedDefaultOrFloor(...)`): when `min(heapAvailableInKB / perEntryKB, cap)` computes to `<= 0`, the default falls back to the **dev-mode default** (1,000) for that property rather than `0`. Explicitly setting `mockserver.maxExpectations` / `mockserver.maxLogEntries` always overrides this.
 
 ## Log Entry Memory Analysis
 
@@ -269,20 +284,69 @@ Each inbound HTTP request generates **2-3 log entries**:
 
 The `arguments` field in `LogEntry` stores objects used for message formatting. When `setArguments()` is called with `HttpRequest` or `HttpResponse` objects, it creates **shallow clones** with updated body representations (`LogEntryBody`). These shallow clones share the same `headers`, `cookies`, `pathParameters`, and `queryStringParameters` references as the originals — only the body wrapper is replaced. This adds approximately **200-400 bytes** per clone rather than duplicating the entire request/response.
 
-### Eviction and GC
+### Byte-Budget Eviction (`maxEventLogSizeInBytes`)
 
-When the `CircularConcurrentLinkedDeque` reaches capacity:
+The `CircularConcurrentLinkedDeque` supports a second, independent bound: a **body-byte budget** supplied via the `maxEventLogSizeInBytes` configuration property (default 0 = disabled).
 
-1. The oldest `LogEntry` is removed from the deque via `poll()`
-2. The `onEvictCallback` calls `LogEntry.clear()`, which nulls all reference fields
-3. All child objects (HttpRequest, HttpResponse, Strings, etc.) become eligible for garbage collection
-4. The `LogEntry` object itself is also GC-eligible (it is fully removed from the deque)
+### Why it exists
+
+`maxLogEntries` caps the *number* of log entries, not their *size*. When each entry holds a large body — for example, an LLM exchange with a multi-hundred-kilobyte tool schema or conversation context — a few thousand entries can exhaust the heap even though the count is low. The byte budget provides a size-based safety valve that the count bound cannot express.
+
+### How it works
+
+On construction, `MockServerEventLog` passes `maxEventLogSizeInBytes` and `LogEntry::estimatedHeapSize` (the weigher) to the 4-argument `CircularConcurrentLinkedDeque` constructor:
+
+```java
+this.eventLog = new CircularConcurrentLinkedDeque<>(
+    configuration.maxLogEntries(),
+    configuration.maxEventLogSizeInBytes(),
+    LogEntry::estimatedHeapSize,
+    LogEntry::clear);
+```
+
+On every `add()`, `evictExcessElements(weight)` runs two passes:
+1. **Count pass** — evict oldest until `count < maxSize` (existing count bound).
+2. **Byte pass** — when `maxBytes > 0` and a weigher is set, evict oldest until `totalBytes + incomingWeight <= maxBytes`.
+
+A running `AtomicLong totalBytes` tracks the sum of all retained entry weights, updated on every insert and eviction. A single element whose weight alone exceeds `maxBytes` is still admitted — the byte loop stops when the deque is empty rather than rejecting the incoming entry.
+
+### `LogEntry.estimatedHeapSize()`
+
+The weigher used by the byte budget. Returns a **stable lower-bound estimate** of the bytes this entry retains on the heap, counting only primary request and response body bytes (the dominant cost for large LLM-capture exchanges):
+
+```java
+public long estimatedHeapSize() {
+    // counts httpRequests[*].getBodyAsRawBytes().length + httpResponse.getBodyAsRawBytes().length
+}
+```
+
+The value is computed lazily and cached (`-1` until first call) so the weight is identical at add-time and at evict-time. It deliberately excludes lazily-derived `httpUpdated*` copies and the `arguments` array so it never changes after the entry is built — the deque relies on add-time weight matching evict-time weight exactly.
+
+Actual heap retention is a small multiple of this figure (headers, metadata, UUID strings, etc.). Set `maxEventLogSizeInBytes` well under the JVM heap — for a 2 GB heap, 256 MB is a reasonable starting point.
+
+### Body truncation (`maxLoggedBodyBytes`)
+
+`maxLoggedBodyBytes` is a secondary in-memory valve (default 0 = unlimited). When set to a positive value, `MockServerEventLog.truncateBodiesForLog()` replaces the request and/or response body in the (already-cloned) log entry with a truncated copy before the entry is added to the deque. A `x-mockserver-body-truncated: <originalLength>` header marks the truncated copy.
+
+Key ordering guarantee: disk capture (when `persistRecordedRequestsToDisk` is enabled) runs **before** truncation in `processLogEntry`, so the NDJSON archive always receives the full body regardless of `maxLoggedBodyBytes`. The archive captures both forwarded and mocked exchanges and outlives ring-buffer (`maxLogEntries` / `maxEventLogSizeInBytes`) eviction and process restarts; evicted entries can be brought back into the queryable in-memory log via `PUT /mockserver/import?format=recording` (`?source=disk` to read the configured path). See [event-system.md](event-system.md) for the disk-capture and re-import paths.
+
+The byte-budget weigher measures the (possibly truncated) body bytes, so truncation reduces the weight contributed to `totalBytes`.
+
+## Eviction and GC
+
+When the `CircularConcurrentLinkedDeque` reaches capacity (count or byte budget):
+
+1. The oldest `LogEntry` is removed from the deque via an internal `pollAndEvict()`
+2. `totalBytes` is decremented by the evicted entry's weight (before the callback, in case the callback clears the entry)
+3. The `onEvictCallback` calls `LogEntry.clear()`, which nulls all reference fields
+4. All child objects (HttpRequest, HttpResponse, Strings, etc.) become eligible for garbage collection
+5. The `LogEntry` object itself is also GC-eligible (it is fully removed from the deque)
 
 The LMAX Disruptor ring buffer pre-allocates `LogEntry` slots separately. Data is copied into ring buffer slots via `translateTo()`, then the consumer calls `cloneAndClear()` — creating a new `LogEntry` for persistent storage and clearing the ring buffer slot. Ring buffer slots do not contribute to persistent memory usage.
 
 **O(1) capacity check (CPU).** The eviction check on every insert uses an internal `AtomicInteger` size counter, not `ConcurrentLinkedDeque.size()` (which is O(n) — it walks the whole list). This matters because the check runs on the hot path for every log entry: with the O(n) call, once the log was full each insert cost ~`O(maxLogEntries)` and CPU climbed as the log filled (GitHub issue #2329). With the counter, insert/evict/`size()` are O(1). If you change `CircularConcurrentLinkedDeque`, keep all mutators updating the counter (see its javadoc) so `size()` stays accurate.
 
-**Clearing expectations does NOT clear the log.** `PUT /mockserver/clear?type=EXPECTATIONS` only clears stored expectations; the request/event log is independent and keeps its entries (bounded by `maxLogEntries`). To free the log, use `PUT /mockserver/clear?type=LOG` (or `?type=ALL`), or `PUT /mockserver/reset` (clears both). Long-running, high-throughput servers should either lower `maxLogEntries` or periodically clear the log.
+**Clearing expectations does NOT clear the log.** `PUT /mockserver/clear?type=EXPECTATIONS` only clears stored expectations; the request/event log is independent and keeps its entries (bounded by `maxLogEntries` and `maxEventLogSizeInBytes`). To free the log, use `PUT /mockserver/clear?type=LOG` (or `?type=ALL`), or `PUT /mockserver/reset` (clears both). Long-running, high-throughput servers should either lower `maxLogEntries`, set a byte budget, or periodically clear the log.
 
 ## Expectation Memory Analysis
 
@@ -324,6 +388,8 @@ For workloads with very large request/response bodies (>10 KB), the automatic de
 | Property | System Property | Environment Variable | Default |
 |----------|----------------|---------------------|---------|
 | Max log entries | `mockserver.maxLogEntries` | `MOCKSERVER_MAX_LOG_ENTRIES` | `min(heapAvailableKB / 8, 100000)` |
+| Max event log size (bytes) | `mockserver.maxEventLogSizeInBytes` | `MOCKSERVER_MAX_EVENT_LOG_SIZE_IN_BYTES` | `0` (disabled) |
+| Max logged body bytes | `mockserver.maxLoggedBodyBytes` | `MOCKSERVER_MAX_LOGGED_BODY_BYTES` | `0` (unlimited) |
 | Ring buffer size | `mockserver.ringBufferSize` | `MOCKSERVER_RING_BUFFER_SIZE` | `min(maxLogEntries, 16384)` (rounded up to a power of two) |
 | Max expectations | `mockserver.maxExpectations` | `MOCKSERVER_MAX_EXPECTATIONS` | `min(heapAvailableKB / 10, 15000)` |
 

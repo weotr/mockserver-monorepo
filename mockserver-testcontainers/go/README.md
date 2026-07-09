@@ -64,7 +64,7 @@ func Example() {
 Creates and starts a MockServer container. Waits for the `/mockserver/status`
 endpoint to respond with HTTP 200 before returning.
 
-- `image` — Docker image (e.g. `"mockserver/mockserver:mockserver-7.2.0"`)
+- `image` — Docker image (e.g. `"mockserver/mockserver:mockserver-7.4.0"`)
 - `opts` — optional `testcontainers.ContainerCustomizer` values
 
 ### `MockServerContainer.URL(ctx) (string, error)`
@@ -75,10 +75,38 @@ Returns the HTTP base URL (e.g. `"http://localhost:32769"`).
 
 Returns the mapped host port for the MockServer container port 1080.
 
-### Constants
+### Constants and variables
 
 - `DefaultPort` — `"1080/tcp"`
-- `DefaultImage` — `"mockserver/mockserver:mockserver-7.2.0"`
+- `DefaultImageName` — `"mockserver/mockserver"`
+- `DefaultImage` — a package variable derived at init from the `mockserver-client-go`
+  dependency version in the build info (`mockserver/mockserver:mockserver-<version>`),
+  falling back to `:latest` when the version cannot be resolved.
+
+### `MockServerContainer.Client(ctx) (*mockserverclient.Client, error)`
+
+Returns a [`mockserver-client-go`](https://pkg.go.dev/github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7)
+control-plane client already pointed at the container's mapped host and port — the Go
+equivalent of the Java module's `getClient()` helper:
+
+```go
+import mockserverclient "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+
+client, err := ctr.Client(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+
+_, err = client.When(
+	mockserverclient.Request().Method("GET").Path("/hello"),
+).Respond(
+	mockserverclient.Response().StatusCode(200).Body("world"),
+)
+```
+
+The client is bundled via the `mockserver-client-go/v7` module. The `/v7` Semantic Import
+Versioning suffix on that module's path is what lets this module depend on it as a normal
+`require`, so downstream `go get` of this module resolves the published client cleanly.
 
 ## Build and Test
 

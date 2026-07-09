@@ -28,8 +28,8 @@ initializerJson.json"]
 
 | Chart | Path | Version | Purpose |
 |-------|------|---------|---------|
-| `mockserver` | `helm/mockserver/` | 7.2.0 | Main deployment chart (includes optional ConfigMap) |
-| `mockserver-config` | `helm/mockserver-config/` | 7.2.0 | Example external ConfigMap chart (for reference) |
+| `mockserver` | `helm/mockserver/` | 7.4.0 | Main deployment chart (includes optional ConfigMap) |
+| `mockserver-config` | `helm/mockserver-config/` | 7.4.0 | Example external ConfigMap chart (for reference) |
 
 ## mockserver Chart
 
@@ -39,6 +39,7 @@ initializerJson.json"]
 |----------|---------|
 | `deployment.yaml` | Single-replica Deployment with ConfigMap volume mount |
 | `service.yaml` | Service (NodePort/LoadBalancer/ClusterIP) |
+| `servicemonitor.yaml` | Optional Prometheus Operator ServiceMonitor for the metrics endpoint (when `serviceMonitor.enabled`) |
 | `ingress.yaml` | Optional Ingress resource |
 | `configmap.yaml` | Optional ConfigMap for inline configuration (when `app.config.enabled`) |
 | `pvc.yaml` | Optional PersistentVolumeClaim (when `app.persistence.enabled` and no `existingClaimName`) |
@@ -105,6 +106,18 @@ service:
   nodePort: ""
   test:
     image: curlimages/curl:8.20.0
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  labels: {}
+  interval: 30s
+  scrapeTimeout: ""
+  path: /mockserver/metrics
+  scheme: http
+  honorLabels: false
+  namespaceSelector: {}
+  relabelings: []
+  metricRelabelings: []
 ingress:
   enabled: false
   className: ""
@@ -129,6 +142,35 @@ clustering:
 imagePullSecrets: []
 releasenameOverride: ""
 ```
+
+### Prometheus ServiceMonitor
+
+`serviceMonitor.enabled=true` renders a Prometheus Operator `ServiceMonitor`
+(`monitoring.coreos.com/v1`) that scrapes MockServer's Prometheus endpoint. It is
+**disabled by default** and has two hard prerequisites: the Prometheus Operator
+CRDs must be installed in the cluster (e.g. via kube-prometheus-stack), and
+MockServer must run with `mockserver.metricsEnabled=true` (set it in
+`app.config.properties`) — otherwise `/mockserver/metrics` returns `404`.
+
+| Value | Default | Purpose |
+|-------|---------|---------|
+| `serviceMonitor.enabled` | `false` | Create the ServiceMonitor |
+| `serviceMonitor.namespace` | `""` | Namespace for the ServiceMonitor (defaults to the release namespace) |
+| `serviceMonitor.labels` | `{}` | Extra labels on the ServiceMonitor — commonly the `release` label your Prometheus `serviceMonitorSelector` matches (e.g. `release: kube-prometheus-stack`) |
+| `serviceMonitor.interval` | `30s` | Scrape interval |
+| `serviceMonitor.scrapeTimeout` | `""` | Per-scrape timeout (Prometheus default if empty) |
+| `serviceMonitor.path` | `/mockserver/metrics` | Scrape path |
+| `serviceMonitor.scheme` | `http` | Scrape scheme |
+| `serviceMonitor.honorLabels` | `false` | Keep target labels on collision |
+| `serviceMonitor.namespaceSelector` | `{}` | Namespaces to search for the Service |
+| `serviceMonitor.relabelings` / `metricRelabelings` | `[]` | Standard relabel configs |
+
+The endpoint targets the Service's named `serviceport`. The user-supplied
+`serviceMonitor.labels` are **merged over** the chart's own metadata labels (user
+wins), so setting `serviceMonitor.labels.release` cleanly overrides the default
+`release` label instead of producing a duplicate key. A ready-to-import Grafana
+dashboard for the scraped server metrics lives at
+[`examples/grafana/mockserver-server.json`](../../examples/grafana/mockserver-server.json).
 
 ### Clustering
 
@@ -333,7 +375,7 @@ The two probes are deliberately split so a slow startup does not get the pod res
 helm install mockserver oci://ghcr.io/mock-server/charts/mockserver
 
 # Pin a version
-helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 7.2.0
+helm install mockserver oci://ghcr.io/mock-server/charts/mockserver --version 7.4.0
 
 # --- Option B: Legacy HTTP repo ------------------------------------------
 helm repo add mockserver https://www.mock-server.com
@@ -481,7 +523,7 @@ cosign verify --key https://www.mock-server.com/mockserver-cosign.pub ghcr.io/mo
 
 > **IAM note:** signing is gated by `aws secretsmanager describe-secret mockserver-release/cosign-key`,
 > so the release-queue role needs **`secretsmanager:DescribeSecret`** on that secret (not just
-> `GetSecretValue`) or the probe fails and signing is silently skipped — the cause of the 7.2.0 chart
+> `GetSecretValue`) or the probe fails and signing is silently skipped — the cause of the 7.4.0 chart
 > publishing unsigned until the grant was added to `read_release_secrets`.
 
 To enable signing:

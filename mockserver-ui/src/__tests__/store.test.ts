@@ -21,6 +21,7 @@ describe('DashboardStore', () => {
       proxiedSearch: '',
       trafficSearch: '',
       error: null,
+      errorSource: null,
       notification: null,
     });
   });
@@ -69,8 +70,18 @@ describe('DashboardStore', () => {
       expect(useDashboardStore.getState().error).toBe('invalid filter');
     });
 
-    it('clears error when no error in message', () => {
-      useDashboardStore.setState({ error: 'old error' });
+    it('clears a push-sourced error when a later push carries no error', () => {
+      // An error carried by a push is remembered as push-sourced …
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [],
+        recordedRequests: [],
+        proxiedRequests: [],
+        error: 'invalid filter',
+      });
+      expect(useDashboardStore.getState().error).toBe('invalid filter');
+
+      // … and a subsequent clean push supersedes it.
       useDashboardStore.getState().applyMessage({
         logMessages: [],
         activeExpectations: [],
@@ -78,6 +89,43 @@ describe('DashboardStore', () => {
         proxiedRequests: [],
       });
       expect(useDashboardStore.getState().error).toBeNull();
+    });
+
+    it('keeps the existing panels when an error-only message arrives (no data arrays)', () => {
+      // Seed all four panels.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [{ key: 'l1', value: {} }],
+        activeExpectations: [{ key: 'e1', value: {} }],
+        recordedRequests: [{ key: 'r1', value: {} }],
+        proxiedRequests: [{ key: 'p1', value: {} }],
+      });
+
+      // A filter that fails to deserialize server-side is pushed as `{"error": ...}`
+      // with NO data arrays — the panels must not be blanked.
+      useDashboardStore.getState().applyMessage({ error: 'invalid filter' } as WebSocketMessage);
+
+      const state = useDashboardStore.getState();
+      expect(state.logMessages).toHaveLength(1);
+      expect(state.activeExpectations).toHaveLength(1);
+      expect(state.recordedRequests).toHaveLength(1);
+      expect(state.proxiedRequests).toHaveLength(1);
+      expect(state.error).toBe('invalid filter');
+    });
+
+    it('does not wipe a user-action error on the next data push', () => {
+      // A user action (e.g. a failed "clear server") sets an error via setError.
+      useDashboardStore.getState().setError('Failed to clear server');
+
+      // A routine data push arrives ~1s later.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [{ key: 'l1', value: {} }],
+        activeExpectations: [],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+
+      // Only push-sourced errors auto-clear — the user-action error must persist.
+      expect(useDashboardStore.getState().error).toBe('Failed to clear server');
     });
 
     it('stays on get-started when the first data arrives (no auto-switch)', () => {
@@ -122,6 +170,86 @@ describe('DashboardStore', () => {
   });
 
   describe('reconcileByKey identity preservation', () => {
+    it('preserves the ARRAY identity for an identical push (no re-render churn)', () => {
+      const message: WebSocketMessage = {
+        logMessages: [{ key: 'l1', value: { messageParts: [] } }],
+        activeExpectations: [{ key: 'e1', value: { httpRequest: { path: '/a' } } }],
+        recordedRequests: [{ key: 'r1', value: { path: '/r' } }],
+        proxiedRequests: [{ key: 'p1', value: { path: '/p' } }],
+      };
+      // First push establishes the reconciled arrays.
+      useDashboardStore.getState().applyMessage(message);
+      const first = useDashboardStore.getState();
+      const firstLogs = first.logMessages;
+      const firstExpectations = first.activeExpectations;
+      const firstReceived = first.recordedRequests;
+      const firstProxied = first.proxiedRequests;
+
+      // A second, brand-new-but-semantically-identical push (the server re-sends
+      // the full list ~1/sec even when nothing changed).
+      useDashboardStore.getState().applyMessage({
+        logMessages: [{ key: 'l1', value: { messageParts: [] } }],
+        activeExpectations: [{ key: 'e1', value: { httpRequest: { path: '/a' } } }],
+        recordedRequests: [{ key: 'r1', value: { path: '/r' } }],
+        proxiedRequests: [{ key: 'p1', value: { path: '/p' } }],
+      });
+      const second = useDashboardStore.getState();
+
+      // The four array identities are preserved so a Zustand array selector can
+      // short-circuit and no subscribed panel re-renders.
+      expect(second.logMessages).toBe(firstLogs);
+      expect(second.activeExpectations).toBe(firstExpectations);
+      expect(second.recordedRequests).toBe(firstReceived);
+      expect(second.proxiedRequests).toBe(firstProxied);
+    });
+
+    it('returns a NEW array identity when any item changes', () => {
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { v: 1 } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const before = useDashboardStore.getState().activeExpectations;
+
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [{ key: 'e1', value: { v: 2 } }],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const after = useDashboardStore.getState().activeExpectations;
+      expect(after).not.toBe(before);
+    });
+
+    it('returns a NEW array identity when items are reordered', () => {
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [
+          { key: 'a', value: { v: 1 } },
+          { key: 'b', value: { v: 1 } },
+        ],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const before = useDashboardStore.getState().activeExpectations;
+
+      // Same items, opposite order — a reorder is a change even though every
+      // item is individually unchanged.
+      useDashboardStore.getState().applyMessage({
+        logMessages: [],
+        activeExpectations: [
+          { key: 'b', value: { v: 1 } },
+          { key: 'a', value: { v: 1 } },
+        ],
+        recordedRequests: [],
+        proxiedRequests: [],
+      });
+      const after = useDashboardStore.getState().activeExpectations;
+      expect(after).not.toBe(before);
+      expect(after.map((i) => i.key)).toEqual(['b', 'a']);
+    });
+
     it('keeps the previous object reference for an unchanged item across pushes', () => {
       // First push establishes the references.
       useDashboardStore.getState().applyMessage({
@@ -411,6 +539,46 @@ describe('DashboardStore', () => {
       expect(useDashboardStore.getState().themeMode).toBe('light');
       useDashboardStore.getState().toggleThemeMode();
       expect(useDashboardStore.getState().themeMode).toBe('dark');
+    });
+  });
+
+  describe('launchpad hand-off drafts', () => {
+    beforeEach(() => {
+      useDashboardStore.setState({
+        view: 'traffic',
+        selectedTrafficKey: 'req-1',
+        pendingVerificationDraft: null,
+        pendingChaosDraft: null,
+      });
+    });
+
+    it('setVerificationDraft stores the draft and navigates to the verification view', () => {
+      useDashboardStore.getState().setVerificationDraft({ method: 'POST', path: '/api/orders' });
+      const state = useDashboardStore.getState();
+      expect(state.pendingVerificationDraft).toEqual({ method: 'POST', path: '/api/orders' });
+      expect(state.view).toBe('verification');
+      // Navigating away clears the selected traffic row (like the other hand-offs).
+      expect(state.selectedTrafficKey).toBeNull();
+    });
+
+    it('clearPendingVerificationDraft resets the draft to null', () => {
+      useDashboardStore.getState().setVerificationDraft({ path: '/x' });
+      useDashboardStore.getState().clearPendingVerificationDraft();
+      expect(useDashboardStore.getState().pendingVerificationDraft).toBeNull();
+    });
+
+    it('setChaosDraft stores the scope and navigates to the chaos view', () => {
+      useDashboardStore.getState().setChaosDraft({ host: 'api.example.com', path: '/api/orders' });
+      const state = useDashboardStore.getState();
+      expect(state.pendingChaosDraft).toEqual({ host: 'api.example.com', path: '/api/orders' });
+      expect(state.view).toBe('chaos');
+      expect(state.selectedTrafficKey).toBeNull();
+    });
+
+    it('clearPendingChaosDraft resets the draft to null', () => {
+      useDashboardStore.getState().setChaosDraft({ host: 'api.example.com' });
+      useDashboardStore.getState().clearPendingChaosDraft();
+      expect(useDashboardStore.getState().pendingChaosDraft).toBeNull();
     });
   });
 });

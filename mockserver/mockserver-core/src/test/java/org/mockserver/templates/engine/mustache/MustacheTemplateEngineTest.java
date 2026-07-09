@@ -6,6 +6,7 @@ import org.hamcrest.Matcher;
 import org.junit.*;
 import org.junit.rules.ExpectedException;
 import org.mockserver.time.FixedTime;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.log.model.LogEntry;
@@ -37,12 +38,14 @@ import static org.hamcrest.Matchers.*;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.openMocks;
 import static org.mockserver.character.Character.NEW_LINE;
 import static org.mockserver.configuration.Configuration.configuration;
 import static org.mockserver.log.model.LogEntry.LogMessageType.TEMPLATE_GENERATED;
+import static org.mockserver.log.model.LogEntry.LogMessageType.TEMPLATE_GENERATION_FAILED;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
 import static org.mockserver.model.JsonBody.json;
@@ -132,6 +135,40 @@ public class MustacheTemplateEngineTest {
                     request
                 )
         );
+    }
+
+    @Test
+    public void shouldLogTemplateGenerationFailedWhenRenderedResponseIsNotAValidHttpResponse() {
+        // given - a template that renders valid JSON which is NOT a valid HttpResponse ("path" is a
+        // request-only field, so it fails HttpResponse schema validation with "is not defined in the schema")
+        String template = "{\"path\": \"{{ request.path }}\"}";
+        HttpRequest request = request()
+            .withPath("/api/orders/42")
+            .withMethod("GET");
+
+        // when
+        HttpResponse actualHttpResponse = new MustacheTemplateEngine(mockServerLogger, configuration)
+            .executeTemplate(template, request, HttpResponseDTO.class);
+
+        // then - no valid response could be produced, so the action degrades to its 404 fallback (null here)
+        assertThat(actualHttpResponse, is(nullValue()));
+
+        // and - the failure is logged as a properly-classified, request-correlated TEMPLATE_GENERATION_FAILED
+        // event (NOT an EXPECTATION_RESPONSE and NOT a generic ERROR) carrying the validation error text and
+        // the offending rendered output
+        ArgumentCaptor<LogEntry> logEntryCaptor = ArgumentCaptor.forClass(LogEntry.class);
+        verify(mockServerLogger, atLeastOnce()).logEvent(logEntryCaptor.capture());
+        LogEntry failure = logEntryCaptor.getAllValues().stream()
+            .filter(entry -> entry.getType() == TEMPLATE_GENERATION_FAILED)
+            .findFirst()
+            .orElse(null);
+        assertThat("expected a TEMPLATE_GENERATION_FAILED log event", failure, is(notNullValue()));
+        assertThat(failure.getLogLevel(), is(Level.ERROR));
+        assertThat(failure.getHttpRequest(), is(request));
+        String message = failure.getMessage();
+        assertThat(message, containsString("schema"));
+        assertThat(message, containsString("path"));
+        assertThat(message, containsString("/api/orders/42"));
     }
 
     @Test
@@ -1072,6 +1109,30 @@ public class MustacheTemplateEngineTest {
         assertThat("faker.name.firstName resolved to empty", body, not(containsString("'firstName': ''")));
         assertThat("faker.internet.emailAddress resolved to empty", body, not(containsString("'email': ''")));
         assertThat("email should contain @", body, containsString("@"));
+    }
+
+    @Test
+    public void shouldProduceDeterministicFakerOutputWhenTemplateFakerSeedSet() {
+        // given
+        String template = "{" + NEW_LINE +
+            "    'statusCode': 200," + NEW_LINE +
+            "    'body': \"{'firstName': '{{ faker.name.firstName }}', 'email': '{{ faker.internet.emailAddress }}'}\"" + NEW_LINE +
+            "}";
+        HttpRequest request = request().withPath("/somePath");
+
+        // when — two independent engines configured with the SAME non-zero seed
+        HttpResponse responseA = new MustacheTemplateEngine(mockServerLogger, configuration().templateFakerSeed(4242L)).executeTemplate(template, request, HttpResponseDTO.class);
+        HttpResponse responseB = new MustacheTemplateEngine(mockServerLogger, configuration().templateFakerSeed(4242L)).executeTemplate(template, request, HttpResponseDTO.class);
+        // and one engine configured with a DIFFERENT non-zero seed
+        HttpResponse responseC = new MustacheTemplateEngine(mockServerLogger, configuration().templateFakerSeed(9999L)).executeTemplate(template, request, HttpResponseDTO.class);
+        String bodyA = responseA.getBodyAsString();
+        String bodyB = responseB.getBodyAsString();
+        String bodyC = responseC.getBodyAsString();
+
+        // then — same seed reproduces byte-identical faker output; a different seed differs
+        assertThat("same seed must reproduce identical faker output", bodyA, is(bodyB));
+        assertThat("faker must have produced a value", bodyA, not(containsString("'firstName': ''")));
+        assertThat("different seed should produce different faker output", bodyC, not(is(bodyA)));
     }
 
     @Test

@@ -1,7 +1,7 @@
 ---
-title: Optimising AI / LLM Cost
+title: "Reduce LLM Cost<br/>(AI Agent Inference Optimisation)"
 shortTitle: LLM Cost Optimisation
-description: Proxy your AI agent's LLM calls through MockServer, then export a one-click optimisation brief (Markdown) or JSON bundle to find ways to cut inference cost — tighter prompts, prompt caching, fewer tool round-trips, and direct HTTP/MCP endpoints.
+description: "Proxy your AI agent's LLM calls through MockServer and export a one-click brief to cut inference cost: tighter prompts, prompt caching, fewer tool calls."
 layout: page
 pageOrder: 10
 section: 'AI & MCP'
@@ -10,7 +10,16 @@ sitemap:
   priority: 0.8
   changefreq: 'monthly'
   lastmod: 2026-06-19T12:00:00+00:00
-keywords: llm cost optimisation, ai cost reduction, prompt caching, token reduction, mockserver optimisation, llm proxy, inference cost, agent cost
+keywords: reduce llm cost, llm cost optimization, ai inference cost, prompt caching, token reduction, mockserver optimisation, llm proxy, agent cost
+schema_faq:
+  - question: "How can I reduce my LLM/AI inference costs?"
+    answer: "Proxy your AI agent's LLM calls through MockServer using the HTTPS_PROXY environment variable. Once traffic is captured, call GET /mockserver/llm/optimisationReport to get a structured analysis. MockServer computes nine deterministic signals — repeated system prompts, low cache-hit rates, oversized tool results, duplicate calls, and more — along with estimated USD savings for each. No LLM call is made; every number is computed locally from your captured traffic."
+  - question: "How do I find wasted tokens in my AI agent?"
+    answer: "After running your agent through the MockServer proxy, open the dashboard LLM Optimise screen or call the REST endpoint. MockServer analyses the captured calls and emits signals such as REPEATED_SYSTEM_PROMPT (same system prompt resent every turn), OVERSIZED_TOOL_RESULT (tool returned more than 1,000 tokens), and UNUSED_TOOL_SCHEMA (tool definitions sent but never invoked). Each signal includes the affected call indices and an estimated token and USD saving."
+  - question: "What is prompt caching and does it save money?"
+    answer: "Prompt caching lets providers store a repeated prompt prefix so subsequent calls do not pay full input-token rates for the static portion. MockServer detects when the same system prompt or large context block is resent across calls without caching enabled and flags it as REPEATED_SYSTEM_PROMPT or LOW_CACHE_HIT_RATE. For Anthropic, the optimisation report includes a ready-to-paste cache_control snippet. For OpenAI and Gemini, the fix guidance explains how to keep the static prefix byte-identical so automatic caching applies."
+  - question: "Can MockServer measure LLM cost?"
+    answer: "Yes. MockServer maintains a built-in provider pricing table and uses it to estimate the USD cost of every captured LLM call. Costs appear in the dashboard hero cards, the per-call table, and the optimisation report's verdict headline (e.g. '$1.42 recoverable'). Figures are directional estimates — the costIsEstimated field in the JSON bundle is true when the provider did not return real usage tokens and MockServer estimated them from decoded text."
 ---
 
 <p>
@@ -40,13 +49,7 @@ keywords: llm cost optimisation, ai cost reduction, prompt caching, token reduct
     <li><a href="#signals">Act on the detected opportunities</a> — nine signal types, each mapped to a concrete lever</li>
 </ol>
 
-```mermaid
-flowchart LR
-    A["AI Agent\n(e.g. Claude Code)"] -->|"HTTPS via proxy"| B["MockServer\n(captures traffic)"]
-    B -->|"forwards to"| C["LLM API\n(OpenAI, Anthropic…)"]
-    B -->|"GET /mockserver/llm/optimisationReport"| D["Optimisation Report\n(JSON bundle + Markdown brief + CSV)"]
-    D -->|"paste into"| E["Any LLM\n(cost-reduction advice)"]
-```
+<p style="width: 80%; margin: 1em auto;"><img src="../images/mockserver_llm_optimisation.png" alt="LLM cost optimisation flow: proxy the AI agent's LLM calls, record the traffic, request a brief, analyse the traffic, and export the optimisation brief." style="max-width:100%;"></p>
 
 <a id="proxy-setup" class="anchor" href="#proxy-setup">&nbsp;</a>
 
@@ -250,6 +253,30 @@ opencode run "summarise the README and suggest one improvement"</code></pre>
     <p>Returns <code class="code inline">text/csv; charset=utf-8</code> — a spreadsheet-friendly export with two sections: a per-call table (provider, model, input/output/cached/reasoning tokens, estimated cost, latency, tool-call count, finish reason) and a totals/verdict summary. Open it in a spreadsheet or feed it to a data pipeline.</p>
 </div>
 
+<button id="button_export_optimisation_rest_dataset" class="accordion">Eval / fine-tune / promptfoo dataset export</button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code"># OpenAI-evals JSONL (one {"input":[...],"ideal":"..."} sample per line)
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=openai-evals"
+
+# Chat fine-tune JSONL (one {"messages":[...]} conversation per line)
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=fine-tune"
+
+# promptfoo test suite (a single {"tests":[...]} JSON document)
+curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=promptfoo"</code></pre>
+    <p>Turn your captured LLM sessions into ready-to-use datasets for eval and fine-tune tooling. The prompt messages come from each captured request and the expected/ideal answer from the captured response. <strong>Redaction is on by default</strong> — every export runs through MockServer's redactor (Authorization / api-key headers, credential query parameters, and any configured body fields) and masks obvious secret shapes (e.g. <code class="code inline">sk-…</code>, AWS keys, bearer tokens) in message text, so nothing sensitive leaks into a dataset. The JSONL formats are served as <code class="code inline">application/x-ndjson</code>; promptfoo as <code class="code inline">application/json</code>.</p>
+</div>
+
+<button id="button_export_optimisation_rest_diff" class="accordion">Diff two agent runs</button>
+<div class="panel">
+<pre class="prettyprint lang-bash code"><code class="code">curl -s -X PUT "http://localhost:1080/mockserver/llm/diffRuns" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "before": {"session": "host:api.openai.com", "provider": "OPENAI"},
+        "after":  {"session": "host:api.openai.com", "provider": "OPENAI"}
+      }'</code></pre>
+    <p>Compare two recorded runs at the prompt level. MockServer reconstructs each run's conversation, normalises the prompts (so whitespace, JSON key ordering, and volatile ids/timestamps don't show up as changes), and reports what changed: message edits/additions/removals, tool calls added or removed, and the token/cost delta. Deterministic and read-only — no LLM is called. Message text is masked for secret shapes. Select each run with the same <code class="code inline">session</code>/<code class="code inline">host</code>/<code class="code inline">provider</code> filter used by the report.</p>
+</div>
+
 <button id="button_export_optimisation_rest_filtered" class="accordion">Filtered by host or provider</button>
 <div class="panel">
 <pre class="prettyprint lang-bash code"><code class="code"># Only OpenAI traffic
@@ -276,9 +303,9 @@ curl -s "http://localhost:1080/mockserver/llm/optimisationReport?format=markdown
     <tbody>
         <tr>
             <td><code class="code inline">format</code></td>
-            <td><code class="code inline">json</code> | <code class="code inline">markdown</code> | <code class="code inline">csv</code></td>
+            <td><code class="code inline">json</code> | <code class="code inline">markdown</code> | <code class="code inline">csv</code> | <code class="code inline">openai-evals</code> | <code class="code inline">fine-tune</code> | <code class="code inline">promptfoo</code></td>
             <td><code class="code inline">json</code></td>
-            <td>Output format. <code class="code inline">markdown</code> returns the pre-framed optimisation brief; <code class="code inline">json</code> returns the structured <code class="code inline">LlmOptimisationReport</code> bundle; <code class="code inline">csv</code> returns a per-call table plus a totals/verdict summary as <code class="code inline">text/csv</code>.</td>
+            <td>Output format. <code class="code inline">markdown</code> returns the pre-framed optimisation brief; <code class="code inline">json</code> returns the structured <code class="code inline">LlmOptimisationReport</code> bundle; <code class="code inline">csv</code> returns a per-call table plus a totals/verdict summary as <code class="code inline">text/csv</code>; <code class="code inline">openai-evals</code> and <code class="code inline">fine-tune</code> export the captured sessions as JSONL datasets; <code class="code inline">promptfoo</code> exports a promptfoo test-suite JSON document. All dataset exports are redacted by default.</td>
         </tr>
         <tr>
             <td><code class="code inline">session</code></td>

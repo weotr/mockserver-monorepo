@@ -10,7 +10,7 @@ import type {
 } from '../types';
 import { ACTION_TYPES, LLM_PROVIDERS } from '../lib/clientFilters';
 
-export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'performance' | 'metrics' | 'drift' | 'verification' | 'slo' | 'async' | 'grpc' | 'breakpoints' | 'contract' | 'cluster' | 'optimise' | 'get-started';
+export type ViewMode = 'dashboard' | 'traffic' | 'sessions' | 'composer' | 'library' | 'chaos' | 'performance' | 'metrics' | 'drift' | 'verification' | 'slo' | 'async' | 'grpc' | 'breakpoints' | 'contract' | 'cluster' | 'optimise' | 'mcp-health' | 'scenarios' | 'audit' | 'get-started';
 
 /** Map legacy/removed ViewMode values to their replacement. */
 const VIEW_MIGRATION: Record<string, ViewMode> = {
@@ -21,7 +21,7 @@ const VIEW_MIGRATION: Record<string, ViewMode> = {
 export const ALL_VIEWS: readonly ViewMode[] = [
   'dashboard', 'traffic', 'sessions', 'composer', 'library', 'chaos', 'performance',
   'metrics', 'drift', 'verification', 'slo', 'async', 'grpc', 'breakpoints', 'contract',
-  'cluster', 'optimise', 'get-started',
+  'cluster', 'optimise', 'mcp-health', 'scenarios', 'audit', 'get-started',
 ];
 
 const VIEW_STORAGE_KEY = 'mockserver-view';
@@ -159,6 +159,27 @@ const proxiedRequestsCache: ReconcileCache = new Map();
  * entry is unchanged we return — and keep cached — the previous reference and
  * its string; when it changes we cache the new string. Keys absent from `next`
  * are pruned so the cache cannot grow unbounded.
+ *
+ * ARRAY identity (L1): when the reconciled result is element-for-element
+ * identical to `prev` (same references, same order, same length) we return the
+ * ORIGINAL `prev` array rather than the freshly-mapped copy. The server re-sends
+ * the full list roughly once a second even when nothing has changed; without
+ * this, every push replaced all four array identities and re-rendered every
+ * subscribed panel (and invalidated every `useMemo([array])` downstream) for no
+ * visible change. Returning `prev` lets a Zustand selector on the array short-
+ * circuit the whole subtree. The cache is left untouched in this case because it
+ * is already valid for the preserved references.
+ *
+ * Serialization cost (L2): the dominant cost is `JSON.stringify(n)` on each new
+ * entry, which is irreducible for a structural change-detection compare without
+ * a protocol change (the server would have to send a per-entry hash/version) —
+ * explicitly out of scope. The only safe, clear pre-`stringify` discriminator
+ * across these heterogeneous entry shapes is reference identity, so we check
+ * `p === n` FIRST and reuse the cached string for that reference instead of
+ * re-serializing it. No speculative field-level discriminator is added: the
+ * measured throughput win comes from L1 (skipping re-renders on idle re-pushes),
+ * not from trying to eliminate a stringify that is genuinely needed whenever an
+ * entry's content actually differs.
  */
 function reconcileByKey<T extends { key: string }>(prev: T[], next: T[], cache: ReconcileCache): T[] {
   if (next.length === 0) {
@@ -172,18 +193,27 @@ function reconcileByKey<T extends { key: string }>(prev: T[], next: T[], cache: 
   }
   const prevByKey = new Map(prev.map((p) => [p.key, p] as const));
   const nextCache: ReconcileCache = new Map();
-  const result = next.map((n) => {
+  // Tracks whether the reconciled array diverges from `prev` in any position
+  // (different length, a new/changed entry, or a reorder). Stays false only when
+  // every element is the SAME reference at the SAME index as in `prev`.
+  let changed = next.length !== prev.length;
+  const result = next.map((n, i) => {
     const p = prevByKey.get(n.key);
     if (!p) {
+      changed = true;
       nextCache.set(n.key, { ref: n, str: JSON.stringify(n) });
       return n;
     }
-    const nStr = JSON.stringify(n);
     if (p === n) {
-      // Same reference already held; no identity to preserve, but keep it cached.
-      nextCache.set(n.key, { ref: n, str: nStr });
+      // Same reference already held — reuse its cached string (only when it was
+      // recorded for THIS reference) instead of re-serializing an unchanged entry.
+      const cached = cache.get(n.key);
+      const str = cached && cached.ref === n ? cached.str : JSON.stringify(n);
+      nextCache.set(n.key, { ref: n, str });
+      if (prev[i] !== n) changed = true; // same ref but reordered
       return n;
     }
+    const nStr = JSON.stringify(n);
     // Trust the cached string only when it was recorded for *this* reference;
     // otherwise (cold/stale cache after a direct setState) re-serialize `p`.
     const cached = cache.get(n.key);
@@ -191,11 +221,19 @@ function reconcileByKey<T extends { key: string }>(prev: T[], next: T[], cache: 
     if (pStr === nStr) {
       // Semantically unchanged — preserve the previous reference and its string.
       nextCache.set(n.key, { ref: p, str: pStr });
+      if (prev[i] !== p) changed = true; // preserved ref but reordered
       return p;
     }
+    changed = true;
     nextCache.set(n.key, { ref: n, str: nStr });
     return n;
   });
+  if (!changed) {
+    // Element-for-element identical to `prev`: keep the previous array identity
+    // so subscribed panels skip re-rendering. The existing cache already holds
+    // valid { ref, str } entries for these preserved references, so leave it.
+    return prev;
+  }
   cache.clear();
   for (const [k, v] of nextCache) cache.set(k, v);
   return result;
@@ -226,6 +264,16 @@ interface DashboardState {
   logShowForwarded: boolean;
 
   error: string | null;
+
+  /**
+   * Where the current {@link error} came from, so a data push only supersedes a
+   * banner it is entitled to. `'push'` = carried in a WebSocket message
+   * (`message.error`); `'client'` = set locally via {@link setError} (a
+   * user-action failure such as a failed clear, a parse failure, or a
+   * connection-lost notice). A clean data push clears a `'push'` error but must
+   * leave a `'client'` error standing until it is dismissed or superseded.
+   */
+  errorSource: 'push' | 'client' | null;
 
   /** Transient toast/snackbar for action feedback (success/info/warning/error). */
   notification: { message: string; severity: 'success' | 'info' | 'warning' | 'error' } | null;
@@ -272,6 +320,30 @@ interface DashboardState {
   setBreakpointPrefill: (prefill: { method?: string; path?: string }) => void;
   /** Clear the pending breakpoint prefill (called by the panel once consumed). */
   clearPendingBreakpointPrefill: () => void;
+
+  /**
+   * Pre-filled method/path to seed the Verification form, set when the user
+   * picks "Verify This Request" from a flow's Create-From menu. Consumed (and
+   * cleared) by VerificationView once it has applied it to the single-request
+   * matcher. Defaults elsewhere (times mode "atLeast", count 1) are the form's.
+   */
+  pendingVerificationDraft: { method?: string; path?: string } | null;
+  /** Seed the verification form from a request and switch to that view. */
+  setVerificationDraft: (prefill: { method?: string; path?: string }) => void;
+  /** Clear the pending verification draft (called by the view once consumed). */
+  clearPendingVerificationDraft: () => void;
+
+  /**
+   * Pre-filled scope (host and/or path) to seed the HTTP chaos rule form, set
+   * when the user picks "Add Chaos For This Host/Path" from a flow's
+   * Create-From menu. Consumed (and cleared) by ServiceChaosPanel once it has
+   * applied it to the register form and expanded that card.
+   */
+  pendingChaosDraft: { host?: string; path?: string } | null;
+  /** Seed the HTTP chaos form scope from a request and switch to that view. */
+  setChaosDraft: (prefill: { host?: string; path?: string }) => void;
+  /** Clear the pending chaos draft (called by the panel once consumed). */
+  clearPendingChaosDraft: () => void;
 
   applyMessage: (message: WebSocketMessage) => void;
   clearUI: () => void;
@@ -343,6 +415,7 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
   logShowForwarded: true,
 
   error: null,
+  errorSource: null,
   notification: null,
 
   debugMismatchOpen: false,
@@ -360,6 +433,8 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
 
   pendingEditExpectation: null,
   pendingBreakpointPrefill: null,
+  pendingVerificationDraft: null,
+  pendingChaosDraft: null,
 
   actionTypeFilter: [],
   llmProviderFilter: [],
@@ -378,13 +453,39 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
     // on (the initial view is 'get-started') until they navigate themselves.
     // We deliberately do NOT auto-advance to the dashboard when the first data
     // arrives — landing on Get Started should be sticky.
-    set((s) => ({
-      logMessages: reconcileByKey(s.logMessages, message.logMessages ?? [], logMessagesCache),
-      activeExpectations: reconcileByKey(s.activeExpectations, message.activeExpectations ?? [], activeExpectationsCache),
-      recordedRequests: reconcileByKey(s.recordedRequests, message.recordedRequests ?? [], recordedRequestsCache),
-      proxiedRequests: reconcileByKey(s.proxiedRequests, message.proxiedRequests ?? [], proxiedRequestsCache),
-      error: message.error ?? null,
-    })),
+    set((s) => {
+      // Reconcile only the arrays actually present in this push. An error-only
+      // message (e.g. a filter that failed to deserialize server-side arrives as
+      // `{"error": "..."}` with no data arrays) must NOT blank the four panels —
+      // an absent field keeps the previous array untouched until the next
+      // event-driven push replaces it.
+      const next = {
+        logMessages: message.logMessages !== undefined
+          ? reconcileByKey(s.logMessages, message.logMessages, logMessagesCache)
+          : s.logMessages,
+        activeExpectations: message.activeExpectations !== undefined
+          ? reconcileByKey(s.activeExpectations, message.activeExpectations, activeExpectationsCache)
+          : s.activeExpectations,
+        recordedRequests: message.recordedRequests !== undefined
+          ? reconcileByKey(s.recordedRequests, message.recordedRequests, recordedRequestsCache)
+          : s.recordedRequests,
+        proxiedRequests: message.proxiedRequests !== undefined
+          ? reconcileByKey(s.proxiedRequests, message.proxiedRequests, proxiedRequestsCache)
+          : s.proxiedRequests,
+      };
+      if (message.error != null) {
+        // A push carried an error — record that it came from a push so a later
+        // clean push may clear it.
+        return { ...next, error: message.error, errorSource: 'push' as const };
+      }
+      if (s.errorSource === 'push') {
+        // The standing banner was itself set by a push; a clean push supersedes it.
+        return { ...next, error: null, errorSource: null };
+      }
+      // A user-action / connection error (set via setError) survives the push —
+      // it stays until dismissed or explicitly superseded.
+      return next;
+    }),
 
   clearUI: () => {
     logMessagesCache.clear();
@@ -404,7 +505,10 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
       selectedTrafficKey: null,
       pendingEditExpectation: null,
       pendingBreakpointPrefill: null,
+      pendingVerificationDraft: null,
+      pendingChaosDraft: null,
       error: null,
+      errorSource: null,
       notification: null,
       view: 'get-started' as ViewMode,
 
@@ -484,7 +588,20 @@ export const useDashboardStore = create<DashboardState>()((set) => ({
     set({ pendingBreakpointPrefill: prefill, view: 'breakpoints' as ViewMode, selectedTrafficKey: null });
   },
   clearPendingBreakpointPrefill: () => set({ pendingBreakpointPrefill: null }),
-  setError: (error) => set({ error }),
+  setVerificationDraft: (prefill) => {
+    persistView('verification');
+    set({ pendingVerificationDraft: prefill, view: 'verification' as ViewMode, selectedTrafficKey: null });
+  },
+  clearPendingVerificationDraft: () => set({ pendingVerificationDraft: null }),
+  setChaosDraft: (prefill) => {
+    persistView('chaos');
+    set({ pendingChaosDraft: prefill, view: 'chaos' as ViewMode, selectedTrafficKey: null });
+  },
+  clearPendingChaosDraft: () => set({ pendingChaosDraft: null }),
+  // A locally-set error (failed clear, parse failure, connection-lost notice) is
+  // tagged 'client' so a subsequent data push cannot silently wipe it — it stays
+  // until the user dismisses it or a later setError/push supersedes it.
+  setError: (error) => set({ error, errorSource: error != null ? 'client' : null }),
   setNotification: (notification) => set({ notification }),
   openDebugMismatch: (result) =>
     set({ debugMismatchOpen: true, debugMismatchResult: result, debugMismatchLoading: false, debugMismatchError: null }),

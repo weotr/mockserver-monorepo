@@ -90,14 +90,60 @@ public class LogEntry implements EventTranslator<LogEntry> {
     private Throwable throwable;
     private Runnable consumer;
     private boolean deleted = false;
+    // Transient marker set on entries injected back into the log by the recorded-traffic re-import
+    // path ({@code PUT /mockserver/import?format=recording}). It tells MockServerEventLog.processLogEntry
+    // NOT to hand the entry to the recorded-request disk consumer, so re-loading an archive does not
+    // append the same exchanges back to the (possibly same) NDJSON file and grow it without bound.
+    private transient boolean skipRecordedRequestPersistence = false;
 
     private String messageFormat;
     private String message;
     private Object[] arguments;
     private String because;
+    /**
+     * Memoized estimate of the heap retained by the stable primary request/response bodies of this
+     * entry, used as the weight by the byte-budget eviction in {@link org.mockserver.collections.CircularConcurrentLinkedDeque}.
+     * Lazily computed once and cached so the weight is identical at add-time and at evict-time (the
+     * deque recomputes the weight when it evicts). {@code -1} means "not yet computed".
+     */
+    private transient long estimatedHeapSize = -1;
 
     public LogEntry() {
 
+    }
+
+    /**
+     * Stable lower-bound estimate of the bytes this entry retains on the heap, counting only the
+     * primary request/response body bytes (the dominant cost for large LLM-capture exchanges). It
+     * deliberately ignores the lazily-derived {@code httpUpdated*} copies and the {@code arguments}
+     * array so the value never changes after the entry is built — the byte-budget eviction relies on
+     * the add-time weight matching the evict-time weight exactly. Reads the {@code httpRequests} field
+     * directly (not {@link #getHttpRequests()}, which substitutes a default request when unset).
+     */
+    @JsonIgnore
+    public long estimatedHeapSize() {
+        if (estimatedHeapSize < 0) {
+            long size = 0;
+            RequestDefinition[] reqs = this.httpRequests;
+            if (reqs != null) {
+                for (RequestDefinition rd : reqs) {
+                    if (rd instanceof HttpRequest) {
+                        byte[] b = ((HttpRequest) rd).getBodyAsRawBytes();
+                        if (b != null) {
+                            size += b.length;
+                        }
+                    }
+                }
+            }
+            if (httpResponse != null) {
+                byte[] b = httpResponse.getBodyAsRawBytes();
+                if (b != null) {
+                    size += b.length;
+                }
+            }
+            estimatedHeapSize = size;
+        }
+        return estimatedHeapSize;
     }
 
     private LogEntry setId(String id) {
@@ -133,10 +179,12 @@ public class LogEntry implements EventTranslator<LogEntry> {
         throwable = null;
         consumer = null;
         deleted = false;
+        skipRecordedRequestPersistence = false;
         messageFormat = null;
         message = null;
         arguments = null;
         because = null;
+        estimatedHeapSize = -1;
     }
 
     public Level getLogLevel() {
@@ -440,6 +488,16 @@ public class LogEntry implements EventTranslator<LogEntry> {
         return this;
     }
 
+    @JsonIgnore
+    public boolean isSkipRecordedRequestPersistence() {
+        return skipRecordedRequestPersistence;
+    }
+
+    public LogEntry setSkipRecordedRequestPersistence(boolean skipRecordedRequestPersistence) {
+        this.skipRecordedRequestPersistence = skipRecordedRequestPersistence;
+        return this;
+    }
+
     public String getMessageFormat() {
         return messageFormat;
     }
@@ -633,7 +691,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
             .setBecause(getBecause())
             .setThrowable(getThrowable())
             .setConsumer(getConsumer())
-            .setDeleted(isDeleted());
+            .setDeleted(isDeleted())
+            .setSkipRecordedRequestPersistence(isSkipRecordedRequestPersistence());
     }
 
     @Override
@@ -656,7 +715,8 @@ public class LogEntry implements EventTranslator<LogEntry> {
             .setBecause(getBecause())
             .setThrowable(getThrowable())
             .setConsumer(getConsumer())
-            .setDeleted(isDeleted());
+            .setDeleted(isDeleted())
+            .setSkipRecordedRequestPersistence(isSkipRecordedRequestPersistence());
         clear();
     }
 
@@ -736,11 +796,17 @@ public class LogEntry implements EventTranslator<LogEntry> {
         TEMPLATE_GENERATED,
         SERVER_CONFIGURATION,
         AUTHENTICATION_FAILED,
+        // A matched response/forward template rendered output that could not be turned into a valid
+        // HttpResponse/HttpRequest (failed JSON-schema validation, or threw while transforming). The
+        // action then degrades to a 404 fallback; this distinct type makes that failure visible and
+        // request-correlated instead of being buried as a generic ERROR while the 404 is logged as a
+        // success-looking EXPECTATION_RESPONSE. Counterpart to TEMPLATE_GENERATED.
+        TEMPLATE_GENERATION_FAILED,
     }
 
     public enum LogMessageTypeCategory {
         MATCHING(LogMessageType.EXPECTATION_MATCHED, LogMessageType.EXPECTATION_NOT_MATCHED, LogMessageType.NO_MATCH_RESPONSE),
-        REQUEST_LIFECYCLE(LogMessageType.RECEIVED_REQUEST, LogMessageType.FORWARDED_REQUEST, LogMessageType.EXPECTATION_RESPONSE, LogMessageType.TEMPLATE_GENERATED),
+        REQUEST_LIFECYCLE(LogMessageType.RECEIVED_REQUEST, LogMessageType.FORWARDED_REQUEST, LogMessageType.EXPECTATION_RESPONSE, LogMessageType.TEMPLATE_GENERATED, LogMessageType.TEMPLATE_GENERATION_FAILED),
         EXPECTATION_MANAGEMENT(LogMessageType.CREATED_EXPECTATION, LogMessageType.UPDATED_EXPECTATION, LogMessageType.REMOVED_EXPECTATION, LogMessageType.CLEARED),
         VERIFICATION(LogMessageType.VERIFICATION, LogMessageType.VERIFICATION_FAILED, LogMessageType.VERIFICATION_PASSED, LogMessageType.RETRIEVED),
         SERVER(LogMessageType.SERVER_CONFIGURATION, LogMessageType.AUTHENTICATION_FAILED, LogMessageType.OPENAPI_REQUEST_VALIDATION_FAILED, LogMessageType.OPENAPI_RESPONSE_VALIDATION_FAILED),

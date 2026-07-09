@@ -2,11 +2,16 @@ package org.mockserver.mock.action.http;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.configuration.ConfigurationProperties;
+import org.mockserver.llm.LlmContentFilterBodies;
 import org.mockserver.llm.LlmErrorBodies;
 import org.mockserver.llm.LlmErrorBody;
 import org.mockserver.llm.LlmQuotaRegistry;
 import org.mockserver.llm.LlmRateLimitHeaders;
+import org.mockserver.llm.OpenAiModerationBodies;
+import org.mockserver.llm.OpenAiResponsesStore;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.ProviderCodecRegistry;
@@ -99,6 +104,15 @@ public class HttpLlmResponseActionHandler {
         ProviderCodec codecInstance = codec.get();
 
         try {
+            // Moderation path (OpenAI POST /v1/moderations) — a flagged/not-flagged verdict.
+            if (httpLlmResponse.getModeration() != null) {
+                String body = OpenAiModerationBodies.encode(httpLlmResponse.getModeration());
+                return response()
+                    .withStatusCode(200)
+                    .withHeader("content-type", "application/json")
+                    .withBody(body);
+            }
+
             // Embedding path
             if (httpLlmResponse.getEmbedding() != null) {
                 String inputText = extractInputFromRequest(request);
@@ -115,10 +129,12 @@ public class HttpLlmResponseActionHandler {
             Completion completion = withInferredUsageIfEnabled(httpLlmResponse.getCompletion(), codecInstance, request);
             if (completion != null && !Boolean.TRUE.equals(completion.getStreaming())) {
                 HttpResponse encoded = codecInstance.encode(completion, model);
+                applyAzureContentFilterAnnotations(encoded, provider, httpLlmResponse.getContentFilter());
                 validateStructuredOutput(completion, encoded, provider, request);
                 applyRateLimitHeaders(encoded, provider, false, httpLlmResponse.getChaos());
                 org.mockserver.telemetry.GenAiSpans.recordCompletion(provider, model, completion);
                 HttpActionHandler.recordLlmUsageMetrics(provider, model, completion);
+                recordOpenAiResponsesStateIfApplicable(provider, codecInstance, request, completion, encoded);
                 return encoded;
             }
 
@@ -167,6 +183,33 @@ public class HttpLlmResponseActionHandler {
                 .withStatusCode(502)
                 .withBody("{\"error\":\"llm codec encode failed\",\"provider\":\"" + provider.name() + "\"}");
         }
+    }
+
+    /**
+     * For a served {@link Provider#OPENAI_RESPONSES} completion, record the issued
+     * response in {@link OpenAiResponsesStore} so it can be chained (via a later request's
+     * {@code previous_response_id}) or retrieved ({@code GET /v1/responses/{id}}). No-op
+     * for every other provider and when the request sets {@code store:false}. Fail-soft
+     * (any error is swallowed inside the store) so it can never affect the served response.
+     */
+    private void recordOpenAiResponsesStateIfApplicable(Provider provider, ProviderCodec codec,
+                                                        HttpRequest request, Completion completion,
+                                                        HttpResponse encoded) {
+        if (provider != Provider.OPENAI_RESPONSES) {
+            return;
+        }
+        String requestBody = request != null ? request.getBodyAsString() : null;
+        // decode() returns the fully-chained conversation (prior turns already prepended
+        // when the request carried a previous_response_id), so the stored record captures
+        // the entire dialogue as of this turn.
+        ParsedConversation chained;
+        try {
+            chained = codec.decode(request);
+        } catch (Exception e) {
+            chained = ParsedConversation.empty();
+        }
+        OpenAiResponsesStore.getInstance().recordIfStored(
+            requestBody, chained, completion, encoded.getBodyAsString());
     }
 
     static final String STRUCTURED_OUTPUT_INVALID_HEADER = "x-mockserver-structured-output-invalid";
@@ -393,6 +436,19 @@ public class HttpLlmResponseActionHandler {
         HttpResponse quotaError = quotaErrorResponseOrNull(chaos, requestTokens, httpLlmResponse.getProvider());
         if (quotaError != null) {
             return quotaError;
+        }
+        // Content-filter block (probabilistic, seeded-deterministic, shares seed) takes
+        // priority over the generic probabilistic error: it emits the PROVIDER-CORRECT
+        // content-filter response (OpenAI 400 content_filter, Azure filtered innererror,
+        // Anthropic refusal, Gemini SAFETY) so agent guardrail-handling can be exercised.
+        if (chaos.getContentFilterBlockProbability() != null
+            && ChaosProbability.shouldInject(chaos.getContentFilterBlockProbability(), chaos.getSeed())) {
+            LlmContentFilterBodies.Block block =
+                LlmContentFilterBodies.blockFor(httpLlmResponse.getProvider(), httpLlmResponse.getContentFilter());
+            return response()
+                .withStatusCode(block.getStatusCode())
+                .withHeader("content-type", "application/json")
+                .withBody(block.getJsonBody());
         }
         // The probabilistic error fires when an errorStatus is set, OR when only an
         // errorKind is declared (the provider's natural status then supplies the code).
@@ -694,6 +750,58 @@ public class HttpLlmResponseActionHandler {
             result.add(SseEvent.sseEvent().withData("{\"malformed\":true"));
         }
         return result;
+    }
+
+    /**
+     * Add Azure OpenAI content-filter annotations to a non-streaming Azure response:
+     * {@code content_filter_results} on each {@code choices[]} entry and a top-level
+     * {@code prompt_filter_results} array. No-op unless the provider is
+     * {@link Provider#AZURE_OPENAI} and a {@link LlmContentFilter} is configured. Fail-soft:
+     * any parse/serialize error leaves the response body unchanged so annotations can never
+     * break the response.
+     */
+    void applyAzureContentFilterAnnotations(HttpResponse encoded, Provider provider, LlmContentFilter contentFilter) {
+        if (encoded == null || provider != Provider.AZURE_OPENAI || contentFilter == null) {
+            return;
+        }
+        String body = encoded.getBodyAsString();
+        if (body == null || body.isEmpty()) {
+            return;
+        }
+        try {
+            JsonNode parsed = OBJECT_MAPPER.readTree(body);
+            if (parsed == null || !parsed.isObject()) {
+                return;
+            }
+            ObjectNode root = (ObjectNode) parsed;
+            // Per-choice content_filter_results (a fresh node per choice so trees are not shared).
+            JsonNode choices = root.get("choices");
+            if (choices != null && choices.isArray()) {
+                for (JsonNode choice : choices) {
+                    if (choice.isObject()) {
+                        ((ObjectNode) choice).set("content_filter_results", LlmContentFilterBodies.azureFilterResults(contentFilter));
+                    }
+                }
+            }
+            // Top-level prompt_filter_results: [{"prompt_index":0,"content_filter_results":{..}}].
+            ArrayNode promptFilterResults = root.putArray("prompt_filter_results");
+            ObjectNode promptEntry = promptFilterResults.addObject();
+            promptEntry.put("prompt_index", 0);
+            promptEntry.set("content_filter_results", LlmContentFilterBodies.azureFilterResults(contentFilter));
+
+            encoded.withBody(OBJECT_MAPPER.writeValueAsString(root));
+        } catch (Exception e) {
+            // fail-soft: leave the response body unchanged
+            if (mockServerLogger.isEnabledForInstance(Level.WARN)) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(EXPECTATION_RESPONSE)
+                        .setLogLevel(Level.WARN)
+                        .setMessageFormat("could not add Azure content-filter annotations — leaving response unchanged:{}")
+                        .setArguments(e.getMessage())
+                );
+            }
+        }
     }
 
     /**

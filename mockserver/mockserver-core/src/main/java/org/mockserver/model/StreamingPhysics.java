@@ -8,6 +8,7 @@ public class StreamingPhysics extends ObjectWithJsonToString {
     private Integer tokensPerSecond;
     private Double jitter;
     private Long seed;
+    private Boolean subwordStreaming;
 
     public static StreamingPhysics streamingPhysics() {
         return new StreamingPhysics();
@@ -59,6 +60,27 @@ public class StreamingPhysics extends ObjectWithJsonToString {
         return seed;
     }
 
+    /**
+     * Controls streaming delta granularity. Subword-sized deltas (a lightweight
+     * BPE approximation, see {@code org.mockserver.llm.TokenCounter}) are now the
+     * <strong>default</strong>: leaving this unset ({@code null}) — or setting it
+     * {@code true} — emits finer, more realistic per-token deltas. Set it explicitly
+     * to {@code false} to opt back into the legacy whole-word (whitespace-boundary)
+     * splitting. The per-event timing math is unchanged — each delta is still one
+     * physics event — so subword mode simply produces more, smaller events, closer
+     * to a real provider's per-token stream (and therefore a slightly longer total
+     * stream duration for the same {@code tokensPerSecond}).
+     */
+    public StreamingPhysics withSubwordStreaming(Boolean subwordStreaming) {
+        this.subwordStreaming = subwordStreaming;
+        this.hashCode = 0;
+        return this;
+    }
+
+    public Boolean getSubwordStreaming() {
+        return subwordStreaming;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -74,13 +96,14 @@ public class StreamingPhysics extends ObjectWithJsonToString {
         return Objects.equals(timeToFirstToken, that.timeToFirstToken) &&
             Objects.equals(tokensPerSecond, that.tokensPerSecond) &&
             Objects.equals(jitter, that.jitter) &&
-            Objects.equals(seed, that.seed);
+            Objects.equals(seed, that.seed) &&
+            Objects.equals(subwordStreaming, that.subwordStreaming);
     }
 
     @Override
     public int hashCode() {
         if (hashCode == 0) {
-            hashCode = Objects.hash(timeToFirstToken, tokensPerSecond, jitter, seed);
+            hashCode = Objects.hash(timeToFirstToken, tokensPerSecond, jitter, seed, subwordStreaming);
         }
         return hashCode;
     }

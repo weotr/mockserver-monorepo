@@ -52,6 +52,11 @@ public class Metrics {
     // number of distinct upstream hosts forwarded to (NOT the full URL/path).
     private static volatile Histogram forwardRequestDurationSeconds;
     private static volatile Counter forwardRequestsTotal;
+    // Protocol actually negotiated to the upstream on each forward/proxy connection (http2 via ALPN vs
+    // http1_1), labeled by upstream host — lets operators confirm whether forwardProxyHttp2Upgrade is
+    // taking effect, since a forward stuck on http1_1 to a backend that withholds its streaming SSE head
+    // over HTTP/1.1 is the classic cause of a high forward time-to-first-byte.
+    private static volatile Counter forwardUpstreamProtocolTotal;
     // Counter for HTTP chaos faults injected (error or latency). Null until metrics are enabled.
     private static volatile Counter httpChaosInjectedTotal;
     /**
@@ -64,6 +69,26 @@ public class Metrics {
      */
     static final java.util.List<String> CHAOS_FAULT_TYPES =
         java.util.List.of("drop", "error", "latency", "truncate", "malformed", "slow", "quota", "graphql", "rateLimit");
+    /**
+     * The five genuinely-monotonic {@link Name} counts that ALSO dual-publish a proper Prometheus
+     * {@link Counter}, mapped to that counter's registration name. The Prometheus client appends the
+     * mandatory {@code _total} suffix, so e.g. {@code mock_server_requests_received} is scraped as
+     * {@code mock_server_requests_received_total}. The legacy {@code *_count} gauges (registered from
+     * the {@link Name} enum) are retained unchanged for back-compat; these counters are the series to
+     * use for {@code rate()}/{@code increase()}. Single source of truth for the constructor
+     * registration, the {@link #increment(Name)} mirror, and the {@link OtelMetricsExporter} OTLP
+     * mirror, so the three can never drift. Insertion-ordered for deterministic registration/export.
+     */
+    static final Map<Name, String> MONOTONIC_TOTAL_COUNTER_NAMES;
+    static {
+        Map<Name, String> names = new LinkedHashMap<>();
+        names.put(Name.REQUESTS_RECEIVED_COUNT, "mock_server_requests_received");
+        names.put(Name.EXPECTATIONS_NOT_MATCHED_COUNT, "mock_server_expectations_not_matched");
+        names.put(Name.RESPONSE_EXPECTATIONS_MATCHED_COUNT, "mock_server_response_expectations_matched");
+        names.put(Name.FORWARD_EXPECTATIONS_MATCHED_COUNT, "mock_server_forward_expectations_matched");
+        names.put(Name.LLM_CHAOS_INJECTED_COUNT, "mock_server_llm_chaos_injected");
+        MONOTONIC_TOTAL_COUNTER_NAMES = Collections.unmodifiableMap(names);
+    }
     // Counter for chaos auto-halt events. Null until metrics are enabled.
     private static volatile Counter chaosAutoHaltTotal;
     // Counter for MCP tool calls, labeled by tool name. Null until metrics are enabled.
@@ -88,6 +113,14 @@ public class Metrics {
     // expectations, but operators with very large or churning expectation sets should
     // leave this off. See docs/code/metrics.md.
     private static volatile Counter expectationMatchedTotal;
+    // Dual-published proper Prometheus Counters for the five genuinely-monotonic *_count gauges
+    // (requests received, not-matched, response/forward matched, LLM chaos injected). Registered
+    // ALONGSIDE — never instead of — the legacy _count gauges: the gauges keep their exact names for
+    // the dashboard UI + Grafana back-compat, while these counters expose the proper _total series so
+    // PromQL rate()/increase() work correctly. Keyed by Name; each counter's exposition name is the
+    // map value + the client-forced "_total" suffix (see MONOTONIC_TOTAL_COUNTER_NAMES). Empty until
+    // metrics are enabled, so an increment on the request hot path pays only a cheap map lookup.
+    private static final Map<Name, Counter> monotonicTotalCounters = new ConcurrentHashMap<>();
     // Supplier of active expectations, set by HttpState at startup so the
     // expectations-by-type GaugeWithCallback can read live state at scrape time
     // without a core->netty dependency.
@@ -128,6 +161,7 @@ public class Metrics {
     private static volatile Counter loadIterationsTotal;     // labels: scenario, run_id
     private static volatile Counter loadThrottledTotal;      // labels: scenario, run_id, reason
     private static volatile Counter loadErrorsTotal;         // labels: scenario, run_id, kind
+    private static volatile Counter loadChecksTotal;         // labels: scenario, run_id, step, outcome
     // GaugeWithCallback live readers, installed by the orchestrator while a run is active.
     private static final AtomicReference<Supplier<Map<LoadGaugeKey, Integer>>> loadActiveVusReader = new AtomicReference<>();
     private static final AtomicReference<Supplier<Map<LoadGaugeKey, Integer>>> loadInflightReader = new AtomicReference<>();
@@ -139,6 +173,7 @@ public class Metrics {
     private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadIterations;
     private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadThrottled;
     private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadErrors;
+    private static volatile io.opentelemetry.api.metrics.LongCounter otelLoadChecks;
 
     private final Boolean metricsEnabled;
 
@@ -150,6 +185,15 @@ public class Metrics {
                     PrometheusRegistry.defaultRegistry.register(new BuildInfoCollector());
                     PrometheusRegistry.defaultRegistry.register(new JvmMetricsCollector());
                     Arrays.stream(Name.values()).forEach(Metrics::getOrCreate);
+                    // Dual-publish a proper Counter for each of the five monotonic counts alongside
+                    // the legacy _count gauge registered just above. Non-breaking: the gauges are
+                    // untouched (dashboard UI + Grafana keep working); these add the _total series
+                    // that rate()/increase() need. Incremented in lock-step by increment(Name).
+                    MONOTONIC_TOTAL_COUNTER_NAMES.forEach((name, counterName) ->
+                        monotonicTotalCounters.put(name, Counter.builder()
+                            .name(counterName)
+                            .help(name.description + " (monotonic counter; use rate()/increase() on this _total series)")
+                            .register()));
                     requestDurationSeconds = Histogram.builder()
                         .name("mock_server_request_duration_seconds")
                         .help("MockServer request handling duration in seconds")
@@ -175,6 +219,11 @@ public class Metrics {
                         .name("mock_server_forward_requests")
                         .help("Total forwarded/proxied requests by upstream host and response status class")
                         .labelNames("upstream_host", "status_class")
+                        .register();
+                    forwardUpstreamProtocolTotal = Counter.builder()
+                        .name("mock_server_forward_upstream_protocol")
+                        .help("Total forward/proxy upstream connections by upstream host and the protocol actually negotiated to the upstream (http2 via ALPN, or http1_1)")
+                        .labelNames("upstream_host", "protocol")
                         .register();
                     httpChaosInjectedTotal = Counter.builder()
                         .name("mock_server_http_chaos_injected")
@@ -354,6 +403,11 @@ public class Metrics {
             .help("Total load-scenario request errors by kind (timeout, connection, render, http_5xx, null_response)")
             .labelNames("scenario", "run_id", "kind")
             .register();
+        loadChecksTotal = Counter.builder()
+            .name("mock_server_load_checks")
+            .help("Total per-step load-scenario response checks by scenario/run/step and outcome (pass, fail)")
+            .labelNames("scenario", "run_id", "step", "outcome")
+            .register();
         GaugeWithCallback.builder()
             .name("mock_server_load_active_vus")
             .help("Number of active virtual users in the running load scenario, by scenario and run")
@@ -426,6 +480,7 @@ public class Metrics {
             droppedLogEventsTotal = null;
             forwardRequestDurationSeconds = null;
             forwardRequestsTotal = null;
+            forwardUpstreamProtocolTotal = null;
             httpChaosInjectedTotal = null;
             chaosAutoHaltTotal = null;
             mcpToolCallsTotal = null;
@@ -436,6 +491,7 @@ public class Metrics {
             llmCostUsdTotal = null;
             llmCostBudgetTrippedTotal = null;
             expectationMatchedTotal = null;
+            monotonicTotalCounters.clear();
             otelRequestDurationHistogram = null;
             loadRequestDurationSeconds = null;
             loadRequestsTotal = null;
@@ -444,6 +500,7 @@ public class Metrics {
             loadIterationsTotal = null;
             loadThrottledTotal = null;
             loadErrorsTotal = null;
+            loadChecksTotal = null;
             loadCustomLabelNames = new String[0];
             otelLoadRequestDuration = null;
             otelLoadRequests = null;
@@ -452,6 +509,7 @@ public class Metrics {
             otelLoadIterations = null;
             otelLoadThrottled = null;
             otelLoadErrors = null;
+            otelLoadChecks = null;
             loadActiveVusReader.set(null);
             loadInflightReader.set(null);
             activeExpectationsSupplier.set(null);
@@ -587,6 +645,34 @@ public class Metrics {
         if (counter != null) {
             counter.labelValues(hostLabel, statusClass(statusCode)).inc();
         }
+    }
+
+    /**
+     * Record the protocol a forward/proxy upstream connection actually negotiated to the upstream
+     * (e.g. {@code "http2"} via ALPN, or {@code "http1_1"}). Lets operators confirm whether
+     * {@code forwardProxyHttp2Upgrade} is taking effect — a forward shown as {@code http1_1} to an
+     * upstream that withholds its streaming SSE response head over HTTP/1.1 explains a high forward
+     * time-to-first-byte (e.g. the OpenAI Codex backend the opencode CLI uses). No-op when metrics are
+     * disabled.
+     */
+    public static void incrementForwardUpstreamProtocol(String upstreamHost, String protocol) {
+        Counter counter = forwardUpstreamProtocolTotal;
+        if (counter != null) {
+            String hostLabel = upstreamHost != null && !upstreamHost.isEmpty() ? upstreamHost : "unknown";
+            counter.labelValues(hostLabel, protocol).inc();
+        }
+    }
+
+    /**
+     * Return the current forward upstream-protocol count for the given host and negotiated protocol,
+     * or 0 if metrics are disabled.
+     */
+    public static long forwardUpstreamProtocolCount(String upstreamHost, String protocol) {
+        Counter counter = forwardUpstreamProtocolTotal;
+        if (counter == null) {
+            return 0;
+        }
+        return (long) counter.labelValues(upstreamHost, protocol).get();
     }
 
     /**
@@ -933,6 +1019,19 @@ public class Metrics {
     }
 
     /**
+     * Return the current value of the dual-published {@code _total} counter for one of the five
+     * monotonic counts, or 0 if metrics are disabled (the counter is not registered) or the name is
+     * not one of the monotonic five. Used by {@link OtelMetricsExporter} to mirror the Prometheus
+     * counter via OTLP. Equal to the legacy {@code _count} gauge value except across a MockServer
+     * reset, where the gauge is zeroed but the monotonic counter continues (standard counter
+     * semantics — see docs/code/metrics.md).
+     */
+    public static long getMonotonicTotalCount(Name name) {
+        Counter counter = monotonicTotalCounters.get(name);
+        return counter != null ? (long) counter.get() : 0L;
+    }
+
+    /**
      * Set the supplier of active expectations. Called by HttpState at startup
      * so the expectations-by-type GaugeWithCallback can read live state at
      * scrape time without a core-to-netty dependency.
@@ -1140,6 +1239,7 @@ public class Metrics {
         evictLoadSeries(loadIterationsTotal, matchesRun);
         evictLoadSeries(loadThrottledTotal, matchesRun);
         evictLoadSeries(loadErrorsTotal, matchesRun);
+        evictLoadSeries(loadChecksTotal, matchesRun);
     }
 
     private static void evictLoadSeries(Histogram metric, java.util.function.Function<java.util.List<String>, Boolean> matches) {
@@ -1345,6 +1445,28 @@ public class Metrics {
     }
 
     /**
+     * Increment the per-step response-check counter for the given outcome.
+     *
+     * @param step    the step label (step name or index)
+     * @param outcome one of "pass" or "fail"
+     */
+    public static void incrementLoadCheck(String scenario, String runId, String step, String outcome) {
+        Counter counter = loadChecksTotal;
+        if (counter != null) {
+            counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"),
+                nonNull(step, "unknown"), nonNull(outcome, "unknown")).inc();
+        }
+        io.opentelemetry.api.metrics.LongCounter otel = otelLoadChecks;
+        if (otel != null) {
+            otel.add(1, io.opentelemetry.api.common.Attributes.of(
+                io.opentelemetry.api.common.AttributeKey.stringKey("scenario"), nonNull(scenario, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("run_id"), nonNull(runId, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("step"), nonNull(step, "unknown"),
+                io.opentelemetry.api.common.AttributeKey.stringKey("outcome"), nonNull(outcome, "unknown")));
+        }
+    }
+
+    /**
      * Register the live readers for the active-VU and in-flight load gauges. Called by the
      * orchestrator on start (and cleared with null on stop), so the gauges read the running scenario
      * at scrape time. Mirrors the chaos GaugeWithCallback pattern.
@@ -1365,7 +1487,8 @@ public class Metrics {
                                                    io.opentelemetry.api.metrics.LongCounter responseBytes,
                                                    io.opentelemetry.api.metrics.LongCounter iterations,
                                                    io.opentelemetry.api.metrics.LongCounter throttled,
-                                                   io.opentelemetry.api.metrics.LongCounter errors) {
+                                                   io.opentelemetry.api.metrics.LongCounter errors,
+                                                   io.opentelemetry.api.metrics.LongCounter checks) {
         otelLoadRequestDuration = duration;
         otelLoadRequests = requests;
         otelLoadRequestBytes = requestBytes;
@@ -1373,6 +1496,7 @@ public class Metrics {
         otelLoadIterations = iterations;
         otelLoadThrottled = throttled;
         otelLoadErrors = errors;
+        otelLoadChecks = checks;
     }
 
     /** Live readers for the OTEL load observable gauges (active VUs / in-flight). */
@@ -1418,6 +1542,19 @@ public class Metrics {
         }
         try {
             return (long) counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"), nonNull(kind, "unknown")).get();
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    public static long getLoadCheckCount(String scenario, String runId, String step, String outcome) {
+        Counter counter = loadChecksTotal;
+        if (counter == null) {
+            return 0L;
+        }
+        try {
+            return (long) counter.labelValues(nonNull(scenario, "unknown"), nonNull(runId, "unknown"),
+                nonNull(step, "unknown"), nonNull(outcome, "unknown")).get();
         } catch (Exception e) {
             return 0L;
         }
@@ -1494,6 +1631,13 @@ public class Metrics {
     public void increment(Name name) {
         if (metricsEnabled) {
             getOrCreate(name).inc();
+            // Mirror the increment onto the dual-published _total counter for the five monotonic
+            // counts (no-op map lookup for every other Name), so the legacy gauge and the proper
+            // counter move together from the same call site.
+            Counter counter = monotonicTotalCounters.get(name);
+            if (counter != null) {
+                counter.inc();
+            }
         }
     }
 
@@ -1527,6 +1671,8 @@ public class Metrics {
         clear(Name.FORWARD_CLASS_CALLBACK_ACTIONS_COUNT);
         clear(Name.FORWARD_OBJECT_CALLBACK_ACTIONS_COUNT);
         clear(Name.FORWARD_REPLACE_ACTIONS_COUNT);
+        clear(Name.FORWARD_VALIDATE_ACTIONS_COUNT);
+        clear(Name.FORWARD_WITH_FALLBACK_ACTIONS_COUNT);
         clear(Name.RESPONSE_ACTIONS_COUNT);
         clear(Name.RESPONSE_TEMPLATE_ACTIONS_COUNT);
         clear(Name.RESPONSE_CLASS_CALLBACK_ACTIONS_COUNT);
@@ -1536,6 +1682,7 @@ public class Metrics {
         clear(Name.LLM_CHAOS_INJECTED_COUNT);
         clear(Name.WEBSOCKET_RESPONSE_ACTIONS_COUNT);
         clear(Name.GRPC_STREAM_RESPONSE_ACTIONS_COUNT);
+        clear(Name.GRPC_BIDI_RESPONSE_ACTIONS_COUNT);
         clear(Name.BINARY_RESPONSE_ACTIONS_COUNT);
         clear(Name.DNS_RESPONSE_ACTIONS_COUNT);
         clear(Name.ERROR_ACTIONS_COUNT);
@@ -1557,6 +1704,8 @@ public class Metrics {
         FORWARD_CLASS_CALLBACK_ACTIONS_COUNT("Action forward class callback count"),
         FORWARD_OBJECT_CALLBACK_ACTIONS_COUNT("Action forward object callback count"),
         FORWARD_REPLACE_ACTIONS_COUNT("Action forward replace count"),
+        FORWARD_VALIDATE_ACTIONS_COUNT("Action forward validate count"),
+        FORWARD_WITH_FALLBACK_ACTIONS_COUNT("Action forward with fallback count"),
         RESPONSE_ACTIONS_COUNT("Action response count"),
         RESPONSE_TEMPLATE_ACTIONS_COUNT("Action response template count"),
         RESPONSE_CLASS_CALLBACK_ACTIONS_COUNT("Action response class callback count"),
@@ -1566,6 +1715,7 @@ public class Metrics {
         LLM_CHAOS_INJECTED_COUNT("Action LLM chaos injected count"),
         WEBSOCKET_RESPONSE_ACTIONS_COUNT("Action WebSocket response count"),
         GRPC_STREAM_RESPONSE_ACTIONS_COUNT("Action gRPC stream response count"),
+        GRPC_BIDI_RESPONSE_ACTIONS_COUNT("Action gRPC bidi response count"),
         BINARY_RESPONSE_ACTIONS_COUNT("Action binary response count"),
         DNS_RESPONSE_ACTIONS_COUNT("Action DNS response count"),
         ERROR_ACTIONS_COUNT("Action error count"),

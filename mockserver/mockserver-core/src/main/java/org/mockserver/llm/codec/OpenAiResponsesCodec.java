@@ -5,10 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.mockserver.llm.JsonEscape;
+import org.mockserver.llm.OpenAiResponsesStore;
 import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
 import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.StreamingPhysicsExpander;
+import org.mockserver.llm.TokenCounter;
 import org.mockserver.model.*;
 
 import java.util.ArrayList;
@@ -199,7 +201,7 @@ public class OpenAiResponsesCodec implements ProviderCodec {
             events.add(sseEvent().withEvent("response.output_item.added").withData(itemAddedData));
 
             // text deltas
-            String[] tokens = text.split("(?<=\\s)|(?=\\s)");
+            List<String> tokens = TokenCounter.streamingTextTokens(text, physics);
             for (String token : tokens) {
                 if (!token.isEmpty()) {
                     String deltaData = "{\"type\":\"response.output_text.delta\",\"item_id\":\"" + msgId +
@@ -360,6 +362,18 @@ public class OpenAiResponsesCodec implements ProviderCodec {
                 }
             } else {
                 return ParsedConversation.empty();
+            }
+
+            // Server-side state chaining: when the request carries a previous_response_id,
+            // prepend the stored prior conversation so matchers and usage inference see the
+            // full dialogue (the Responses API sends only the new turn's input plus the id).
+            // No-op when there is no previous_response_id or the id is unknown/not stored.
+            List<ParsedMessage> priorMessages =
+                OpenAiResponsesStore.getInstance().priorMessagesFor(body);
+            if (!priorMessages.isEmpty()) {
+                List<ParsedMessage> chained = new ArrayList<>(priorMessages);
+                chained.addAll(parsed);
+                return ParsedConversation.of(chained);
             }
 
             return ParsedConversation.of(parsed);

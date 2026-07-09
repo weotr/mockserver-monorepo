@@ -5,6 +5,7 @@ import CardActions from '@mui/material/CardActions';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
 import Link from '@mui/material/Link';
+import Alert from '@mui/material/Alert';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import PauseCircleIcon from '@mui/icons-material/PauseCircle';
@@ -26,15 +27,31 @@ interface ActionCardProps {
   description: string;
   actionLabel: string;
   onAction: () => void;
+  /** Optional second CTA rendered as an outlined button alongside the primary one. */
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
 }
 
-function ActionCard({ icon, title, description, actionLabel, onAction }: ActionCardProps) {
+function ActionCard({
+  icon,
+  title,
+  description,
+  actionLabel,
+  onAction,
+  secondaryActionLabel,
+  onSecondaryAction,
+}: ActionCardProps) {
   return (
     <Card
       variant="outlined"
       sx={(theme) => ({
-        flex: '1 1 0',
-        minWidth: 0,
+        // Wide enough that the longest title ("Performance Testing") stays on one
+        // line; whole tiles wrap to the next row rather than being squeezed narrow
+        // enough to wrap the heading. The maxWidth stops a lone wrapped tile from
+        // stretching across the full row.
+        flex: '1 1 200px',
+        minWidth: 200,
+        maxWidth: 360,
         display: 'flex',
         flexDirection: 'column',
         transition: theme.transitions.create(['transform', 'box-shadow', 'border-color'], {
@@ -58,10 +75,15 @@ function ActionCard({ icon, title, description, actionLabel, onAction }: ActionC
           {description}
         </Typography>
       </CardContent>
-      <CardActions sx={{ px: 1.5, pb: 1.5, pt: 0 }}>
+      <CardActions sx={{ px: 1.5, pb: 1.5, pt: 0, gap: 0.75 }}>
         <Button size="small" variant="contained" onClick={onAction}>
           {actionLabel}
         </Button>
+        {secondaryActionLabel && onSecondaryAction && (
+          <Button size="small" variant="outlined" onClick={onSecondaryAction}>
+            {secondaryActionLabel}
+          </Button>
+        )}
       </CardActions>
     </Card>
   );
@@ -79,6 +101,9 @@ const OTHER_TABS: { view: ViewMode; label: string; description: string }[] = [
 export default function OnboardingPanel({ connectionParams }: OnboardingPanelProps) {
   const [openApiOpen, setOpenApiOpen] = useState(false);
   const setView = useDashboardStore((s) => s.setView);
+  const activeMockCount = useDashboardStore((s) => s.activeExpectations.length);
+  const recordedRequestCount = useDashboardStore((s) => s.recordedRequests.length);
+  const hasExistingState = activeMockCount > 0 || recordedRequestCount > 0;
 
   const go = (view: ViewMode) => () => setView(view);
 
@@ -93,8 +118,10 @@ export default function OnboardingPanel({ connectionParams }: OnboardingPanelPro
       title: 'Mocking',
       description:
         'Build mock responses by hand, or import an OpenAPI / Swagger spec, Postman collection, WSDL, or HAR file to generate stubs automatically.',
-      actionLabel: 'Import OpenAPI',
-      onAction: () => setOpenApiOpen(true),
+      actionLabel: 'Create Mock',
+      onAction: go('composer'),
+      secondaryActionLabel: 'Import OpenAPI',
+      onSecondaryAction: () => setOpenApiOpen(true),
     },
     {
       icon: <SwapHorizIcon color="primary" />,
@@ -163,6 +190,24 @@ export default function OnboardingPanel({ connectionParams }: OnboardingPanelPro
         full feature set.
       </Typography>
 
+      {/* Returning-user awareness: when this server already holds state, offer a
+          jump straight to the Dashboard instead of the empty first-run flow. We
+          surface it (never auto-redirect) so the user stays in control of the view. */}
+      {hasExistingState && (
+        <Alert
+          severity="info"
+          sx={{ mb: 3, maxWidth: 760, width: '100%' }}
+          action={
+            <Button color="inherit" size="small" onClick={go('dashboard')}>
+              Open Dashboard
+            </Button>
+          }
+        >
+          This server has {activeMockCount} active mock{activeMockCount === 1 ? '' : 's'} and{' '}
+          {recordedRequestCount} recorded request{recordedRequestCount === 1 ? '' : 's'}.
+        </Alert>
+      )}
+
       {/* Responsive switch keyed off the CONTAINER width, not the viewport. The
           dashboard is embedded in a narrow IDE tool window (JCEF) whose CSS
           viewport stays wide regardless of the visible panel size, so a viewport
@@ -172,12 +217,14 @@ export default function OnboardingPanel({ connectionParams }: OnboardingPanelPro
           panel is narrow — so an engine without container-query support (older
           browsers, jsdom in tests) falls back to tiles rather than nothing. */}
       <Box sx={{ containerType: 'inline-size', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-        {/* Wide panels: feature tiles side by side. */}
+        {/* Wide panels: feature tiles side by side, wrapping to a second row when
+            six no longer fit at their one-line-title minimum width rather than
+            squeezing all six abreast (which wrapped the headings). */}
         <Box
           sx={{
             display: 'flex',
             '@container (max-width: 899.98px)': { display: 'none' },
-            flexWrap: 'nowrap',
+            flexWrap: 'wrap',
             gap: 1.5,
             alignItems: 'stretch',
             justifyContent: 'center',

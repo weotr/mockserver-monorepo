@@ -51,7 +51,7 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | Ports & proxy | `serverPort`, `proxyRemoteHost`, `proxyRemotePort` |
 | Logging | `logLevel`, `disableSystemOut`, `detailedMatchFailures`, `compactLogFormat`, `metricsEnabled`, `slowRequestThresholdMillis`, `attachMismatchDiagnosticToResponse`, `closestMatchHintEnabled` |
 | Dev mode | `devMode` |
-| Memory usage | `maxExpectations`, `maxLogEntries`, `ringBufferSize` (in-flight log event ring buffer size, decoupled from `maxLogEntries` retention; default `min(maxLogEntries, 16384)`, rounded up to a power of two — see [memory-management.md](memory-management.md#ring-buffer-sizing)), `maxWebSocketExpectations`, `outputMemoryUsageCsv` |
+| Memory usage | `maxExpectations`, `maxLogEntries`, `ringBufferSize` (in-flight log event ring buffer size, decoupled from `maxLogEntries` retention; default `min(maxLogEntries, 16384)`, rounded up to a power of two — see [memory-management.md](memory-management.md#ring-buffer-sizing)), `maxWebSocketExpectations`, `webSocketProxyMaxRecordedFrames` (max relayed WebSocket frames recorded per proxied passthrough connection; default `1000`, `0` disables frame recording — see [netty-pipeline.md](netty-pipeline.md#websocket-proxy-passthrough)), `webSocketProxyIdleTimeoutSeconds` (idle timeout in seconds for a proxied passthrough WebSocket relay; default `0` = disabled — see [netty-pipeline.md](netty-pipeline.md#websocket-proxy-passthrough)), `outputMemoryUsageCsv` |
 | HTTP behaviour | `nioEventLoopThreadCount`, `actionHandlerThreadCount`, `webSocketClientEventLoopThreadCount`, `clientNioEventLoopThreadCount`, `streamingResponsesEnabled`, `maxStreamingCaptureBytes` |
 | Matching | `matchersFailFast`, `matchExactCase` (when `true`, method/path/string-body matching is case-sensitive, and response reason-phrase matching in verification is also case-sensitive; header/cookie/query matching always stays case-insensitive — default `false`) |
 | JSON Schema matching (internal tuning) | `jsonSchemaAllowRemoteRefs`, `mockserver.candidateIndexThreshold` — **JVM system-property-only tuning knobs**, not part of the standard four-equivalent-forms property set; see [Internal Tuning-Only System Properties](#internal-tuning-only-system-properties) below |
@@ -68,7 +68,7 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | TLS inbound — dynamic | `certificateAuthorityPrivateKey`, `certificateAuthorityCertificate`, `dynamicallyCreateCertificateAuthorityCertificate`, `directoryToSaveDynamicSSLCertificate`, `preventCertificateDynamicUpdate`, `sslCertificateDomainName`, `sslSubjectAlternativeNameDomains`, `sslSubjectAlternativeNameIps` |
 | TLS inbound — fixed | `privateKeyPath`, `x509CertificatePath` |
 | mTLS | `tlsMutualAuthenticationRequired`, `tlsMutualAuthenticationCertificateChain` |
-| TLS outbound | `forwardProxyTLSX509CertificatesTrustManagerType`, `forwardProxyTLSCustomTrustX509Certificates`, `forwardProxyPrivateKey`, `forwardProxyCertificateChain` |
+| TLS outbound | `forwardProxyTLSX509CertificatesTrustManagerType`, `forwardProxyTLSCustomTrustX509Certificates`, `forwardProxyPrivateKey`, `forwardProxyCertificateChain`, `forwardProxyClientCertificatesByHost` (per-host outbound mTLS cert/key map — see [tls-and-security.md](tls-and-security.md#per-host-outbound-mtls)) |
 | Protocol selection | `tlsProtocols`, `proactivelyInitialiseTLS`, `useBouncyCastleForKeyAndCertificateGeneration`, `useSemicolonAsQueryParameterSeparator` |
 | MCP | `mcpEnabled` |
 | WASM rules | `wasmEnabled`, `wasmMaxMemoryPages` |
@@ -76,15 +76,17 @@ The first three feed into the **static** `ConfigurationProperties`. The fourth u
 | DNS | `dnsEnabled`, `dnsPort` |
 | HTTP/3 (QUIC) | `http3Port`, `http3AltSvcMaxAge`, `http3AdvertiseAltSvc`, `http3ConnectUdpEnabled`, `http3MaxIdleTimeout`, `http3InitialMaxData`, `http3InitialMaxStreamDataBidirectional`, `http3InitialMaxStreamsBidirectional`, `http3QpackMaxTableCapacity` |
 | Service mesh / transparent proxy | `transparentProxyEnabled`, `transparentProxyTproxy`, `transparentProxyEbpf`, `transparentProxyEbpfMapPath` |
-| OpenTelemetry | `otelMetricsEnabled`, `otelTracesEnabled`, `otelEndpoint`, `otelMetricsExportIntervalSeconds`, `otelPropagateTraceContext`, `otelGenerateTraceId` |
+| OpenTelemetry | `otelMetricsEnabled`, `otelTracesEnabled`, `otelEndpoint`, `otelMetricsExportIntervalSeconds`, `otelMetricsTemporality`, `otelPropagateTraceContext`, `otelGenerateTraceId` |
+| Prometheus Remote Write | `prometheusRemoteWriteEnabled`, `prometheusRemoteWriteUrl`, `prometheusRemoteWriteProtocolVersion`, `prometheusRemoteWriteIntervalSeconds`, `prometheusRemoteWriteBearerToken`, `prometheusRemoteWriteBasicAuthUsername`, `prometheusRemoteWriteBasicAuthPassword`, `prometheusRemoteWriteHeaders` |
 | Chaos auto-halt | `chaosAutoHaltEnabled`, `chaosAutoHaltErrorThreshold`, `chaosAutoHaltWindowMillis` |
 | Rate limiting | `rateLimitMaxNamedQuotas` |
 | SLO verdicts | `sloTrackingEnabled`, `sloWindowRetentionMillis`, `sloWindowMaxSamples` |
 | Load generation | `loadGenerationEnabled`, `loadGenerationSuppressEventLog`, `loadGenerationMaxVirtualUsers`, `loadGenerationMaxInFlightRequests`, `loadGenerationMaxRequestsPerSecond`, `loadGenerationMaxDurationMillis`, `loadGenerationMaxSteps` |
 | Breakpoints | `breakpointTimeoutMillis`, `breakpointMaxHeld` (breakpoint activation is now via the matcher-based registry REST API) |
 | Template restrictions | `javascriptDisallowedClasses`, `javascriptDisallowedText`, `javascriptTemplateExecutionTimeout` (millis; default 5000, 0/negative disables — wall-clock cancellation of runaway JS templates), `velocityDisallowClassLoading`, `velocityDisallowedText`, `mustacheDisallowedText` |
+| Template sample data | `templateFakerSeed` (long; default 0 = unseeded/random. Non-zero seeds the template `faker` helper — Velocity `$faker`, Mustache `{{faker.*}}`, JavaScript `faker` — deterministically so faker-driven templates produce reproducible fixtures across runs. The seed initialises a per-engine `Faker`; its value sequence is deterministic for a given order of renders, strongest for sequential generation. The template analogue of the OpenAPI `SampleDataGenerator` fixed seed) |
 | Drift detection | `driftSemanticAnalysisEnabled`, `driftResponseTimeThresholdMs`, `driftAlertWebhookEnabled`, `driftAlertWebhookUrl`, `driftAlertSeverityThreshold`, `driftAlertCooldownMillis` |
-| Control-plane audit | `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads` |
+| Control-plane audit | `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads`, `auditLogFile` |
 | Clustered state | `stateBackend`, `clusterEnabled`, `clusterName`, `clusterTransportConfig`, `clusterSharedTimesEnabled` |
 | Blob store | `blobStoreType`, `blobStoreBucket`, `blobStoreRegion`, `blobStoreEndpoint`, `blobStoreKeyPrefix`, `blobStoreAccessKeyId`, `blobStoreSecretAccessKey`, `blobStoreContainer`, `blobStoreConnectionString`, `blobStoreProjectId` |
 | Async messaging | `asyncKafkaBootstrapServers`, `asyncMqttBrokerUrl`, `asyncRecordedMessageMaxEntries` |
@@ -109,7 +111,7 @@ Opt-in (default `false`). When `true`, MockServer masks the same sensitive heade
 
 This complements `redactSecretsInRecordedExpectations` (which masks the recorded-expectation *export* path); set both when you want secrets masked everywhere they could be observed.
 
-### `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads`
+### `controlPlaneAuditEnabled`, `controlPlaneAuditMaxEntries`, `controlPlaneAuditReads`, `auditLogFile`
 
 Opt-in, append-only, bounded, in-memory audit log of control-plane *mutations* (who/what/when/where/outcome) that backs `GET /mockserver/audit` (see [docs/code/event-system.md](event-system.md#control-plane-audit-log)). It records redacted, structural metadata only — never request headers or bodies.
 
@@ -118,6 +120,7 @@ Opt-in, append-only, bounded, in-memory audit log of control-plane *mutations* (
 | `controlPlaneAuditEnabled` | `false` | When `false`, no audit entries are recorded and control-plane operations behave byte-for-byte identically (the audit emit returns immediately). Set to `true` to opt in. |
 | `controlPlaneAuditMaxEntries` | `1000` | Maximum entries retained in the bounded ring; the oldest is evicted once full. **Read once at `AuditStore` construction** — a fixed-capacity ring (like the drift store), so changing it at runtime does not resize an already-constructed store. |
 | `controlPlaneAuditReads` | `false` | When `false`, only mutations (and `reset`) are audited. Set to `true` to also audit control-plane reads (GET requests and read-only PUTs such as `/retrieve`, `/verify`, `/diff`). No effect unless `controlPlaneAuditEnabled` is `true`. |
+| `auditLogFile` | `""` (off) | Optional path to a durable NDJSON audit file. When set, each recorded entry is *also* appended (one compact JSON object per line) by `AuditFileSink` — a separate writer that observes the same entries, leaving the in-memory ring untouched — giving a restart-and-`reset`-surviving trail. Path resolved once on first write; parent dirs created; append-only (rotation out of scope); fail-soft (one WARN then self-disable on IO error). No effect unless `controlPlaneAuditEnabled` is `true`. |
 
 The recorded principal is **best-effort and unverified** in this version: the JWT `sub` is read with no signature verification, or the mTLS client-certificate CN, else `anonymous`. The raw token is never stored.
 

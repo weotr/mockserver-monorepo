@@ -13,7 +13,7 @@ dotnet add package MockServerClient
 Or via PackageReference in your `.csproj`:
 
 ```xml
-<PackageReference Include="MockServerClient" Version="7.0.1" />
+<PackageReference Include="MockServerClient" Version="7.4.0" />
 ```
 
 ## Supported Targets
@@ -80,6 +80,49 @@ client.VerifySequence(
 ```csharp
 var requests = client.RetrieveRecordedRequests(
     HttpRequest.Request().WithPath("/api")
+);
+```
+
+### JWT Request Matcher
+
+Match a bearer token's claims (exact or regex; a leading `!` negates), plus optional
+issuer/audience/algorithm/header/scheme constraints. Unset properties are omitted from the wire.
+
+```csharp
+client.When(
+    HttpRequest.Request()
+        .WithPath("/secure")
+        .WithJwt(new Jwt
+        {
+            Claims = new Dictionary<string, string>
+            {
+                ["sub"] = "user-123",
+                ["role"] = "!admin",              // negated: any role except admin
+                ["email"] = "^.+@example.com$"     // regex match
+            },
+            Issuer = "https://issuer.example.com",
+            Audience = "my-api",
+            Algorithm = "RS256"
+        })
+).Respond(
+    HttpResponse.Response().WithStatusCode(200)
+);
+```
+
+### ALL_OF Body Matcher
+
+Require the request body to satisfy every sub-matcher. Combine any typed body matchers
+(e.g. JSON path and regex) via `BodyMatcher`:
+
+```csharp
+client.When(
+    HttpRequest.Request()
+        .WithPath("/api")
+        .WithAllOfBody(
+            BodyMatcher.OfJsonPath("$.name"),
+            BodyMatcher.OfRegex(".*active.*"))
+).Respond(
+    HttpResponse.Response().WithStatusCode(200)
 );
 ```
 
@@ -304,7 +347,7 @@ string launcherPath = MockServerBinaryLauncher.EnsureBinary();
 ### Specify a version
 
 ```csharp
-using var launcher = MockServerBinaryLauncher.Start(port: 1080, version: "7.2.0");
+using var launcher = MockServerBinaryLauncher.Start(port: 1080, version: "7.4.0");
 ```
 
 ### API reference

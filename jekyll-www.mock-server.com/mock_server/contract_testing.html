@@ -128,6 +128,244 @@ keywords: contract testing, consumer-driven contracts, Pact, OpenAPI contract te
 
 <button id="button_contract_test_openapi" class="accordion">run OpenAPI contract tests against a live service</button>
 <div class="panel">
+  <button class="accordion inner">Java</button>
+  <div class="panel">
+    <p>Use the typed <code>contractTest</code> helper on <code>MockServerClient</code> — it builds the request, parses the response, and returns a structured <code>ContractReport</code>:</p>
+    <pre class="prettyprint lang-java code"><code class="code">MockServerClient client = new MockServerClient("localhost", 1080);
+
+// Run contract test against a live service
+MockServerClient.ContractReport report = client.contractTest(
+    "https://petstore3.swagger.io/api/v3/openapi.json",
+    "https://petstore3.swagger.io"
+);
+
+System.out.println("All passed: " + report.allPassed());
+System.out.println("Passed: " + report.passed() + " / " + report.total());
+for (MockServerClient.ContractResult result : report.results()) {
+    System.out.printf("  %s %s — %s%n",
+        result.method(), result.path(),
+        result.passed() ? "PASS" : "FAIL");
+    result.requestErrors().forEach(e -> System.out.println("    request: " + e));
+    result.responseErrors().forEach(e -> System.out.println("    response: " + e));
+}
+
+// Optionally filter to a single operation by operationId
+MockServerClient.ContractReport singleOp = client.contractTest(
+    "https://petstore3.swagger.io/api/v3/openapi.json",
+    "https://petstore3.swagger.io",
+    "getUsers"
+);</code></pre>
+    <p>To validate recorded traffic against a spec instead of driving live requests, use <code>trafficValidate</code>:</p>
+    <pre class="prettyprint lang-java code"><code class="code">// Validate traffic already recorded by MockServer against an OpenAPI spec
+MockServerClient.ContractReport trafficReport = client.trafficValidate(
+    "https://petstore3.swagger.io/api/v3/openapi.json"
+);
+System.out.println("Traffic valid: " + trafficReport.allPassed());</code></pre>
+  </div>
+  <button class="accordion inner">JavaScript</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-javascript code"><code class="code">const http = require('http');
+
+const body = JSON.stringify({
+    spec: 'https://petstore3.swagger.io/api/v3/openapi.json',
+    baseUrl: 'https://petstore3.swagger.io'
+});
+
+const req = http.request(
+    {host: 'localhost', port: 1080, method: 'PUT', path: '/mockserver/contractTest',
+     headers: {'Content-Type': 'application/json'}},
+    res => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+            const report = JSON.parse(data);
+            console.log('All passed:', report.allPassed);
+            report.results.forEach(r => {
+                console.log(r.method, r.path, r.passed ? 'PASS' : 'FAIL');
+                r.validationErrors.forEach(e => console.log('  ', e));
+            });
+        });
+    });
+req.on('error', console.error);
+req.write(body);
+req.end();</code></pre>
+  </div>
+  <button class="accordion inner">Python</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-python code"><code class="code">import json
+import urllib.request
+
+body = json.dumps({
+    "spec": "https://petstore3.swagger.io/api/v3/openapi.json",
+    "baseUrl": "https://petstore3.swagger.io"
+}).encode("utf-8")
+
+req = urllib.request.Request(
+    "http://localhost:1080/mockserver/contractTest",
+    data=body,
+    method="PUT",
+    headers={"Content-Type": "application/json"}
+)
+with urllib.request.urlopen(req) as response:
+    report = json.loads(response.read().decode("utf-8"))
+
+print("All passed:", report["allPassed"])
+for result in report["results"]:
+    print(result["method"], result["path"], "PASS" if result["passed"] else "FAIL")
+    for error in result["validationErrors"]:
+        print("  ", error)</code></pre>
+  </div>
+  <button class="accordion inner">Ruby</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-ruby code"><code class="code">require 'net/http'
+require 'uri'
+require 'json'
+
+uri = URI('http://localhost:1080/mockserver/contractTest')
+req = Net::HTTP::Put.new(uri)
+req['Content-Type'] = 'application/json'
+req.body = {
+    spec: 'https://petstore3.swagger.io/api/v3/openapi.json',
+    baseUrl: 'https://petstore3.swagger.io'
+}.to_json
+
+response = Net::HTTP.start(uri.host, uri.port) { |http| http.request(req) }
+report = JSON.parse(response.body)
+
+puts "All passed: #{report['allPassed']}"
+report['results'].each do |result|
+    puts "#{result['method']} #{result['path']} #{result['passed'] ? 'PASS' : 'FAIL'}"
+    result['validationErrors'].each { |error| puts "  #{error}" }
+end</code></pre>
+  </div>
+  <button class="accordion inner">Go</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+)
+
+func main() {
+    body := []byte(`{
+    "spec": "https://petstore3.swagger.io/api/v3/openapi.json",
+    "baseUrl": "https://petstore3.swagger.io"
+}`)
+    req, _ := http.NewRequest("PUT",
+        "http://localhost:1080/mockserver/contractTest",
+        bytes.NewReader(body))
+    req.Header.Set("Content-Type", "application/json")
+    resp, _ := http.DefaultClient.Do(req)
+    defer resp.Body.Close()
+
+    raw, _ := io.ReadAll(resp.Body)
+    var report struct {
+        AllPassed bool `json:"allPassed"`
+        Results   []struct {
+            Method           string   `json:"method"`
+            Path             string   `json:"path"`
+            Passed           bool     `json:"passed"`
+            ValidationErrors []string `json:"validationErrors"`
+        } `json:"results"`
+    }
+    json.Unmarshal(raw, &amp;report)
+
+    fmt.Println("All passed:", report.AllPassed)
+    for _, result := range report.Results {
+        status := "FAIL"
+        if result.Passed {
+            status = "PASS"
+        }
+        fmt.Println(result.Method, result.Path, status)
+    }
+}</code></pre>
+  </div>
+  <button class="accordion inner">.NET</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
+using var httpClient = new HttpClient();
+var json = @"{
+    ""spec"": ""https://petstore3.swagger.io/api/v3/openapi.json"",
+    ""baseUrl"": ""https://petstore3.swagger.io""
+}";
+var response = await httpClient.PutAsync(
+    "http://localhost:1080/mockserver/contractTest",
+    new StringContent(json, Encoding.UTF8, "application/json")
+);
+
+using var report = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+Console.WriteLine("All passed: " + report.RootElement.GetProperty("allPassed").GetBoolean());
+foreach (var result in report.RootElement.GetProperty("results").EnumerateArray())
+{
+    Console.WriteLine(
+        result.GetProperty("method").GetString() + " " +
+        result.GetProperty("path").GetString() + " " +
+        (result.GetProperty("passed").GetBoolean() ? "PASS" : "FAIL"));
+}</code></pre>
+  </div>
+  <button class="accordion inner">Rust</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+use serde_json::Value;
+
+let client = Client::new();
+let body = r#"{
+    "spec": "https://petstore3.swagger.io/api/v3/openapi.json",
+    "baseUrl": "https://petstore3.swagger.io"
+}"#;
+let report: Value = client
+    .put("http://localhost:1080/mockserver/contractTest")
+    .header("Content-Type", "application/json")
+    .body(body.to_string())
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+
+println!("All passed: {}", report["allPassed"]);
+for result in report["results"].as_array().unwrap() {
+    let status = if result["passed"].as_bool().unwrap() { "PASS" } else { "FAIL" };
+    println!("{} {} {}", result["method"], result["path"], status);
+}</code></pre>
+  </div>
+  <button class="accordion inner">PHP</button>
+  <div class="panel">
+    <p>There is no typed contract-test helper, so send the raw <span class="inline_code">PUT /mockserver/contractTest</span> request:</p>
+    <pre class="prettyprint lang-php code"><code class="code">$json = &lt;&lt;&lt;'JSON'
+{
+    "spec": "https://petstore3.swagger.io/api/v3/openapi.json",
+    "baseUrl": "https://petstore3.swagger.io"
+}
+JSON;
+
+$ch = curl_init('http://localhost:1080/mockserver/contractTest');
+curl_setopt_array($ch, [
+    CURLOPT_CUSTOMREQUEST  =&gt; 'PUT',
+    CURLOPT_POSTFIELDS     =&gt; $json,
+    CURLOPT_HTTPHEADER     =&gt; ['Content-Type: application/json; charset=utf-8'],
+    CURLOPT_RETURNTRANSFER =&gt; true,
+]);
+$report = json_decode(curl_exec($ch), true);
+curl_close($ch);
+
+echo 'All passed: ' . ($report['allPassed'] ? 'true' : 'false') . "\n";
+foreach ($report['results'] as $result) {
+    echo $result['method'] . ' ' . $result['path'] . ' ' . ($result['passed'] ? 'PASS' : 'FAIL') . "\n";
+}</code></pre>
+  </div>
   <button class="accordion inner">REST API</button>
   <div class="panel">
     <p>Test all operations in a spec hosted at a URL:</p>
@@ -165,65 +403,6 @@ keywords: contract testing, consumer-driven contracts, Pact, OpenAPI contract te
     "baseUrl": "http://localhost:8080",
     "operationId": "getUsers"
   }'</code></pre>
-  </div>
-  <button class="accordion inner">Java</button>
-  <div class="panel">
-    <p>Use the typed <code>contractTest</code> helper on <code>MockServerClient</code> — it builds the request, parses the response, and returns a structured <code>ContractReport</code>:</p>
-    <pre class="prettyprint lang-java code"><code class="code">MockServerClient client = new MockServerClient("localhost", 1080);
-
-// Run contract test against a live service
-MockServerClient.ContractReport report = client.contractTest(
-    "https://petstore3.swagger.io/api/v3/openapi.json",
-    "https://petstore3.swagger.io"
-);
-
-System.out.println("All passed: " + report.allPassed());
-System.out.println("Passed: " + report.passed() + " / " + report.total());
-for (MockServerClient.ContractResult result : report.results()) {
-    System.out.printf("  %s %s — %s%n",
-        result.method(), result.path(),
-        result.passed() ? "PASS" : "FAIL");
-    result.requestErrors().forEach(e -> System.out.println("    request: " + e));
-    result.responseErrors().forEach(e -> System.out.println("    response: " + e));
-}
-
-// Optionally filter to a single operation by operationId
-MockServerClient.ContractReport singleOp = client.contractTest(
-    "https://petstore3.swagger.io/api/v3/openapi.json",
-    "https://petstore3.swagger.io",
-    "getUsers"
-);</code></pre>
-    <p>To validate recorded traffic against a spec instead of driving live requests, use <code>trafficValidate</code>:</p>
-    <pre class="prettyprint lang-java code"><code class="code">// Validate traffic already recorded by MockServer against an OpenAPI spec
-MockServerClient.ContractReport trafficReport = client.trafficValidate(
-    "https://petstore3.swagger.io/api/v3/openapi.json"
-);
-System.out.println("Traffic valid: " + trafficReport.allPassed());</code></pre>
-  </div>
-  <button class="accordion inner">JavaScript</button>
-  <div class="panel">
-    <pre class="prettyprint code"><code class="code">const mockServerClient = require('mockserver-client').mockServerClient;
-
-mockServerClient('localhost', 1080)
-    .sendRequest({
-        method: 'PUT',
-        path: '/mockserver/contractTest',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({
-            spec: 'https://petstore3.swagger.io/api/v3/openapi.json',
-            baseUrl: 'https://petstore3.swagger.io'
-        })
-    })
-    .then(response => {
-        const report = JSON.parse(response.body);
-        console.log('All passed:', report.allPassed);
-        report.results.forEach(r => {
-            console.log(r.method, r.path, r.passed ? 'PASS' : 'FAIL');
-            if (r.validationErrors.length > 0) {
-                r.validationErrors.forEach(e => console.log('  ', e));
-            }
-        });
-    });</code></pre>
   </div>
 </div>
 
@@ -356,6 +535,228 @@ System.out.println(verificationReport);</code></pre>
     <pre class="prettyprint lang-java code"><code class="code">// Import a Pact contract; returns a JSON array of the generated expectations
 String expectations = client.pactImport(pactJson);
 System.out.println("Created expectations: " + expectations);</code></pre>
+  </div>
+  <button class="accordion inner">JavaScript</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on the client — <code>pactExport</code>, <code>pactVerify</code>, and <code>pactImport</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-javascript code"><code class="code">const mockServerClient = require('mockserver-client').mockServerClient;
+
+const client = mockServerClient('localhost', 1080);
+
+// Create an expectation with the typed client
+await client.mockAnyResponse({
+    httpRequest: {method: 'GET', path: '/api/users'},
+    httpResponse: {
+        statusCode: 200,
+        headers: {'content-type': ['application/json']},
+        body: {users: [{id: 1, name: 'Alice'}]}
+    }
+});
+
+// Export active expectations as a Pact v3 contract (resolves to the parsed contract object)
+const pactContract = await client.pactExport('frontend', 'users-service');</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-javascript code"><code class="code">// Resolves with the parsed report for both pass (202) and fail (406) —
+// inspect report.verified to tell them apart
+const report = await client.pactVerify(pactContract);
+console.log('verified:', report.verified);</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-javascript code"><code class="code">// Resolves to the array of generated expectations
+const expectations = await client.pactImport(pactContract);
+console.log('Created expectations:', expectations);</code></pre>
+  </div>
+  <button class="accordion inner">Python</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on <code>MockServerClient</code> — <code>pact_export</code>, <code>pact_verify</code>, and <code>pact_import</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+from mockserver.models import HttpRequest, HttpResponse
+
+client = MockServerClient("localhost", 1080)
+
+# Create an expectation with the typed client
+client.when(
+    HttpRequest.request("/api/users").with_method("GET")
+).respond(
+    HttpResponse(
+        status_code=200,
+        headers={"content-type": ["application/json"]},
+        body='{"users":[{"id":1,"name":"Alice"}]}'
+    )
+)
+
+# Export active expectations as a Pact v3 contract (returns the contract JSON)
+pact_json = client.pact_export("frontend", "users-service")</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-python code"><code class="code"># Returns the verification report for both a pass (202) and a fail (406);
+# only a genuinely bad request (400) raises
+report = client.pact_verify(pact_json)
+print("report:", report)</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-python code"><code class="code"># Returns the upserted expectations JSON
+expectations = client.pact_import(pact_json)
+print("Created expectations:", expectations)</code></pre>
+  </div>
+  <button class="accordion inner">Ruby</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on the client — <code>pact_export</code>, <code>pact_verify</code>, and <code>pact_import</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+
+# Create an expectation with the typed client
+client.when(
+    MockServer::HttpRequest.new(method: 'GET', path: '/api/users')
+).respond(
+    MockServer::HttpResponse.new(
+        status_code: 200,
+        headers: {'content-type' =&gt; ['application/json']},
+        body: '{"users":[{"id":1,"name":"Alice"}]}'
+    )
+)
+
+# Export active expectations as a Pact v3 contract (returns the contract JSON)
+pact_json = client.pact_export(consumer: 'frontend', provider: 'users-service')</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-ruby code"><code class="code"># Returns the verification report for both a pass (202) and a fail (406);
+# only a genuinely bad request raises MockServer::Error
+report = client.pact_verify(pact_json)
+puts "report: #{report}"</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-ruby code"><code class="code"># Returns the upserted expectations JSON
+expectations = client.pact_import(pact_json)
+puts "Created expectations: #{expectations}"</code></pre>
+  </div>
+  <button class="accordion inner">Go</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on the client — <code>PactExport</code>, <code>PactVerify</code>, and <code>PactImport</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-go code"><code class="code">import (
+    "fmt"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+)
+
+client := mockserver.New("localhost", 1080)
+
+// Create an expectation with the typed client
+client.When(
+    mockserver.Request().Method("GET").Path("/api/users"),
+).Respond(
+    mockserver.Response().
+        StatusCode(200).
+        Header("content-type", "application/json").
+        Body(`{"users":[{"id":1,"name":"Alice"}]}`),
+)
+
+// Export active expectations as a Pact v3 contract (returns the contract JSON)
+pactJson, err := client.PactExport("frontend", "users-service")</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-go code"><code class="code">// passed = true when every interaction verified (202), false on a fail (406);
+// report carries the verification report JSON in both cases
+passed, report, err := client.PactVerify(pactJson)
+fmt.Println("verified:", passed, report)</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-go code"><code class="code">// Returns the slice of generated expectations
+expectations, err := client.PactImport(pactJson)
+fmt.Println("Created expectations:", expectations)</code></pre>
+  </div>
+  <button class="accordion inner">.NET</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on <code>MockServerClient</code> — <code>PactExport</code>, <code>PactVerify</code>, and <code>PactImport</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-csharp code"><code class="code">using MockServer.Client;
+using MockServer.Client.Models;
+
+using var client = new MockServerClient("localhost", 1080);
+
+// Create an expectation with the typed client
+client.When(
+    HttpRequest.Request().WithMethod("GET").WithPath("/api/users")
+).Respond(
+    HttpResponse.Response()
+        .WithStatusCode(200)
+        .WithHeader("content-type", "application/json")
+        .WithBody("{\"users\":[{\"id\":1,\"name\":\"Alice\"}]}")
+);
+
+// Export active expectations as a Pact v3 contract (returns the contract JSON)
+var pactJson = client.PactExport("frontend", "users-service");</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-csharp code"><code class="code">// Returns true when every interaction verified (202), false on a fail (406);
+// a verification failure does not throw
+bool verified = client.PactVerify(pactJson);
+Console.WriteLine("verified: " + verified);</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-csharp code"><code class="code">// Returns the list of generated expectations
+var expectations = client.PactImport(pactJson);
+Console.WriteLine("Created expectations: " + expectations.Count);</code></pre>
+  </div>
+  <button class="accordion inner">Rust</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on the client — <code>pact_export</code>, <code>pact_verify</code>, and <code>pact_import</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::{ClientBuilder, HttpRequest, HttpResponse};
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+
+// Create an expectation with the typed client
+client.when(HttpRequest::new().method("GET").path("/api/users"))
+    .respond(
+        HttpResponse::new()
+            .status_code(200)
+            .header("content-type", "application/json")
+            .body(r#"{"users":[{"id":1,"name":"Alice"}]}"#)
+    )
+    .unwrap();
+
+// Export active expectations as a Pact v3 contract (returns the contract JSON)
+let pact_json = client.pact_export("frontend", "users-service").unwrap();</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-rust code"><code class="code">// passed = true when every interaction verified (202), false on a fail (406);
+// the report is carried in both cases (a fail does not error)
+let verification = client.pact_verify(&amp;pact_json).unwrap();
+println!("verified: {} {}", verification.passed, verification.report);</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-rust code"><code class="code">// Returns the Vec of generated expectations
+let expectations = client.pact_import(&amp;pact_json).unwrap();
+println!("Created expectations: {}", expectations.len());</code></pre>
+  </div>
+  <button class="accordion inner">PHP</button>
+  <div class="panel">
+    <p>Use the typed Pact helpers on <code>MockServerClient</code> — <code>pactExport</code>, <code>pactVerify</code>, and <code>pactImport</code> — alongside the typed expectation API:</p>
+    <p><strong>Step 1 — Consumer: create expectations and export the contract</strong></p>
+    <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+use MockServer\HttpRequest;
+use MockServer\HttpResponse;
+
+$client = new MockServerClient('localhost', 1080);
+
+// Create an expectation with the typed client
+$client-&gt;when(
+    HttpRequest::request()
+        -&gt;method('GET')
+        -&gt;path('/api/users')
+)-&gt;respond(
+    HttpResponse::response()
+        -&gt;statusCode(200)
+        -&gt;header('content-type', 'application/json')
+        -&gt;body('{"users":[{"id":1,"name":"Alice"}]}')
+);
+
+// Export active expectations as a Pact v3 contract (returns the contract JSON)
+$pactJson = $client-&gt;pactExport('frontend', 'users-service');</code></pre>
+    <p><strong>Step 2 — Provider: verify the contract</strong></p>
+    <pre class="prettyprint lang-php code"><code class="code">// Returns true when every interaction verified (202), false on a fail (406);
+// a verification failure does not throw
+$verified = $client-&gt;pactVerify($pactJson);
+echo 'verified: ' . ($verified ? 'true' : 'false') . "\n";</code></pre>
+    <p><strong>Alternative — Provider: import a contract and stub from it</strong></p>
+    <pre class="prettyprint lang-php code"><code class="code">// Returns the upserted expectations JSON
+$expectations = $client-&gt;pactImport($pactJson);
+echo 'Created expectations: ' . $expectations . "\n";</code></pre>
   </div>
   <button class="accordion inner">REST API</button>
   <div class="panel">

@@ -314,7 +314,56 @@ RSpec.describe 'MockServer models' do
       it '.regex creates REGEX body' do
         body = MockServer::Body.regex('.*test.*')
         expect(body.type).to eq('REGEX')
-        expect(body.string).to eq('.*test.*')
+        expect(body.regex).to eq('.*test.*')
+        expect(body.to_h).to eq({ 'type' => 'REGEX', 'regex' => '.*test.*' })
+      end
+
+      it '.json_path creates JSON_PATH body serialising to jsonPath' do
+        body = MockServer::Body.json_path('$.name')
+        expect(body.type).to eq('JSON_PATH')
+        expect(body.json_path).to eq('$.name')
+        expect(body.to_h).to eq({ 'type' => 'JSON_PATH', 'jsonPath' => '$.name' })
+      end
+
+      it '.xpath creates XPATH body serialising to xpath' do
+        body = MockServer::Body.xpath('/root/active')
+        expect(body.type).to eq('XPATH')
+        expect(body.to_h).to eq({ 'type' => 'XPATH', 'xpath' => '/root/active' })
+      end
+
+      it '.all_of combines sub-bodies under bodyAllOf' do
+        body = MockServer::Body.all_of(
+          MockServer::Body.json_path('$.name'),
+          MockServer::Body.regex('.*active.*')
+        )
+        expect(body.type).to eq('ALL_OF')
+        expect(body.to_h).to eq({
+          'type' => 'ALL_OF',
+          'bodyAllOf' => [
+            { 'type' => 'JSON_PATH', 'jsonPath' => '$.name' },
+            { 'type' => 'REGEX', 'regex' => '.*active.*' }
+          ]
+        })
+      end
+
+      it '.all_of round-trips through JSON' do
+        body = MockServer::Body.all_of(
+          MockServer::Body.json_path('$.name'),
+          MockServer::Body.regex('.*active.*')
+        )
+        json = JSON.generate(body.to_h)
+        expect(json).to eq(
+          '{"type":"ALL_OF","bodyAllOf":[' \
+          '{"type":"JSON_PATH","jsonPath":"$.name"},' \
+          '{"type":"REGEX","regex":".*active.*"}]}'
+        )
+        roundtrip = MockServer::Body.from_hash(JSON.parse(json))
+        expect(roundtrip.type).to eq('ALL_OF')
+        expect(roundtrip.body_all_of.length).to eq(2)
+        expect(roundtrip.body_all_of[0]).to be_a(MockServer::Body)
+        expect(roundtrip.body_all_of[0].json_path).to eq('$.name')
+        expect(roundtrip.body_all_of[1].regex).to eq('.*active.*')
+        expect(roundtrip.to_h).to eq(body.to_h)
       end
 
       it '.exact creates STRING body' do
@@ -508,6 +557,53 @@ RSpec.describe 'MockServer models' do
   end
 
   # -------------------------------------------------------------------
+  # Jwt
+  # -------------------------------------------------------------------
+  describe MockServer::Jwt do
+    it 'serializes only non-nil fields' do
+      jwt = MockServer::Jwt.new(claims: { 'sub' => 'abc' }, issuer: 'iss')
+      expect(jwt.to_h).to eq({ 'claims' => { 'sub' => 'abc' }, 'issuer' => 'iss' })
+    end
+
+    it 'omits unset optional fields' do
+      jwt = MockServer::Jwt.new(claims: { 'sub' => 'abc' })
+      h = jwt.to_h
+      expect(h).not_to have_key('issuer')
+      expect(h).not_to have_key('audience')
+      expect(h).not_to have_key('algorithm')
+      expect(h).not_to have_key('header')
+      expect(h).not_to have_key('scheme')
+    end
+
+    it 'keeps claim values as plain strings including "!" negation and regex' do
+      jwt = MockServer::Jwt.new(claims: { 'role' => '!admin', 'email' => '^.+@example.com$' })
+      expect(jwt.to_h['claims']).to eq({ 'role' => '!admin', 'email' => '^.+@example.com$' })
+    end
+
+    it 'with_claim appends claims fluently' do
+      jwt = MockServer::Jwt.new.with_claim('sub', 'user-123').with_claim('role', '!admin')
+      expect(jwt.to_h['claims']).to eq({ 'sub' => 'user-123', 'role' => '!admin' })
+    end
+
+    it 'round-trips through from_hash' do
+      original = MockServer::Jwt.new(
+        claims: { 'sub' => 'user-123', 'role' => '!admin' },
+        issuer: 'https://issuer.example.com',
+        audience: 'my-api',
+        algorithm: 'RS256',
+        header: 'authorization',
+        scheme: 'Bearer'
+      )
+      roundtrip = MockServer::Jwt.from_hash(original.to_h)
+      expect(roundtrip.to_h).to eq(original.to_h)
+    end
+
+    it 'returns nil from_hash when data is nil' do
+      expect(MockServer::Jwt.from_hash(nil)).to be_nil
+    end
+  end
+
+  # -------------------------------------------------------------------
   # HttpRequest
   # -------------------------------------------------------------------
   describe MockServer::HttpRequest do
@@ -640,6 +736,47 @@ RSpec.describe 'MockServer models' do
       sa = MockServer::SocketAddress.new(host: 'localhost', port: 8080)
       req = MockServer::HttpRequest.new(socket_address: sa)
       expect(req.to_h['socketAddress']).to eq({ 'host' => 'localhost', 'port' => 8080 })
+    end
+
+    it 'serializes a jwt matcher under the "jwt" key alongside method/path' do
+      jwt = MockServer::Jwt.new(
+        claims: { 'sub' => 'user-123', 'role' => '!admin', 'email' => '^.+@example.com$' },
+        issuer: 'https://issuer.example.com',
+        audience: 'my-api',
+        algorithm: 'RS256'
+      )
+      req = MockServer::HttpRequest.new(method: 'GET', path: '/api').with_jwt(jwt)
+      expect(req.to_h).to eq({
+        'method' => 'GET',
+        'path' => '/api',
+        'jwt' => {
+          'claims' => {
+            'sub' => 'user-123',
+            'role' => '!admin',
+            'email' => '^.+@example.com$'
+          },
+          'issuer' => 'https://issuer.example.com',
+          'audience' => 'my-api',
+          'algorithm' => 'RS256'
+        }
+      })
+    end
+
+    it 'omits the jwt key when no jwt matcher is set' do
+      req = MockServer::HttpRequest.new(method: 'GET', path: '/api')
+      expect(req.to_h).not_to have_key('jwt')
+    end
+
+    it 'round-trips a request carrying a jwt matcher' do
+      original = MockServer::HttpRequest.new(method: 'GET', path: '/secure').with_jwt(
+        MockServer::Jwt.new(claims: { 'sub' => '!blocked' }, header: 'authorization', scheme: 'Bearer')
+      )
+      roundtrip = MockServer::HttpRequest.from_hash(original.to_h)
+      expect(roundtrip.jwt).to be_a(MockServer::Jwt)
+      expect(roundtrip.jwt.claims).to eq({ 'sub' => '!blocked' })
+      expect(roundtrip.jwt.header).to eq('authorization')
+      expect(roundtrip.jwt.scheme).to eq('Bearer')
+      expect(roundtrip.to_h).to eq(original.to_h)
     end
 
     it 'deserializes from hash' do
@@ -2955,6 +3092,123 @@ RSpec.describe 'MockServer models' do
       req = MockServer::HttpRequest.from_hash({ 'path' => '/c', 'cookies' => { 'session' => 'abc123' } })
       expect(req.cookies[0].name).to eq('session')
       expect(req.cookies[0].values).to eq(['abc123'])
+    end
+  end
+
+  # -------------------------------------------------------------------
+  # Residual round-trip fidelity fields (closed known-gaps["ruby"] entries)
+  # -------------------------------------------------------------------
+  describe 'round-trip fidelity fields' do
+    it 'HttpChaosProfile round-trips the GraphQL fault-injection knobs' do
+      chaos = MockServer::HttpChaosProfile.new(
+        graphql_errors: true,
+        graphql_error_message: 'boom',
+        graphql_error_code: 'INTERNAL_SERVER_ERROR',
+        graphql_nullify_data: false
+      )
+      h = chaos.to_h
+      expect(h['graphqlErrors']).to be(true)
+      expect(h['graphqlErrorMessage']).to eq('boom')
+      expect(h['graphqlErrorCode']).to eq('INTERNAL_SERVER_ERROR')
+      # false must survive strip_none (only nil is dropped)
+      expect(h).to have_key('graphqlNullifyData')
+      expect(h['graphqlNullifyData']).to be(false)
+
+      restored = MockServer::HttpChaosProfile.from_hash(h)
+      expect(restored.graphql_errors).to be(true)
+      expect(restored.graphql_error_message).to eq('boom')
+      expect(restored.graphql_error_code).to eq('INTERNAL_SERVER_ERROR')
+      expect(restored.graphql_nullify_data).to be(false)
+    end
+
+    it 'HttpChaosProfile omits GraphQL knobs when unset' do
+      h = MockServer::HttpChaosProfile.new(error_status: 500).to_h
+      %w[graphqlErrors graphqlErrorMessage graphqlErrorCode graphqlNullifyData].each do |k|
+        expect(h).not_to have_key(k)
+      end
+    end
+
+    it 'GrpcStreamMessage round-trips templateType' do
+      msg = MockServer::GrpcStreamMessage.new(json: '{"id":2}', template_type: 'VELOCITY')
+      h = msg.to_h
+      expect(h['templateType']).to eq('VELOCITY')
+      expect(MockServer::GrpcStreamMessage.from_hash(h).template_type).to eq('VELOCITY')
+    end
+
+    it 'GrpcStreamMessage omits templateType when unset' do
+      expect(MockServer::GrpcStreamMessage.new(json: '{}').to_h).not_to have_key('templateType')
+    end
+
+    it 'GraphQLBody round-trips selectionSetMatchType and array fields' do
+      body = MockServer::GraphQLBody.new(
+        query: 'query GetUser($id: ID!) { user(id: $id) { name } }',
+        operation_name: 'GetUser',
+        selection_set_match_type: 'AST_SUBSET',
+        fields: ['user']
+      )
+      h = body.to_h
+      expect(h['selectionSetMatchType']).to eq('AST_SUBSET')
+      expect(h['fields']).to eq(['user'])
+
+      restored = MockServer::GraphQLBody.from_hash(h)
+      expect(restored.selection_set_match_type).to eq('AST_SUBSET')
+      expect(restored.fields).to eq(['user'])
+    end
+
+    it 'Body round-trips the XML wire key without disturbing string' do
+      body = MockServer::Body.from_hash({ 'type' => 'XML', 'xml' => '<a><b>c</b></a>' })
+      expect(body.xml).to eq('<a><b>c</b></a>')
+      expect(body.string).to be_nil
+      h = body.to_h
+      expect(h['xml']).to eq('<a><b>c</b></a>')
+      expect(h).not_to have_key('string')
+    end
+
+    it 'Body.xml factory still emits the legacy string key (not xml)' do
+      h = MockServer::Body.xml('<root/>').to_h
+      expect(h['string']).to eq('<root/>')
+      expect(h).not_to have_key('xml')
+    end
+
+    it 'HttpRequest round-trips the protocol field' do
+      req = MockServer::HttpRequest.from_hash({ 'path' => '/adv', 'protocol' => 'HTTP_2' })
+      expect(req.protocol).to eq('HTTP_2')
+      expect(req.to_h['protocol']).to eq('HTTP_2')
+    end
+
+    it 'HttpRequest serializes pathParameters in the schema-matcher object form' do
+      path_params = { 'cartId' => [{ 'schema' => { 'type' => 'string', 'pattern' => '^[A-Z0-9-]+$' } }] }
+      req = MockServer::HttpRequest.from_hash({ 'path' => '/c', 'pathParameters' => path_params })
+      expect(req.to_h['pathParameters']).to eq(path_params)
+    end
+
+    it 'HttpResponse round-trips trailers' do
+      resp = MockServer::HttpResponse.from_hash({ 'trailers' => { 'X-Trailer' => ['end'] } })
+      expect(resp.trailers[0].name).to eq('X-Trailer')
+      expect(resp.trailers[0].values).to eq(['end'])
+      expect(resp.to_h['trailers']).to eq([{ 'name' => 'X-Trailer', 'values' => ['end'] }])
+    end
+
+    it 'HttpWebSocketResponse round-trips per-frame matchers' do
+      data = {
+        'subprotocol' => 'chat',
+        'matchers' => [
+          { 'frameType' => 'TEXT', 'textMatcher' => 'ping', 'responses' => [{ 'text' => 'pong' }] }
+        ]
+      }
+      resp = MockServer::HttpWebSocketResponse.from_hash(data)
+      matcher = resp.matchers[0]
+      expect(matcher).to be_a(MockServer::WebSocketFrameMatcher)
+      expect(matcher.frame_type).to eq('TEXT')
+      expect(matcher.text_matcher).to eq('ping')
+      expect(matcher.responses[0].text).to eq('pong')
+      expect(resp.to_h['matchers']).to eq(data['matchers'])
+    end
+
+    it 'Expectation round-trips the timestamp field' do
+      exp = MockServer::Expectation.from_hash({ 'timestamp' => '2026-07-03T12:00:00.000Z' })
+      expect(exp.timestamp).to eq('2026-07-03T12:00:00.000Z')
+      expect(exp.to_h['timestamp']).to eq('2026-07-03T12:00:00.000Z')
     end
   end
 end

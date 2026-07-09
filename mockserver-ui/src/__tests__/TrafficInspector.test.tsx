@@ -3,13 +3,38 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ThemeProvider } from '@mui/material/styles';
 import { buildTheme } from '../theme';
-import TrafficInspector from '../components/TrafficInspector';
+import TrafficInspector, {
+  maskSecretValue,
+  maskSecretsInValue,
+  mcpErrorInfo,
+  isUnmatchedResponse,
+  buildRequestCurl,
+} from '../components/TrafficInspector';
+import { summarizeTraffic, type McpParsed } from '../lib/llmTraffic';
+import { DebugMismatchContext } from '../hooks/DebugMismatchContext';
+import { GenerateStubContext } from '../hooks/GenerateStubContext';
 import { useDashboardStore } from '../store';
+import * as trafficLib from '../lib/traffic';
 
 function renderTrafficInspector() {
   return render(
     <ThemeProvider theme={buildTheme('dark')}>
       <TrafficInspector />
+    </ThemeProvider>,
+  );
+}
+
+function renderWithMismatchContexts(
+  debugMismatch: (r: Record<string, unknown>) => Promise<void>,
+  generateStub: (r: Record<string, unknown>) => Promise<void>,
+) {
+  return render(
+    <ThemeProvider theme={buildTheme('dark')}>
+      <DebugMismatchContext.Provider value={debugMismatch}>
+        <GenerateStubContext.Provider value={generateStub}>
+          <TrafficInspector />
+        </GenerateStubContext.Provider>
+      </DebugMismatchContext.Provider>
     </ThemeProvider>,
   );
 }
@@ -371,6 +396,98 @@ describe('TrafficInspector — per-request timing display', () => {
     expect(screen.getByText('TTFB 1200ms')).toBeInTheDocument();
     expect(screen.getByText('total 1500ms')).toBeInTheDocument();
   });
+
+  it('renders injected chaos-latency segment and the injected/real legend for a proxied response', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-chaos-timed',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/data',
+              headers: [{ name: 'host', values: ['example.com'] }],
+            },
+            httpResponse: {
+              statusCode: 200,
+              timing: {
+                connectionTimeInMillis: 10,
+                timeToFirstByteInMillis: 60,
+                totalTimeInMillis: 100,
+                requestStartedMillis: 1700000000000,
+                connectionEstablishedMillis: 1700000000010,
+                responseReceivedMillis: 1700000000100,
+                injectedChaosLatencyMillis: 500,
+                injectedDelayMillis: null,
+                breakpointHeldMillis: null,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/data/));
+
+    // Real segments (proxied) plus the injected chaos-latency segment are rendered
+    expect(screen.getByTestId('timing-waterfall')).toBeInTheDocument();
+    expect(screen.getByTestId('timing-segment-connect')).toBeInTheDocument();
+    expect(screen.getByTestId('timing-segment-injected-chaos')).toBeInTheDocument();
+    // Grouped legend distinguishes injected from real
+    expect(screen.getByTestId('timing-legend-injected')).toBeInTheDocument();
+    expect(screen.getByText('Injected by MockServer:')).toBeInTheDocument();
+    expect(screen.getByText('Chaos latency')).toBeInTheDocument();
+    // Injected total chip surfaces the injected sum
+    expect(screen.getByText('injected 500ms')).toBeInTheDocument();
+  });
+
+  it('renders a waterfall with a processing segment and injected delay for a mock-served response', async () => {
+    const user = userEvent.setup();
+
+    useDashboardStore.setState({
+      recordedRequests: [
+        {
+          key: 'req-mock-timed',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/mock-delayed',
+            },
+            // Mock-served: no connect/TTFB, total already includes the injected delay
+            httpResponse: {
+              statusCode: 200,
+              timing: {
+                connectionTimeInMillis: null,
+                timeToFirstByteInMillis: null,
+                totalTimeInMillis: 205,
+                requestStartedMillis: null,
+                connectionEstablishedMillis: null,
+                responseReceivedMillis: null,
+                injectedChaosLatencyMillis: null,
+                injectedDelayMillis: 200,
+                breakpointHeldMillis: null,
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/mock-delayed/));
+
+    // Mock-served entries now render a waterfall too (previously proxy-only)
+    expect(screen.getByTestId('timing-waterfall')).toBeInTheDocument();
+    // No connect segment on a mock; a real "processing" segment plus the injected delay segment
+    expect(screen.queryByTestId('timing-segment-connect')).not.toBeInTheDocument();
+    expect(screen.getByTestId('timing-segment-processing')).toBeInTheDocument();
+    expect(screen.getByTestId('timing-segment-injected-delay')).toBeInTheDocument();
+    expect(screen.getByText('Response delay')).toBeInTheDocument();
+    expect(screen.getByText('injected 200ms')).toBeInTheDocument();
+  });
 });
 
 describe('TrafficInspector — compare two requests (diff)', () => {
@@ -470,6 +587,144 @@ describe('TrafficInspector — compare two requests (diff)', () => {
     expect(checkboxes[2]!).toBeDisabled();
     // Already-checked ones remain interactive so the user can deselect.
     expect(checkboxes[0]!).toBeEnabled();
+  });
+});
+
+describe('TrafficInspector — Diff Pool', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'pool-a',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/alpha', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+        {
+          key: 'pool-b',
+          value: {
+            httpRequest: { method: 'POST', path: '/api/beta', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 201 },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  async function addToPool(user: ReturnType<typeof userEvent.setup>, pathText: RegExp) {
+    await user.click(screen.getByText(pathText));
+    await user.click(screen.getByRole('button', { name: /Add to Diff Pool/i }));
+  }
+
+  it('adds the selected request to the pool and shows the header chip count', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    // No chip before anything is staged.
+    expect(screen.queryByRole('button', { name: /Diff Pool \(/i })).not.toBeInTheDocument();
+
+    await addToPool(user, /\/api\/alpha/);
+
+    // Chip appears with a count of one; the action flips to the "already in pool" state.
+    expect(screen.getByRole('button', { name: /Diff Pool \(1\)/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /In Diff Pool/i })).toBeDisabled();
+
+    await addToPool(user, /\/api\/beta/);
+    expect(screen.getByRole('button', { name: /Diff Pool \(2\)/i })).toBeInTheDocument();
+  });
+
+  it('removes a single entry and clears the whole pool from the popover', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    await addToPool(user, /\/api\/alpha/);
+    await addToPool(user, /\/api\/beta/);
+
+    // Open the pool popover from the header chip.
+    await user.click(screen.getByRole('button', { name: /Diff Pool \(2\)/i }));
+    // Both entries are listed.
+    expect(screen.getByRole('button', { name: /Remove GET \/api\/alpha from Diff Pool/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Remove POST \/api\/beta from Diff Pool/i })).toBeInTheDocument();
+
+    // Remove one entry -> only the other remains listed.
+    await user.click(screen.getByRole('button', { name: /Remove GET \/api\/alpha from Diff Pool/i }));
+    expect(screen.queryByRole('button', { name: /Remove GET \/api\/alpha from Diff Pool/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Remove POST \/api\/beta from Diff Pool/i })).toBeInTheDocument();
+
+    // Clear All empties the pool, closes the popover, and the header chip disappears.
+    await user.click(screen.getByRole('button', { name: /Clear All/i }));
+    expect(screen.queryByRole('button', { name: /Diff Pool \(/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Remove POST \/api\/beta from Diff Pool/i })).not.toBeInTheDocument();
+  });
+
+  it('picks two pooled entries and diffs them via the shared dialog + PUT /mockserver/diff', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        diffCount: 1,
+        identical: false,
+        diffs: [{ field: 'method', expectedValue: 'GET', actualValue: 'POST', diffType: 'CHANGED' }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderTrafficInspector();
+    await addToPool(user, /\/api\/alpha/);
+    await addToPool(user, /\/api\/beta/);
+
+    await user.click(screen.getByRole('button', { name: /Diff Pool \(2\)/i }));
+
+    // "Diff Selected" is disabled until exactly two are picked.
+    const diffSelected = screen.getByRole('button', { name: /Diff Selected/i });
+    expect(diffSelected).toBeDisabled();
+
+    await user.click(screen.getByRole('checkbox', { name: /Pick GET \/api\/alpha/i }));
+    await user.click(screen.getByRole('checkbox', { name: /Pick POST \/api\/beta/i }));
+    expect(diffSelected).toBeEnabled();
+    await user.click(diffSelected);
+
+    // The shared diff dialog opens seeded with the two pooled requests.
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Compare' }));
+    expect(await within(dialog).findByText('Request Diff')).toBeInTheDocument();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toMatch(/\/mockserver\/diff$/);
+    const body = JSON.parse((init as RequestInit).body as string);
+    // First pick (alpha) -> expected, second pick (beta) -> actual, sending httpRequest definitions.
+    expect(body.expected).toMatchObject({ method: 'GET', path: '/api/alpha' });
+    expect(body.actual).toMatchObject({ method: 'POST', path: '/api/beta' });
+  });
+
+  it('caps the popover selection at two entries', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      recordedRequests: [
+        { key: 'p1', value: { httpRequest: { method: 'GET', path: '/one' }, httpResponse: { statusCode: 200 } } },
+        { key: 'p2', value: { httpRequest: { method: 'GET', path: '/two' }, httpResponse: { statusCode: 200 } } },
+        { key: 'p3', value: { httpRequest: { method: 'GET', path: '/three' }, httpResponse: { statusCode: 200 } } },
+      ],
+    });
+    renderTrafficInspector();
+
+    await addToPool(user, /\/one/);
+    await addToPool(user, /\/two/);
+    await addToPool(user, /\/three/);
+
+    await user.click(screen.getByRole('button', { name: /Diff Pool \(3\)/i }));
+    const picks = screen.getAllByRole('checkbox');
+    await user.click(picks[0]!);
+    await user.click(picks[1]!);
+    // The third checkbox is disabled once two are picked; picked ones stay interactive.
+    expect(picks[2]!).toBeDisabled();
+    expect(picks[0]!).toBeEnabled();
   });
 });
 
@@ -743,6 +998,136 @@ describe('TrafficInspector — Replay button', () => {
   });
 });
 
+describe('TrafficInspector — Repeat Advanced', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-repeat',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/repeat-me',
+              headers: [{ name: 'host', values: ['example.com'] }],
+            },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+      ],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows a Repeat… button and opens the dialog on click', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    await user.click(screen.getByText(/\/api\/repeat-me/));
+
+    const repeatBtn = screen.getByRole('button', { name: /Repeat/i });
+    await user.click(repeatBtn);
+
+    expect(screen.getByText('Repeat Request')).toBeInTheDocument();
+    // Default iterations = 10, concurrency = 1, delay = 0.
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByLabelText('Iterations')).toHaveValue(10);
+    expect(within(dialog).getByLabelText('Concurrency')).toHaveValue(1);
+    expect(within(dialog).getByLabelText('Delay (ms)')).toHaveValue(0);
+  });
+
+  it('issues exactly N replay calls and reports the summary', async () => {
+    const user = userEvent.setup();
+    // A fresh Response per call — a Response body stream can only be read once.
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ statusCode: 200 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    );
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/repeat-me/));
+    await user.click(screen.getByRole('button', { name: /Repeat/i }));
+
+    const dialog = screen.getByRole('dialog');
+    const iterationsInput = within(dialog).getByLabelText('Iterations');
+    await user.clear(iterationsInput);
+    await user.type(iterationsInput, '3');
+
+    await user.click(within(dialog).getByRole('button', { name: /Start/i }));
+
+    // Completion summary appears once all three calls settle.
+    expect(await within(dialog).findByText(/3 succeeded, 0 failed/i)).toBeInTheDocument();
+
+    const replayCalls = fetchSpy.mock.calls.filter(([url]) =>
+      typeof url === 'string' && url.includes('/mockserver/replay'),
+    );
+    expect(replayCalls).toHaveLength(3);
+    expect(replayCalls[0]![1]).toEqual(
+      expect.objectContaining({ method: 'PUT', headers: { 'Content-Type': 'application/json' } }),
+    );
+  });
+
+  it('counts failed replays and shows a warning summary', async () => {
+    const user = userEvent.setup();
+    // Every replay returns a 502 → each counts as failed.
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => 'Bad Gateway',
+    } as Response);
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/repeat-me/));
+    await user.click(screen.getByRole('button', { name: /Repeat/i }));
+
+    const dialog = screen.getByRole('dialog');
+    const iterationsInput = within(dialog).getByLabelText('Iterations');
+    await user.clear(iterationsInput);
+    await user.type(iterationsInput, '2');
+
+    await user.click(within(dialog).getByRole('button', { name: /Start/i }));
+
+    expect(await within(dialog).findByText(/0 succeeded, 2 failed/i)).toBeInTheDocument();
+  });
+
+  it('View Them seeds the traffic search with the request path', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ statusCode: 200 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    );
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/repeat-me/));
+    await user.click(screen.getByRole('button', { name: /Repeat/i }));
+
+    const dialog = screen.getByRole('dialog');
+    const iterationsInput = within(dialog).getByLabelText('Iterations');
+    await user.clear(iterationsInput);
+    await user.type(iterationsInput, '1');
+    await user.click(within(dialog).getByRole('button', { name: /Start/i }));
+
+    const viewBtn = await within(dialog).findByRole('button', { name: /View Them/i });
+    await user.click(viewBtn);
+
+    expect(useDashboardStore.getState().trafficSearch).toBe('path:/api/repeat-me');
+  });
+});
+
 /**
  * Master/detail resize-divider tests.
  *
@@ -810,7 +1195,7 @@ describe('TrafficInspector — search filtering', () => {
     expect(screen.getByText(/\/api\/users/)).toBeInTheDocument();
     expect(screen.getByText(/\/api\/orders/)).toBeInTheDocument();
 
-    const search = screen.getByPlaceholderText('Search...');
+    const search = screen.getByRole('textbox', { name: 'Search' });
     await user.type(search, 'orders');
 
     expect(screen.queryByText(/\/api\/users/)).not.toBeInTheDocument();
@@ -821,7 +1206,7 @@ describe('TrafficInspector — search filtering', () => {
     const user = userEvent.setup();
     renderTrafficInspector();
 
-    const search = screen.getByPlaceholderText('Search...');
+    const search = screen.getByRole('textbox', { name: 'Search' });
     // "WIDGET-42" only appears inside the response body, exercising the cached
     // JSON.stringify fallback rather than the field-level match.
     await user.type(search, 'widget-42');
@@ -834,7 +1219,7 @@ describe('TrafficInspector — search filtering', () => {
     const user = userEvent.setup();
     renderTrafficInspector();
 
-    const search = screen.getByPlaceholderText('Search...');
+    const search = screen.getByRole('textbox', { name: 'Search' });
     await user.type(search, 'nonexistent-term-xyz');
 
     expect(screen.getByText('No matching requests')).toBeInTheDocument();
@@ -886,5 +1271,770 @@ describe('TrafficInspector — master/detail resize divider', () => {
     });
     renderTrafficInspector();
     expect(screen.queryByTestId('traffic-master-resizer')).not.toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — secret-header masking (pure helper)', () => {
+  it('preserves the auth scheme and keeps the last 4 chars of a Bearer token', () => {
+    expect(maskSecretValue('Bearer sk-secret-abcd1234')).toBe('Bearer ••••1234');
+    expect(maskSecretValue('Basic dXNlcjpXXYY')).toBe('Basic ••••XXYY');
+  });
+
+  it('masks a raw token entirely when shorter than 5 chars', () => {
+    expect(maskSecretValue('abcd')).toBe('••••');
+    expect(maskSecretValue('')).toBe('');
+  });
+
+  it('masks an api-key value without a scheme, keeping the last 4 chars', () => {
+    expect(maskSecretValue('sk-ant-api03-XYZ9876')).toBe('••••9876');
+  });
+
+  it('masks secret headers in array form on httpRequest, leaving non-secrets intact', () => {
+    const value = {
+      httpRequest: {
+        method: 'POST',
+        path: '/v1/messages',
+        headers: [
+          { name: 'host', values: ['api.anthropic.com'] },
+          { name: 'authorization', values: ['Bearer sk-live-TOPSECRET4321'] },
+          { name: 'x-api-key', values: ['anthropic-key-ABCDEFGH'] },
+        ],
+      },
+    };
+    const masked = maskSecretsInValue(value) as typeof value;
+    const headers = masked.httpRequest.headers;
+    expect(headers[0]).toEqual({ name: 'host', values: ['api.anthropic.com'] });
+    expect(headers[1]!.values).toEqual(['Bearer ••••4321']);
+    expect(headers[2]!.values).toEqual(['••••EFGH']);
+    // The original object must not be mutated.
+    expect(value.httpRequest.headers[1]!.values[0]).toBe('Bearer sk-live-TOPSECRET4321');
+  });
+
+  it('masks secret headers in object form on httpResponse (e.g. Set-Cookie)', () => {
+    const value = {
+      httpResponse: {
+        statusCode: 200,
+        headers: { 'Set-Cookie': ['session=SUPERSECRETVALUE'], 'content-type': ['application/json'] },
+      },
+    };
+    const masked = maskSecretsInValue(value) as typeof value;
+    expect(masked.httpResponse.headers['Set-Cookie']).toEqual(['••••ALUE']);
+    expect(masked.httpResponse.headers['content-type']).toEqual(['application/json']);
+  });
+
+  it('returns the original reference when there is nothing to mask', () => {
+    const value = { httpRequest: { method: 'GET', headers: [{ name: 'host', values: ['x'] }] } };
+    expect(maskSecretsInValue(value)).toBe(value);
+  });
+});
+
+describe('TrafficInspector — masked secrets flow into the Diff/Compare view', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'req-secret',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/secure',
+              headers: [
+                { name: 'host', values: ['example.com'] },
+                { name: 'authorization', values: ['Bearer sk-secret-abcd1234'] },
+              ],
+            },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+        {
+          key: 'req-plain',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/plain', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('seeds the diff editor with the MASKED Authorization value, not the raw token', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    await user.click(screen.getByRole('button', { name: /Compare requests/i }));
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[0]!); // first row = /api/plain (newest at top) — order not important
+    await user.click(checkboxes[1]!);
+    await user.click(screen.getByRole('button', { name: /Diff \(2\/2\)/ }));
+
+    const dialog = await screen.findByRole('dialog');
+    // The masked token must appear in one of the seeded editors; the raw token never does.
+    const expected = within(dialog).getByLabelText('Expected request (JSON)') as HTMLTextAreaElement;
+    const actual = within(dialog).getByLabelText('Actual request (JSON)') as HTMLTextAreaElement;
+    const combined = `${expected.value}\n${actual.value}`;
+    expect(combined).toContain('••••1234');
+    expect(combined).not.toContain('sk-secret-abcd1234');
+  });
+});
+
+describe('TrafficInspector — search indexes decoded BINARY body text', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  it('matches a word that only exists in the DECODED base64 body', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      recordedRequests: [
+        {
+          key: 'req-binary',
+          value: {
+            httpRequest: { method: 'POST', path: '/api/binary', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: {
+              statusCode: 200,
+              // base64 of {"prompt":"PINEAPPLE-TOKEN"} — searching the base64 string would not match.
+              body: { type: 'BINARY', base64Bytes: btoa('{"prompt":"PINEAPPLE-TOKEN"}') },
+            },
+          },
+        },
+        {
+          key: 'req-other',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/other', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+    const search = screen.getByRole('textbox', { name: 'Search' });
+    await user.type(search, 'pineapple-token');
+
+    expect(screen.getByText(/\/api\/binary/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/api\/other/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — MCP JSON-RPC error classification (pure helper)', () => {
+  const base: McpParsed = {
+    kind: 'mcp', method: 'tools/call', id: 1, params: {}, result: null, error: null, isResponse: true,
+  };
+
+  it('flags a JSON-RPC error object and exposes its numeric code + message', () => {
+    const info = mcpErrorInfo({ ...base, error: { code: -32601, message: 'Method not found' } }, 200);
+    expect(info.isError).toBe(true);
+    expect(info.code).toBe(-32601);
+    expect(info.message).toBe('Method not found');
+  });
+
+  it('flags a non-2xx HTTP status even without a JSON-RPC error object', () => {
+    expect(mcpErrorInfo(base, 500).isError).toBe(true);
+    expect(mcpErrorInfo(base, 400).isError).toBe(true);
+  });
+
+  it('treats a clean 2xx result as not an error', () => {
+    const info = mcpErrorInfo({ ...base, result: { ok: true } }, 200);
+    expect(info.isError).toBe(false);
+    expect(info.code).toBeNull();
+  });
+});
+
+describe('TrafficInspector — bulk select + clear', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        { key: 'r1', value: { httpRequest: { method: 'GET', path: '/a' }, httpResponse: { statusCode: 200 } } },
+        { key: 'r2', value: { httpRequest: { method: 'GET', path: '/b' }, httpResponse: { statusCode: 200 } } },
+        { key: 'r3', value: { httpRequest: { method: 'GET', path: '/c' }, httpResponse: { statusCode: 200 } } },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+      notification: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('reveals uncapped select checkboxes and a Clear button in select mode', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    // No checkboxes until a mode is enabled.
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Select requests/i }));
+
+    // Per-row checkboxes (3) + the header "select all" checkbox = 4, none capped/disabled.
+    const rowCheckboxes = screen.getAllByRole('checkbox').filter(
+      (c) => c.getAttribute('aria-label')?.startsWith('Select request'),
+    );
+    expect(rowCheckboxes).toHaveLength(3);
+    await user.click(rowCheckboxes[0]!);
+    await user.click(rowCheckboxes[1]!);
+    await user.click(rowCheckboxes[2]!);
+    // No two-item cap — all three stay enabled and checked.
+    rowCheckboxes.forEach((c) => expect(c).toBeEnabled());
+    expect(screen.getByRole('button', { name: /Clear \(3\)/ })).toBeEnabled();
+  });
+
+  it('bulk-clears selected requests via clearLoggedRequest and drops the rows', async () => {
+    const user = userEvent.setup();
+    const spy = vi.spyOn(trafficLib, 'clearLoggedRequest').mockResolvedValue(undefined);
+    renderTrafficInspector();
+
+    await user.click(screen.getByRole('button', { name: /Select requests/i }));
+    await user.click(screen.getByLabelText('Select all requests'));
+    await user.click(screen.getByRole('button', { name: /Clear \(3\)/ }));
+
+    // Confirmation gate — nothing cleared until confirmed.
+    expect(spy).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Clear selected' }));
+
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(3));
+    // Each call sends the request definition (the httpRequest) for a selected row.
+    const paths = spy.mock.calls.map((c) => (c[1] as { path: string }).path).sort();
+    expect(paths).toEqual(['/a', '/b', '/c']);
+
+    await vi.waitFor(() =>
+      expect(useDashboardStore.getState().recordedRequests).toHaveLength(0),
+    );
+    expect(useDashboardStore.getState().notification).toMatchObject({ severity: 'success' });
+  });
+
+  it('leaving compare mode is not broken by select mode (mutually exclusive)', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    await user.click(screen.getByRole('button', { name: /Compare requests/i }));
+    expect(screen.getByRole('button', { name: /Diff \(/ })).toBeInTheDocument();
+
+    // Entering select mode exits compare mode (Diff button gone).
+    await user.click(screen.getByRole('button', { name: /Select requests/i }));
+    expect(screen.queryByRole('button', { name: /Diff \(/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Clear \(0\)/ })).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copy as curl — buildRequestCurl pure helper
+// ---------------------------------------------------------------------------
+
+describe('buildRequestCurl', () => {
+  it('reproduces the captured request against its original target', () => {
+    const value = {
+      httpRequest: {
+        method: 'POST',
+        path: '/v1/chat',
+        secure: true,
+        headers: [
+          { name: 'Host', values: ['api.example.com'] },
+          { name: 'Content-Type', values: ['application/json'] },
+          { name: 'Authorization', values: ['Bearer sk-secret-1234'] },
+        ],
+        queryStringParameters: [{ name: 'q', values: ['1'] }],
+        body: { type: 'STRING', string: '{"hello":"world"}' },
+      },
+      httpResponse: { statusCode: 200 },
+    };
+
+    const curl = buildRequestCurl(value, summarizeTraffic(value));
+
+    // Method + full URL (scheme from `secure`, host from the Host header, query appended).
+    expect(curl).toContain("curl -X 'POST' 'https://api.example.com/v1/chat?q=1'");
+    // Non-secret header carried through.
+    expect(curl).toContain("-H 'Content-Type: application/json'");
+    // Body carried through as --data-raw.
+    expect(curl).toContain(`--data-raw '{"hello":"world"}'`);
+    // Host header is not duplicated (it is in the URL).
+    expect(curl).not.toMatch(/-H 'Host:/i);
+    // Secret header value is masked, not leaked verbatim.
+    expect(curl).toContain('1234');
+    expect(curl).not.toContain('sk-secret-1234');
+  });
+
+  it('defaults method to GET and http scheme, and omits the body when absent', () => {
+    const value = {
+      httpRequest: {
+        path: '/api/ping',
+        headers: [{ name: 'host', values: ['svc.local'] }],
+      },
+      httpResponse: { statusCode: 200 },
+    };
+    const curl = buildRequestCurl(value, summarizeTraffic(value));
+    expect(curl).toContain("curl -X 'GET' 'http://svc.local/api/ping'");
+    expect(curl).not.toContain('--data-raw');
+  });
+
+  it('returns an empty string when there is no request', () => {
+    const value = { httpResponse: { statusCode: 200 } };
+    expect(buildRequestCurl(value, summarizeTraffic(value))).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unmatched detection
+// ---------------------------------------------------------------------------
+
+describe('isUnmatchedResponse', () => {
+  it('is true for a 404 Not Found response', () => {
+    expect(isUnmatchedResponse({ httpResponse: { statusCode: 404, reasonPhrase: 'Not Found' } })).toBe(true);
+    // reasonPhrase comparison is case-insensitive.
+    expect(isUnmatchedResponse({ httpResponse: { statusCode: 404, reasonPhrase: 'not found' } })).toBe(true);
+  });
+
+  it('is false for a matched response or a 404 without the Not Found phrase', () => {
+    expect(isUnmatchedResponse({ httpResponse: { statusCode: 200, reasonPhrase: 'OK' } })).toBe(false);
+    expect(isUnmatchedResponse({ httpResponse: { statusCode: 404 } })).toBe(false);
+    expect(isUnmatchedResponse({})).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Operator-aware search in TrafficInspector
+// ---------------------------------------------------------------------------
+
+describe('TrafficInspector — operator search', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'ok',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/ok', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+        {
+          key: 'err',
+          value: {
+            httpRequest: { method: 'POST', path: '/api/err', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 500 },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  it('filters by status comparator operator', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    expect(screen.getByText(/\/api\/ok/)).toBeInTheDocument();
+    expect(screen.getByText(/\/api\/err/)).toBeInTheDocument();
+
+    await user.type(screen.getByRole('textbox', { name: 'Search' }), 'status:>=400');
+
+    expect(screen.queryByText(/\/api\/ok/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\/api\/err/)).toBeInTheDocument();
+  });
+
+  it('filters by method operator', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    await user.type(screen.getByRole('textbox', { name: 'Search' }), 'method:POST');
+
+    expect(screen.queryByText(/\/api\/ok/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\/api\/err/)).toBeInTheDocument();
+  });
+
+  it('filters by path glob operator', async () => {
+    const user = userEvent.setup();
+    renderTrafficInspector();
+
+    await user.type(screen.getByRole('textbox', { name: 'Search' }), 'path:/api/o*');
+
+    expect(screen.getByText(/\/api\/ok/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/api\/err/)).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unmatched badge + mismatch-debugging actions
+// ---------------------------------------------------------------------------
+
+describe('TrafficInspector — unmatched requests', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [
+        {
+          key: 'missed',
+          value: {
+            httpRequest: { method: 'GET', path: '/missing', headers: [{ name: 'host', values: ['localhost'] }] },
+            httpResponse: { statusCode: 404, reasonPhrase: 'Not Found' },
+          },
+        },
+        {
+          key: 'hit',
+          value: {
+            httpRequest: { method: 'GET', path: '/found', headers: [{ name: 'host', values: ['localhost'] }] },
+            httpResponse: { statusCode: 200, reasonPhrase: 'OK' },
+          },
+        },
+      ],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it('shows an "N unmatched" badge that opens the Explain Unmatched dialog', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ unmatchedRequests: [] }),
+    }));
+
+    renderTrafficInspector();
+
+    const badge = screen.getByText('1 unmatched');
+    expect(badge).toBeInTheDocument();
+
+    await user.click(badge);
+    expect(await screen.findByText('Explain Unmatched Requests')).toBeInTheDocument();
+  });
+
+  it('offers "Why Didn\'t This Match?" and "Generate Stub" on an unmatched detail pane', async () => {
+    const user = userEvent.setup();
+    const debugMismatch = vi.fn().mockResolvedValue(undefined);
+    const generateStub = vi.fn().mockResolvedValue(undefined);
+
+    renderWithMismatchContexts(debugMismatch, generateStub);
+
+    await user.click(screen.getByText(/\/missing/));
+
+    const whyButton = screen.getByRole('button', { name: /Why Didn't This Match/i });
+    expect(whyButton).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate Stub/i })).toBeInTheDocument();
+
+    await user.click(whyButton);
+    expect(debugMismatch).toHaveBeenCalledTimes(1);
+    expect(debugMismatch.mock.calls[0]![0]).toMatchObject({ method: 'GET', path: '/missing' });
+  });
+
+  it('does not offer mismatch actions on a matched request', async () => {
+    const user = userEvent.setup();
+    const debugMismatch = vi.fn().mockResolvedValue(undefined);
+    const generateStub = vi.fn().mockResolvedValue(undefined);
+
+    renderWithMismatchContexts(debugMismatch, generateStub);
+
+    await user.click(screen.getByText(/\/found/));
+
+    expect(screen.queryByRole('button', { name: /Why Didn't This Match/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate Stub/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Actionable empty state
+// ---------------------------------------------------------------------------
+
+describe('TrafficInspector — empty state', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  it('shows guidance with a copyable proxy curl example when no traffic exists', () => {
+    renderTrafficInspector();
+    expect(screen.getByText('No traffic captured yet.')).toBeInTheDocument();
+    expect(screen.getByText(/curl -x http:\/\/.+ http:\/\/example\.com/)).toBeInTheDocument();
+    expect(screen.getByText(/Get Started tab/i)).toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — Structured detail pane (generic HTTP)', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+    });
+  });
+
+  it('defaults to structured Request/Response tabs with Raw JSON kept last', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-structured',
+          value: {
+            httpRequest: {
+              method: 'POST',
+              path: '/api/orders',
+              headers: [
+                { name: 'host', values: ['example.com'] },
+                { name: 'content-type', values: ['application/json'] },
+              ],
+              queryStringParameters: [{ name: 'page', values: ['2'] }],
+              body: { type: 'JSON', json: '{"sku":"A1"}' },
+            },
+            httpResponse: {
+              statusCode: 201,
+              reasonPhrase: 'Created',
+              headers: [{ name: 'x-trace', values: ['abc123'] }],
+              body: { type: 'JSON', json: '{"id":7}' },
+            },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/orders/));
+
+    // Structured tabs render, Raw JSON is present as the last tab.
+    const requestTab = screen.getByRole('tab', { name: 'Request' });
+    expect(requestTab).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Response' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Raw JSON' })).toBeInTheDocument();
+    // Request tab is selected by default.
+    expect(requestTab).toHaveAttribute('aria-selected', 'true');
+
+    // Request tab surfaces method/path, a query-parameter row, and a header row.
+    expect(screen.getByText('/api/orders')).toBeInTheDocument();
+    expect(screen.getByText('page')).toBeInTheDocument();
+    expect(screen.getByText('content-type')).toBeInTheDocument();
+
+    // Response tab surfaces status + reason and its own header.
+    await user.click(screen.getByRole('tab', { name: 'Response' }));
+    expect(screen.getByText('Created')).toBeInTheDocument();
+    expect(screen.getByText('x-trace')).toBeInTheDocument();
+
+    // Raw JSON tab still renders the raw tree.
+    await user.click(screen.getByRole('tab', { name: 'Raw JSON' }));
+    expect(screen.getByText('httpRequest')).toBeInTheDocument();
+  });
+
+  it('renders a non-JSON request body as raw text (fallback)', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-plaintext',
+          value: {
+            httpRequest: {
+              method: 'POST',
+              path: '/api/upload',
+              headers: [{ name: 'host', values: ['example.com'] }],
+              body: { type: 'STRING', string: 'just plain text, not json' },
+            },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+      ],
+    });
+
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/upload/));
+
+    // The plain-text body is shown verbatim under the Request tab (no JSON tree).
+    expect(screen.getByText('just plain text, not json')).toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — Promote to Mocks', () => {
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+      view: 'traffic',
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function seedProxied() {
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-promote',
+          value: {
+            httpRequest: { method: 'GET', path: '/api/users', headers: [{ name: 'host', values: ['example.com'] }] },
+            httpResponse: { statusCode: 200, body: { type: 'JSON', json: '{"ok":true}' } },
+          },
+        },
+      ],
+    });
+  }
+
+  it('disables the Promote button when there is no proxied traffic', () => {
+    renderTrafficInspector();
+    expect(screen.getByRole('button', { name: /Promote to Mocks/i })).toBeDisabled();
+  });
+
+  it('calls the promote endpoint with the search-derived filter and reports the created count', async () => {
+    const user = userEvent.setup();
+    seedProxied();
+    useDashboardStore.setState({ trafficSearch: 'method:GET path:/api/users' });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => [{ id: 'e1' }, { id: 'e2' }],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderTrafficInspector();
+    await user.click(screen.getByRole('button', { name: /Promote to Mocks/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    // Filter prefilled from the search operators.
+    expect(within(dialog).getByLabelText('Method filter')).toHaveValue('GET');
+    expect(within(dialog).getByLabelText('Path filter')).toHaveValue('/api/users');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Run' }));
+
+    // Hits the promote endpoint with the filter as the request-matcher body.
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/mockserver/recordings/promote'),
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body).toMatchObject({ method: 'GET', path: '/api/users' });
+
+    // Success message reports the number of created expectations.
+    expect(await within(dialog).findByText(/Created 2 expectations/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /View Expectations/i })).toBeInTheDocument();
+  });
+
+  it('surfaces the server error envelope when the promote call fails', async () => {
+    const user = userEvent.setup();
+    seedProxied();
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => 'no recorded traffic to promote',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderTrafficInspector();
+    await user.click(screen.getByRole('button', { name: /Promote to Mocks/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Run' }));
+
+    // The shared HumanErrorAlert shows a humanised 400 message...
+    expect(await within(dialog).findByText(/rejected as invalid/i)).toBeInTheDocument();
+    // ...and keeps the raw server body behind a Details toggle.
+    await user.click(within(dialog).getByRole('button', { name: /details/i }));
+    expect(within(dialog).getByText(/no recorded traffic to promote/i)).toBeInTheDocument();
+  });
+});
+
+describe('TrafficInspector — "Create From This…" launchpad menu', () => {
+  const MENU_LABEL = 'Create from this request…';
+
+  beforeEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [
+        {
+          key: 'req-http-1',
+          value: {
+            httpRequest: {
+              method: 'GET',
+              path: '/api/orders',
+              headers: [{ name: 'host', values: ['api.example.com'] }],
+            },
+            httpResponse: { statusCode: 200 },
+          },
+        },
+      ],
+      recordedRequests: [],
+      activeExpectations: [],
+      trafficSearch: '',
+      selectedTrafficKey: null,
+      view: 'traffic',
+      pendingEditExpectation: null,
+      pendingVerificationDraft: null,
+      pendingChaosDraft: null,
+    });
+  });
+
+  afterEach(() => {
+    useDashboardStore.setState({
+      proxiedRequests: [],
+      pendingEditExpectation: null,
+      pendingVerificationDraft: null,
+      pendingChaosDraft: null,
+    });
+  });
+
+  async function selectRowAndOpenMenu(user: ReturnType<typeof userEvent.setup>) {
+    renderTrafficInspector();
+    await user.click(screen.getByText(/\/api\/orders/));
+    await user.click(screen.getByRole('button', { name: MENU_LABEL }));
+  }
+
+  it('offers the menu with all four actions in the detail pane', async () => {
+    const user = userEvent.setup();
+    await selectRowAndOpenMenu(user);
+    expect(screen.getByRole('menuitem', { name: 'Create Mock' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Set Breakpoint' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Verify This Request' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Add Chaos For This Host/Path' })).toBeInTheDocument();
+  });
+
+  it('"Verify This Request" seeds the verification draft and navigates', async () => {
+    const user = userEvent.setup();
+    await selectRowAndOpenMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Verify This Request' }));
+    const state = useDashboardStore.getState();
+    expect(state.pendingVerificationDraft).toEqual({ method: 'GET', path: '/api/orders' });
+    expect(state.view).toBe('verification');
+  });
+
+  it('"Add Chaos For This Host/Path" seeds the chaos draft and navigates', async () => {
+    const user = userEvent.setup();
+    await selectRowAndOpenMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Add Chaos For This Host/Path' }));
+    const state = useDashboardStore.getState();
+    expect(state.pendingChaosDraft).toEqual({ host: 'api.example.com', path: '/api/orders' });
+    expect(state.view).toBe('chaos');
+  });
+
+  it('"Create Mock" loads a draft expectation into the Composer', async () => {
+    const user = userEvent.setup();
+    await selectRowAndOpenMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Create Mock' }));
+    const state = useDashboardStore.getState();
+    expect(state.view).toBe('composer');
+    const req = state.pendingEditExpectation?.['httpRequest'] as Record<string, unknown>;
+    expect(req?.['method']).toBe('GET');
+    expect(req?.['path']).toBe('/api/orders');
   });
 });

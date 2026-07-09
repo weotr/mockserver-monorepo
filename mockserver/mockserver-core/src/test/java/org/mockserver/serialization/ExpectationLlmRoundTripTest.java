@@ -60,6 +60,38 @@ public class ExpectationLlmRoundTripTest {
     }
 
     @Test
+    public void shouldRoundTripStreamingPhysicsSubwordStreaming() {
+        // given — a streaming completion opting into subword-sized deltas
+        Expectation original = when(request().withPath("/v1/chat/completions"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.OPENAI)
+                    .withModel("gpt-4o")
+                    .withCompletion(
+                        completion()
+                            .withText("Hello, world!")
+                            .withStreaming(true)
+                            .withStreamingPhysics(
+                                StreamingPhysics.streamingPhysics()
+                                    .withTokensPerSecond(50)
+                                    .withSubwordStreaming(true))
+                    )
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — subwordStreaming survives the schema-validated JSON round-trip
+        assertThat(deserialized, is(notNullValue()));
+        assertThat(deserialized.length, is(1));
+        StreamingPhysics physics = deserialized[0].getHttpLlmResponse().getCompletion().getStreamingPhysics();
+        assertThat(physics, is(notNullValue()));
+        assertThat(physics.getSubwordStreaming(), is(Boolean.TRUE));
+        assertThat(physics.getTokensPerSecond(), is(50));
+    }
+
+    @Test
     public void shouldRoundTripCompletionWithOutputSchema() {
         // given — a completion carrying a declared structured-output schema
         String schema = "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"]}";
@@ -475,6 +507,64 @@ public class ExpectationLlmRoundTripTest {
         // token-based quota fields must survive the schema-validated JSON round-trip
         assertThat(chaos.getTokenQuotaLimit(), is(50_000L));
         assertThat(chaos.getTokenQuotaWindowMillis(), is(60_000L));
+    }
+
+    @Test
+    public void shouldRoundTripModerationAndContentFilter() {
+        // given — a moderation verdict + Azure content-filter severities
+        Expectation original = when(request().withPath("/v1/moderations"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.OPENAI)
+                    .withModel("omni-moderation-latest")
+                    .withModeration(
+                        org.mockserver.model.ModerationResponse.moderationResponse()
+                            .withFlaggedCategory("hate")
+                            .withFlaggedCategory("violence")
+                            .withModel("omni-moderation-latest"))
+                    .withContentFilter(
+                        org.mockserver.model.LlmContentFilter.llmContentFilter()
+                            .withHate("high")
+                            .withViolence("low"))
+            );
+
+        // when — through the schema-validated JSON round-trip
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then
+        assertThat(deserialized.length, is(1));
+        HttpLlmResponse llm = deserialized[0].getHttpLlmResponse();
+        assertThat(llm.getModeration(), is(notNullValue()));
+        assertThat(llm.getModeration().getFlaggedCategories(), is(java.util.Arrays.asList("hate", "violence")));
+        assertThat(llm.getModeration().getModel(), is("omni-moderation-latest"));
+        assertThat(llm.getContentFilter(), is(notNullValue()));
+        assertThat(llm.getContentFilter().getHate(), is("high"));
+        assertThat(llm.getContentFilter().getViolence(), is("low"));
+    }
+
+    @Test
+    public void shouldRoundTripContentFilterBlockProbability() {
+        // given — the content-filter-block chaos field
+        Expectation original = when(request().withPath("/v1/chat/completions"))
+            .thenRespondWithLlm(
+                llmResponse()
+                    .withProvider(Provider.OPENAI)
+                    .withCompletion(completion().withText("hi"))
+                    .withChaos(
+                        org.mockserver.model.LlmChaosProfile.llmChaosProfile()
+                            .withContentFilterBlockProbability(1.0)
+                            .withSeed(7L))
+            );
+
+        // when
+        String json = serializer.serialize(original);
+        Expectation[] deserialized = serializer.deserializeArray(json, false);
+
+        // then — the field survives the schema-validated JSON round-trip
+        org.mockserver.model.LlmChaosProfile chaos = deserialized[0].getHttpLlmResponse().getChaos();
+        assertThat(chaos, is(notNullValue()));
+        assertThat(chaos.getContentFilterBlockProbability(), is(1.0));
     }
 
     @Test

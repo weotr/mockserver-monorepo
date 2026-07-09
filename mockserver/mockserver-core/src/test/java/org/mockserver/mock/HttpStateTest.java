@@ -2073,6 +2073,114 @@ public class HttpStateTest {
     }
 
     @Test
+    public void shouldSerializeRequestResponsesRetrieveOffTheLogConsumerThread() throws Exception {
+        // bug #3: serializing the whole REQUEST_RESPONSES list inside the single disruptor log-consumer
+        // callback (thread "MockServer-EventLog*") both raced the retrieve future timeout and stalled all
+        // further logging. The fix materializes the (cheap) list on the consumer thread but performs the
+        // heavy serialize(...) on the CALLER thread. Prove that by recording the thread serialize() runs on.
+
+        // given - a recording serializer injected in place of the real one
+        final java.util.concurrent.atomic.AtomicReference<String> serializeThreadName = new java.util.concurrent.atomic.AtomicReference<>();
+        LogEventRequestAndResponseSerializer recordingSerializer = new LogEventRequestAndResponseSerializer(new MockServerLogger()) {
+            @Override
+            public String serialize(java.util.List<org.mockserver.model.LogEventRequestAndResponse> httpRequestAndHttpResponses) {
+                serializeThreadName.set(Thread.currentThread().getName());
+                return super.serialize(httpRequestAndHttpResponses);
+            }
+        };
+        java.lang.reflect.Field field = HttpState.class.getDeclaredField("httpRequestResponseSerializer");
+        field.setAccessible(true);
+        field.set(httpState, recordingSerializer);
+
+        httpState.log(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(EXPECTATION_RESPONSE)
+                .setHttpRequest(request("request_one"))
+                .setHttpResponse(response("response_one"))
+        );
+        httpState.log(
+            new LogEntry()
+                .setLogLevel(INFO)
+                .setType(EXPECTATION_RESPONSE)
+                .setHttpRequest(request("request_two"))
+                .setHttpResponse(response("response_two"))
+        );
+
+        // when
+        HttpResponse response = httpState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "request_responses")
+                    .withQueryStringParameter("format", "json")
+                    .withBody(requestDefinitionSerializer.serialize(request("request_.*")))
+            );
+
+        // then - retrieve completed with the correct content
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(response.getBodyAsString(), containsString("request_one"));
+        assertThat(response.getBodyAsString(), containsString("request_two"));
+        // and - serialization ran on the caller (test) thread, NOT on the disruptor log-consumer thread
+        assertThat(serializeThreadName.get(), is(notNullValue()));
+        assertThat(serializeThreadName.get(), not(startsWith("MockServer-EventLog")));
+        assertThat(serializeThreadName.get(), is(Thread.currentThread().getName()));
+    }
+
+    @Test
+    public void shouldRetrieveManyLargeRequestResponsesWithoutTimingOut() {
+        // bug #3 regression guard: a log holding many large captured response bodies must serialize and
+        // return from a REQUEST_RESPONSES JSON retrieve without throwing a TimeoutException — the heavy
+        // serialization is no longer gated by the retrieve future timeout because it runs on the caller
+        // thread rather than inside the single log-consumer callback.
+
+        // given - a dedicated HttpState whose log retains all the entries we are about to write
+        final int entryCount = 2000;
+        final int bodyBytes = 64 * 1024;
+        Configuration largeLogConfiguration = configuration().maxLogEntries(entryCount + 100);
+        Scheduler scheduler = mock(Scheduler.class);
+        org.mockito.Mockito.when(scheduler.getExecutorService()).thenReturn(schedulerExecutor);
+        HttpState largeLogState = new HttpState(largeLogConfiguration, new MockServerLogger(largeLogConfiguration, MockServerLogger.class), scheduler);
+
+        StringBuilder largeBodyBuilder = new StringBuilder(bodyBytes);
+        for (int i = 0; i < bodyBytes; i++) {
+            largeBodyBuilder.append('x');
+        }
+        String largeBody = largeBodyBuilder.toString();
+        for (int i = 0; i < entryCount; i++) {
+            largeLogState.log(
+                new LogEntry()
+                    .setLogLevel(INFO)
+                    .setType(EXPECTATION_RESPONSE)
+                    .setHttpRequest(request("/req-" + i))
+                    .setHttpResponse(response(largeBody))
+            );
+        }
+
+        // when
+        long start = System.currentTimeMillis();
+        HttpResponse response = largeLogState
+            .retrieve(
+                request()
+                    .withQueryStringParameter("type", "request_responses")
+                    .withQueryStringParameter("format", "json")
+                    .withBody(requestDefinitionSerializer.serialize(request("/req-.*")))
+            );
+        long durationMillis = System.currentTimeMillis() - start;
+
+        // then - completed (no TimeoutException) and returned every entry
+        assertThat(response.getStatusCode(), is(200));
+        assertThat(durationMillis, lessThan(largeLogConfiguration.maxFutureTimeoutInMillis()));
+        String body = response.getBodyAsString();
+        assertThat(body, containsString("/req-0\""));
+        assertThat(body, containsString("/req-" + (entryCount - 1) + "\""));
+        int pathCount = 0;
+        for (int idx = body.indexOf("\"path\""); idx >= 0; idx = body.indexOf("\"path\"", idx + 1)) {
+            pathCount++;
+        }
+        assertThat(pathCount, is(entryCount));
+    }
+
+    @Test
     public void shouldRetrieveRecordedRequestsResponsesAsLogEntries() {
         // given
         httpState.log(
@@ -2422,7 +2530,7 @@ public class HttpStateTest {
         assertThat(responseWriter.response.getStatusCode(), is(200));
         assertThat(responseWriter.response.getBody().getContentType(), is(MediaType.create("text", "x-go").withCharset(UTF_8).toString()));
         String body = responseWriter.response.getBodyAsString();
-        assertThat(body, containsString("mockserver \"github.com/mock-server/mockserver-monorepo/mockserver-client-go\""));
+        assertThat(body, containsString("mockserver \"github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7\""));
         assertThat(body, containsString("client := mockserver.New(\"localhost\", 1080)"));
         assertThat(body, containsString("client.Upsert(e)"));
         assertThat(body, containsString("/somePath"));
@@ -3533,6 +3641,67 @@ public class HttpStateTest {
         }
     }
 
+    private static String matchRequestV2ModuleBase64() throws java.io.IOException {
+        try (java.io.InputStream in = HttpStateTest.class.getResourceAsStream("/org/mockserver/wasm/match-request-v2.wasm")) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            return java.util.Base64.getEncoder().encodeToString(out.toByteArray());
+        }
+    }
+
+    @Test
+    public void shouldTestWasmV2ModuleWithQueryParametersAndCookies() throws java.io.IOException {
+        // given — the v2 module matches POST /orders with query tenant=acme and cookie session=abc123
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String body = "{\"module\":\"" + matchRequestV2ModuleBase64() + "\","
+                + "\"request\":{\"method\":\"POST\",\"path\":\"/orders\","
+                + "\"queryStringParameters\":{\"tenant\":[\"acme\"]},"
+                + "\"cookies\":{\"session\":\"abc123\"},\"body\":\"{}\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            assertThat(responseWriter.response.getBodyAsString(), is("{\"matched\":true}"));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldNotMatchWasmV2ModuleWhenCookieMissingFromSampleRequest() throws java.io.IOException {
+        // given — same module, but the sample request omits the required cookie
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String body = "{\"module\":\"" + matchRequestV2ModuleBase64() + "\","
+                + "\"request\":{\"method\":\"POST\",\"path\":\"/orders\","
+                + "\"queryStringParameters\":{\"tenant\":[\"acme\"]},\"body\":\"{}\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            assertThat(responseWriter.response.getBodyAsString(), is("{\"matched\":false}"));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
     @Test
     public void shouldReturnMatchedFalseForInvalidWasmModule() {
         // given
@@ -3593,6 +3762,76 @@ public class HttpStateTest {
             // then
             assertThat(handle, is(true));
             assertThat(responseWriter.response.getStatusCode(), is(400));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    private static String shapeResponseModuleBase64() throws java.io.IOException {
+        try (java.io.InputStream in = HttpStateTest.class.getResourceAsStream("/org/mockserver/wasm/shape-response.wasm")) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[4096];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            return java.util.Base64.getEncoder().encodeToString(out.toByteArray());
+        }
+    }
+
+    @Test
+    public void shouldTestWasmModuleAndReturnShapedResponseWhenCandidateProvided() throws java.io.IOException {
+        // given — the shape-response module matches POST /shape and, given a candidate response, shapes it
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String body = "{\"module\":\"" + shapeResponseModuleBase64() + "\","
+                + "\"request\":{\"method\":\"POST\",\"path\":\"/shape\",\"body\":\"{}\"},"
+                + "\"response\":{\"statusCode\":201,\"headers\":{\"Content-Type\":[\"application/json\"]},\"body\":\"{\\\"name\\\":\\\"acme\\\"}\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then — matched true and the shaped response is returned
+            assertThat(handle, is(true));
+            assertThat(responseWriter.response.getStatusCode(), is(200));
+            com.fasterxml.jackson.databind.JsonNode result = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+            assertThat(result.get("matched").asBoolean(), is(true));
+            com.fasterxml.jackson.databind.JsonNode shaped = result.get("shaped");
+            assertThat(shaped, is(notNullValue()));
+            assertThat(shaped.get("statusCode").asInt(), is(200));
+            assertThat(shaped.get("headers").get("X-Shaped").get(0).asText(), is("true"));
+            assertThat(shaped.get("body").asText(), is("{\"greeting\":\"Hello, acme!\",\"shaped\":true}"));
+        } finally {
+            configuration.wasmEnabled(original);
+        }
+    }
+
+    @Test
+    public void shouldTestWasmModuleWithNullShapedWhenModuleDoesNotShape() throws java.io.IOException {
+        // given — a pure predicate module (no shape_response) with a candidate response present
+        boolean original = configuration.wasmEnabled();
+        try {
+            configuration.wasmEnabled(true);
+            String body = "{\"module\":\"" + matchRequestModuleBase64() + "\","
+                + "\"request\":{\"method\":\"POST\",\"path\":\"/orders\",\"headers\":{\"X-Tenant\":[\"acme\"]}},"
+                + "\"response\":{\"statusCode\":200,\"body\":\"{}\"}}";
+            HttpRequest testRequest = request("/mockserver/wasm/test").withMethod("POST").withBody(body);
+            FakeResponseWriter responseWriter = new FakeResponseWriter();
+
+            // when
+            boolean handle = httpState.handle(testRequest, responseWriter, false);
+
+            // then — matched true, shaped is explicit null (module does not shape)
+            assertThat(handle, is(true));
+            com.fasterxml.jackson.databind.JsonNode result = org.mockserver.serialization.ObjectMapperFactory.createObjectMapper()
+                .readTree(responseWriter.response.getBodyAsString());
+            assertThat(result.get("matched").asBoolean(), is(true));
+            assertThat(result.has("shaped"), is(true));
+            assertThat(result.get("shaped").isNull(), is(true));
         } finally {
             configuration.wasmEnabled(original);
         }

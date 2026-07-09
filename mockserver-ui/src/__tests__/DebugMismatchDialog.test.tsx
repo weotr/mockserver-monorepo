@@ -83,14 +83,68 @@ describe('DebugMismatchDialog', () => {
     expect(screen.getByText('Connection failed')).toBeInTheDocument();
   });
 
-  it('shows score badges for each expectation', () => {
+  it('shows an honest "differs on N field(s)" badge counting only failing fields', () => {
     useDashboardStore.setState({
       debugMismatchOpen: true,
       debugMismatchResult: sampleResult,
     });
     render(<DebugMismatchDialog connectionParams={connectionParams} />);
-    expect(screen.getByText('10/12')).toBeInTheDocument();
-    expect(screen.getByText('6/12')).toBeInTheDocument();
+    // exp-1 differs on path + body; exp-2 differs on method only. The badge counts
+    // failing fields, not (all-fields − failing), so it never inflates the score.
+    expect(screen.getByText('differs on 2 fields')).toBeInTheDocument();
+    expect(screen.getByText('differs on 1 field')).toBeInTheDocument();
+    expect(screen.queryByText('10/12')).not.toBeInTheDocument();
+  });
+
+  it('does not inflate the score for a matcher that only specifies a couple of fields', () => {
+    // A method+path-only matcher: the server reports 15 of 16 possible fields as
+    // "matched" (14 were never specified), which previously read as 15/16. The
+    // honest count is the single field that actually differs.
+    const inflated: DebugMismatchResult = {
+      ...sampleResult,
+      closestMatch: undefined,
+      results: [
+        {
+          expectationId: 'exp-x',
+          expectationMethod: 'GET',
+          expectationPath: '/api/users',
+          matches: false,
+          matchedFieldCount: 15,
+          totalFieldCount: 16,
+          differences: { path: ['expected /api/users but was /api/items'] },
+        },
+      ],
+    };
+    useDashboardStore.setState({
+      debugMismatchOpen: true,
+      debugMismatchResult: inflated,
+    });
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
+    expect(screen.getByText('differs on 1 field')).toBeInTheDocument();
+    expect(screen.queryByText('15/16')).not.toBeInTheDocument();
+  });
+
+  it('gives the close icon button an accessible label', () => {
+    useDashboardStore.setState({
+      debugMismatchOpen: true,
+      debugMismatchResult: sampleResult,
+    });
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
+    expect(document.querySelector('button[aria-label="Close"]')).toBeInTheDocument();
+  });
+
+  it('renders a client-derived remediation hint on each failing field', async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      debugMismatchOpen: true,
+      debugMismatchResult: sampleResult,
+    });
+    render(<DebugMismatchDialog connectionParams={connectionParams} />);
+
+    await user.click(screen.getByText('GET /api/users'));
+    // Hints mirror the server's MismatchRemediation defaults, derived from the field name.
+    expect(screen.getByText(/Hint: check the request path/)).toBeInTheDocument();
+    expect(screen.getByText(/Hint: check the request body content/)).toBeInTheDocument();
   });
 
   it('shows method and path for expectations', () => {
@@ -178,7 +232,7 @@ describe('DebugMismatchDialog', () => {
       });
       render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
-      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      await user.click(screen.getByRole('tab', { name: 'Visual Diff' }));
 
       // Diff table header from DiffPanel.
       expect(screen.getByText('Expected')).toBeInTheDocument();
@@ -199,7 +253,7 @@ describe('DebugMismatchDialog', () => {
       });
       render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
-      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      await user.click(screen.getByRole('tab', { name: 'Visual Diff' }));
       // exp-2's only difference is on `method`; it must NOT appear because exp-1 is closest.
       expect(screen.queryByText('method')).not.toBeInTheDocument();
     });
@@ -212,7 +266,7 @@ describe('DebugMismatchDialog', () => {
       });
       render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
-      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      await user.click(screen.getByRole('tab', { name: 'Visual Diff' }));
       // exp-1 (10/12) outscores exp-2 (6/12), so its fields drive the diff.
       expect(screen.getByText('path')).toBeInTheDocument();
     });
@@ -239,7 +293,7 @@ describe('DebugMismatchDialog', () => {
       });
       render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
-      await user.click(screen.getByRole('tab', { name: 'Visual diff' }));
+      await user.click(screen.getByRole('tab', { name: 'Visual Diff' }));
       expect(
         screen.getByText(/No closest expectation with field-level differences/),
       ).toBeInTheDocument();
@@ -253,8 +307,8 @@ describe('DebugMismatchDialog', () => {
       });
       render(<DebugMismatchDialog connectionParams={connectionParams} />);
 
-      // Default tab still shows the original score/path UI (info not removed).
-      expect(screen.getByText('10/12')).toBeInTheDocument();
+      // Default tab still shows the score/path UI (info not removed).
+      expect(screen.getByText('differs on 2 fields')).toBeInTheDocument();
       await user.click(screen.getByText('GET /api/users'));
       expect(
         screen.getByText('expected /api/users but was /api/items'),

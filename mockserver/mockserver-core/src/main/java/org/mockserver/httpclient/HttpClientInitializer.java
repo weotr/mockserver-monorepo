@@ -15,8 +15,10 @@ import org.mockserver.codec.MockServerBinaryClientCodec;
 import org.mockserver.codec.MockServerHttpClientCodec;
 import org.mockserver.codec.StreamingAwareHttpObjectAggregator;
 import org.mockserver.configuration.Configuration;
+import org.mockserver.log.model.LogEntry;
 import org.mockserver.logging.LoggingHandler;
 import org.mockserver.logging.MockServerLogger;
+import org.mockserver.metrics.Metrics;
 import org.mockserver.model.Protocol;
 import org.mockserver.proxyconfiguration.ProxyConfiguration;
 import org.mockserver.socket.tls.NettySslContextFactory;
@@ -31,6 +33,7 @@ import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.httpclient.NettyHttpClient.CONNECTION_POOL;
 import static org.mockserver.httpclient.NettyHttpClient.REMOTE_SOCKET;
 import static org.mockserver.httpclient.NettyHttpClient.SECURE;
+import static org.slf4j.event.Level.DEBUG;
 import static org.slf4j.event.Level.TRACE;
 
 @ChannelHandler.Sharable
@@ -92,7 +95,7 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
 
         if (secure) {
             InetSocketAddress remoteAddress = channel.attr(REMOTE_SOCKET).get();
-            pipeline.addLast(nettySslContextFactory.createClientSslContext(forwardProxyClient, httpProtocol != null && httpProtocol.equals(Protocol.HTTP_2)).newHandler(channel.alloc(), remoteAddress.getHostName(), remoteAddress.getPort()));
+            pipeline.addLast(nettySslContextFactory.createClientSslContext(forwardProxyClient, httpProtocol != null && httpProtocol.equals(Protocol.HTTP_2), remoteAddress.getHostName()).newHandler(channel.alloc(), remoteAddress.getHostName(), remoteAddress.getPort()));
         }
 
         // add logging
@@ -146,33 +149,143 @@ public class HttpClientInitializer extends ChannelInitializer<SocketChannel> {
         }
         pipeline.addLast(new MockServerHttpClientCodec(mockServerLogger, proxyConfigurations));
         pipeline.addLast(httpClientHandler);
+        recordForwardUpstreamProtocol(pipeline, "http1_1");
         protocolFuture.complete(Protocol.HTTP_1_1);
     }
 
-    private void configureHttp2Pipeline(ChannelPipeline pipeline) {
-        addReadTimeoutHandlerIfNotPooled(pipeline);
-        final Http2Connection connection = new DefaultHttp2Connection(false);
-        final HttpToHttp2ConnectionHandlerBuilder http2ConnectionHandlerBuilder = new HttpToHttp2ConnectionHandlerBuilder()
-            .frameListener(
-                new DelegatingDecompressorFrameListener(
-                    connection,
-                    new InboundHttp2ToHttpAdapterBuilder(connection)
-                        .maxContentLength(configuration != null ? configuration.maxResponseBodySize() : org.mockserver.configuration.ConfigurationProperties.maxResponseBodySize())
-                        .propagateSettings(true)
-                        .validateHttpHeaders(false)
-                        .build()
-                )
-            )
-            .connection(connection)
-            .flushPreface(true);
-        if (mockServerLogger.isEnabledForInstance(TRACE)) {
-            http2ConnectionHandlerBuilder.frameLogger(new Http2FrameLogger(LogLevel.TRACE, HttpClientHandler.class.getName()));
+    /**
+     * Record (metric + DEBUG log) the protocol this forward/proxy client connection actually negotiated
+     * to the upstream, so operators can confirm whether {@code forwardProxyHttp2Upgrade} is taking effect.
+     * A forward shown as {@code http1_1} to a backend that withholds its streaming SSE head over HTTP/1.1
+     * (e.g. the OpenAI Codex endpoint) is the classic cause of a high forward time-to-first-byte.
+     */
+    private void recordForwardUpstreamProtocol(ChannelPipeline pipeline, String protocol) {
+        String upstreamHost = "unknown";
+        InetSocketAddress remote = pipeline.channel().attr(REMOTE_SOCKET).get();
+        if (remote != null) {
+            upstreamHost = remote.getHostString();
         }
-        pipeline.addLast(http2ConnectionHandlerBuilder.build());
-        pipeline.addLast(new Http2SettingsHandler(protocolFuture));
-        pipeline.addLast(new TimeToFirstByteHandler());
-        pipeline.addLast(new MockServerHttpClientCodec(mockServerLogger, proxyConfigurations));
-        pipeline.addLast(httpClientHandler);
+        Metrics.incrementForwardUpstreamProtocol(upstreamHost, protocol);
+        if (mockServerLogger.isEnabledForInstance(DEBUG)) {
+            mockServerLogger.logEvent(new LogEntry()
+                .setLogLevel(DEBUG)
+                .setMessageFormat("forward upstream connection to {} negotiated {}")
+                .setArguments(upstreamHost, protocol));
+        }
+    }
+
+    /**
+     * Builds a streaming-capable HTTP/2 client pipeline using the same multiplex stack the server side
+     * uses ({@link Http2FrameCodecBuilder#forClient()} + {@link Http2MultiplexHandler}), so that — unlike
+     * the previous {@code InboundHttp2ToHttpAdapter} path which aggregated the whole response — a streamed
+     * upstream response (Server-Sent Events) is relayed incrementally to the proxy client. This is selected
+     * purely by ALPN, so it serves BOTH direct HTTP/2 clients and forward-over-HTTP/2.
+     * <p>
+     * The MockServer request is written to the parent channel by {@link NettyHttpClient} exactly as for
+     * HTTP/1.1; {@link Http2ForwardRequestDispatchHandler} (at the tail) intercepts that write, opens a
+     * single outbound stream and dispatches the request to it. The per-stream response pipeline (decode,
+     * decompress, streaming-aware aggregate, relay) is built by {@link Http2ForwardStreamChildInitializer}.
+     * <p>
+     * ROUND-TRIP vs STREAMING / stream correlation: a spec-compliant HTTP/2 upstream answers on the SAME
+     * (client-initiated, odd) stream the request was sent on, so the response arrives on the bootstrap
+     * child stream and is handled there. However MockServer's OWN non-multiplex HTTP/2 server (the
+     * {@code HttpToHttp2ConnectionHandler} path in PortUnificationHandler) does not propagate the request's
+     * stream id onto its responses, so it returns responses generally — ordinary aggregated mock responses
+     * as well as gRPC reflection and websocket object-callback forwards — on a fresh SERVER-INITIATED (even)
+     * stream rather than echoing the request's stream id. A strict multiplex client treats such a stream as an
+     * unsolicited inbound stream; the original implementation RST-reset it via {@code ClosedInboundHttp2-
+     * StreamHandler}, so the response was discarded and the request's stream never completed (the round
+     * trip hung until timeout — the regression this fixes). The old aggregating client tolerated it because
+     * {@code InboundHttp2ToHttpAdapter} correlates at the connection level, not by strict stream identity.
+     * <p>
+     * Because this client disables server push ({@code pushEnabled(false)}), an inbound (server-initiated)
+     * stream is never a legitimate push — it can only be such a misattributed response — so the inbound
+     * stream is routed through the SAME per-stream response pipeline ({@code childInitializer}) instead of
+     * being reset. That completes the response future for these paths while leaving the compliant
+     * same-stream path (and the incremental SSE streaming feature) unchanged.
+     * <p>
+     * ALPN has already proven HTTP/2 by the time this runs, so {@code protocolFuture} is completed with
+     * {@link Protocol#HTTP_2} here; the frame codec consumes the SETTINGS frame, so the old
+     * {@link Http2SettingsHandler} (which waited for SETTINGS) is not used.
+     */
+    private void configureHttp2Pipeline(ChannelPipeline pipeline) {
+        // NOTE: deliberately NO parent-channel read timeout here. The per-stream ReadTimeoutHandler is
+        // armed on the CHILD pipeline (Http2ForwardStreamChildInitializer) and is swapped for the longer
+        // stream IdleStateHandler (streamIdleTimeoutSeconds) when a streaming response is detected. A read
+        // timeout on the PARENT would never be swapped, so an inter-event pause longer than maxSocketTimeout
+        // (default 20s) during a streaming response — e.g. an LLM reasoning gap — would trip it and close the
+        // connection, truncating the stream. The pre-dispatch window (connect + TLS handshake) is already
+        // covered by the connect timeout and TLS handshake timeout.
+
+        int maxFrameSize = configuration != null ? configuration.maxResponseBodySize() : org.mockserver.configuration.ConfigurationProperties.maxResponseBodySize();
+        Http2FrameCodecBuilder frameCodecBuilder = Http2FrameCodecBuilder.forClient()
+            .initialSettings(Http2Settings.defaultSettings()
+                // We are a client: never accept server push.
+                .pushEnabled(false)
+                .maxFrameSize(maxFrameSize < Http2CodecUtil.MAX_FRAME_SIZE_LOWER_BOUND
+                    ? Http2CodecUtil.MAX_FRAME_SIZE_LOWER_BOUND
+                    : Math.min(maxFrameSize, Http2CodecUtil.MAX_FRAME_SIZE_UPPER_BOUND)));
+        if (mockServerLogger.isEnabledForInstance(TRACE)) {
+            frameCodecBuilder.frameLogger(new Http2FrameLogger(LogLevel.TRACE, HttpClientHandler.class.getName()));
+        }
+        pipeline.addLast(frameCodecBuilder.build());
+
+        Http2ForwardStreamChildInitializer childInitializer = new Http2ForwardStreamChildInitializer(configuration, mockServerLogger, proxyConfigurations, httpClientHandler, httpClientConnectionHandler);
+        // Push is disabled, so an inbound (server-initiated) stream is never a push — it is a response
+        // MockServer's own non-multiplex HTTP/2 server returned on a server-initiated stream instead of the
+        // request's stream. Route it through the same response pipeline (NOT reset) so the round trip
+        // completes; a compliant upstream answers on the client-initiated stream opened below and never
+        // creates an inbound stream, so this leaves the same-stream / streaming path untouched.
+        pipeline.addLast(new Http2MultiplexHandler(childInitializer));
+        // Intercepts the MockServer request written to the parent channel and dispatches it on a new stream.
+        pipeline.addLast(new Http2ForwardRequestDispatchHandler(childInitializer));
+
+        // ALPN already proved HTTP/2; the frame codec consumes SETTINGS, so complete immediately.
+        recordForwardUpstreamProtocol(pipeline, "http2");
+        protocolFuture.complete(Protocol.HTTP_2);
+    }
+
+    /**
+     * Tail outbound handler on the parent HTTP/2 connection. {@link NettyHttpClient} writes the MockServer
+     * {@link org.mockserver.model.HttpRequest} to the parent channel exactly as it does for HTTP/1.1; this
+     * handler intercepts that write, opens a single outbound stream channel (configured by
+     * {@link Http2ForwardStreamChildInitializer}) and writes the request to it, where the child's encoder
+     * turns it into HEADERS + DATA frames. Keeping the dispatch here means {@link NettyHttpClient} needs no
+     * HTTP/2-specific code.
+     */
+    private static class Http2ForwardRequestDispatchHandler extends io.netty.channel.ChannelOutboundHandlerAdapter {
+
+        private final Http2ForwardStreamChildInitializer childInitializer;
+
+        private Http2ForwardRequestDispatchHandler(Http2ForwardStreamChildInitializer childInitializer) {
+            this.childInitializer = childInitializer;
+        }
+
+        @Override
+        public void write(io.netty.channel.ChannelHandlerContext ctx, Object msg, io.netty.channel.ChannelPromise promise) throws Exception {
+            if (msg instanceof org.mockserver.model.HttpRequest) {
+                new Http2StreamChannelBootstrap(ctx.channel())
+                    .handler(childInitializer)
+                    .open()
+                    .addListener((io.netty.util.concurrent.GenericFutureListener<io.netty.util.concurrent.Future<Http2StreamChannel>>) openFuture -> {
+                        if (openFuture.isSuccess()) {
+                            Http2StreamChannel streamChannel = openFuture.getNow();
+                            streamChannel.writeAndFlush(msg).addListener(writeFuture -> {
+                                if (writeFuture.isSuccess()) {
+                                    promise.setSuccess();
+                                } else {
+                                    promise.setFailure(writeFuture.cause());
+                                    streamChannel.close();
+                                }
+                            });
+                        } else {
+                            promise.setFailure(openFuture.cause());
+                        }
+                    });
+            } else {
+                super.write(ctx, msg, promise);
+            }
+        }
     }
 
     private void configureBinaryPipeline(ChannelPipeline pipeline) {

@@ -1,7 +1,6 @@
 package org.mockserver.matchers;
 
 import org.mockserver.configuration.ConfigurationProperties;
-import org.mockserver.model.Header;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.RequestDefinition;
 import org.mockserver.wasm.WasmRequest;
@@ -45,28 +44,14 @@ public class WasmBodyMatcher extends BodyMatcher<String> {
 
     /**
      * Build the {@link WasmRequest} envelope from the matched body plus, when available,
-     * the method/path/headers carried on the {@link MatchDifference} context. Falls back
-     * to a body-only request when no request context is present (keeps the matcher usable
-     * outside the request-matching path).
+     * the method/path/query-parameters/headers/cookies carried on the {@link MatchDifference}
+     * context. Falls back to a body-only request when no request context is present (keeps the
+     * matcher usable outside the request-matching path).
      */
     private WasmRequest buildWasmRequest(MatchDifference context, String body) {
         RequestDefinition requestDefinition = context == null ? null : context.getHttpRequest();
         if (requestDefinition instanceof HttpRequest) {
-            HttpRequest request = (HttpRequest) requestDefinition;
-            WasmRequest wasmRequest = new WasmRequest(
-                request.getMethod() == null ? "" : request.getMethod().getValue(),
-                request.getPath() == null ? "" : request.getPath().getValue(),
-                null,
-                body
-            );
-            for (Header header : request.getHeaderList()) {
-                if (header.getValues() != null) {
-                    for (org.mockserver.model.NottableString value : header.getValues()) {
-                        wasmRequest.withHeader(header.getName().getValue(), value == null ? null : value.getValue());
-                    }
-                }
-            }
-            return wasmRequest;
+            return WasmRequest.fromHttpRequest((HttpRequest) requestDefinition, body);
         }
         return WasmRequest.ofBody(body);
     }

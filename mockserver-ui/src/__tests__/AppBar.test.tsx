@@ -12,6 +12,7 @@ function renderAppBar(overrides = {}) {
     onClearServer: vi.fn().mockResolvedValue(undefined),
     onClearLogs: vi.fn().mockResolvedValue(undefined),
     onClearExpectations: vi.fn().mockResolvedValue(undefined),
+    onShowShortcuts: vi.fn(),
   };
   const props = { ...defaults, ...overrides };
   return {
@@ -49,6 +50,15 @@ describe('AppBar', () => {
     expect(screen.getByText('error')).toBeInTheDocument();
   });
 
+  it('exposes the server location (host:port) in the connection chip tooltip', async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+    // The chip label stays "connected"; the tooltip finally says WHERE.
+    await user.hover(screen.getByText('connected'));
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent(/MockServer at https?:\/\/[^:]+:\d+/);
+  });
+
   it('toggles theme when theme button is clicked', async () => {
     const user = userEvent.setup();
     renderAppBar();
@@ -72,10 +82,10 @@ describe('AppBar', () => {
     expect(clearButton).toBeDefined();
 
     await user.click(clearButton!);
-    expect(screen.getByText('Reset server (all)')).toBeInTheDocument();
+    expect(screen.getByText('Reset Server (all)')).toBeInTheDocument();
 
     // Reset is destructive — it opens a confirmation dialog rather than firing immediately.
-    await user.click(screen.getByText('Reset server (all)'));
+    await user.click(screen.getByText('Reset Server (all)'));
     expect(props.onClearServer).not.toHaveBeenCalled();
     expect(screen.getByText('Reset the entire server?')).toBeInTheDocument();
 
@@ -101,7 +111,7 @@ describe('AppBar', () => {
     expect(mcpButton).not.toBeInTheDocument();
   });
 
-  it('calls onClearLogs when clear server logs is clicked', async () => {
+  it('confirms before clearing server logs from the menu', async () => {
     const user = userEvent.setup();
     const { props } = renderAppBar();
 
@@ -109,8 +119,14 @@ describe('AppBar', () => {
       (b) => b.querySelector('[data-testid="DeleteSweepIcon"]'),
     );
     await user.click(clearButton!);
-    await user.click(screen.getByText('Clear server logs'));
+    // Clearing logs from the menu opens a confirmation dialog rather than firing
+    // immediately — matching the Cmd/Ctrl+Shift+L shortcut behaviour.
+    await user.click(screen.getByText('Clear Server Logs'));
+    expect(props.onClearLogs).not.toHaveBeenCalled();
+    expect(screen.getByText('Clear server logs?')).toBeInTheDocument();
 
+    // Confirm in the dialog.
+    await user.click(screen.getByRole('button', { name: 'Clear logs' }));
     expect(props.onClearLogs).toHaveBeenCalledOnce();
     expect(props.onClearServer).not.toHaveBeenCalled();
   });
@@ -156,12 +172,14 @@ describe('AppBar', () => {
     expect(screen.queryByText(/^H3 :/)).not.toBeInTheDocument();
   });
 
-  it('opens the keyboard shortcuts dialog from the keyboard icon', async () => {
+  it('requests the keyboard shortcuts dialog from the keyboard icon', async () => {
     const user = userEvent.setup();
-    renderAppBar();
+    // The shortcuts dialog is now owned by App (shared with the `?` shortcut); the
+    // AppBar button just asks App to open it via onShowShortcuts.
+    const { props } = renderAppBar();
 
     await user.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
-    expect(screen.getByText('Focus the log search field')).toBeInTheDocument();
+    expect(props.onShowShortcuts).toHaveBeenCalledOnce();
   });
 
   it('opens the SAML dialog from the tools menu', async () => {
@@ -174,9 +192,39 @@ describe('AppBar', () => {
     expect(toolsButton).toBeDefined();
     await user.click(toolsButton!);
 
-    await user.click(screen.getByText('Mock SAML provider…'));
+    await user.click(screen.getByText('Mock SAML Provider…'));
     // The dialog title appears once the SAML dialog opens.
-    expect(screen.getByText('Mock SAML provider')).toBeInTheDocument();
+    expect(screen.getByText('Mock SAML Provider')).toBeInTheDocument();
+  });
+
+  it('opens the GraphQL import dialog from the tools menu', async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+
+    const toolsButton = screen.getAllByRole('button').find(
+      (b) => b.getAttribute('aria-label') === 'Import / export tools',
+    );
+    expect(toolsButton).toBeDefined();
+    await user.click(toolsButton!);
+
+    await user.click(screen.getByText('Import GraphQL Schema…'));
+    // The dialog title appears once the GraphQL import dialog opens.
+    expect(screen.getByRole('heading', { name: 'Import GraphQL Schema' })).toBeInTheDocument();
+  });
+
+  it('opens the SCIM dialog from the tools menu', async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+
+    const toolsButton = screen.getAllByRole('button').find(
+      (b) => b.getAttribute('aria-label') === 'Import / export tools',
+    );
+    expect(toolsButton).toBeDefined();
+    await user.click(toolsButton!);
+
+    await user.click(screen.getByText('Mock SCIM Provider…'));
+    // The dialog title appears once the SCIM dialog opens.
+    expect(screen.getByText('Mock SCIM Provider')).toBeInTheDocument();
   });
 
   it('opens the baseline compare dialog from the tools menu', async () => {
@@ -189,9 +237,9 @@ describe('AppBar', () => {
     expect(toolsButton).toBeDefined();
     await user.click(toolsButton!);
 
-    await user.click(screen.getByText('Compare against baseline…'));
+    await user.click(screen.getByText('Compare Against Baseline…'));
     // The dialog heading appears once the baseline compare dialog opens.
-    expect(screen.getByRole('heading', { name: 'Compare against baseline' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Compare Against Baseline' })).toBeInTheDocument();
   });
 });
 
@@ -255,6 +303,26 @@ describe('AppBar responsive navigation', () => {
     expect(useDashboardStore.getState().view).toBe('metrics');
   });
 
+  it('navigates to the standalone Scenarios view from the Mock group', async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+
+    await user.click(screen.getByRole('button', { name: 'Mock views' }));
+    const scenariosItem = await screen.findByRole('menuitem', { name: 'Scenarios view' });
+    await user.click(scenariosItem);
+    expect(useDashboardStore.getState().view).toBe('scenarios');
+  });
+
+  it('navigates to the Audit trail view from the Inspect group', async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+
+    await user.click(screen.getByRole('button', { name: 'Inspect views' }));
+    const auditItem = await screen.findByRole('menuitem', { name: 'Audit trail view' });
+    await user.click(auditItem);
+    expect(useDashboardStore.getState().view).toBe('audit');
+  });
+
   it('highlights the group that owns the active view', () => {
     useDashboardStore.setState({ view: 'slo' });
     renderAppBar();
@@ -266,7 +334,7 @@ describe('AppBar responsive navigation', () => {
     expect(verifyButton).toBeInTheDocument();
   });
 
-  it('reaches every ViewMode through exactly one group (no orphaned view)', async () => {
+  it('reaches every ViewMode through at least one group (no orphaned view)', async () => {
     const user = userEvent.setup();
     renderAppBar();
 
@@ -295,6 +363,9 @@ describe('AppBar responsive navigation', () => {
       contract: 'Contract test view',
       cluster: 'Cluster status view',
       optimise: 'LLM Optimise view',
+      'mcp-health': 'MCP server health view',
+      scenarios: 'Scenarios view',
+      audit: 'Audit trail view',
     };
     const allViews = Object.keys(expectedAria) as ViewMode[];
 
@@ -316,10 +387,26 @@ describe('AppBar responsive navigation', () => {
     }
 
     // Every ViewMode is reachable through some group (runtime guard that the
-    // NAV_GROUPS wiring actually renders each labelled item).
+    // NAV_GROUPS wiring actually renders each labelled item). A view may live in
+    // more than one group (e.g. Trace under both Observe and AI), so this asserts
+    // reachability — "at least one group" — not single-group uniqueness.
     for (const v of allViews) {
       expect(reachableLabels.has(expectedAria[v])).toBe(true);
     }
+  });
+
+  it('highlights every group that owns a multi-group view (Trace in Observe and AI)', () => {
+    // Trace (`sessions`) is deliberately listed under both Observe and AI, so
+    // both group buttons must read as active when the Trace view is current —
+    // not just the first group, which the old find-first highlight would do.
+    useDashboardStore.setState({ view: 'sessions' });
+    renderAppBar();
+    const observeButton = screen.getByRole('button', { name: 'Observe views' });
+    const aiButton = screen.getByRole('button', { name: 'AI views' });
+    // The active-group highlight is a translucent background applied via sx;
+    // assert both owning group buttons are present (visual highlight via style).
+    expect(observeButton).toBeInTheDocument();
+    expect(aiButton).toBeInTheDocument();
   });
 
   it('exposes a one-line description for nav tabs that have one', () => {
@@ -329,8 +416,8 @@ describe('AppBar responsive navigation', () => {
     // self-explanatory Get Started tab is intentionally omitted (no bar).
     const views = Object.keys(NAV_TAB_DESCRIPTIONS);
     // Exact count guards against descriptions being accidentally dropped from
-    // other tabs: 17 tabs carry one (every tab except the omitted Get Started).
-    expect(views.length).toBe(17);
+    // other tabs: 20 tabs carry one (every tab except the omitted Get Started).
+    expect(views.length).toBe(20);
     for (const v of views) {
       expect(NAV_TAB_DESCRIPTIONS[v as keyof typeof NAV_TAB_DESCRIPTIONS]?.length ?? 0).toBeGreaterThan(0);
     }
@@ -345,6 +432,16 @@ describe('AppBar responsive navigation', () => {
     expect(screen.queryByText(/Esc filter/i)).not.toBeInTheDocument();
     // The Keyboard-shortcuts dialog button remains the discoverability path.
     expect(screen.getByRole('button', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+  });
+
+  it('uses a fitting AI icon (not the piggy-bank Savings icon) for the AI group', () => {
+    useDashboardStore.setState({ view: 'dashboard' });
+    renderAppBar();
+    // The AI group button carries the swapped-in AutoAwesome icon; the old
+    // SavingsIcon (a piggy bank) must no longer appear anywhere in the bar.
+    const aiButton = screen.getByRole('button', { name: 'AI views' });
+    expect(aiButton.querySelector('[data-testid="AutoAwesomeIcon"]')).toBeInTheDocument();
+    expect(screen.queryByTestId('SavingsIcon')).not.toBeInTheDocument();
   });
 
   it('navigates to the gRPC view from the hamburger menu on narrow screens', async () => {

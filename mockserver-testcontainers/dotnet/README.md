@@ -53,13 +53,14 @@ var response = await httpClient.GetStringAsync($"{url}/hello");
 |--------|-------------|
 | `WithLogLevel(string)` | Set the MockServer log level (INFO, DEBUG, WARN, ERROR, TRACE) |
 | `WithMockServerProperty(string, string)` | Set any MockServer configuration property as an env var |
-| `WithImage(string)` | Override the Docker image (default: `mockserver/mockserver:mockserver-7.2.0`) |
+| `WithImage(string)` | Override the Docker image (default: `mockserver/mockserver:mockserver-7.4.0`) |
 | `WithPortBinding(int, int)` | Bind a specific host port to the container port |
 
 ## Container Helpers
 
 | Method | Returns |
 |--------|---------|
+| `GetClient()` | A cached, ready-wired `MockServer.Client.MockServerClient` pointed at the mapped host/port |
 | `GetUrl()` | HTTP endpoint: `http://host:port` |
 | `GetSecureUrl()` | HTTPS endpoint: `https://host:port` |
 | `GetConnectionString()` | `host:port` |

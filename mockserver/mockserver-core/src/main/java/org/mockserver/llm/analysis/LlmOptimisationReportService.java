@@ -94,7 +94,10 @@ public class LlmOptimisationReportService {
                 HttpRequest request = pair.getHttpRequest();
                 // detectForAnalysis (not sniff) so MOCKED LLM traffic on localhost — e.g. the
                 // demo, and any mocked conversations — is included, matching the Sessions view.
-                Optional<Provider> providerOpt = LlmProviderSniffer.detectForAnalysis(request);
+                // Pass the response so detection can fall back to the body shape (the resilient
+                // signal) when an unknown host / non-standard path is used by a coding CLI.
+                Optional<Provider> providerOpt =
+                    LlmProviderSniffer.detectForAnalysis(request, pair.getHttpResponse());
                 if (!providerOpt.isPresent()) {
                     continue; // not LLM traffic
                 }
@@ -174,7 +177,25 @@ public class LlmOptimisationReportService {
         return csvRenderer.render(result.getReport());
     }
 
-    private FixtureRedactor redactor() {
+    /**
+     * Render the captured session as an eval / fine-tune / promptfoo dataset for a
+     * previously built result. The exporter always redacts request and response
+     * content via {@link FixtureRedactor} (default sensitive headers/query params
+     * plus any configured {@code mockserver.fixtureBodyRedactFields}) before
+     * emission, so secrets and configured PII never reach the dataset.
+     */
+    public String renderDataset(Result result, LlmDatasetExporter.DatasetFormat format) {
+        return new LlmDatasetExporter().export(result.getIncludedExchanges(), format, redactor());
+    }
+
+    /**
+     * The redactor used for the brief appendix, dataset exports and the agent-run
+     * diff — default sensitive headers/query params plus any configured
+     * {@code mockserver.fixtureBodyRedactFields}. Public so the diff callers
+     * (REST {@code PUT /llm/diffRuns}, MCP {@code diff_agent_runs}) redact each
+     * request the SAME way the export path does before surfacing decoded prompts.
+     */
+    public FixtureRedactor redactor() {
         List<String> bodyFields = bodyFields();
         return bodyFields.isEmpty()
             ? new FixtureRedactor()

@@ -466,6 +466,9 @@ public class Main {
         @Option(names = "--watch", description = "Watch the initializer/expectations file(s) (from --init / --openapi) and live-reload expectations when they change, without a restart (~5s poll). Equivalent to MOCKSERVER_WATCH_INITIALIZATION_JSON=true or -Dmockserver.watchInitializationJson=true.")
         boolean watch;
 
+        @Option(names = "--proxy-setup", description = "Set MockServer up as a TLS-intercepting proxy: generate a unique private Certificate Authority (instead of the public CA published in the MockServer repository) and print an OS-specific copy-paste setup block (CA path plus HTTPS_PROXY / NODE_EXTRA_CA_CERTS / SSL_CERT_FILE / REQUESTS_CA_BUNDLE exports). Equivalent to MOCKSERVER_PROXY_SETUP=true or -Dmockserver.proxySetup=true.")
+        boolean proxySetup;
+
         @Option(names = "--validate-openapi", description = "Validate forwarded/proxied requests and responses against the given OpenAPI spec (URL, file path, or inline payload). Violations are logged; combine with --validate-enforce to block non-conformant traffic.")
         String validateOpenapi;
 
@@ -527,6 +530,20 @@ public class Main {
                 // Wire --watch (must be set before startup so the expectation file watcher is created)
                 if (watch) {
                     ConfigurationProperties.watchInitializationJson(true);
+                }
+
+                // Standalone launch (jar/Docker/CLI): print the proxy setup block at startup by default,
+                // unless the user explicitly configured proxySetupLogging in ANY source (-D, env var, or
+                // the mockserver.properties file). Embedded ClientAndServer keeps the global default
+                // (off) so it stays silent.
+                if (!ConfigurationProperties.proxySetupLoggingConfigured()) {
+                    ConfigurationProperties.proxySetupLogging(true);
+                }
+
+                // Wire --proxy-setup (forces a unique dynamic CA and ensures the proxy setup block prints)
+                if (proxySetup) {
+                    ConfigurationProperties.proxySetup(true);
+                    ConfigurationProperties.proxySetupLogging(true);
                 }
 
                 // Wire --openapi

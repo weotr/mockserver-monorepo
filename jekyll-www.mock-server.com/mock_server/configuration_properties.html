@@ -106,7 +106,7 @@ mockserver.enableCORSForAllResponses=false</code></pre>
             <td><span class="inline_code">maxSocketTimeout</span></td>
             <td><span class="inline_code">MOCKSERVER_MAX_SOCKET_TIMEOUT</span></td>
             <td><span class="this_value">20,000 ms</span></td>
-            <td>Increase when your system-under-test is slow; decrease to fail fast in unit tests</td>
+            <td>Maximum time to wait for the first response byte when forwarding/proxying. Increase when your system-under-test is slow to start responding — e.g. a reasoning LLM backend can take minutes to emit its first token, so a low value 502s a healthy call; decrease to fail fast in unit tests. Also accepted as <span class="inline_code">maxSocketTimeoutInMillis</span> / <span class="inline_code">MOCKSERVER_MAX_SOCKET_TIMEOUT_IN_MILLIS</span> (the same setting under the name used by the Java API and the configuration JSON)</td>
         </tr>
         <tr>
             <td><span class="inline_code">enableCORSForAPI</span></td>
@@ -140,6 +140,265 @@ mockserver.enableCORSForAllResponses=false</code></pre>
         </tr>
     </tbody>
 </table>
+
+<a id="property_index" class="anchor" href="#property_index">&nbsp;</a>
+
+<h2>Property Index</h2>
+
+<p>Filter the full list of configuration properties. Click a property name to jump to its detail — the accordion expands automatically.</p>
+
+<input type="text" id="configPropertyFilter" placeholder="Filter properties&#8230;" aria-label="Filter configuration properties" style="width:100%;max-width:420px;padding:6px 10px;font-size:0.9em;border:1px solid #ccc;border-radius:3px;margin-bottom:10px;">
+
+<table id="configPropertyIndex" class="table-scroll">
+    <thead>
+        <tr>
+            <th>Property</th>
+            <th>Section</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td><a href="#button_configuration_log_level">Log Level</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_disable_system_out">Disable Logging To System Out</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_disable_logging">Disable All Logging</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_compact_log_format">Compact Log Format</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_log_level_overrides">Log Level Overrides (Per-Category)</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_detailed_match_failures">Detailed Match Failures</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_detailed_verification_failures">Detailed Verification Failures</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_launch_ui__debug">Launch UI When Log Level DEBUG</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_enabled_metrics">Enable Metrics</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_log_event_listener">Custom Log Event Listener</a></td><td><a href="#logging_configuration">Logging &amp; Metrics</a></td></tr>
+        <tr><td><a href="#button_configuration_dev_mode">Dev Mode</a></td><td><a href="#dev_mode_configuration">Developer Mode</a></td></tr>
+        <tr><td><a href="#button_configuration_max_expectations">Maximum Expectations To Hold In Memory</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_request_log_size">Maximum Log Entries To Hold In Memory</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_ring_buffer_size">Log Event Ring Buffer Size</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_max_event_log_size_in_bytes">Maximum Event Log Size In Bytes</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_max_logged_body_bytes">Maximum Logged Body Bytes Per Entry</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_max_web_socket_expectations">Maximum WebSockets For Object Callback Expectations</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_log_memory_statistics">Output JVM Memory Usage</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_memory_statistics_directory">Directory For Outputting JVM Memory Usage</a></td><td><a href="#memory_configuration">Memory Usage</a></td></tr>
+        <tr><td><a href="#button_configuration_connection_delay_millis">Connection Delay</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_use_native_transport">Use Native Transport (Epoll)</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_nio_event_loop_thread_count">Number of Event Loop Threads</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_action_handler_thread_count">Number of Action Handler Threads</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_client_nio_event_loop_thread_count">Number of Client Event Loop Threads</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_web_socket_event_loop_thread_count">Number of Client Web Socket Event Loop Threads</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_matchers_fail_fast">Request Matchers Fail Fast</a></td><td><a href="#memory_configuration">Performance</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_port">HTTP/3 (QUIC) Port</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_max_idle_timeout">HTTP/3 Max Idle Timeout</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_initial_max_data">HTTP/3 Initial Max Data</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_initial_max_stream_data_bidirectional">HTTP/3 Initial Max Stream Data (Bidirectional)</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_initial_max_streams_bidirectional">HTTP/3 Initial Max Streams (Bidirectional)</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_qpack_max_table_capacity">HTTP/3 QPACK Max Table Capacity</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_alt_svc_max_age">HTTP/3 Alt-Svc Max Age</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_advertise_alt_svc">HTTP/3 Advertise Alt-Svc</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_connect_udp_enabled">HTTP/3 CONNECT-UDP (MASQUE) Enabled</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_http3_connect_udp_allowed_targets">HTTP/3 CONNECT-UDP (MASQUE) Allowed Targets</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_max_socket_timeout">Maximum Socket Timeout</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_socket_connection_timeout">Maximum Socket Connection Timeout</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_aways_close_socket_connection">Always Close Socket Connection After Response</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_local_bound_ip">Local Bound IP For Accepting Socket Connection</a></td><td><a href="#socket_configuration">Socket</a></td></tr>
+        <tr><td><a href="#button_configuration_match_exact_case">Match Exact Case</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_max_initial_line_length">Maximum HTTP Request Initial Line Length</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_max_header_size">Maximum HTTP Request Header Size</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_max_chunk_size">Maximum HTTP Request Chunk Size</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_max_request_body_size">Maximum Inbound Request Body Size</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_max_response_body_size">Maximum Upstream Response Body Size</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_regex_matching_timeout_millis">Regex Matching Timeout</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_xpath_matching_timeout_millis">XPath Matching Timeout</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_custom_json_unit_matchers_class">Custom JSON Body Matchers</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_json_schema_allow_remote_refs">JSON Schema Remote $ref Resolution</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_attach_mismatch_diagnostic_to_response">Attach Mismatch Diagnostic To Unmatched Response</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_closest_match_hint_enabled">Closest Match Hint On Unmatched Response</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_block_private_networks">Block Forwarding To Private Networks (SSRF Protection)</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_tls_allow_insecure_protocols">Allow Insecure TLS Protocols</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_treat_semicolon_as_query_parameter_separator">Treat Semicolon As Query Parameter Separator</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_startup_warmup">Startup Warmup</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_assume_all_requests_are_http">Assume All Requests Are HTTP</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_http2_enabled">HTTP/2 Enabled</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_grpc_bidi_streaming_enabled">gRPC Bidi-Streaming Enabled</a></td><td><a href="#http_request_size_configuration">HTTP Request Parsing</a></td></tr>
+        <tr><td><a href="#button_configuration_enable_cors_for_api">Enable CORS For MockServer REST API</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_enable_cors_for_all_responses">Enable CORS For All Responses</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_cors_allow_origin">CORS Allow Origin Value</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_cors_allow_methods">CORS Allow Methods Value</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_cors_allow_headers">CORS Allow Headers Value</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_cors_allow_credentials">CORS Allow Credentials Value</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_cors_max_age">CORS Max Age Value</a></td><td><a href="#http_request_size_configuration">CORS</a></td></tr>
+        <tr><td><a href="#button_configuration_default_response_headers">Default Response Headers</a></td><td><a href="#default_response_headers_configuration">Default Response Headers</a></td></tr>
+        <tr><td><a href="#button_configuration_disable_classes_in_javascript_templates">Disable Classes In JavaScript Templates</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_restrict_content_allowed_in_javascript_templates">Restrict Content In JavaScript Templates</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_javascript_template_execution_timeout">JavaScript Template Execution Timeout</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_template_faker_seed">Template Faker Seed</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_disable_class_loading_in_velocity_templates">Disable Class Loading In Velocity Templates</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_restrict_content_allowed_in_velocity_templates">Restrict Content In Velocity Templates</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_restrict_content_allowed_in_mustache_templates">Restrict Content In Mustache Templates</a></td><td><a href="#default_response_headers_configuration">Template Restrictions</a></td></tr>
+        <tr><td><a href="#button_configuration_initialization_class">Expectation Initialization Class</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_initialization_json_path">Expectation Initialization JSON File Path</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_initialization_openapi_path">Expectation Initialization OpenAPI File Path</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_watch_initialization_json">Watch Expectation Initialization Files</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_fail_on_initialization_error">Fail On Initialization Error</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_persist_expectations_as_json">Persist Expectations As JSON</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_persisted_expectations_file_path">Persisted Expectations File Path</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_persist_recorded_expectations">Persist Recorded Expectations As JSON</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_persisted_recorded_expectations_file_path">Persisted Recorded Expectations File Path</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_persist_recorded_requests_to_disk">Persist Recorded Requests To Disk (NDJSON)</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_persisted_recorded_requests_path">Persisted Recorded Requests File Path</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_maximum_number_of_requests_to_return_in_verification_failure">Maximum Requests In Verification Failure</a></td><td><a href="#proxy_configuration">Initializer &amp; Persistence</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_setup">Proxy Setup — Generate Unique Secure CA</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_setup_logging">Proxy Setup Logging</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_attempt_to_proxy_if_no_matching_expectation">Attempt To Proxy If No Matching Expectation</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_binary_requests_without_waiting_for_response">Forward Binary Requests Without Waiting For Response</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_connection_pool_enabled">Reuse Upstream Connections (Connection Pooling)</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_connection_pool_max_idle_per_key">Maximum Idle Pooled Connections Per Upstream</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_connection_pool_idle_timeout_millis">Idle Pooled Connection Timeout</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_connection_pool_keep_alive">Keep Pooled Connections Warm Under Sustained Load</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_connection_pool_max_total_per_key">Maximum Warm Pooled Connections Per Upstream</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_socket_keep_alive">Forward Upstream TCP Keepalive</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_socket_keep_alive_idle_seconds">Forward Upstream TCP Keepalive Idle Seconds</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_socket_keep_alive_interval_seconds">Forward Upstream TCP Keepalive Interval Seconds</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_socket_keep_alive_count">Forward Upstream TCP Keepalive Probe Count</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_http2_enabled">Forward Upstream Requests Using HTTP/2</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_http2_upgrade">Upgrade Forwarded Requests To HTTP/2</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_retry_count">Retry Forwarded Requests On Transient Failure</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_retry_backoff_millis">Retry Back-Off</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_circuit_breaker_enabled">Upstream Circuit Breaker</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_circuit_breaker_failure_threshold">Circuit Breaker Failure Threshold</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_circuit_breaker_window_millis">Circuit Breaker Open Window</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_http_proxy">HTTP Proxy For Forwarded Requests</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_https_proxy">HTTPS Proxy For Forwarded Requests</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_socks_proxy">SOCKS Proxy For Forwarded Requests</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_authentication_username">Proxy Authentication Username For Forwarded Requests</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_authentication_password">Proxy Authentication Password For Forwarded Requests</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_authentication_realm">Realm For Proxy Authentication to MockServer</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_authentication_username">Required Username For Proxy Authentication to MockServer</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_authentication_password">Required Password For Proxy Authentication to MockServer</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_pass">ProxyPass Mappings</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_no_proxy_hosts">Hosts That Bypass Proxy</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_adjust_host_header">Auto-Adjust Host Header When Forwarding</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_default_host_header">Default Host Header for Forwarded Requests</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_remote_host">Proxy Remote Host</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_proxy_remote_port">Proxy Remote Port</a></td><td><a href="#proxy_configuration">Proxying</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_authentication_required">Require Authentication On Mocked Endpoints</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_basic_authentication_username">Data Plane Basic Authentication Username</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_basic_authentication_password">Data Plane Basic Authentication Password</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_basic_authentication_realm">Data Plane Basic Authentication Realm</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_bearer_authentication_token">Data Plane Bearer Authentication Token</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_api_key_authentication_header">Data Plane API Key Header Name</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_data_plane_api_key_authentication_value">Data Plane API Key Value</a></td><td><a href="#data_plane_authentication_configuration">Data Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_streaming_responses_enabled">Streaming Responses Enabled</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_max_streaming_capture_bytes">Maximum Streaming Response Body Capture</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_max_llm_conversation_body_size">Maximum LLM Conversation Body Size</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_llm_backend">Runtime LLM Backend (optional)</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_llm_vcr">LLM Fixture (VCR) Recording &amp; Replay</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_drift">Drift Detection</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_audit">Control-Plane Audit Log</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_oidc">Control-Plane OIDC Authentication</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_authorization">Control-Plane Authorization</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_breakpoints">Interactive Breakpoints</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_chaos_auto_halt">Chaos Auto-Halt Circuit-Breaker</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_rate_limit_max_named_quotas">Rate Limit Max Named Quotas</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_connection_lifecycle_chaos">Connection-Lifecycle Faults &amp; Preemption Simulation</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_slo_verdicts">SLO Verdicts</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_load_generation">Load Generation</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_llm_metrics">LLM Token &amp; Cost Metrics</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_per_expectation_metrics">Per-Expectation Match Counters</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_slow_request_threshold_millis">Slow Request Threshold</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_metrics_request_duration_route_labels">Metrics Request Duration Route Labels</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_redact_secrets_in_recorded_expectations">Redact Secrets In Recorded Expectations</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_templatize_recorded_values">Templatize Recorded Values</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_redact_secrets_in_log">Redact Secrets In Event Log &amp; Dashboard</a></td><td><a href="#streaming_proxy_configuration">Streaming Proxy</a></td></tr>
+        <tr><td><a href="#button_configuration_dashboard_analytics_enabled">Dashboard Analytics Enabled</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_dashboard_analytics_endpoint">Dashboard Analytics Endpoint</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_dashboard_analytics_key">Dashboard Analytics Key</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_dashboard_analytics_distribution">Dashboard Analytics Distribution</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_otel">OpenTelemetry (Metrics, GenAI Spans &amp; Trace Context)</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_prometheus_remote_write">Prometheus Remote Write (Push Metrics)</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_stream_idle_timeout_seconds">Streaming Response Idle Timeout</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_global_response_delay_millis">Global Response Delay</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_stop_drain_millis">Graceful Shutdown Connection Drain</a></td><td><a href="#dashboard_analytics_configuration">Dashboard Analytics</a></td></tr>
+        <tr><td><a href="#button_configuration_liveness_get_path">Path for HTTP GET Liveness / Healthcheck Probes</a></td><td><a href="#liveness_configuration">Liveness</a></td></tr>
+        <tr><td><a href="#button_configuration_match_namespace_header">Request Header That Scopes Matching To A Namespace</a></td><td><a href="#multi_tenancy_configuration">Multi-Tenancy</a></td></tr>
+        <tr><td><a href="#button_configuration_openapi_context_path_prefix">OpenAPI Context Path Prefix</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_openapi_response_validation">OpenAPI Response Validation</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_enforce_response_validation_for_mocks">Enforce Response Validation For Mocks</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_validate_requests_against_openapi_spec">Validate Requests Against OpenAPI Spec</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_validate_proxy_openapi_spec">Validation Proxy OpenAPI Spec</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_validate_proxy_enforce">Validation Proxy Enforce</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_generate_realistic_example_values">Generate Realistic Example Values</a></td><td><a href="#openapi_configuration">OpenAPI</a></td></tr>
+        <tr><td><a href="#button_configuration_async_kafka_bootstrap_servers">Default Kafka Bootstrap Servers</a></td><td><a href="#async_messaging_configuration">Async Messaging</a></td></tr>
+        <tr><td><a href="#button_configuration_async_mqtt_broker_url">Default MQTT Broker URL</a></td><td><a href="#async_messaging_configuration">Async Messaging</a></td></tr>
+        <tr><td><a href="#button_configuration_async_amqp_uri">Default AMQP (RabbitMQ) URI</a></td><td><a href="#async_messaging_configuration">Async Messaging</a></td></tr>
+        <tr><td><a href="#button_configuration_async_recorded_message_max_entries">Maximum Recorded Messages Per Channel</a></td><td><a href="#async_messaging_configuration">Async Messaging</a></td></tr>
+        <tr><td><a href="#button_configuration_mcp_enabled">Enable MCP Endpoint</a></td><td><a href="#mcp_configuration">MCP</a></td></tr>
+        <tr><td><a href="#button_configuration_wasm_enabled">Enable WASM Body Matching</a></td><td><a href="#wasm_configuration">WASM</a></td></tr>
+        <tr><td><a href="#button_configuration_wasm_max_memory_pages">WASM Maximum Memory Pages</a></td><td><a href="#wasm_configuration">WASM</a></td></tr>
+        <tr><td><a href="#button_configuration_grpc_enabled">Enable gRPC Support</a></td><td><a href="#grpc_configuration">gRPC</a></td></tr>
+        <tr><td><a href="#button_configuration_grpc_descriptor_directory">gRPC Descriptor Directory</a></td><td><a href="#grpc_configuration">gRPC</a></td></tr>
+        <tr><td><a href="#button_configuration_grpc_proto_directory">gRPC Proto Source Directory</a></td><td><a href="#grpc_configuration">gRPC</a></td></tr>
+        <tr><td><a href="#button_configuration_grpc_protoc_path">gRPC Protoc Path</a></td><td><a href="#grpc_configuration">gRPC</a></td></tr>
+        <tr><td><a href="#button_configuration_dns_enabled">Enable DNS Mocking</a></td><td><a href="#dns_configuration">DNS</a></td></tr>
+        <tr><td><a href="#button_configuration_dns_port">DNS Port</a></td><td><a href="#dns_configuration">DNS</a></td></tr>
+        <tr><td><a href="#button_configuration_transparent_proxy_enabled">Transparent Proxy Enabled</a></td><td><a href="#service_mesh_configuration">Service Mesh</a></td></tr>
+        <tr><td><a href="#button_configuration_transparent_proxy_tproxy">Transparent Proxy TPROXY Mode</a></td><td><a href="#service_mesh_configuration">Service Mesh</a></td></tr>
+        <tr><td><a href="#button_configuration_transparent_proxy_ebpf">Transparent Proxy eBPF Original Destination Resolution</a></td><td><a href="#service_mesh_configuration">Service Mesh</a></td></tr>
+        <tr><td><a href="#button_configuration_transparent_proxy_ebpf_map_path">Transparent Proxy eBPF Map Path</a></td><td><a href="#service_mesh_configuration">Service Mesh</a></td></tr>
+        <tr><td><a href="#button_configuration_state_backend">State Backend</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_enabled">Cluster Enabled</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_name">Cluster Name</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_transport_config">Cluster Transport Config</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_shared_times_enabled">Cluster Shared Times Enabled</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_verify_fan_in">Cluster Verify Fan-In</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_verify_fan_in_peers">Cluster Verify Fan-In Peers</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_cluster_fan_in_peer_auth_token">Cluster Fan-In Peer Auth Token</a></td><td><a href="#clustering_configuration">Clustering</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_type">Blob Store Type</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_bucket">Blob Store Bucket (S3 / GCS)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_region">Blob Store Region (S3)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_endpoint">Blob Store Endpoint Override</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_key_prefix">Blob Store Key Prefix</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_container">Blob Store Container (Azure)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_connection_string">Blob Store Connection String (Azure)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_access_key_id">Blob Store Access Key ID (S3)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_secret_access_key">Blob Store Secret Access Key (S3)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_blob_store_project_id">Blob Store Project ID (GCS)</a></td><td><a href="#cloud_blob_store_configuration">Cloud Blob Store</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_mtls_authentication_required">Enabled Control Plane mTLS Authentication</a></td><td><a href="#control_plane_authentication_configuration">Control Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_mtls_authentication_ca_chain">Control Plane mTLS Authentication CA Chain</a></td><td><a href="#control_plane_authentication_configuration">Control Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_mtls_authentication_private_key_path">Control Plane mTLS Authentication Client Private Key</a></td><td><a href="#control_plane_authentication_configuration">Control Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_control_plane_mtls_authentication_certificate_path">Control Plane mTLS Authentication Client Certificate</a></td><td><a href="#control_plane_authentication_configuration">Control Plane Authentication</a></td></tr>
+        <tr><td><a href="#button_configuration_dynamically_create_ca_certificate">Dynamically Create Inbound Certificate Authority X.509</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_directory_to_save_dynamic_ssl_certificates">Directory To Save Dynamic CA X.509 and Private Key</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_proactively_initialise_tls">Proactively Initialise TLS During Start Up</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_tls_protocols">TLS Protocol Versions</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_prevent_dynamic_tls_update">Prevent Dynamic Inbound X.509 Update</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_ssl_certificate_domain_name">Inbound X.509 Domain Name</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_ssl_subject_alternative_name_domains">Inbound X.509 Subject Alternative Name Domains</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_ssl_subject_alternative_name_ips">Inbound X.509 Subject Alternative Name IPs</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_tls_certificate_authority_private_key">Fixed Inbound Certificate Authority Private Key</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_tls_certificate_authority_certificate">Fixed Inbound Certificate Authority X.509 Certificate Chain</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_tls_private_key">Fixed Inbound Private Key</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_tls_X509_certificate">Fixed Inbound X.509 Certificate Chain</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_require_mtls_for_all_tls_connections">Require Inbound mTLS Client Authentication</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_mtls_certificate_chain">Fixed Inbound mTLS Client Authentication X.509 Certificate Chain</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_trusted_tls_certs_group_for_proxied_reqs">Outbound Trusted Certificates Group</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_custom_trusted_tls_certs_for_proxied_reqs">Fixed Outbound X.509 Certificate Trust Chain</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_private_key">Fixed Outbound Client Private Key</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_certificate_chain">Fixed Outbound Client X.509 Certificate Chain</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_forward_proxy_client_certificates_by_host">Per-Host Outbound Client Certificate/Key (mTLS)</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+        <tr><td><a href="#button_configuration_mtls_mockserver_client_certificate_chain">MockServerClient Trust X.509 Certificate Chain</a></td><td><a href="#tls_configuration">TLS</a></td></tr>
+    </tbody>
+</table>
+
+<script>
+(function () {
+    var input = document.getElementById('configPropertyFilter');
+    var rows = document.querySelectorAll('#configPropertyIndex tbody tr');
+    if (!input) { return; }
+    input.addEventListener('input', function () {
+        var q = this.value.toLowerCase();
+        rows.forEach(function (row) {
+            row.style.display = (!q || row.textContent.toLowerCase().indexOf(q) !== -1) ? '' : 'none';
+        });
+    });
+}());
+</script>
 
 <h2>Settings Properties</h2>
 
@@ -287,7 +546,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 <div class="panel title">
     <p>Maximum number of expectations held in the in-memory ring buffer. Expectations are stored in a circular queue so once this limit is reached the oldest and lowest priority expectations are overwritten.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">minimum of (free heap space in KB / 10) and 15000</span></p>
-    <p>The default is calculated automatically based on available JVM heap memory. Each expectation typically uses 4-10 KB of heap for small response bodies. Expectations with large response bodies use significantly more: a 10 KB response body results in ~15-20 KB per expectation, a 50 KB response body results in ~55-75 KB per expectation. With a 256 MB heap, the default is approximately 15,000. You can override this if you need more or want to reduce memory usage.</p>
+    <p>The default is calculated automatically based on available JVM heap memory. Each expectation typically uses 4-10 KB of heap for small response bodies. Expectations with large response bodies use significantly more: a 10 KB response body results in ~15-20 KB per expectation, a 50 KB response body results in ~55-75 KB per expectation. With a 256 MB heap, the default is approximately 15,000. You can override this if you need more or want to reduce memory usage. On JVMs that do not report a usable heap maximum (for example GraalVM native images), the default falls back to a floor of 1,000 — set the property explicitly to override.</p>
     <p><strong>Power-of-2 sizing:</strong> the ring buffer is implemented on top of the LMAX Disruptor, which rounds the configured size up to the next power of 2. Setting <span class="inline_code">maxExpectations=10000</span> actually allocates 16,384 slots (a 63.8% overhead). To minimise wasted heap, pick a power-of-2 value yourself: 1,024 / 2,048 / 4,096 / 8,192 / 16,384 / 32,768 / 65,536.</p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxExpectations(int count)</code></pre>
@@ -305,7 +564,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 <div class="panel title">
     <p>Maximum number of log entries to hold in memory, this includes recorded requests, expectation match failures and other log entries. Log entries are stored in a circular queue so once this limit is reached the oldest entries are overwritten. The lower the log level the more log entries will be captured, particularly at TRACE level logging.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">minimum of (free heap space in KB / 8) and 100000</span></p>
-    <p>The default is calculated automatically based on available JVM heap memory. Each log entry typically uses 4-10 KB of heap for small request/response bodies, but log entries for large responses are proportionally larger (e.g., a 100 KB response body produces log entries of ~100+ KB each). Each HTTP request generates 2-3 log entries (request recording, expectation match, and response) that are always stored regardless of log level. With a 256 MB heap the default of approximately 20,000 entries covers around 7,000-10,000 HTTP requests before the oldest entries are evicted. For high-throughput use cases or large response bodies, reduce this value to limit memory usage and GC pressure. See <a href="/mock_server/performance.html#troubleshooting_performance">troubleshooting performance</a> for detailed guidance.</p>
+    <p>The default is calculated automatically based on available JVM heap memory. Each log entry typically uses 4-10 KB of heap for small request/response bodies, but log entries for large responses are proportionally larger (e.g., a 100 KB response body produces log entries of ~100+ KB each). Each HTTP request generates 2-3 log entries (request recording, expectation match, and response) that are always stored regardless of log level. With a 256 MB heap the default of approximately 20,000 entries covers around 7,000-10,000 HTTP requests before the oldest entries are evicted. For high-throughput use cases or large response bodies, reduce this value to limit memory usage and GC pressure. On JVMs that do not report a usable heap maximum (for example GraalVM native images), the default falls back to a floor of 1,000 — set the property explicitly to override. See <a href="/mock_server/performance.html#troubleshooting_performance">troubleshooting performance</a> for detailed guidance.</p>
     <p><strong>Independent of the ring buffer:</strong> <span class="inline_code">maxLogEntries</span> controls how much history is <em>retained</em>, not the size of the in-flight log event ring buffer. The ring buffer is a separate, smaller buffer sized by <span class="inline_code">ringBufferSize</span> (default <span class="this_value">min(maxLogEntries, 16,384)</span>), so raising <span class="inline_code">maxLogEntries</span> for more retention no longer inflates the ring buffer's fixed memory. You can set <span class="inline_code">maxLogEntries</span> to any value — it does not need to be a power of 2.</p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxLogEntries(int count)</code></pre>
@@ -337,6 +596,46 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.ringBufferSize="8192"</code></pre>
 </div>
 
+<button id="button_configuration_max_event_log_size_in_bytes" class="accordion title"><strong>Maximum Event Log Size In Bytes</strong></button>
+<div class="panel title">
+    <p>OOM guard for the in-memory event log. The log is normally bounded only by entry count (<span class="inline_code">maxLogEntries</span>), not by size — so a few thousand large request/response bodies (e.g. LLM tool schemas, growing conversation context, or accumulated SSE chunks) can exhaust the heap even when the entry count is low. When this is set to a value &gt; 0, the log also enforces a body-byte budget: once exceeded, the oldest entries are evicted (oldest-first) until the budget fits, in addition to the existing count bound.</p>
+    <p>The budget measures primary request and response body bytes only (using <span class="inline_code">LogEntry.estimatedHeapSize()</span>). Actual heap retention is a small multiple of that figure (headers, metadata, etc.), so set this well under the JVM heap. For a 2 GB heap, 256 MB (<span class="inline_code">268435456</span>) is a reasonable starting point.</p>
+    <p>When 0 (the default), the byte budget is disabled and the log is bounded only by entry count.</p>
+    <p>See <a href="/mock_server/performance.html#proxying_large_bodies">Proxying LLM / Large-Body Traffic Without OOM</a> for the recommended combo with disk capture.</p>
+    <p>Type: <span class="keyword">long</span> Default: <span class="this_value">0</span> (disabled)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxEventLogSizeInBytes(long bytes)</code></pre>
+    <pre class="prettyprint lang-java code"><code class="code">Configuration.maxEventLogSizeInBytes(Long bytes)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxEventLogSizeInBytes=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_MAX_EVENT_LOG_SIZE_IN_BYTES=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.maxEventLogSizeInBytes=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxEventLogSizeInBytes="268435456"</code></pre>
+</div>
+
+<button id="button_configuration_max_logged_body_bytes" class="accordion title"><strong>Maximum Logged Body Bytes Per Entry</strong></button>
+<div class="panel title">
+    <p>Secondary memory valve. When set to a value &gt; 0, request and response bodies kept <em>in memory</em> in the event log are truncated beyond this many bytes. A <span class="inline_code">x-mockserver-body-truncated: &lt;originalLength&gt;</span> header is added to the in-memory copy so a reader can tell the body was clipped and how large it originally was.</p>
+    <p>This is symmetric with the existing <span class="inline_code">maxStreamingCaptureBytes</span> cap (default 256 KB) applied to SSE streams.</p>
+    <p><strong>Important:</strong> if disk capture (<span class="inline_code">persistRecordedRequestsToDisk</span>) is also enabled, the disk archive always records the <strong>full</strong> body — the disk write happens before truncation. For full-fidelity off-line processing, leave this at 0 and rely on the byte-budget eviction (<span class="inline_code">maxEventLogSizeInBytes</span>) to bound the in-memory window instead.</p>
+    <p>When 0 (the default), bodies are kept in full in the event log (no truncation).</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">0</span> (unlimited)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxLoggedBodyBytes(int bytes)</code></pre>
+    <pre class="prettyprint lang-java code"><code class="code">Configuration.maxLoggedBodyBytes(Integer bytes)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxLoggedBodyBytes=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_MAX_LOGGED_BODY_BYTES=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.maxLoggedBodyBytes=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxLoggedBodyBytes="262144"</code></pre>
+</div>
+
 <button id="button_configuration_max_web_socket_expectations" class="accordion title"><strong>Maximum WebSockets For Object Callback Expectations</strong></button>
 <div class="panel title">
     <p>Maximum number of remote (not the same JVM) method callbacks (i.e. web sockets) registered for expectations.  The web socket client registry entries are stored in a circular queue so once this limit is reach the oldest are overwritten.</p>
@@ -351,6 +650,39 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.maxWebSocketExpectations=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxWebSocketExpectations="2000"</code></pre>
+</div>
+
+<button id="button_configuration_web_socket_proxy_max_recorded_frames" class="accordion title"><strong>Maximum Recorded Frames Per Proxied WebSocket</strong></button>
+<div class="panel title">
+    <p>Maximum number of WebSocket frames recorded per proxied (passthrough) WebSocket connection. When MockServer proxies a WebSocket upgrade to a real upstream server (no matching WebSocket expectation), the relayed frames (text, binary, ping, pong, close) are captured into a per-connection transcript that is written to the request log when the connection closes, so <span class="inline_code">retrieveRecordedRequests</span> and the dashboard show the WebSocket traffic. Once this limit is reached the remaining frames on that connection are still relayed but not recorded, which bounds memory on long-lived connections.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">1000</span> (set to <span class="this_value">0</span> to disable frame recording; the upgrade handshake is still recorded)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.webSocketProxyMaxRecordedFrames(int count)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.webSocketProxyMaxRecordedFrames=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_WEB_SOCKET_PROXY_MAX_RECORDED_FRAMES=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.webSocketProxyMaxRecordedFrames=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.webSocketProxyMaxRecordedFrames="500"</code></pre>
+</div>
+
+<button id="button_configuration_web_socket_proxy_idle_timeout_seconds" class="accordion title"><strong>Proxied WebSocket Idle Timeout</strong></button>
+<div class="panel title">
+    <p>Idle timeout, in seconds, for a proxied (passthrough) WebSocket connection. When set to a positive value, a relayed WebSocket connection whose two directions have both been idle (no message sent either way) for this many seconds is closed, reaping half-open or abandoned relays.</p>
+    <p>The default is <span class="this_value">0</span>, which disables idle reaping &mdash; long-lived WebSocket connections that are legitimately idle (for example waiting for server-pushed events) are left open and rely on TCP keep-alive. Raise it only if you need MockServer to bound how long an idle passthrough relay is held open.</p>
+    <p>Type: <span class="keyword">int</span> Default: <span class="this_value">0</span> (disabled)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.webSocketProxyIdleTimeoutSeconds(int seconds)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.webSocketProxyIdleTimeoutSeconds=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_WEB_SOCKET_PROXY_IDLE_TIMEOUT_SECONDS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.webSocketProxyIdleTimeoutSeconds=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.webSocketProxyIdleTimeoutSeconds="300"</code></pre>
 </div>
 
 <button id="button_configuration_log_memory_statistics" class="accordion title"><strong>Output JVM Memory Usage</strong></button>
@@ -522,7 +854,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 <button id="button_configuration_http3_connect_udp_enabled" class="accordion title"><strong>HTTP/3 CONNECT-UDP (MASQUE) Enabled</strong></button>
 <div class="panel title">
     <p><strong>Experimental.</strong> Enable the CONNECT-UDP (MASQUE, RFC 9298) forward proxy on the HTTP/3 server. When enabled, the server advertises <span class="inline_code">SETTINGS_ENABLE_CONNECT_PROTOCOL</span> (RFC 9220) and extended-CONNECT requests with <span class="inline_code">:protocol=connect-udp</span> are relayed: MockServer opens a UDP socket to the target authority and forwards datagrams in both directions, so an HTTP/3 client can tunnel UDP through MockServer. Normal (non-CONNECT) HTTP/3 requests are unaffected regardless of this setting.</p>
-    <p><strong>Security &mdash; this is an open UDP relay.</strong> When enabled there is no restriction on the relay target, so a client can reach any UDP host:port reachable from MockServer (including private networks, loopback, and cloud metadata endpoints such as 169.254.169.254). This is intended for controlled test environments only &mdash; leave it disabled (the default) and do not expose a CONNECT-UDP&ndash;enabled HTTP/3 port to untrusted clients.</p>
+    <p><strong>Security &mdash; restrict the relay target.</strong> By default the relay can reach any UDP host:port reachable from MockServer (including private networks, loopback, and cloud metadata endpoints such as 169.254.169.254), so it is intended for controlled test environments only. To constrain it, set <span class="inline_code">http3ConnectUdpAllowedTargets</span> (an allowlist) and/or enable <span class="inline_code">forwardProxyBlockPrivateNetworks</span> (which now also blocks private/loopback/metadata CONNECT-UDP targets, exactly as it does for forwarded requests). Even so, leave CONNECT-UDP disabled (the default) unless needed and do not expose a CONNECT-UDP&ndash;enabled HTTP/3 port to untrusted clients.</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3ConnectUdpEnabled(boolean enabled)</code></pre>
@@ -536,9 +868,26 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3ConnectUdpEnabled="true"</code></pre>
 </div>
 
+<button id="button_configuration_http3_connect_udp_allowed_targets" class="accordion title"><strong>HTTP/3 CONNECT-UDP (MASQUE) Allowed Targets</strong></button>
+<div class="panel title">
+    <p><strong>Experimental.</strong> Restrict which targets the HTTP/3 CONNECT-UDP (MASQUE) relay may reach, as a comma-separated allowlist of <span class="inline_code">host</span> or <span class="inline_code">host:port</span> entries (bracket IPv6 literals, e.g. <span class="inline_code">[::1]:53</span>). Matching is exact and case-insensitive; an entry without a port permits the host on any port. Only relevant when <span class="inline_code">http3ConnectUdpEnabled</span> is <span class="inline_code">true</span>.</p>
+    <p>When empty (the default) the allowlist is not enforced and the relay may reach any target (still subject to <span class="inline_code">forwardProxyBlockPrivateNetworks</span>). When set, a CONNECT-UDP request to a target that does not match any entry is refused with <span class="inline_code">403</span> and no datagrams are relayed &mdash; use this to limit the relay's SSRF exposure to a known set of destinations.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (not enforced)</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.http3ConnectUdpAllowedTargets(String allowedTargets)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3ConnectUdpAllowedTargets=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_HTTP3_CONNECT_UDP_ALLOWED_TARGETS=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.http3ConnectUdpAllowedTargets=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.http3ConnectUdpAllowedTargets="dns.example.com:53,[::1]:9090"</code></pre>
+</div>
+
 <button id="button_configuration_max_socket_timeout" class="accordion title"><strong>Maximum Socket Timeout In Millis</strong></button>
 <div class="panel title">
-    <p>Maximum time in milliseconds allowed for a response from a socket</p>
+    <p>Maximum time in milliseconds to wait for the first response byte when forwarding/proxying</p>
     <p>Type: <span class="keyword">long</span> Default: <span class="this_value">20000</span></p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.maxSocketTimeout(long milliseconds)</code></pre>
@@ -550,6 +899,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.maxSocketTimeout=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.maxSocketTimeout="10000"</code></pre>
+    <p>Also accepted under the unit-bearing name <span class="inline_code">maxSocketTimeoutInMillis</span> / <span class="inline_code">MOCKSERVER_MAX_SOCKET_TIMEOUT_IN_MILLIS</span>, which matches the Java API and the value reported in the configuration JSON. The two names are the same setting; set whichever you prefer.</p>
 </div>
 
 <button id="button_configuration_socket_connection_timeout" class="accordion title"><strong>Maximum Socket Connection Timeout In Millis</strong></button>
@@ -566,6 +916,7 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.socketConnectionTimeout=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.socketConnectionTimeout="10000"</code></pre>
+    <p>Also accepted under the unit-bearing name <span class="inline_code">socketConnectionTimeoutInMillis</span> / <span class="inline_code">MOCKSERVER_SOCKET_CONNECTION_TIMEOUT_IN_MILLIS</span>, which matches the Java API and the value reported in the configuration JSON. The two names are the same setting; set whichever you prefer.</p>
 </div>
 
 <button id="button_configuration_aways_close_socket_connection" class="accordion title"><strong>Always Close Socket Connection After Response</strong></button>
@@ -866,6 +1217,24 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.useSemicolonAsQueryParameterSeparator="false"</code></pre>
 </div>
 
+<button id="button_configuration_startup_warmup" class="accordion title"><strong>Startup Warmup</strong></button>
+<div class="panel title">
+    <p>If true (the default) MockServer sends itself a single warm-up request in the background immediately after it starts listening.</p>
+    <p>The very first request handled by a freshly started MockServer is noticeably slower than every request after it (typically a few hundred milliseconds) because the code that handles requests is only loaded and initialised the first time it is used. The warm-up request pays that one-off cost in the background so the first request from your test or application &mdash; including a readiness poll such as Testcontainers &mdash; is fast.</p>
+    <p>The warm-up runs on a background thread and never delays start up. Leave it enabled unless you want to avoid the single extra loopback request during start up, for example in a tightly locked-down environment where MockServer must not connect to itself.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.startupWarmup(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.startupWarmup=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_STARTUP_WARMUP=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.startupWarmup=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.startupWarmup="false"</code></pre>
+</div>
+
 <button id="button_configuration_assume_all_requests_are_http" class="accordion title"><strong>Assume All Requests Are HTTP</strong></button>
 <div class="panel title">
     <p>If false requests are assumed as binary if the method isn't one of "GET", "POST", "PUT", "HEAD", "OPTIONS", "PATCH", "DELETE", "TRACE" or "CONNECT"</p>
@@ -948,6 +1317,38 @@ mockserver.enableCORSForAllResponses=true</code></pre>
 <h2>Proxying Configuration:</h2>
 
 <p><strong>Note:</strong> HTTP/2 proxying has limitations. When MockServer forwards requests to downstream services, HTTP/2 requests are downgraded to HTTP/1.1. MockServer can accept HTTP/2 connections and serve mock responses over HTTP/2, but forwarded/proxied requests are always sent as HTTP/1.1. See <a href="/mock_server/getting_started.html#http2_proxy_limitations">HTTP/2 proxy limitations</a> for details.</p>
+
+<button id="button_configuration_proxy_setup" class="accordion title"><strong>Proxy Setup — Generate Unique Secure CA</strong></button>
+<div class="panel title">
+    <p>When set to <span class="inline_code">true</span>, MockServer generates a unique Certificate Authority (CA) key pair on first startup and saves it to <span class="inline_code">directoryToSaveDynamicSSLCertificate</span> (default: the working directory). This is equivalent to enabling <span class="inline_code">dynamicallyCreateCertificateAuthorityCertificate</span> but is exposed as a single, easy-to-remember flag for proxy setups.</p>
+    <p>Use this flag for any shared, persistent, or team-facing setup. Without it, MockServer uses the built-in default CA whose private key is published in the MockServer git repository — safe only for isolated local development.</p>
+    <p>For standalone launches (JAR, Docker, CLI), the startup "Proxy Setup" log block and the <span class="inline_code">mockserver-ca.pem</span> file are written automatically. The CA certificate and proxy configuration are always available on demand from <span class="inline_code">GET /mockserver/proxyConfiguration</span>, regardless of how MockServer was started.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.proxySetup=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_PROXY_SETUP=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.proxySetup=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.proxySetup="true"</code></pre>
+</div>
+
+<button id="button_configuration_proxy_setup_logging" class="accordion title"><strong>Proxy Setup Logging — Print Copy-Paste Block At Startup</strong></button>
+<div class="panel title">
+    <p>Controls whether MockServer prints a "Proxy Setup" block to the log at startup. The block contains the absolute path to the CA certificate file and the environment variable exports to set (<span class="inline_code">HTTPS_PROXY</span>, <span class="inline_code">NODE_EXTRA_CA_CERTS</span>, <span class="inline_code">SSL_CERT_FILE</span>, <span class="inline_code">REQUESTS_CA_BUNDLE</span>) in both Unix <span class="inline_code">export</span> and Windows PowerShell <span class="inline_code">$env:</span> forms, ready to paste into a terminal.</p>
+    <p>The default is <span class="this_value">false</span>, but the <strong>standalone launcher</strong> (the executable JAR, Docker image, and <span class="inline_code">mockserver</span> CLI) automatically enables this at startup, so anyone running MockServer as a proxy sees the block without any extra configuration. Embedded usage (<span class="inline_code">new ClientAndServer(...)</span> inside a test suite) stays silent by default to avoid polluting test output on every JUnit run; set this to <span class="inline_code">true</span> explicitly if the block is needed in embedded mode.</p>
+    <p>When this setting is enabled, MockServer writes the CA certificate to <span class="inline_code">mockserver-ca.pem</span> in the dynamic-SSL directory at startup and prints the "Proxy Setup" log block. When this setting is disabled (e.g. embedded usage), the CA file is instead written on the first call to <span class="inline_code">GET /mockserver/proxyConfiguration</span>. The endpoint itself is always available regardless of this setting.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span> (auto-enabled by the standalone launcher)</p>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.proxySetupLogging=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_PROXY_SETUP_LOGGING=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.proxySetupLogging=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.proxySetupLogging="true"</code></pre>
+</div>
 
 <button id="button_configuration_attempt_to_proxy_if_no_matching_expectation" class="accordion title"><strong>Attempt To Proxy Request If No Matching Expectation</strong></button>
 <div class="panel title">
@@ -1150,6 +1551,25 @@ mockserver.enableCORSForAllResponses=true</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyHttp2Enabled=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyHttp2Enabled="true"</code></pre>
+</div>
+
+<button id="button_configuration_forward_proxy_http2_upgrade" class="accordion title"><strong>Upgrade Forwarded Requests To HTTP/2</strong></button>
+<div class="panel title">
+    <p>By default a forwarded request is only sent over HTTP/2 when the incoming request itself used HTTP/2 (and "Forward Upstream Requests Using HTTP/2" is enabled). Enable this setting to forward a secure (TLS) request to its upstream over HTTP/2 via ALPN <em>even when the incoming client used HTTP/1.1</em>, with automatic fallback to HTTP/1.1 if the upstream does not negotiate HTTP/2.</p>
+    <p>This is useful when an upstream sends a streaming (Server-Sent Events) response head immediately over HTTP/2 but withholds it over HTTP/1.1 &mdash; forwarding over HTTP/2 lets MockServer relay the response head to the client promptly instead of waiting for the whole stream. HTTP/2 only happens over TLS using ALPN (there is no plain-HTTP h2c path, so a non-secure request is unaffected and stays HTTP/1.1). HTTP/2 upstream connections are not reused across requests.</p>
+    <p>It applies to both matched <code>forward</code> expectations and the <em>transparent (HTTPS) proxy</em> path used to capture a tool's traffic &mdash; so it is the recommended setting when recording a coding-assistant CLI (for example the <code>opencode</code> CLI, whose OpenAI Codex backend withholds its SSE head over HTTP/1.1) through MockServer as an HTTPS proxy, where it otherwise surfaces as a streaming header timeout.</p>
+    <p>The default (off) is unchanged from previous behaviour.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.forwardProxyHttp2Upgrade(boolean enable)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyHttp2Upgrade=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_FORWARD_PROXY_HTTP2_UPGRADE=...</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.forwardProxyHttp2Upgrade=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.forwardProxyHttp2Upgrade="true"</code></pre>
 </div>
 
 <button id="button_configuration_forward_proxy_retry_count" class="accordion title"><strong>Retry Forwarded Requests On Transient Failure</strong></button>
@@ -1723,6 +2143,26 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
 <button id="button_configuration_drift" class="accordion title"><strong>Drift Detection</strong></button>
 <div class="panel title">
     <p>Controls for mock drift detection and semantic drift analysis. See <a href="/mock_server/drift_detection.html">Drift Detection</a> for full details.</p>
+    <p><strong>Drift detection enabled</strong> &mdash; the master switch for mock drift detection. When <code>true</code> (the default), MockServer compares each forwarded upstream response against any matching mock so it can detect when the real service has drifted away from your mocks. When <code>false</code>, this comparison is skipped entirely, which removes the small per-request overhead it adds &mdash; useful if you are proxying at high volume and do not need drift reporting.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">true</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.driftDetectionEnabled(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftDetectionEnabled=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_DETECTION_ENABLED=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftDetectionEnabled="false"</code></pre>
+    <p><strong>Drift sample rate</strong> &mdash; the fraction of forwarded responses to analyse for drift, between <code>0.0</code> and <code>1.0</code>. The default <code>1.0</code> analyses every forwarded response. Lower it (for example <code>0.1</code> for 10%) to sample only a portion of traffic and reduce overhead when you are proxying at high volume but still want periodic drift signals. Values outside the range are clamped to the nearest bound. Has no effect when <code>driftDetectionEnabled</code> is <code>false</code>.</p>
+    <p>Type: <span class="keyword">double</span> Default: <span class="this_value">1.0</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.driftSampleRate(double rate)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftSampleRate=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_DRIFT_SAMPLE_RATE=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.driftSampleRate="0.1"</code></pre>
     <p><strong>Semantic drift analysis</strong> &mdash; when <code>true</code> and a runtime LLM backend is configured, each structural drift record is enriched with an LLM-classified severity (BREAKING, WARNING, or INFORMATIONAL) and a one-sentence explanation. Off by default (opt-in). Enrichment is best-effort: if the LLM is unavailable, drift records are stored with structural data only.</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <p>Java Code:</p>
@@ -1818,6 +2258,16 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CONTROL_PLANE_AUDIT_READS=...</code></pre>
     <p>Example:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.controlPlaneAuditReads="true"</code></pre>
+    <p><strong>Audit log file</strong> &mdash; an optional path to a durable audit log file. When set (and the audit log is enabled), every recorded entry is <em>also</em> appended as one JSON object per line (newline-delimited JSON) to this file, giving a restart-surviving trail that outlives the in-memory log &mdash; which is bounded and is wiped by the very <code>reset</code> it records. Empty by default (the file sink is off and behaviour is unchanged). The path is resolved once, on the first entry written, and missing parent directories are created. The file grows append-only; use external log rotation (for example <code>logrotate</code>) if it needs to be capped. If the file cannot be opened or written, a single warning is logged and the file sink is disabled &mdash; request handling and the in-memory log are never affected.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">"" (off)</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.auditLogFile(String path)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.auditLogFile=...</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_AUDIT_LOG_FILE=...</code></pre>
+    <p>Example:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.auditLogFile="/var/log/mockserver/audit.ndjson"</code></pre>
 </div>
 
 <button id="button_configuration_control_plane_oidc" class="accordion title"><strong>Control-Plane OIDC Authentication</strong></button>
@@ -2304,6 +2754,8 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelMetricsEnabled=... &nbsp; MOCKSERVER_OTEL_METRICS_ENABLED=...</code></pre>
     <p>Export interval (seconds), default <span class="this_value">60</span>:</p>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelMetricsExportIntervalSeconds=... &nbsp; MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS=...</code></pre>
+    <p><strong>Aggregation temporality</strong> &mdash; how counter and histogram values are reported over OTLP: <span class="this_value">cumulative</span> (the default, a running total) or <span class="this_value">delta</span> (only the change since the last export). Choose <span class="inline_code">delta</span> for backends such as <strong>New Relic</strong> that prefer it &mdash; delta metrics do not require the backend to track a separate running total per pod/instance, which reduces the number of time series. Only affects OTLP export (the Prometheus endpoint is always cumulative); any unrecognised value falls back to <span class="inline_code">cumulative</span>.</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelMetricsTemporality="delta" &nbsp; MOCKSERVER_OTEL_METRICS_TEMPORALITY=delta</code></pre>
     <p><strong>2. GenAI span export</strong> &mdash; emit one OpenTelemetry GenAI semantic-convention span per LLM completion MockServer serves <strong>or forwards/proxies</strong>, carrying provider (<span class="inline_code">gen_ai.system</span>), model, token usage and finish reason. When MockServer forwards traffic to an upstream LLM provider (matched-expectation forward or unmatched proxy-pass), it detects the provider from the target host and emits a GenAI span for the upstream response. These are spans MockServer codes deliberately &mdash; <strong>no</strong> auto-instrumentation is added.</p>
     <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.otelTracesEnabled(boolean enabled)</code></pre>
@@ -2327,9 +2779,34 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.otelPropagateTraceContext="true" -Dmockserver.otelGenerateTraceId="true"</code></pre>
 </div>
 
+<button id="button_configuration_prometheus_remote_write" class="accordion title"><strong>Prometheus Remote Write (Push Metrics)</strong></button>
+<div class="panel title">
+    <p>Instead of (or as well as) being scraped at <span class="inline_code">/mockserver/metrics</span>, MockServer can <strong>push</strong> the very same metrics to a Prometheus <strong>Remote-Write</strong> endpoint on an interval. This suits short-lived pods and agentless setups, and works with Prometheus (started with <span class="inline_code">--web.enable-remote-write-receiver</span>), Grafana Cloud / Mimir, New Relic, VictoriaMetrics and Thanos Receive. It is <strong>off by default</strong> and <strong>fail-soft</strong> &mdash; a push failure logs one line and never affects request handling. The pushed series are exactly what the scrape endpoint serves (the whole registry); remote write is always cumulative (the Prometheus model).</p>
+    <p><strong>Enable</strong> &mdash; turn on the periodic push.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.prometheusRemoteWriteEnabled(boolean enabled)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.prometheusRemoteWriteEnabled=... &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_ENABLED=...</code></pre>
+    <p><strong>Endpoint URL</strong> &mdash; the full remote-write URL to POST to (e.g. <span class="inline_code">http://prometheus:9090/api/v1/write</span>). Required when enabled; if left blank, a warning is logged and nothing is pushed.</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.prometheusRemoteWriteUrl(String url)</code></pre>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.prometheusRemoteWriteUrl=... &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_URL=...</code></pre>
+    <p><strong>Protocol version</strong> &mdash; <span class="this_value">v1</span> (default, universally supported) or <span class="this_value">v2</span>. v2 interns labels into a symbol table and carries per-series metadata; use it only if your receiver supports Remote-Write 2.0. Any unrecognised value falls back to <span class="inline_code">v1</span>.</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.prometheusRemoteWriteProtocolVersion="v2" &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_PROTOCOL_VERSION=v2</code></pre>
+    <p><strong>Push interval</strong> (seconds), default <span class="this_value">60</span>, minimum <span class="this_value">1</span>:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.prometheusRemoteWriteIntervalSeconds=... &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_INTERVAL_SECONDS=...</code></pre>
+    <p><strong>Authentication</strong> &mdash; most hosted endpoints require it. A bearer token is used if set (it wins over basic auth); otherwise HTTP basic auth (username + password); then any custom headers are applied last (so a custom <span class="inline_code">Authorization</span> header can override). Credential values are never logged.</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.prometheusRemoteWriteBearerToken=... &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BEARER_TOKEN=...
+-Dmockserver.prometheusRemoteWriteBasicAuthUsername=... &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_USERNAME=...
+-Dmockserver.prometheusRemoteWriteBasicAuthPassword=... &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_PASSWORD=...</code></pre>
+    <p><strong>Custom headers</strong> &mdash; extra HTTP headers as a comma-separated <span class="inline_code">key=value</span> list, for tenant/API-key headers such as New Relic's <span class="inline_code">Api-Key</span> or Grafana Mimir's <span class="inline_code">X-Scope-OrgID</span>:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.prometheusRemoteWriteHeaders="Api-Key=NRAK-xxxx,X-Scope-OrgID=tenant-a" &nbsp; MOCKSERVER_PROMETHEUS_REMOTE_WRITE_HEADERS=...</code></pre>
+    <p>Example (push to a local Prometheus every 15s):</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.metricsEnabled="true" -Dmockserver.prometheusRemoteWriteEnabled="true" -Dmockserver.prometheusRemoteWriteUrl="http://localhost:9090/api/v1/write" -Dmockserver.prometheusRemoteWriteIntervalSeconds="15"</code></pre>
+</div>
+
 <button id="button_configuration_stream_idle_timeout_seconds" class="accordion title"><strong>Streaming Response Idle Timeout</strong></button>
 <div class="panel title">
     <p>The maximum time in seconds a streaming response connection may be idle (no chunk received from the upstream server) before MockServer closes it and logs the captured portion as truncated. This replaces the fixed global socket timeout for streaming responses, which would otherwise terminate long-lived LLM completions. The timeout resets on every chunk received, so a slow-but-active stream is never cut off prematurely.</p>
+    <p>Set to <span class="this_value">0</span> to disable the idle bound entirely: a stream is then never closed for inactivity. Use with care — this removes the only inactivity limit on a streaming connection, so a stalled upstream that stops sending chunks will hold the connection open indefinitely.</p>
     <p>Type: <span class="keyword">int</span> Default: <span class="this_value">60</span> (seconds)</p>
     <p>Java Code:</p>
     <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.streamIdleTimeoutSeconds(int seconds)</code></pre>
@@ -2615,6 +3092,8 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
 
 {% include_subpage _includes/service_mesh_configuration.html %}
 
+<a id="clustering_configuration" class="anchor" href="#clustering_configuration">&nbsp;</a>
+
 <h2>Clustering Configuration:</h2>
 
 <p>These properties configure multi-node clustering. When enabled, MockServer instances sharing the same cluster name replicate expectation state via an embedded Infinispan data grid with JGroups transport. Requires the <span class="inline_code">mockserver-state-infinispan</span> module on the classpath and <span class="inline_code">stateBackend=infinispan</span>.</p>
@@ -2691,6 +3170,50 @@ mockserver.llmRequestTimeoutMillis=30000</code></pre>
     <p>Property File:</p>
     <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterSharedTimesEnabled=false</code></pre>
 </div>
+
+<button id="button_configuration_cluster_verify_fan_in" class="accordion title"><strong>Cluster Verify Fan-In</strong></button>
+<div class="panel title">
+    <p>Controls whether <span class="inline_code">verify</span> and <span class="inline_code">retrieve</span> of recorded requests aggregate across all cluster nodes. MockServer replicates expectations and scenario state across a cluster, but each node keeps its OWN record of the requests it received. Behind a load balancer that means a <span class="inline_code">verify</span> or a retrieve of recorded requests sees only the traffic that happened to reach the node handling that call — so a verification can pass even though the whole cluster served more (or fewer) matching requests than expected. When <span class="keyword">true</span>, MockServer asks every other node (listed in <span class="inline_code">clusterVerifyFanInPeers</span>) for its local records, merges them, and evaluates the verification against the cluster-wide total. Default is <span class="keyword">false</span> (each node reports only its own traffic — unchanged behaviour). If a peer cannot be reached the verify/retrieve fails rather than returning a partial result. Only relevant in a clustered deployment.</p>
+    <p>Type: <span class="keyword">boolean</span> Default: <span class="this_value">false</span></p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.clusterVerifyFanIn(boolean enabled)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.clusterVerifyFanIn=true</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLUSTER_VERIFY_FAN_IN=true</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterVerifyFanIn=true</code></pre>
+</div>
+
+<button id="button_configuration_cluster_verify_fan_in_peers" class="accordion title"><strong>Cluster Verify Fan-In Peers</strong></button>
+<div class="panel title">
+    <p>The comma-separated list of the OTHER cluster nodes' base URLs (for example <span class="inline_code">http://mockserver-1:1080,http://mockserver-2:1080</span>) that <span class="inline_code">clusterVerifyFanIn</span> queries when aggregating verify/retrieve across the cluster. List every node except the one being configured. Has no effect unless <span class="inline_code">clusterVerifyFanIn</span> is enabled; when enabled with an empty list, fan-in is a no-op.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (empty)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.clusterVerifyFanInPeers(String peers)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.clusterVerifyFanInPeers="http://mockserver-1:1080,http://mockserver-2:1080"</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLUSTER_VERIFY_FAN_IN_PEERS=http://mockserver-1:1080,http://mockserver-2:1080</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterVerifyFanInPeers=http://mockserver-1:1080,http://mockserver-2:1080</code></pre>
+</div>
+
+<button id="button_configuration_cluster_fan_in_peer_auth_token" class="accordion title"><strong>Cluster Fan-In Peer Auth Token</strong></button>
+<div class="panel title">
+    <p>The credential MockServer presents when it queries other cluster nodes during verify/retrieve fan-in. If your MockServer control plane requires authentication (a bearer token, JWT, or OIDC), the fan-in queries to other nodes would otherwise be rejected and the whole verify/retrieve would fail. Set this to the credential each node should send — it is used <em>exactly as given</em> for the <span class="inline_code">Authorization</span> header, so include the scheme, for example <span class="inline_code">Bearer eyJ...</span>. Set the same value on every node. Default is empty (no credential sent — unchanged behaviour); leave it empty if your control plane is not authenticated. Because it is sent on every cross-node query, treat it as a shared secret and prefer TLS between nodes. Has no effect unless <span class="inline_code">clusterVerifyFanIn</span> is enabled.</p>
+    <p>Type: <span class="keyword">string</span> Default: <span class="this_value">""</span> (empty)</p>
+    <p>Java Code:</p>
+    <pre class="prettyprint lang-java code"><code class="code">ConfigurationProperties.clusterFanInPeerAuthToken(String token)</code></pre>
+    <p>System Property:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">-Dmockserver.clusterFanInPeerAuthToken="Bearer eyJ..."</code></pre>
+    <p>Environment Variable:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">MOCKSERVER_CLUSTER_FAN_IN_PEER_AUTH_TOKEN="Bearer eyJ..."</code></pre>
+    <p>Property File:</p>
+    <pre class="code" style="padding: 2px;"><code class="code">mockserver.clusterFanInPeerAuthToken=Bearer eyJ...</code></pre>
+</div>
+
+<a id="cloud_blob_store_configuration" class="anchor" href="#cloud_blob_store_configuration">&nbsp;</a>
 
 <h2>Cloud Blob Store Configuration:</h2>
 

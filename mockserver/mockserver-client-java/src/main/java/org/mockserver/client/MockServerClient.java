@@ -23,6 +23,7 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.matchers.TimeToLive;
 import org.mockserver.matchers.Times;
 import org.mockserver.mock.Expectation;
+import org.mockserver.mock.MockMode;
 import org.mockserver.mock.OpenAPIExpectation;
 import org.mockserver.mock.breakpoint.BreakpointPhase;
 import org.mockserver.oidc.OidcProviderConfiguration;
@@ -83,12 +84,35 @@ import static org.mockserver.verify.VerificationTimes.exactly;
 import static org.slf4j.event.Level.*;
 
 /**
+ * Client for communicating with a running MockServer instance.
+ * <p>
+ * Instances can be created directly via one of the constructors, for example:
+ * <pre>
+ * MockServerClient client = new MockServerClient("localhost", 1080);
+ * </pre>
+ * or, for a more discoverable and self-documenting alternative that covers every
+ * construction dimension (host, port, context path, TLS, control plane JWT, proxy
+ * configuration and request override) with sensible defaults, via the fluent
+ * {@link #builder()}:
+ * <pre>
+ * MockServerClient client = MockServerClient.builder()
+ *     .host("localhost")
+ *     .port(1080)
+ *     .contextPath("/mockserver")
+ *     .secure(true)
+ *     .build();
+ * </pre>
+ * The builder simply delegates to the existing constructors and {@code with...}
+ * setters, so both approaches produce identically-configured clients; the
+ * constructors remain fully supported.
+ *
  * @author jamesdbloom
  */
 @SuppressWarnings({"UnusedReturnValue", "FieldMayBeFinal"})
 public class MockServerClient implements Stoppable {
 
     private static final MockServerLogger MOCK_SERVER_LOGGER = new MockServerLogger(MockServerClient.class);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final Map<Integer, MockServerEventBus> EVENT_BUS_MAP = new ConcurrentHashMap<>();
     private final EventLoopGroup eventLoopGroup;
     private final String host;
@@ -257,6 +281,203 @@ public class MockServerClient implements Stoppable {
 
     private NioEventLoopGroup eventLoopGroup() {
         return new NioEventLoopGroup(configuration.clientNioEventLoopThreadCount(), new Scheduler.SchedulerThreadFactory(this.getClass().getSimpleName() + "-eventLoop"));
+    }
+
+    /**
+     * Create a fluent {@link Builder} for constructing a {@link MockServerClient}.
+     * <p>
+     * The builder is a discoverable alternative to the constructors that covers every
+     * construction dimension in one place, with sensible defaults ({@code host} =
+     * {@code "localhost"}, {@code port} = {@code 1080}, empty context path). It delegates
+     * to the existing constructors and {@code with...} setters, so it introduces no new
+     * behaviour; the constructors remain fully supported. For example:
+     * <pre>
+     * MockServerClient client = MockServerClient.builder()
+     *     .host("localhost")
+     *     .port(1080)
+     *     .build();
+     * </pre>
+     *
+     * @return a new builder pre-populated with the default host and port
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * Fluent builder for {@link MockServerClient}.
+     * <p>
+     * Covers every dimension exposed by the {@link MockServerClient} constructors and
+     * {@code with...} setters:
+     * <ul>
+     *     <li>{@link #configuration(ClientConfiguration)} / {@link #configuration(Configuration)}</li>
+     *     <li>{@link #host(String)} (default {@code "localhost"})</li>
+     *     <li>{@link #port(int)} (default {@code 1080})</li>
+     *     <li>{@link #contextPath(String)} (default empty)</li>
+     *     <li>{@link #portFuture(CompletableFuture)} (mutually exclusive with host/port/contextPath)</li>
+     *     <li>{@link #secure(boolean)} — TLS, delegates to {@link MockServerClient#withSecure(boolean)}</li>
+     *     <li>{@link #proxyConfiguration(ProxyConfiguration)} — delegates to {@link MockServerClient#withProxyConfiguration(ProxyConfiguration)}</li>
+     *     <li>{@link #controlPlaneJWT(String)} / {@link #controlPlaneJWT(Supplier)} — delegates to {@link MockServerClient#withControlPlaneJWT(Supplier)}</li>
+     *     <li>{@link #requestOverride(HttpRequest)} — delegates to {@link MockServerClient#withRequestOverride(HttpRequest)}</li>
+     * </ul>
+     * The builder performs no construction work until {@link #build()} is called, at which
+     * point it selects the matching constructor and applies the configured setters, so the
+     * resulting client is identical to one built directly. Validation (for example, the
+     * empty-host check) is inherited from the constructors and surfaces from {@link #build()}.
+     */
+    public static final class Builder {
+
+        private ClientConfiguration configuration;
+        private String host = "localhost";
+        private int port = 1080;
+        private String contextPath = "";
+        private CompletableFuture<Integer> portFuture;
+        private Boolean secure;
+        private ProxyConfiguration proxyConfiguration;
+        private Supplier<String> controlPlaneJWTSupplier;
+        private HttpRequest requestOverride;
+        private boolean hostSet;
+        private boolean portSet;
+        private boolean contextPathSet;
+
+        private Builder() {
+        }
+
+        /**
+         * Use the given {@link ClientConfiguration}. When {@code null} the client falls back
+         * to the default configuration, matching the constructors' behaviour.
+         */
+        public Builder configuration(ClientConfiguration configuration) {
+            this.configuration = configuration;
+            return this;
+        }
+
+        /**
+         * Use the given {@link Configuration}, wrapped as a {@link ClientConfiguration} (the
+         * same conversion the {@code MockServerClient(Configuration, ...)} constructors perform).
+         */
+        public Builder configuration(Configuration configuration) {
+            this.configuration = configuration == null ? null : clientConfiguration(configuration);
+            return this;
+        }
+
+        /**
+         * The host of the MockServer to communicate with. Defaults to {@code "localhost"}.
+         */
+        public Builder host(String host) {
+            this.host = host;
+            this.hostSet = true;
+            return this;
+        }
+
+        /**
+         * The port of the MockServer to communicate with. Defaults to {@code 1080}.
+         */
+        public Builder port(int port) {
+            this.port = port;
+            this.portSet = true;
+            return this;
+        }
+
+        /**
+         * The context path that the MockServer war is deployed to. Defaults to empty.
+         */
+        public Builder contextPath(String contextPath) {
+            this.contextPath = contextPath;
+            this.contextPathSet = true;
+            return this;
+        }
+
+        /**
+         * Resolve the port lazily from a {@link CompletableFuture}, for use when the MockServer
+         * port is not yet known at client-construction time. This is mutually exclusive with
+         * {@link #host(String)}, {@link #port(int)} and {@link #contextPath(String)}: the
+         * future-based constructor always communicates with {@code localhost} using an empty
+         * context path.
+         */
+        public Builder portFuture(CompletableFuture<Integer> portFuture) {
+            this.portFuture = portFuture;
+            return this;
+        }
+
+        /**
+         * Whether to communicate with MockServer over TLS. Delegates to
+         * {@link MockServerClient#withSecure(boolean)}.
+         */
+        public Builder secure(boolean secure) {
+            this.secure = secure;
+            return this;
+        }
+
+        /**
+         * Route communication to MockServer via a proxy. Delegates to
+         * {@link MockServerClient#withProxyConfiguration(ProxyConfiguration)}.
+         */
+        public Builder proxyConfiguration(ProxyConfiguration proxyConfiguration) {
+            this.proxyConfiguration = proxyConfiguration;
+            return this;
+        }
+
+        /**
+         * A fixed JWT for control plane authorisation. Delegates to
+         * {@link MockServerClient#withControlPlaneJWT(String)}.
+         */
+        public Builder controlPlaneJWT(String controlPlaneJWT) {
+            this.controlPlaneJWTSupplier = () -> controlPlaneJWT;
+            return this;
+        }
+
+        /**
+         * A JWT supplier for control plane authorisation. Delegates to
+         * {@link MockServerClient#withControlPlaneJWT(Supplier)}.
+         */
+        public Builder controlPlaneJWT(Supplier<String> controlPlaneJWTSupplier) {
+            this.controlPlaneJWTSupplier = controlPlaneJWTSupplier;
+            return this;
+        }
+
+        /**
+         * A request override applied to every control plane request. Delegates to
+         * {@link MockServerClient#withRequestOverride(HttpRequest)}.
+         */
+        public Builder requestOverride(HttpRequest requestOverride) {
+            this.requestOverride = requestOverride;
+            return this;
+        }
+
+        /**
+         * Build the {@link MockServerClient}, selecting the matching constructor and applying
+         * the configured {@code with...} setters. Constructor validation (such as the
+         * empty-host check) surfaces from here.
+         *
+         * @throws IllegalArgumentException if {@link #portFuture(CompletableFuture)} is combined
+         *                                  with an explicit host, port or context path, or if a
+         *                                  constructor rejects the supplied values
+         */
+        public MockServerClient build() {
+            MockServerClient client;
+            if (portFuture != null) {
+                if (hostSet || portSet || contextPathSet) {
+                    throw new IllegalArgumentException("portFuture(...) can not be combined with host(...), port(...) or contextPath(...); the future-based client always communicates with localhost using an empty context path");
+                }
+                client = new MockServerClient(configuration, portFuture);
+            } else {
+                client = new MockServerClient(configuration, host, port, contextPath);
+            }
+            if (secure != null) {
+                client.withSecure(secure);
+            }
+            if (proxyConfiguration != null) {
+                client.withProxyConfiguration(proxyConfiguration);
+            }
+            if (controlPlaneJWTSupplier != null) {
+                client.withControlPlaneJWT(controlPlaneJWTSupplier);
+            }
+            if (requestOverride != null) {
+                client.withRequestOverride(requestOverride);
+            }
+            return client;
+        }
     }
 
     /**
@@ -2547,6 +2768,337 @@ public class MockServerClient implements Stoppable {
             true
         );
         return clientClass.cast(this);
+    }
+
+    // -------------------------------------------------------------------
+    // Metrics (Prometheus exposition)
+    // -------------------------------------------------------------------
+
+    /**
+     * Scrape the Prometheus exposition-format metrics. Wraps {@code GET /mockserver/metrics}.
+     * <p>
+     * This is distinct from {@link #retrieveMetrics()} (which returns the JSON counter snapshot via
+     * {@code PUT /mockserver/retrieve?type=METRICS}). When {@code metricsEnabled} is {@code false}
+     * the server replies {@code 404 NOT_FOUND}.
+     *
+     * @return the Prometheus exposition text
+     */
+    public String scrapeMetrics() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("metrics")),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : null;
+    }
+
+    // -------------------------------------------------------------------
+    // Drift detection
+    // -------------------------------------------------------------------
+
+    /**
+     * Retrieve the recorded mock drift report. Wraps {@code GET /mockserver/drift}.
+     * <p>
+     * The report is returned as a JSON string of the form
+     * {@code {"count": <n>, "drifts": [ ... ]}}, where each entry describes a difference detected
+     * between a mock's configured response and the live upstream response for the same request.
+     *
+     * @return the drift report as a JSON string
+     */
+    public String retrieveDrift() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("drift")),
+            false
+        );
+        return httpResponse != null ? httpResponse.getBodyAsString() : null;
+    }
+
+    /**
+     * Clear all recorded mock drift. Wraps {@code PUT /mockserver/drift/clear}.
+     *
+     * @return this MockServerClient
+     */
+    public MockServerClient clearDrift() {
+        sendRequest(
+            request()
+                .withMethod("PUT")
+                .withPath(calculatePath("drift/clear")),
+            true
+        );
+        return clientClass.cast(this);
+    }
+
+    // -------------------------------------------------------------------
+    // File store
+    // -------------------------------------------------------------------
+
+    /**
+     * Store a UTF-8 text file in the in-memory file store. Wraps {@code PUT /mockserver/files/store}.
+     *
+     * @param name    the file name/key (required)
+     * @param content the file content as a UTF-8 string (required)
+     * @return this MockServerClient
+     */
+    public MockServerClient storeFile(String name, String content) {
+        if (isBlank(name)) {
+            throw new IllegalArgumentException("storeFile(name, content) requires a non null name");
+        }
+        ObjectNode requestBody = OBJECT_MAPPER.createObjectNode();
+        requestBody.put("name", name);
+        requestBody.put("content", content != null ? content : "");
+        sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("files/store"))
+                .withBody(requestBody.toString(), StandardCharsets.UTF_8),
+            false
+        );
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Store a binary file in the in-memory file store. Wraps {@code PUT /mockserver/files/store}.
+     * The bytes are base64-encoded and sent with {@code "base64": true} so the server stores the
+     * raw bytes verbatim.
+     *
+     * @param name    the file name/key (required)
+     * @param content the file content as raw bytes (required)
+     * @return this MockServerClient
+     */
+    public MockServerClient storeFile(String name, byte[] content) {
+        if (isBlank(name)) {
+            throw new IllegalArgumentException("storeFile(name, content) requires a non null name");
+        }
+        ObjectNode requestBody = OBJECT_MAPPER.createObjectNode();
+        requestBody.put("name", name);
+        requestBody.put("content", Base64.getEncoder().encodeToString(content != null ? content : new byte[0]));
+        requestBody.put("base64", true);
+        sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("files/store"))
+                .withBody(requestBody.toString(), StandardCharsets.UTF_8),
+            false
+        );
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Retrieve a file's raw bytes from the in-memory file store. Wraps
+     * {@code PUT /mockserver/files/retrieve}. The server replies {@code 404 NOT_FOUND} for an
+     * unknown file.
+     *
+     * @param name the file name/key (required)
+     * @return the raw file bytes
+     */
+    public byte[] retrieveFile(String name) {
+        if (isBlank(name)) {
+            throw new IllegalArgumentException("retrieveFile(name) requires a non null name");
+        }
+        ObjectNode requestBody = OBJECT_MAPPER.createObjectNode();
+        requestBody.put("name", name);
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("files/retrieve"))
+                .withBody(requestBody.toString(), StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && Integer.valueOf(404).equals(httpResponse.getStatusCode())) {
+            throw new ClientException("file not found: " + name);
+        }
+        return httpResponse != null ? httpResponse.getBodyAsRawBytes() : null;
+    }
+
+    /**
+     * List the names of all files in the in-memory file store. Wraps {@code PUT /mockserver/files/list}.
+     *
+     * @return the set of file names
+     */
+    @SuppressWarnings("unchecked")
+    public Set<String> listFiles() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("files/list")),
+            false
+        );
+        if (httpResponse == null || isBlank(httpResponse.getBodyAsString())) {
+            return new LinkedHashSet<>();
+        }
+        try {
+            List<String> names = OBJECT_MAPPER.readValue(httpResponse.getBodyAsString(), List.class);
+            return new LinkedHashSet<>(names);
+        } catch (Throwable throwable) {
+            throw new ClientException("Unable to parse files/list response", throwable);
+        }
+    }
+
+    /**
+     * Delete a file from the in-memory file store. Wraps {@code PUT /mockserver/files/delete}. The
+     * server replies {@code 404 NOT_FOUND} for an unknown file.
+     *
+     * @param name the file name/key (required)
+     * @return this MockServerClient
+     */
+    public MockServerClient deleteFile(String name) {
+        if (isBlank(name)) {
+            throw new IllegalArgumentException("deleteFile(name) requires a non null name");
+        }
+        ObjectNode requestBody = OBJECT_MAPPER.createObjectNode();
+        requestBody.put("name", name);
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("files/delete"))
+                .withBody(requestBody.toString(), StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && Integer.valueOf(404).equals(httpResponse.getStatusCode())) {
+            throw new ClientException("file not found: " + name);
+        }
+        return clientClass.cast(this);
+    }
+
+    // -------------------------------------------------------------------
+    // Import (HAR / Postman collection)
+    // -------------------------------------------------------------------
+
+    /**
+     * Import a HAR (HTTP Archive) document as expectations. Wraps
+     * {@code PUT /mockserver/import?format=har}.
+     *
+     * @param harJson the HAR JSON document
+     * @return the upserted expectations
+     */
+    public Expectation[] importHar(String harJson) {
+        return importDocument(harJson, "har");
+    }
+
+    /**
+     * Import a Postman collection as expectations. Wraps
+     * {@code PUT /mockserver/import?format=postman}.
+     *
+     * @param postmanJson the Postman collection JSON document
+     * @return the upserted expectations
+     */
+    public Expectation[] importPostmanCollection(String postmanJson) {
+        return importDocument(postmanJson, "postman");
+    }
+
+    /**
+     * Import a HAR, Postman collection, or Pact contract as expectations. Wraps
+     * {@code PUT /mockserver/import}. When {@code format} is blank the server auto-detects the
+     * format from the JSON shape.
+     *
+     * @param json   the document JSON (required)
+     * @param format one of {@code har}, {@code postman}, {@code pact}, or {@code null}/blank for auto-detect
+     * @return the upserted expectations
+     */
+    public Expectation[] importDocument(String json, String format) {
+        if (isBlank(json)) {
+            throw new IllegalArgumentException("importDocument(json, format) requires a non null document JSON");
+        }
+        HttpRequest importRequest = request()
+            .withMethod("PUT")
+            .withContentType(APPLICATION_JSON_UTF_8)
+            .withPath(calculatePath("import"))
+            .withBody(json, StandardCharsets.UTF_8);
+        if (isNotBlank(format)) {
+            importRequest.withQueryStringParameter("format", format);
+        }
+        HttpResponse httpResponse = sendRequest(importRequest, false);
+        if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+            return expectationSerializer.deserializeArray(httpResponse.getBodyAsString(), true);
+        }
+        return new Expectation[0];
+    }
+
+    // -------------------------------------------------------------------
+    // Operating mode
+    // -------------------------------------------------------------------
+
+    /**
+     * Set the high-level operating mode. Wraps {@code PUT /mockserver/mode?mode=<MODE>}. Setting the
+     * mode also flips {@code attemptToProxyIfNoMatchingExpectation} server-side.
+     *
+     * @param mode one of {@link MockMode#SIMULATE}, {@link MockMode#SPY}, {@link MockMode#CAPTURE}
+     * @return this MockServerClient
+     */
+    public MockServerClient setMode(MockMode mode) {
+        if (mode == null) {
+            throw new IllegalArgumentException("setMode(mode) requires a non null mode");
+        }
+        sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(APPLICATION_JSON_UTF_8)
+                .withPath(calculatePath("mode"))
+                .withQueryStringParameter("mode", mode.name()),
+            false
+        );
+        return clientClass.cast(this);
+    }
+
+    /**
+     * Read the current high-level operating mode. Wraps {@code GET /mockserver/mode}.
+     *
+     * @return the current {@link MockMode}
+     */
+    public MockMode retrieveMode() {
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("GET")
+                .withPath(calculatePath("mode")),
+            false
+        );
+        if (httpResponse == null || isBlank(httpResponse.getBodyAsString())) {
+            throw new ClientException("Unable to read mode: empty response");
+        }
+        try {
+            JsonNode node = OBJECT_MAPPER.readTree(httpResponse.getBodyAsString());
+            return MockMode.parse(node.get("mode").asText());
+        } catch (Throwable throwable) {
+            throw new ClientException("Unable to parse mode response", throwable);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // WSDL
+    // -------------------------------------------------------------------
+
+    /**
+     * Generate and upsert expectations from a WSDL document. Wraps {@code PUT /mockserver/wsdl} with
+     * the raw WSDL XML as the request body (mirrors how {@code openAPIExpectation(...)} feeds the
+     * OpenAPI upsert).
+     *
+     * @param wsdl the WSDL document XML (required)
+     * @return the generated (upserted) expectations
+     */
+    public Expectation[] wsdlExpectation(String wsdl) {
+        if (isBlank(wsdl)) {
+            throw new IllegalArgumentException("wsdlExpectation(wsdl) requires a non null WSDL document");
+        }
+        HttpResponse httpResponse = sendRequest(
+            request()
+                .withMethod("PUT")
+                .withContentType(MediaType.APPLICATION_XML_UTF_8)
+                .withPath(calculatePath("wsdl"))
+                .withBody(wsdl, StandardCharsets.UTF_8),
+            false
+        );
+        if (httpResponse != null && isNotBlank(httpResponse.getBodyAsString())) {
+            return expectationSerializer.deserializeArray(httpResponse.getBodyAsString(), true);
+        }
+        return new Expectation[0];
     }
 
     // -------------------------------------------------------------------

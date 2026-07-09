@@ -1,0 +1,52 @@
+# Left-hand navigation structure.
+#
+# `featured`  - a short, pinned "Popular" group shown at the top of the sidebar
+#               so the highest-value features are always one click away,
+#               independent of which section they live in.
+# `sections`  - the ordered list of collapsible sections. Each section's pages
+#               are discovered automatically from page front matter
+#               (`section:` plus optional `extraSections:` for cross-listing),
+#               sorted by `pageOrder`. `extraLinks` adds non-page links
+#               (external references, llms.txt, etc.) to the end of a section.
+#
+# A page can appear in more than one section: set `section:` for its primary
+# home and list any additional sections in `extraSections:` (a YAML list).
+
+featured:
+  - title: Creating Expectations
+    url: /mock_server/creating_expectations.html
+  - title: Stateful Scenarios
+    url: /mock_server/stateful_scenarios.html
+  - title: OpenAPI & WSDL
+    url: /mock_server/using_openapi.html
+  - title: AI & MCP Mocking
+    url: /mock_server/ai_protocol_mocking.html
+  - title: Chaos Testing
+    url: /mock_server/chaos_testing.html
+  - title: Load / Performance
+    url: /mock_server/load_injection.html
+
+sections:
+  - name: Getting Started
+    extraLinks:
+      - title: REST API Reference
+        url: https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi
+        external: true
+  - name: Creating Mocks
+  - name: Data & State
+  - name: Verify & Test
+  - name: Protocols & Advanced
+  - name: AI & MCP
+    extraLinks:
+      - title: llms.txt
+        url: /llms.txt
+  - name: Chaos Testing
+  - name: Performance Testing
+  - name: Security
+  - name: Proxying
+  - name: Operations
+  - name: Where
+    extraLinks:
+      - title: Swagger Hub
+        url: https://app.swaggerhub.com/apis/jamesdbloom/mock-server-openapi
+        external: true

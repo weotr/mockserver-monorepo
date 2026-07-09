@@ -1,0 +1,156 @@
+/* ===========================================================================
+   Left-hand navigation: collapsible sections, pinned "Popular" group and a
+   live filter box. Layered on top of the base #menu styles in _styles.scss.
+   Works identically in the fixed desktop sidebar and the mobile push-drawer.
+   =========================================================================== */
+
+/* -- Filter / search box --------------------------------------------------- */
+
+.nav-filter {
+    position: relative;
+    padding: 10px 10px 8px;
+}
+
+#navFilter {
+    width: 100%;
+    box-sizing: border-box;
+    background: #2a2a2a;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #eee;
+    font: 0.9em Helvetica, Arial, sans-serif;
+    padding: 7px 26px 7px 10px;
+    outline: none;
+}
+
+#navFilter:focus {
+    border-color: #888;
+}
+
+/* Keyboard focus ring (suppressed for mouse via :focus-visible). */
+#navFilter:focus-visible {
+    outline: 2px solid #aaa;
+    outline-offset: 2px;
+}
+
+#navFilter::placeholder {
+    color: #888;
+}
+
+.nav-filter-clear {
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: #999;
+    font-size: 1.2em;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.nav-filter-clear:hover {
+    color: #fff;
+}
+
+.nav-no-results {
+    color: #aaa;
+    font-size: 0.85em;
+    padding: 4px 14px;
+    margin: 0;
+}
+
+/* -- Featured / Popular group ---------------------------------------------- */
+
+.nav-star {
+    color: #f5b301;
+}
+
+/* -- Collapsible sections -------------------------------------------------- */
+
+/*
+The section heading is a <button> so it is keyboard-focusable and toggles its
+panel. It still carries `.pure-menu-heading`, so it inherits the base heading
+font, colour and border; we only reset the intrinsic button chrome here.
+*/
+.nav-toggle {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    box-sizing: border-box;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    outline: none;
+}
+
+.nav-toggle:hover,
+.nav-toggle:focus {
+    background: #2a2a2a;
+}
+
+/* Keyboard focus ring (suppressed for mouse via :focus-visible). */
+.nav-toggle:focus-visible {
+    outline: 2px solid #aaa;
+    outline-offset: -2px;
+}
+
+/* Triangle chevron: points right when collapsed, rotates down when open. */
+.nav-chevron {
+    flex: 0 0 auto;
+    display: inline-block;
+    width: 0.85em;
+    margin-right: 6px;
+    font-size: 0.8em;
+    line-height: 1;
+    text-align: center;
+    transition: transform 0.15s ease;
+}
+
+.nav-chevron::before {
+    content: "\25B8"; /* ▸ small right-pointing triangle */
+}
+
+.nav-collapsible.open > .nav-toggle .nav-chevron,
+#menu.filtering .nav-collapsible.filter-open > .nav-toggle .nav-chevron {
+    transform: rotate(90deg);
+}
+
+/* Panels are collapsed by default; the current page's section is rendered
+   already-open server-side (`.open`) so there is no flash before JS runs. */
+.nav-collapsible .nav-panel {
+    display: none;
+}
+
+.nav-collapsible.open .nav-panel {
+    display: block;
+}
+
+/* -- Filtering state ------------------------------------------------------- */
+
+/* While a filter query is active, hide the static intro and Popular groups,
+   collapse all sections, then JS re-opens only those with matches. */
+#menu.filtering .nav-static,
+#menu.filtering .nav-featured {
+    display: none;
+}
+
+#menu.filtering .nav-collapsible .nav-panel {
+    display: none;
+}
+
+#menu.filtering .nav-collapsible.filter-open .nav-panel {
+    display: block;
+}
+
+#menu.filtering .nav-collapsible.filter-hide {
+    display: none;
+}
+
+/* Individual non-matching items hidden during filtering. */
+#menu.filtering li.filter-hide {
+    display: none;
+}

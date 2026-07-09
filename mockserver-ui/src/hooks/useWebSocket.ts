@@ -32,13 +32,62 @@ export function useWebSocket(params: ConnectionParams) {
   const reconnectCountRef = useRef(0);
   const lastFilterRef = useRef<RequestFilter>({});
   const connectRef = useRef<(filter: RequestFilter) => void>(() => {});
+  // While the tab is hidden we don't parse/reconcile/re-render on every ~1/sec
+  // push — we stash only the NEWEST raw message here (each push is full state)
+  // and replay it when the tab becomes visible again. The socket stays open so
+  // the server keeps us current without reconnect churn. `null` = nothing buffered.
+  const hiddenMessageRef = useRef<string | null>(null);
+  // Set when a dashboard HTTP probe returns 401/403 (control-plane auth is enabled but this
+  // client is unauthenticated). Suppresses the generic "server down" banner so the actionable
+  // auth-required message is shown instead. Cleared on a successful open.
+  const authRequiredRef = useRef(false);
 
   const applyMessage = useDashboardStore((s) => s.applyMessage);
   const setConnectionStatus = useDashboardStore((s) => s.setConnectionStatus);
   const setError = useDashboardStore((s) => s.setError);
 
+  // Parse + apply a raw WebSocket payload. Shared by the live onmessage path and
+  // the deferred visibility-resume path so error/parse-failure and the store's
+  // errorSource semantics behave identically whether a message is applied live
+  // or replayed late.
+  const applyRawMessage = useCallback(
+    (raw: string) => {
+      try {
+        const data = JSON.parse(raw) as WebSocketMessage;
+        applyMessage(data);
+      } catch {
+        setError('Failed to parse WebSocket message');
+      }
+    },
+    [applyMessage, setError],
+  );
+
+  const probeAuthRequired = useCallback(async () => {
+    // The browser WebSocket API does not expose the handshake HTTP status: a rejected upgrade
+    // (401/403 when control-plane auth is enabled) and an unreachable server both surface as an
+    // abnormal close / onerror with no readable status. Probe the dashboard HTTP endpoint — which
+    // is gated by the SAME control-plane auth as the WebSocket upgrade — to tell the two apart and
+    // show an actionable auth-required message instead of the misleading "server down" banner.
+    try {
+      const base = buildBaseUrl(params);
+      const response = await fetch(`${base}/mockserver/dashboard`, { method: 'GET' });
+      if (response.status === 401 || response.status === 403) {
+        authRequiredRef.current = true;
+        setError(
+          `Dashboard requires authentication (HTTP ${response.status}) on ${params.host}:${params.port}. ` +
+            `Control-plane authentication is enabled. Browsers cannot attach a bearer token to a WebSocket, so serve ` +
+            `the dashboard through an authenticating proxy that adds the Authorization header (or use mutual TLS).`,
+        );
+        return;
+      }
+      authRequiredRef.current = false;
+    } catch {
+      // Ignore probe failures — fall back to the generic connection-lost handling below.
+    }
+  }, [params, setError]);
+
   const scheduleReconnect = useCallback(
-    (filter: RequestFilter) => {
+    () => {
       // Keep retrying with a capped backoff rather than permanently giving up — a server that
       // is down longer than the first few attempts (a deploy/restart) should still reconnect
       // automatically once it comes back. onopen resets the counter and clears the error.
@@ -46,13 +95,19 @@ export function useWebSocket(params: ConnectionParams) {
       // Surface the banner early (after the 2nd failed attempt, ~a few seconds) so a user pointed
       // at the wrong server isn't left guessing. Include the host/port so the cause is actionable —
       // they come from the ?host=/?port= URL params. onopen resets the counter and clears the error.
-      if (reconnectCountRef.current === 2) {
+      // Suppressed when a probe has determined the failure is an auth rejection, so the auth-required
+      // message (set by probeAuthRequired) is not clobbered by the generic banner.
+      if (reconnectCountRef.current === 2 && !authRequiredRef.current) {
         setError(`Connection lost to ${params.host}:${params.port} — retrying automatically. Check the server is running and the host/port (?host=&port= in the URL) are correct.`);
       }
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       const delay = RECONNECT_DELAY_MS * Math.min(reconnectCountRef.current, 5); // capped at 15s
       reconnectTimerRef.current = setTimeout(() => {
-        connectRef.current(filter);
+        // Reconnect with the LAST filter actually requested — read live from the ref, never a
+        // stale closure value. A filter set via sendFilter() while the socket was OPEN only
+        // updates lastFilterRef (no reconnect), so a closure-captured filter would resurrect the
+        // pre-filter state on reconnect and silently stream unfiltered data to the panels.
+        connectRef.current(lastFilterRef.current);
       }, delay);
     },
     [setError, params.host, params.port],
@@ -79,36 +134,63 @@ export function useWebSocket(params: ConnectionParams) {
 
       ws.onopen = () => {
         reconnectCountRef.current = 0;
+        authRequiredRef.current = false;
         setConnectionStatus('connected');
         setError(null);
         ws.send(JSON.stringify(filter));
       };
 
       ws.onmessage = (event: MessageEvent) => {
-        try {
-          const data = JSON.parse(event.data as string) as WebSocketMessage;
-          applyMessage(data);
-        } catch {
-          setError('Failed to parse WebSocket message');
+        const raw = event.data as string;
+        // Hidden tab: buffer only the newest payload and skip all work until the
+        // tab is shown again (a background dashboard otherwise parses/reconciles/
+        // re-renders 1/sec forever). onopen/onclose/onerror are NOT gated, so the
+        // connection banner still updates correctly while hidden.
+        if (typeof document !== 'undefined' && document.hidden) {
+          hiddenMessageRef.current = raw;
+          return;
         }
+        applyRawMessage(raw);
       };
 
       ws.onclose = () => {
         setConnectionStatus('disconnected');
         socketRef.current = null;
-        scheduleReconnect(filter);
+        // Fire-and-forget: distinguish an auth rejection from a down server so the right message
+        // is shown. Never blocks or defers the reconnect (probe failures are swallowed internally).
+        void probeAuthRequired();
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
         setConnectionStatus('error');
       };
     },
-    [params, applyMessage, setConnectionStatus, setError, scheduleReconnect],
+    [params, applyRawMessage, setConnectionStatus, setError, scheduleReconnect, probeAuthRequired],
   );
 
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  // When the tab becomes visible again, replay the newest message buffered while
+  // it was hidden so the panels are current immediately (rather than waiting for
+  // the next ~1/sec push). Applying it goes through the same path as a live
+  // message, so a buffered error-only payload and errorSource semantics behave
+  // identically to a live one.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const onVisibilityChange = (): void => {
+      if (document.hidden) return;
+      const buffered = hiddenMessageRef.current;
+      if (buffered !== null) {
+        hiddenMessageRef.current = null;
+        applyRawMessage(buffered);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [applyRawMessage]);
 
   const sendFilter = useCallback(
     (filter: RequestFilter) => {
@@ -132,6 +214,9 @@ export function useWebSocket(params: ConnectionParams) {
       closeWebSocket(socketRef.current);
       socketRef.current = null;
     }
+    // Drop any message buffered while hidden so it can't be replayed after an
+    // intentional disconnect.
+    hiddenMessageRef.current = null;
     setConnectionStatus('disconnected');
   }, [setConnectionStatus]);
 

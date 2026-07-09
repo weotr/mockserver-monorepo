@@ -108,6 +108,8 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
         private final BooleanMatcher keepAliveMatcher;
         private final BooleanMatcher sslMatcher;
         private final ExactStringMatcher protocolMatcher;
+        private final ClientCertificateMatcher clientCertificateMatcher;
+        private final JwtMatcher jwtMatcher;
         private final JsonSchemaBodyDecoder jsonSchemaBodyParser;
 
         /**
@@ -127,6 +129,8 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
             this.keepAliveMatcher = null;
             this.sslMatcher = null;
             this.protocolMatcher = null;
+            this.clientCertificateMatcher = null;
+            this.jwtMatcher = null;
             this.jsonSchemaBodyParser = null;
         }
 
@@ -136,7 +140,7 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
          * but set {@code httpRequests = singletonList(null)}.
          */
         private Compiled(HttpRequest httpRequest) {
-            this(httpRequest, null, null, null, null, null, null, null, null, null, null, null);
+            this(httpRequest, null, null, null, null, null, null, null, null, null, null, null, null, null);
         }
 
         private Compiled(
@@ -151,6 +155,8 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
             BooleanMatcher keepAliveMatcher,
             BooleanMatcher sslMatcher,
             ExactStringMatcher protocolMatcher,
+            ClientCertificateMatcher clientCertificateMatcher,
+            JwtMatcher jwtMatcher,
             JsonSchemaBodyDecoder jsonSchemaBodyParser
         ) {
             this.httpRequest = httpRequest;
@@ -165,6 +171,8 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
             this.keepAliveMatcher = keepAliveMatcher;
             this.sslMatcher = sslMatcher;
             this.protocolMatcher = protocolMatcher;
+            this.clientCertificateMatcher = clientCertificateMatcher;
+            this.jwtMatcher = jwtMatcher;
             this.jsonSchemaBodyParser = jsonSchemaBodyParser;
         }
     }
@@ -218,7 +226,8 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
                     (controlPlaneMatcher
                         || bodyMatcher instanceof JsonStringMatcher
                         || bodyMatcher instanceof JsonSchemaMatcher
-                        || bodyMatcher instanceof JsonPathMatcher)
+                        || bodyMatcher instanceof JsonPathMatcher
+                        || (bodyMatcher instanceof AllOfBodyMatcher && ((AllOfBodyMatcher) bodyMatcher).containsJsonMatcher()))
                         ? new JsonSchemaBodyDecoder(configuration, mockServerLogger, expectation, httpRequest)
                         : null;
                 rebuilt = new Compiled(
@@ -233,6 +242,8 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
                     new BooleanMatcher(mockServerLogger, httpRequest.isKeepAlive()),
                     new BooleanMatcher(mockServerLogger, httpRequest.isSecure()),
                     new ExactStringMatcher(mockServerLogger, httpRequest.getProtocol() != null ? string(httpRequest.getProtocol().name()) : null),
+                    new ClientCertificateMatcher(mockServerLogger, httpRequest.getClientCertificate(), controlPlaneMatcher),
+                    new JwtMatcher(mockServerLogger, httpRequest.getJwt(), controlPlaneMatcher),
                     jsonSchemaBodyParser
                 );
             } else {
@@ -429,6 +440,16 @@ public class HttpRequestPropertiesMatcher extends AbstractHttpRequestMatcher {
 
                     boolean protocolMatches = matches(PROTOCOL, context, compiled.protocolMatcher, request.getProtocol() != null ? string(request.getProtocol().name()) : null);
                     if (failFast(compiled, compiled.protocolMatcher, context, matchDifferenceCount, becauseBuilder, protocolMatches, PROTOCOL)) {
+                        return false;
+                    }
+
+                    boolean clientCertificateMatches = matches(CLIENT_CERTIFICATE, context, compiled.clientCertificateMatcher, request.getClientCertificateChain());
+                    if (failFast(compiled, compiled.clientCertificateMatcher, context, matchDifferenceCount, becauseBuilder, clientCertificateMatches, CLIENT_CERTIFICATE)) {
+                        return false;
+                    }
+
+                    boolean jwtMatches = matches(JWT, context, compiled.jwtMatcher, compiled.jwtMatcher == null ? null : request.getFirstHeader(compiled.jwtMatcher.getHeaderName()));
+                    if (failFast(compiled, compiled.jwtMatcher, context, matchDifferenceCount, becauseBuilder, jwtMatches, JWT)) {
                         return false;
                     }
 

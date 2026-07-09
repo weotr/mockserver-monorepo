@@ -9,6 +9,7 @@ import org.mockserver.llm.ParsedConversation;
 import org.mockserver.llm.ParsedMessage;
 import org.mockserver.llm.ProviderCodec;
 import org.mockserver.llm.StreamingPhysicsExpander;
+import org.mockserver.llm.TokenCounter;
 import org.mockserver.model.*;
 
 import java.util.ArrayList;
@@ -206,8 +207,9 @@ public class AnthropicCodec implements ProviderCodec {
                 ",\"content_block\":{\"type\":\"text\",\"text\":\"\"}}";
             events.add(sseEvent().withEvent("content_block_start").withData(blockStartData));
 
-            // Split text into tokens (naive: split on whitespace boundaries preserving spaces)
-            String[] tokens = text.split("(?<=\\s)|(?=\\s)");
+            // Split text into streaming deltas: subword-sized by default, or whole words
+            // when streamingPhysics.subwordStreaming is explicitly false.
+            List<String> tokens = TokenCounter.streamingTextTokens(text, physics);
             for (String token : tokens) {
                 if (!token.isEmpty()) {
                     String deltaData = "{\"type\":\"content_block_delta\",\"index\":" + contentIndex +

@@ -101,6 +101,9 @@ public class ConfigurationProperties {
     // memory usage
     private static final String MOCKSERVER_MAX_EXPECTATIONS = "mockserver.maxExpectations";
     private static final String MOCKSERVER_MAX_LOG_ENTRIES = "mockserver.maxLogEntries";
+    // LLM-capture disk-offload + OOM guard (config plumbing only — eviction/persistence behaviour added later)
+    private static final String MOCKSERVER_MAX_EVENT_LOG_SIZE_IN_BYTES = "mockserver.maxEventLogSizeInBytes";
+    private static final String MOCKSERVER_MAX_LOGGED_BODY_BYTES = "mockserver.maxLoggedBodyBytes";
     private static final String MOCKSERVER_RING_BUFFER_SIZE = "mockserver.ringBufferSize";
     // Default ceiling for the in-flight disruptor ring buffer, decoupling it from maxLogEntries
     // retention. The ring only has to absorb event bursts between the producer (Netty I/O threads)
@@ -111,6 +114,8 @@ public class ConfigurationProperties {
     // 131072-slot ring (~14.7MB of empty LogEntry shells) purely as a side effect of retention sizing.
     static final int DEFAULT_MAX_RING_BUFFER_SIZE = 16384;
     private static final String MOCKSERVER_MAX_WEB_SOCKET_EXPECTATIONS = "mockserver.maxWebSocketExpectations";
+    private static final String MOCKSERVER_WEB_SOCKET_PROXY_MAX_RECORDED_FRAMES = "mockserver.webSocketProxyMaxRecordedFrames";
+    private static final String MOCKSERVER_WEB_SOCKET_PROXY_IDLE_TIMEOUT_SECONDS = "mockserver.webSocketProxyIdleTimeoutSeconds";
     private static final String MOCKSERVER_OUTPUT_MEMORY_USAGE_CSV = "mockserver.outputMemoryUsageCsv";
     private static final String MOCKSERVER_MEMORY_USAGE_CSV_DIRECTORY = "mockserver.memoryUsageCsvDirectory";
 
@@ -121,6 +126,10 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CLIENT_NIO_EVENT_LOOP_THREAD_COUNT = "mockserver.clientNioEventLoopThreadCount";
     private static final String MOCKSERVER_WEB_SOCKET_CLIENT_EVENT_LOOP_THREAD_COUNT = "mockserver.webSocketClientEventLoopThreadCount";
     private static final String MOCKSERVER_MAX_FUTURE_TIMEOUT = "mockserver.maxFutureTimeout";
+    // Unit-bearing alias matching Configuration.maxFutureTimeoutInMillis() and the /mockserver/configuration
+    // JSON key (same footgun and resolution as the socket-timeout aliases above): a synonym for the primary
+    // key, honoured rather than silently ignored, with the primary key read first.
+    private static final String MOCKSERVER_MAX_FUTURE_TIMEOUT_IN_MILLIS = "mockserver.maxFutureTimeoutInMillis";
     private static final String MOCKSERVER_MATCHERS_FAIL_FAST = "mockserver.matchersFailFast";
     private static final String MOCKSERVER_MATCH_EXACT_CASE = "mockserver.matchExactCase";
     private static final String MOCKSERVER_FORWARD_CONNECTION_POOL_ENABLED = "mockserver.forwardConnectionPoolEnabled";
@@ -135,6 +144,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_FORWARD_PROXY_RETRY_COUNT = "mockserver.forwardProxyRetryCount";
     private static final String MOCKSERVER_FORWARD_PROXY_RETRY_BACKOFF_MILLIS = "mockserver.forwardProxyRetryBackoffMillis";
     private static final String MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED = "mockserver.forwardProxyHttp2Enabled";
+    private static final String MOCKSERVER_FORWARD_PROXY_HTTP2_UPGRADE = "mockserver.forwardProxyHttp2Upgrade";
     private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED = "mockserver.forwardProxyCircuitBreakerEnabled";
     private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_FAILURE_THRESHOLD = "mockserver.forwardProxyCircuitBreakerFailureThreshold";
     private static final String MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_WINDOW_MILLIS = "mockserver.forwardProxyCircuitBreakerWindowMillis";
@@ -143,7 +153,16 @@ public class ConfigurationProperties {
 
     // socket
     private static final String MOCKSERVER_MAX_SOCKET_TIMEOUT = "mockserver.maxSocketTimeout";
+    // `InMillis`-suffixed aliases that match Configuration.maxSocketTimeoutInMillis() /
+    // socketConnectionTimeoutInMillis() and the keys reported in the /mockserver/configuration JSON, so an
+    // operator who sets -Dmockserver.maxSocketTimeoutInMillis (the natural name to reach for) is honoured
+    // rather than silently ignored. These are synonyms for the primary keys; the primary key is read first
+    // (so a programmatic/runtime value can never be silently overridden by a launch-time alias) and the
+    // alias is used only when the primary is unset. Declared as MOCKSERVER_* constants so the reflective
+    // recognised-key registry accepts them too.
+    private static final String MOCKSERVER_MAX_SOCKET_TIMEOUT_IN_MILLIS = "mockserver.maxSocketTimeoutInMillis";
     private static final String MOCKSERVER_SOCKET_CONNECTION_TIMEOUT = "mockserver.socketConnectionTimeout";
+    private static final String MOCKSERVER_SOCKET_CONNECTION_TIMEOUT_IN_MILLIS = "mockserver.socketConnectionTimeoutInMillis";
     private static final String MOCKSERVER_CONNECTION_DELAY_MILLIS = "mockserver.connectionDelayMillis";
     private static final String MOCKSERVER_ALWAYS_CLOSE_SOCKET_CONNECTIONS = "mockserver.alwaysCloseSocketConnections";
     private static final String MOCKSERVER_LOCAL_BOUND_IP = "mockserver.localBoundIP";
@@ -161,6 +180,8 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_LLM_BASE_URL = "mockserver.llmBaseUrl";
     private static final String MOCKSERVER_LLM_BACKENDS_CONFIG = "mockserver.llmBackendsConfig";
     private static final String MOCKSERVER_LLM_REQUEST_TIMEOUT_MILLIS = "mockserver.llmRequestTimeoutMillis";
+    private static final String MOCKSERVER_DRIFT_DETECTION_ENABLED = "mockserver.driftDetectionEnabled";
+    private static final String MOCKSERVER_DRIFT_SAMPLE_RATE = "mockserver.driftSampleRate";
     private static final String MOCKSERVER_DRIFT_SEMANTIC_ANALYSIS_ENABLED = "mockserver.driftSemanticAnalysisEnabled";
     private static final String MOCKSERVER_DRIFT_RESPONSE_TIME_THRESHOLD_MS = "mockserver.driftResponseTimeThresholdMs";
     private static final String MOCKSERVER_DRIFT_ALERT_WEBHOOK_ENABLED = "mockserver.driftAlertWebhookEnabled";
@@ -170,6 +191,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CONTROL_PLANE_AUDIT_ENABLED = "mockserver.controlPlaneAuditEnabled";
     private static final String MOCKSERVER_CONTROL_PLANE_AUDIT_MAX_ENTRIES = "mockserver.controlPlaneAuditMaxEntries";
     private static final String MOCKSERVER_CONTROL_PLANE_AUDIT_READS = "mockserver.controlPlaneAuditReads";
+    private static final String MOCKSERVER_AUDIT_LOG_FILE = "mockserver.auditLogFile";
     private static final String MOCKSERVER_FIXTURE_BODY_REDACT_FIELDS = "mockserver.fixtureBodyRedactFields";
     private static final String MOCKSERVER_LLM_VCR_STRICT = "mockserver.llmVcrStrict";
     private static final String MOCKSERVER_LLM_OPTIMISATION_MAX_CALLS = "mockserver.llmOptimisationMaxCalls";
@@ -177,8 +199,17 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_OTEL_TRACES_ENABLED = "mockserver.otelTracesEnabled";
     private static final String MOCKSERVER_OTEL_ENDPOINT = "mockserver.otelEndpoint";
     private static final String MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS = "mockserver.otelMetricsExportIntervalSeconds";
+    private static final String MOCKSERVER_OTEL_METRICS_TEMPORALITY = "mockserver.otelMetricsTemporality";
     private static final String MOCKSERVER_OTEL_PROPAGATE_TRACE_CONTEXT = "mockserver.otelPropagateTraceContext";
     private static final String MOCKSERVER_OTEL_GENERATE_TRACE_ID = "mockserver.otelGenerateTraceId";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_ENABLED = "mockserver.prometheusRemoteWriteEnabled";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_URL = "mockserver.prometheusRemoteWriteUrl";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_INTERVAL_SECONDS = "mockserver.prometheusRemoteWriteIntervalSeconds";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BEARER_TOKEN = "mockserver.prometheusRemoteWriteBearerToken";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_USERNAME = "mockserver.prometheusRemoteWriteBasicAuthUsername";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_PASSWORD = "mockserver.prometheusRemoteWriteBasicAuthPassword";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_HEADERS = "mockserver.prometheusRemoteWriteHeaders";
+    private static final String MOCKSERVER_PROMETHEUS_REMOTE_WRITE_PROTOCOL_VERSION = "mockserver.prometheusRemoteWriteProtocolVersion";
     private static final String MOCKSERVER_LLM_SEMANTIC_MATCHING_ENABLED = "mockserver.llmSemanticMatchingEnabled";
     private static final String MOCKSERVER_LLM_INFER_USAGE_ENABLED = "mockserver.llmInferUsageEnabled";
     private static final String MOCKSERVER_LLM_METRICS_ENABLED = "mockserver.llmMetricsEnabled";
@@ -191,6 +222,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_REDACT_SECRETS_IN_LOG = "mockserver.redactSecretsInLog";
     private static final String MOCKSERVER_LLM_COST_BUDGET_USD = "mockserver.llmCostBudgetUsd";
     private static final String MOCKSERVER_USE_SEMICOLON_AS_QUERY_PARAMETER_SEPARATOR = "mockserver.useSemicolonAsQueryParameterSeparator";
+    private static final String MOCKSERVER_STARTUP_WARMUP = "mockserver.startupWarmup";
     private static final String MOCKSERVER_ASSUME_ALL_REQUESTS_ARE_HTTP = "mockserver.assumeAllRequestsAreHttp";
     private static final String MOCKSERVER_HTTP2_ENABLED = "mockserver.http2Enabled";
 
@@ -220,6 +252,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_HTTP3_INITIAL_MAX_STREAMS_BIDIRECTIONAL = "mockserver.http3InitialMaxStreamsBidirectional";
     private static final String MOCKSERVER_HTTP3_QPACK_MAX_TABLE_CAPACITY = "mockserver.http3QpackMaxTableCapacity";
     private static final String MOCKSERVER_HTTP3_CONNECT_UDP_ENABLED = "mockserver.http3ConnectUdpEnabled";
+    private static final String MOCKSERVER_HTTP3_CONNECT_UDP_ALLOWED_TARGETS = "mockserver.http3ConnectUdpAllowedTargets";
     private static final String MOCKSERVER_HTTP3_ALT_SVC_MAX_AGE = "mockserver.http3AltSvcMaxAge";
     private static final String MOCKSERVER_HTTP3_ADVERTISE_ALT_SVC = "mockserver.http3AdvertiseAltSvc";
 
@@ -250,6 +283,7 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_VELOCITY_DISALLOW_CLASS_LOADING = "mockserver.velocityDisallowClassLoading";
     private static final String MOCKSERVER_VELOCITY_DISALLOWED_TEXT = "mockserver.velocityDisallowedText";
     private static final String MOCKSERVER_MUSTACHE_DISALLOWED_TEXT = "mockserver.mustacheDisallowedText";
+    private static final String MOCKSERVER_TEMPLATE_FAKER_SEED = "mockserver.templateFakerSeed";
 
     // mock initialization
     private static final String MOCKSERVER_INITIALIZATION_CLASS = "mockserver.initializationClass";
@@ -271,6 +305,10 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_PERSIST_RECORDED_EXPECTATIONS = "mockserver.persistRecordedExpectations";
     private static final String MOCKSERVER_PERSISTED_RECORDED_EXPECTATIONS_PATH = "mockserver.persistedRecordedExpectationsPath";
 
+    // recorded request persistence (LLM-capture disk-offload — config plumbing only, behaviour added later)
+    private static final String MOCKSERVER_PERSIST_RECORDED_REQUESTS_TO_DISK = "mockserver.persistRecordedRequestsToDisk";
+    private static final String MOCKSERVER_PERSISTED_RECORDED_REQUESTS_PATH = "mockserver.persistedRecordedRequestsPath";
+
     // state backend (G10 phase 2a)
     private static final String MOCKSERVER_STATE_BACKEND = "mockserver.stateBackend";
     private static final String MOCKSERVER_BLOB_STORE_TYPE = "mockserver.blobStoreType";
@@ -291,6 +329,9 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_CLUSTER_NAME = "mockserver.clusterName";
     private static final String MOCKSERVER_CLUSTER_TRANSPORT_CONFIG = "mockserver.clusterTransportConfig";
     private static final String MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED = "mockserver.clusterSharedTimesEnabled";
+    private static final String MOCKSERVER_CLUSTER_VERIFY_FAN_IN = "mockserver.clusterVerifyFanIn";
+    private static final String MOCKSERVER_CLUSTER_VERIFY_FAN_IN_PEERS = "mockserver.clusterVerifyFanInPeers";
+    private static final String MOCKSERVER_CLUSTER_FAN_IN_PEER_AUTH_TOKEN = "mockserver.clusterFanInPeerAuthToken";
 
     // verification
     private static final String MOCKSERVER_MAXIMUM_NUMBER_OF_REQUESTS_TO_RETURN_IN_VERIFICATION_FAILURE = "mockserver.maximumNumberOfRequestToReturnInVerificationFailure";
@@ -359,6 +400,10 @@ public class ConfigurationProperties {
     private static final String MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE = "mockserver.dynamicallyCreateCertificateAuthorityCertificate";
     private static final String MOCKSERVER_CERTIFICATE_DIRECTORY_TO_SAVE_DYNAMIC_SSL_CERTIFICATE = "mockserver.directoryToSaveDynamicSSLCertificate";
 
+    // proxy setup convenience
+    private static final String MOCKSERVER_PROXY_SETUP = "mockserver.proxySetup";
+    private static final String MOCKSERVER_PROXY_SETUP_LOGGING = "mockserver.proxySetupLogging";
+
     // inbound - dynamic private key & x509
     private static final String MOCKSERVER_PREVENT_CERTIFICATE_DYNAMIC_UPDATE = "mockserver.preventCertificateDynamicUpdate";
     private static final String MOCKSERVER_SSL_CERTIFICATE_DOMAIN_NAME = "mockserver.sslCertificateDomainName";
@@ -392,6 +437,7 @@ public class ConfigurationProperties {
     // outbound - fixed private key & x509
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_PRIVATE_KEY = "mockserver.forwardProxyPrivateKey";
     private static final String MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATE_CHAIN = "mockserver.forwardProxyCertificateChain";
+    private static final String MOCKSERVER_FORWARD_PROXY_CLIENT_CERTIFICATES_BY_HOST = "mockserver.forwardProxyClientCertificatesByHost";
 
     // service mesh / sidecar
     private static final String MOCKSERVER_TRANSPARENT_PROXY_ENABLED = "mockserver.transparentProxyEnabled";
@@ -1355,6 +1401,27 @@ public class ConfigurationProperties {
     }
 
     /**
+     * Allowlist of targets the HTTP/3 CONNECT-UDP (MASQUE) relay may reach, as a
+     * comma-separated list of {@code host} or {@code host:port} entries (IPv6 literals
+     * bracketed, e.g. {@code [::1]:53}). Matching is exact and case-insensitive; an
+     * entry without a port permits the host on any port. Only relevant when
+     * {@code http3ConnectUdpEnabled=true}.
+     * <p>
+     * When <strong>empty</strong> (the default) the allowlist is not enforced and the
+     * relay may reach any target (subject to {@code forwardProxyBlockPrivateNetworks}).
+     * When <strong>non-empty</strong>, a CONNECT-UDP request to a target that does not
+     * match any entry is refused (403) and no datagrams are relayed. This constrains the
+     * relay's SSRF exposure. Default: "" (not enforced).
+     */
+    public static String http3ConnectUdpAllowedTargets() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_HTTP3_CONNECT_UDP_ALLOWED_TARGETS, "MOCKSERVER_HTTP3_CONNECT_UDP_ALLOWED_TARGETS", "");
+    }
+
+    public static void http3ConnectUdpAllowedTargets(String allowedTargets) {
+        setProperty(MOCKSERVER_HTTP3_CONNECT_UDP_ALLOWED_TARGETS, allowedTargets);
+    }
+
+    /**
      * Max-age in seconds for the Alt-Svc header advertising HTTP/3 on the TCP
      * response path. Only relevant when {@code http3Port > 0} and
      * {@code http3AdvertiseAltSvc} is {@code true}.
@@ -1621,17 +1688,81 @@ public class ConfigurationProperties {
 
     // memory usage
 
+    // Reserved for JVM internals, Netty buffers and thread stacks; subtracted from the free heap
+    // before deriving the maxLogEntries / maxExpectations defaults.
+    static final long BASE_MEMORY_IN_KB = 20 * 1024L;
+
     public static long heapAvailableInKB() {
         Summary heap = MemoryMonitoring.getJVMMemory(MemoryType.HEAP);
-        long baseMemory  = 20 * 1024L;
-        return ((heap.getNet().getMax() - heap.getNet().getUsed()) / 1024L) - baseMemory;
+        Runtime runtime = Runtime.getRuntime();
+        return computeHeapAvailableInKB(
+            heap.getNet().getMax(),
+            heap.getNet().getUsed(),
+            runtime.maxMemory(),
+            runtime.totalMemory() - runtime.freeMemory()
+        );
+    }
+
+    /**
+     * Compute the available heap (in KB) used to derive the {@code maxLogEntries} and
+     * {@code maxExpectations} defaults, robust to environments where the aggregated JMX heap-pool
+     * max is undefined.
+     * <p>
+     * The JMX spec allows {@link java.lang.management.MemoryUsage#getMax()} to return {@code -1}
+     * (undefined); some environments (verified: a GraalVM native image of the shaded jar; also
+     * possible in exotic JVM/WAR setups) report the heap pools' max as {@code -1}/{@code 0}. When
+     * that happens the JMX figures are unusable, so we fall back to {@link Runtime#maxMemory()} /
+     * {@code totalMemory() - freeMemory()}. {@code Runtime.maxMemory()} may return
+     * {@link Long#MAX_VALUE} when the heap is unbounded — the subtraction stays non-negative, and
+     * the (very large) result is clamped by the {@code Math.min(..., cap)} in the callers.
+     * <p>
+     * The result is floored at {@code 0} so it is never negative (a negative value would produce a
+     * non-functional {@code <= 0} store capacity downstream).
+     *
+     * @param heapMax     aggregated JMX heap-pool max in bytes ({@code <= 0} when undefined)
+     * @param heapUsed    aggregated JMX heap-pool used in bytes
+     * @param runtimeMax  {@link Runtime#maxMemory()} fallback ceiling in bytes
+     * @param runtimeUsed {@link Runtime#totalMemory()} minus {@link Runtime#freeMemory()} in bytes
+     * @return available heap in KB, never negative
+     */
+    static long computeHeapAvailableInKB(long heapMax, long heapUsed, long runtimeMax, long runtimeUsed) {
+        long max = heapMax;
+        long used = heapUsed;
+        if (max <= 0) {
+            // JMX heap-pool max undefined (-1); fall back to the Runtime view of the heap.
+            max = runtimeMax;
+            used = runtimeUsed;
+        }
+        if (max <= 0) {
+            // Still no usable ceiling (both JMX and Runtime undefined) — avoid a garbage result.
+            return 0L;
+        }
+        return Math.max(0L, ((max - used) / 1024L) - BASE_MEMORY_IN_KB);
     }
 
     public static int maxExpectations() {
         return readIntegerProperty(MOCKSERVER_MAX_EXPECTATIONS, "MOCKSERVER_MAX_EXPECTATIONS", devModeDefaultOrHeapBased(
             DEV_MODE_MAX_EXPECTATIONS, MOCKSERVER_MAX_EXPECTATIONS, "MOCKSERVER_MAX_EXPECTATIONS",
-            Math.min((int) (heapAvailableInKB() / 10), 15000)
+            heapBasedDefaultOrFloor(heapAvailableInKB(), 10, 15000, DEV_MODE_MAX_EXPECTATIONS)
         ));
+    }
+
+    /**
+     * Derive a heap-based store-size default, flooring at {@code floor} when the heap-derived value
+     * computes to {@code <= 0}. {@link #heapAvailableInKB()} can be {@code 0} when the JVM reports an
+     * undefined heap max ({@code -1}, e.g. a GraalVM native image); without a floor the resulting
+     * capacity would be {@code <= 0}, silently dropping every expectation / log entry. The floor keeps
+     * the store minimally functional in that case.
+     *
+     * @param heapAvailableInKB available heap in KB (never negative)
+     * @param perEntryKB        estimated KB per stored entry (heap divided by this)
+     * @param cap               upper bound regardless of heap
+     * @param floor             minimum functional default when the heap-derived value is {@code <= 0}
+     * @return the store-size default, at least {@code min(floor, cap)} and at most {@code cap}
+     */
+    static int heapBasedDefaultOrFloor(long heapAvailableInKB, long perEntryKB, int cap, int floor) {
+        int heapBased = (int) Math.min(heapAvailableInKB / perEntryKB, cap);
+        return heapBased > 0 ? heapBased : Math.min(floor, cap);
     }
 
     /**
@@ -1651,7 +1782,7 @@ public class ConfigurationProperties {
     public static int maxLogEntries() {
         return readIntegerProperty(MOCKSERVER_MAX_LOG_ENTRIES, "MOCKSERVER_MAX_LOG_ENTRIES", devModeDefaultOrHeapBased(
             DEV_MODE_MAX_LOG_ENTRIES, MOCKSERVER_MAX_LOG_ENTRIES, "MOCKSERVER_MAX_LOG_ENTRIES",
-            Math.min((int) (heapAvailableInKB() / 8), 100000)
+            heapBasedDefaultOrFloor(heapAvailableInKB(), 8, 100000, DEV_MODE_MAX_LOG_ENTRIES)
         ));
     }
 
@@ -1667,6 +1798,42 @@ public class ConfigurationProperties {
      */
     public static void maxLogEntries(int count) {
         setProperty(MOCKSERVER_MAX_LOG_ENTRIES, "" + count);
+    }
+
+    public static long maxEventLogSizeInBytes() {
+        return Math.max(0L, readLongProperty(MOCKSERVER_MAX_EVENT_LOG_SIZE_IN_BYTES, "MOCKSERVER_MAX_EVENT_LOG_SIZE_IN_BYTES", 0L));
+    }
+
+    /**
+     * <p>
+     * Maximum total size in bytes of the in-memory event log before older entries are evicted from memory (the oldest first).
+     * </p>
+     * <p>
+     * The default is 0, which disables the size-based limit (the event log is bounded only by {@code maxLogEntries}).
+     * </p>
+     *
+     * @param maxEventLogSizeInBytes maximum total size in bytes of the in-memory event log (0 disables the limit)
+     */
+    public static void maxEventLogSizeInBytes(long maxEventLogSizeInBytes) {
+        setProperty(MOCKSERVER_MAX_EVENT_LOG_SIZE_IN_BYTES, "" + maxEventLogSizeInBytes);
+    }
+
+    public static int maxLoggedBodyBytes() {
+        return Math.max(0, readIntegerProperty(MOCKSERVER_MAX_LOGGED_BODY_BYTES, "MOCKSERVER_MAX_LOGGED_BODY_BYTES", 0));
+    }
+
+    /**
+     * <p>
+     * Maximum number of bytes of a request or response body retained in each log entry; bodies larger than this are truncated.
+     * </p>
+     * <p>
+     * The default is 0, which means unlimited (bodies are retained in full).
+     * </p>
+     *
+     * @param maxLoggedBodyBytes maximum number of body bytes retained per log entry (0 means unlimited)
+     */
+    public static void maxLoggedBodyBytes(int maxLoggedBodyBytes) {
+        setProperty(MOCKSERVER_MAX_LOGGED_BODY_BYTES, "" + maxLoggedBodyBytes);
     }
 
     public static int ringBufferSize() {
@@ -1760,6 +1927,51 @@ public class ConfigurationProperties {
      */
     public static void maxWebSocketExpectations(int count) {
         setProperty(MOCKSERVER_MAX_WEB_SOCKET_EXPECTATIONS, "" + count);
+    }
+
+    public static int webSocketProxyMaxRecordedFrames() {
+        return readIntegerProperty(MOCKSERVER_WEB_SOCKET_PROXY_MAX_RECORDED_FRAMES, "MOCKSERVER_WEB_SOCKET_PROXY_MAX_RECORDED_FRAMES", 1000);
+    }
+
+    /**
+     * <p>
+     * Maximum number of WebSocket frames recorded per proxied (passthrough) WebSocket connection. When MockServer
+     * proxies a WebSocket upgrade to a real upstream server (no matching mock expectation), the relayed frames
+     * (text, binary, ping, pong, close) are captured into a per-connection transcript that is written to the event
+     * log as a {@code FORWARDED_REQUEST} when the connection closes, so {@code retrieveRecordedRequests} and the
+     * dashboard show the WebSocket traffic. Once this cap is reached the remaining frames on that connection are
+     * relayed but not recorded (the transcript is flagged truncated), bounding memory on long-lived connections.
+     * </p>
+     * <p>
+     * The default is 1000. Set to 0 to disable frame recording (the upgrade handshake is still recorded).
+     * </p>
+     *
+     * @param count maximum number of relayed WebSocket frames recorded per proxied connection
+     */
+    public static void webSocketProxyMaxRecordedFrames(int count) {
+        setProperty(MOCKSERVER_WEB_SOCKET_PROXY_MAX_RECORDED_FRAMES, "" + count);
+    }
+
+    public static int webSocketProxyIdleTimeoutSeconds() {
+        return readIntegerProperty(MOCKSERVER_WEB_SOCKET_PROXY_IDLE_TIMEOUT_SECONDS, "MOCKSERVER_WEB_SOCKET_PROXY_IDLE_TIMEOUT_SECONDS", 0);
+    }
+
+    /**
+     * <p>
+     * Idle timeout (in seconds) for a proxied (passthrough) WebSocket connection. When set to a positive value, a
+     * relayed WebSocket connection whose two directions have both been idle (no frame sent either way) for this many
+     * seconds is closed, reaping half-open / abandoned relays.
+     * </p>
+     * <p>
+     * The default is 0, which disables idle reaping — long-lived WebSocket connections that are legitimately idle
+     * (e.g. waiting for server-pushed events) are left to TCP keep-alive and normal peer-close propagation. Raise it
+     * only if you need MockServer to bound how long an idle passthrough relay is held open.
+     * </p>
+     *
+     * @param seconds idle timeout in seconds for proxied WebSocket relays (0 disables)
+     */
+    public static void webSocketProxyIdleTimeoutSeconds(int seconds) {
+        setProperty(MOCKSERVER_WEB_SOCKET_PROXY_IDLE_TIMEOUT_SECONDS, "" + seconds);
     }
 
     public static boolean outputMemoryUsageCsv() {
@@ -1874,7 +2086,8 @@ public class ConfigurationProperties {
     }
 
     public static long maxFutureTimeout() {
-        return readLongProperty(MOCKSERVER_MAX_FUTURE_TIMEOUT, "MOCKSERVER_MAX_FUTURE_TIMEOUT", TimeUnit.SECONDS.toMillis(90));
+        return readLongPropertyWithMillisAlias(MOCKSERVER_MAX_FUTURE_TIMEOUT, "MOCKSERVER_MAX_FUTURE_TIMEOUT",
+            MOCKSERVER_MAX_FUTURE_TIMEOUT_IN_MILLIS, "MOCKSERVER_MAX_FUTURE_TIMEOUT_IN_MILLIS", TimeUnit.SECONDS.toMillis(90));
     }
 
     /**
@@ -2159,6 +2372,27 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_FORWARD_PROXY_HTTP2_ENABLED, "" + enable);
     }
 
+    public static boolean forwardProxyHttp2Upgrade() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_PROXY_HTTP2_UPGRADE, "MOCKSERVER_FORWARD_PROXY_HTTP2_UPGRADE", "" + false));
+    }
+
+    /**
+     * If false (the default) a forwarded or proxied request is only sent upstream over HTTP/2 when the
+     * inbound request itself used HTTP/2 and {@code forwardProxyHttp2Enabled} is set. If true, a secure
+     * (TLS) forward is sent upstream over HTTP/2 via ALPN even when the inbound client is HTTP/1.1, with
+     * automatic fallback to HTTP/1.1 if the upstream does not negotiate h2.
+     * <p>
+     * This is useful when an upstream sends a streaming (Server-Sent Events) response head immediately
+     * over HTTP/2 but withholds it over HTTP/1.1 — forwarding over HTTP/2 lets MockServer relay the head
+     * to the client promptly. HTTP/2 only flows over TLS+ALPN (there is no h2c cleartext path — a
+     * non-secure request is unaffected and stays HTTP/1.1). HTTP/2 forward connections are not pooled.
+     *
+     * @param enable forward a secure request upstream over HTTP/2 even when the inbound client is HTTP/1.1
+     */
+    public static void forwardProxyHttp2Upgrade(boolean enable) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_HTTP2_UPGRADE, "" + enable);
+    }
+
     public static boolean forwardProxyCircuitBreakerEnabled() {
         return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED, "MOCKSERVER_FORWARD_PROXY_CIRCUIT_BREAKER_ENABLED", "" + false));
     }
@@ -2251,7 +2485,8 @@ public class ConfigurationProperties {
     // socket
 
     public static long maxSocketTimeout() {
-        return readLongProperty(MOCKSERVER_MAX_SOCKET_TIMEOUT, "MOCKSERVER_MAX_SOCKET_TIMEOUT", TimeUnit.SECONDS.toMillis(20));
+        return readLongPropertyWithMillisAlias(MOCKSERVER_MAX_SOCKET_TIMEOUT, "MOCKSERVER_MAX_SOCKET_TIMEOUT",
+            MOCKSERVER_MAX_SOCKET_TIMEOUT_IN_MILLIS, "MOCKSERVER_MAX_SOCKET_TIMEOUT_IN_MILLIS", TimeUnit.SECONDS.toMillis(20));
     }
 
     /**
@@ -2266,7 +2501,8 @@ public class ConfigurationProperties {
     }
 
     public static long socketConnectionTimeout() {
-        return readLongProperty(MOCKSERVER_SOCKET_CONNECTION_TIMEOUT, "MOCKSERVER_SOCKET_CONNECTION_TIMEOUT", TimeUnit.SECONDS.toMillis(20));
+        return readLongPropertyWithMillisAlias(MOCKSERVER_SOCKET_CONNECTION_TIMEOUT, "MOCKSERVER_SOCKET_CONNECTION_TIMEOUT",
+            MOCKSERVER_SOCKET_CONNECTION_TIMEOUT_IN_MILLIS, "MOCKSERVER_SOCKET_CONNECTION_TIMEOUT_IN_MILLIS", TimeUnit.SECONDS.toMillis(20));
     }
 
     /**
@@ -2571,6 +2807,67 @@ public class ConfigurationProperties {
     }
 
     /**
+     * Master switch for mock-drift analysis on forwarded responses. When {@code true}
+     * (the default), every eligible forwarded upstream response is compared — on a
+     * background scheduler thread — against any response-type stub expectations that
+     * match the same request, recording structural and performance drift. When
+     * {@code false}, the drift analysis (and the extra {@code allMatchingExpectation}
+     * lookup it performs per forward) is skipped entirely, removing its cost from the
+     * forward path. Default {@code true} to preserve the historical always-on behaviour.
+     */
+    public static boolean driftDetectionEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(
+            PROPERTIES, MOCKSERVER_DRIFT_DETECTION_ENABLED, "MOCKSERVER_DRIFT_DETECTION_ENABLED", "true"));
+    }
+
+    public static void driftDetectionEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_DRIFT_DETECTION_ENABLED, "" + enabled);
+    }
+
+    /**
+     * Fraction of eligible forwarded responses to analyse for drift, in the range
+     * {@code [0.0, 1.0]}. Default {@code 1.0} (analyse every eligible forward,
+     * preserving the historical behaviour). A value below {@code 1.0} analyses only
+     * that fraction of forwarded responses (sampled with a thread-safe random draw),
+     * trading drift coverage for lower overhead under high forward volume. Values
+     * outside the range are clamped to the nearest bound ({@code < 0} → {@code 0},
+     * {@code > 1} → {@code 1}) with a WARN. Has no effect when
+     * {@code driftDetectionEnabled} is {@code false}.
+     */
+    public static double driftSampleRate() {
+        double value = readDoubleProperty(MOCKSERVER_DRIFT_SAMPLE_RATE, "MOCKSERVER_DRIFT_SAMPLE_RATE", 1.0d);
+        if (value < 0.0d) {
+            if (LoggerHolder.LOGGER != null) {
+                LoggerHolder.LOGGER.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.WARN)
+                        .setMessageFormat("driftSampleRate value {} is below minimum, clamping to 0.0")
+                        .setArguments(value)
+                );
+            }
+            return 0.0d;
+        }
+        if (value > 1.0d) {
+            if (LoggerHolder.LOGGER != null) {
+                LoggerHolder.LOGGER.logEvent(
+                    new LogEntry()
+                        .setType(LogEntry.LogMessageType.SERVER_CONFIGURATION)
+                        .setLogLevel(Level.WARN)
+                        .setMessageFormat("driftSampleRate value {} is above maximum, clamping to 1.0")
+                        .setArguments(value)
+                );
+            }
+            return 1.0d;
+        }
+        return value;
+    }
+
+    public static void driftSampleRate(double rate) {
+        setProperty(MOCKSERVER_DRIFT_SAMPLE_RATE, "" + rate);
+    }
+
+    /**
      * Whether to enable LLM-powered semantic drift analysis. When enabled and a
      * runtime LLM backend is available, each structural drift record is enriched
      * with a severity classification (BREAKING / WARNING / INFORMATIONAL) and an
@@ -2629,6 +2926,24 @@ public class ConfigurationProperties {
 
     public static void controlPlaneAuditReads(boolean enabled) {
         setProperty(MOCKSERVER_CONTROL_PLANE_AUDIT_READS, "" + enabled);
+    }
+
+    /**
+     * Optional path to a durable control-plane audit log file. When set (and
+     * {@code controlPlaneAuditEnabled} is true), every recorded {@link org.mockserver.mock.audit.AuditEntry}
+     * is additionally appended as one JSON object per line ("NDJSON") to this file,
+     * giving a restart-surviving audit trail that outlives the bounded in-memory
+     * ring buffer (which is wiped by the very {@code reset} it records). Empty
+     * default = off (behaviour unchanged). The path is resolved once on the first
+     * entry written; parent directories are created if missing. The file grows
+     * append-only — rotation is out of scope, use external log rotation if needed.
+     */
+    public static String auditLogFile() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_AUDIT_LOG_FILE, "MOCKSERVER_AUDIT_LOG_FILE", "");
+    }
+
+    public static void auditLogFile(String path) {
+        setProperty(MOCKSERVER_AUDIT_LOG_FILE, path == null ? "" : path);
     }
 
     /**
@@ -2809,6 +3124,124 @@ public class ConfigurationProperties {
 
     public static void otelMetricsExportIntervalSeconds(long seconds) {
         setProperty(MOCKSERVER_OTEL_METRICS_EXPORT_INTERVAL_SECONDS, "" + seconds);
+    }
+
+    /**
+     * OTLP aggregation temporality for counter/histogram instruments: {@code cumulative} (default,
+     * exactly the previous behaviour) or {@code delta}. Backends such as New Relic prefer delta.
+     * Kept as a plain string here; the exporter parses it and fails safe to cumulative on any
+     * unknown/blank value. OTLP-only — Prometheus scrape/remote-write are inherently cumulative.
+     */
+    public static String otelMetricsTemporality() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_OTEL_METRICS_TEMPORALITY, "MOCKSERVER_OTEL_METRICS_TEMPORALITY", "cumulative");
+    }
+
+    public static void otelMetricsTemporality(String temporality) {
+        setProperty(MOCKSERVER_OTEL_METRICS_TEMPORALITY, temporality);
+    }
+
+    /**
+     * When true, MockServer periodically pushes the same Prometheus metrics served at
+     * {@code /mockserver/metrics} to a Prometheus Remote-Write v1 endpoint (Prometheus with
+     * {@code --web.enable-remote-write-receiver}, Grafana Mimir, New Relic, VictoriaMetrics,
+     * Thanos Receive). Off by default. Fail-soft — remote-write export never affects request
+     * handling. Remote write is inherently cumulative (the Prometheus model); there is no delta.
+     */
+    public static boolean prometheusRemoteWriteEnabled() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_ENABLED, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_ENABLED", "" + false));
+    }
+
+    public static void prometheusRemoteWriteEnabled(boolean enabled) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_ENABLED, "" + enabled);
+    }
+
+    /**
+     * The Prometheus Remote-Write v1 endpoint URL to POST to (e.g.
+     * {@code http://localhost:9090/api/v1/write}). Empty by default; when remote-write is
+     * enabled but this is blank the exporter logs a warning and does nothing.
+     */
+    public static String prometheusRemoteWriteUrl() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_URL, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_URL", "");
+    }
+
+    public static void prometheusRemoteWriteUrl(String url) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_URL, url);
+    }
+
+    /**
+     * How often (seconds) metrics are pushed to the remote-write endpoint. Default 60. Clamped
+     * to a minimum of 1 second.
+     */
+    public static long prometheusRemoteWriteIntervalSeconds() {
+        return Math.max(1L, readLongProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_INTERVAL_SECONDS, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_INTERVAL_SECONDS", 60L));
+    }
+
+    public static void prometheusRemoteWriteIntervalSeconds(long seconds) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_INTERVAL_SECONDS, "" + seconds);
+    }
+
+    /**
+     * Optional bearer token for the remote-write endpoint. When set, the exporter sends an
+     * {@code Authorization: Bearer <token>} header. Takes precedence over basic auth.
+     */
+    public static String prometheusRemoteWriteBearerToken() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BEARER_TOKEN, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BEARER_TOKEN", "");
+    }
+
+    public static void prometheusRemoteWriteBearerToken(String token) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BEARER_TOKEN, token);
+    }
+
+    /**
+     * Optional HTTP basic-auth username for the remote-write endpoint. Used only when no bearer
+     * token is set; combined with {@link #prometheusRemoteWriteBasicAuthPassword()}.
+     */
+    public static String prometheusRemoteWriteBasicAuthUsername() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_USERNAME, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_USERNAME", "");
+    }
+
+    public static void prometheusRemoteWriteBasicAuthUsername(String username) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_USERNAME, username);
+    }
+
+    /**
+     * Optional HTTP basic-auth password for the remote-write endpoint. Paired with
+     * {@link #prometheusRemoteWriteBasicAuthUsername()}.
+     */
+    public static String prometheusRemoteWriteBasicAuthPassword() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_PASSWORD, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_PASSWORD", "");
+    }
+
+    public static void prometheusRemoteWriteBasicAuthPassword(String password) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_BASIC_AUTH_PASSWORD, password);
+    }
+
+    /**
+     * Optional extra HTTP headers to add to each remote-write POST, as a comma-separated
+     * {@code key=value} list (e.g. {@code X-Scope-OrgID=tenant-a,X-Custom=abc}). Applied after
+     * the resolved auth header, so a user-supplied {@code Authorization} header may override it.
+     * The raw string is returned here; the exporter parses it.
+     */
+    public static String prometheusRemoteWriteHeaders() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_HEADERS, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_HEADERS", "");
+    }
+
+    public static void prometheusRemoteWriteHeaders(String headers) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_HEADERS, headers);
+    }
+
+    /**
+     * The Prometheus remote-write protocol version to encode and push: {@code v1} (the original
+     * {@code prometheus.WriteRequest}, the default) or {@code v2} (the newer, symbol-interned
+     * {@code io.prometheus.write.v2.Request}). Any unrecognised or blank value falls back to
+     * {@code v1}. Choose {@code v2} only when the receiver advertises Remote-Write 2.0 support.
+     */
+    public static String prometheusRemoteWriteProtocolVersion() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROMETHEUS_REMOTE_WRITE_PROTOCOL_VERSION, "MOCKSERVER_PROMETHEUS_REMOTE_WRITE_PROTOCOL_VERSION", "v1");
+    }
+
+    public static void prometheusRemoteWriteProtocolVersion(String version) {
+        setProperty(MOCKSERVER_PROMETHEUS_REMOTE_WRITE_PROTOCOL_VERSION, version);
     }
 
     /**
@@ -3112,6 +3545,23 @@ public class ConfigurationProperties {
     }
 
     /**
+     * If true (the default) MockServer sends itself a single warm-up request immediately after it starts listening, on a background thread.
+     * <p>
+     * The very first request handled by a freshly started MockServer is noticeably slower than every request after it (typically a few hundred milliseconds) because the request-handling code (the HTTP codec, JSON serialisation and response writers) is only loaded and initialised when it is first used. The warm-up request pays that one-off cost in the background so the first request from your test or application is fast.
+     * <p>
+     * The warm-up runs in the background and never delays start up. Disable it (set to false) only if you want to avoid the single extra loopback request during start up — for example in a tightly locked-down environment where MockServer must not connect to itself.
+     *
+     * @param enable true (the default) to send a background warm-up request after start up
+     */
+    public static void startupWarmup(boolean enable) {
+        setProperty(MOCKSERVER_STARTUP_WARMUP, "" + enable);
+    }
+
+    public static boolean startupWarmup() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_STARTUP_WARMUP, "MOCKSERVER_STARTUP_WARMUP", "true"));
+    }
+
+    /**
      * If true requests are assumed as binary if the method isn't one of "GET", "POST", "PUT", "HEAD", "OPTIONS", "PATCH", "DELETE", "TRACE" or "CONNECT"
      * <p>
      * The default is true
@@ -3376,6 +3826,26 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_MUSTACHE_DISALLOWED_TEXT, mustacheDisallowedText);
     }
 
+    public static long templateFakerSeed() {
+        return readLongProperty(MOCKSERVER_TEMPLATE_FAKER_SEED, "MOCKSERVER_TEMPLATE_FAKER_SEED", 0L);
+    }
+
+    /**
+     * Seed for the template {@code faker} sample-data helper (net.datafaker).
+     * <p>
+     * The default is 0, which leaves faker unseeded so it produces different, time/random-based
+     * sample values on every render (behaviour unchanged). Set a non-zero value to seed faker
+     * deterministically so faker-driven templates generate reproducible fixtures across runs — the
+     * template analogue of the OpenAPI example generator's fixed-seed model. The seed initialises a
+     * per-engine faker whose sequence is deterministic for a given order of renders; determinism is
+     * strongest for sequential (single-threaded) fixture generation.
+     *
+     * @param seed faker seed, 0 to leave faker unseeded (random)
+     */
+    public static void templateFakerSeed(long seed) {
+        setProperty(MOCKSERVER_TEMPLATE_FAKER_SEED, "" + seed);
+    }
+
     // mock initialization
 
     public static String initializationClass() {
@@ -3597,6 +4067,38 @@ public class ConfigurationProperties {
      */
     public static void persistedRecordedExpectationsPath(String persistedRecordedExpectationsPath) {
         setProperty(MOCKSERVER_PERSISTED_RECORDED_EXPECTATIONS_PATH, persistedRecordedExpectationsPath);
+    }
+
+    // recorded request persistence (LLM-capture disk-offload)
+
+    public static boolean persistRecordedRequestsToDisk() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PERSIST_RECORDED_REQUESTS_TO_DISK, "MOCKSERVER_PERSIST_RECORDED_REQUESTS_TO_DISK", "" + false));
+    }
+
+    /**
+     * Enable the persisting of recorded requests (captured traffic) to disk
+     * <p>
+     * The default is false
+     *
+     * @param enable the persisting of recorded requests to disk
+     */
+    public static void persistRecordedRequestsToDisk(boolean enable) {
+        setProperty(MOCKSERVER_PERSIST_RECORDED_REQUESTS_TO_DISK, "" + enable);
+    }
+
+    public static String persistedRecordedRequestsPath() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_PERSISTED_RECORDED_REQUESTS_PATH, "MOCKSERVER_PERSISTED_RECORDED_REQUESTS_PATH", "recordedRequests.ndjson");
+    }
+
+    /**
+     * The file path used to save persisted recorded requests, which is updated whenever a new request is captured
+     * <p>
+     * The default is "recordedRequests.ndjson"
+     *
+     * @param persistedRecordedRequestsPath file path used to save persisted recorded requests
+     */
+    public static void persistedRecordedRequestsPath(String persistedRecordedRequestsPath) {
+        setProperty(MOCKSERVER_PERSISTED_RECORDED_REQUESTS_PATH, persistedRecordedRequestsPath);
     }
 
     // state backend (G10 phase 2a)
@@ -3822,6 +4324,65 @@ public class ConfigurationProperties {
      */
     public static void clusterSharedTimesEnabled(boolean clusterSharedTimesEnabled) {
         setProperty(MOCKSERVER_CLUSTER_SHARED_TIMES_ENABLED, String.valueOf(clusterSharedTimesEnabled));
+    }
+
+    /**
+     * Returns whether {@code verify}/{@code retrieve} aggregate across cluster
+     * members (scatter-gather fan-in). Default is {@code false} (per-node
+     * behaviour). Only meaningful in a clustered deployment behind a load
+     * balancer. See {@code org.mockserver.cluster.ClusterFanIn}.
+     */
+    public static boolean clusterVerifyFanIn() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_VERIFY_FAN_IN, "MOCKSERVER_CLUSTER_VERIFY_FAN_IN", "false"));
+    }
+
+    /**
+     * Enables or disables cluster verify/retrieve fan-in.
+     *
+     * @param clusterVerifyFanIn {@code true} to aggregate verify/retrieve
+     *                           across cluster peers
+     */
+    public static void clusterVerifyFanIn(boolean clusterVerifyFanIn) {
+        setProperty(MOCKSERVER_CLUSTER_VERIFY_FAN_IN, String.valueOf(clusterVerifyFanIn));
+    }
+
+    /**
+     * Returns the comma-separated list of peer control-plane base URLs queried
+     * during verify/retrieve fan-in. Default is empty (no peers).
+     */
+    public static String clusterVerifyFanInPeers() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_VERIFY_FAN_IN_PEERS, "MOCKSERVER_CLUSTER_VERIFY_FAN_IN_PEERS", "");
+    }
+
+    /**
+     * Sets the comma-separated list of peer control-plane base URLs for
+     * verify/retrieve fan-in.
+     *
+     * @param clusterVerifyFanInPeers comma-separated peer base URLs
+     */
+    public static void clusterVerifyFanInPeers(String clusterVerifyFanInPeers) {
+        setProperty(MOCKSERVER_CLUSTER_VERIFY_FAN_IN_PEERS, clusterVerifyFanInPeers != null ? clusterVerifyFanInPeers : "");
+    }
+
+    /**
+     * Returns the credential the verify/retrieve fan-in peer accessor presents on
+     * cross-node queries, sent verbatim as the control-plane {@code Authorization}
+     * header (e.g. {@code Bearer <jwt>}). Default is empty (no credential — current
+     * behaviour). Set this on every node so an authenticated cluster can fan in.
+     */
+    public static String clusterFanInPeerAuthToken() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_CLUSTER_FAN_IN_PEER_AUTH_TOKEN, "MOCKSERVER_CLUSTER_FAN_IN_PEER_AUTH_TOKEN", "");
+    }
+
+    /**
+     * Sets the credential the verify/retrieve fan-in peer accessor presents on
+     * cross-node queries (sent verbatim as the control-plane {@code Authorization}
+     * header, so include the scheme, e.g. {@code Bearer <jwt>}).
+     *
+     * @param clusterFanInPeerAuthToken the control-plane Authorization header value
+     */
+    public static void clusterFanInPeerAuthToken(String clusterFanInPeerAuthToken) {
+        setProperty(MOCKSERVER_CLUSTER_FAN_IN_PEER_AUTH_TOKEN, clusterFanInPeerAuthToken != null ? clusterFanInPeerAuthToken : "");
     }
 
     // verification
@@ -4756,7 +5317,60 @@ public class ConfigurationProperties {
     }
 
     public static boolean dynamicallyCreateCertificateAuthorityCertificate() {
-        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE, "MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE", "false"));
+        // proxySetup is the convenience on-switch for a unique private CA: when enabled it forces
+        // dynamic CA generation regardless of the dynamicallyCreateCertificateAuthorityCertificate value.
+        return proxySetup() || Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE, "MOCKSERVER_DYNAMICALLY_CREATE_CERTIFICATE_AUTHORITY_CERTIFICATE", "false"));
+    }
+
+    public static boolean proxySetup() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROXY_SETUP, "MOCKSERVER_PROXY_SETUP", "false"));
+    }
+
+    /**
+     * Convenience on-switch for using MockServer as a TLS-intercepting proxy. When enabled MockServer
+     * forces dynamic creation of a unique private Certificate Authority (so the public CA private key
+     * published in the MockServer repository is not used) and prints an OS-specific copy-paste proxy
+     * setup block on startup.
+     *
+     * @param enable enable proxy setup convenience mode
+     */
+    public static void proxySetup(boolean enable) {
+        setProperty(MOCKSERVER_PROXY_SETUP, "" + enable);
+    }
+
+    public static boolean proxySetupLogging() {
+        return Boolean.parseBoolean(readPropertyHierarchically(PROPERTIES, MOCKSERVER_PROXY_SETUP_LOGGING, "MOCKSERVER_PROXY_SETUP_LOGGING", "false"));
+    }
+
+    /**
+     * Whether to materialise the active CA to {@code mockserver-ca.pem} and print the OS-specific
+     * copy-paste proxy setup block (CA path and proxy / CA environment-variable exports) on startup.
+     * <p>
+     * Default is false so embedded {@code ClientAndServer} usage (the large unit-test user base) stays
+     * silent and never drops a {@code mockserver-ca.pem} file into the working directory. The standalone
+     * CLI launcher ({@code org.mockserver.cli.Main}) enables it so jar/Docker/CLI launches always print
+     * the block.
+     *
+     * @param enable enable the proxy setup startup logging block
+     */
+    public static void proxySetupLogging(boolean enable) {
+        setProperty(MOCKSERVER_PROXY_SETUP_LOGGING, "" + enable);
+    }
+
+    /**
+     * Whether {@code proxySetupLogging} has an explicit value from any user source — a system property
+     * (incl. a programmatic set), the {@code mockserver.properties} file, or the
+     * {@code MOCKSERVER_PROXY_SETUP_LOGGING} environment variable — as opposed to falling back to the
+     * built-in default. The standalone CLI launcher uses this to auto-enable the proxy setup block only
+     * when the user has not configured it themselves (in any source), so a properties-file opt-out is
+     * honoured just like a {@code -D} / env-var one.
+     *
+     * @return true if an explicit value exists in any user source
+     */
+    public static boolean proxySetupLoggingConfigured() {
+        return System.getProperty(MOCKSERVER_PROXY_SETUP_LOGGING) != null
+            || (PROPERTIES != null && PROPERTIES.getProperty(MOCKSERVER_PROXY_SETUP_LOGGING) != null)
+            || isNotBlank(System.getenv("MOCKSERVER_PROXY_SETUP_LOGGING"));
     }
 
     /**
@@ -5052,6 +5666,27 @@ public class ConfigurationProperties {
         setProperty(MOCKSERVER_FORWARD_PROXY_TLS_X509_CERTIFICATE_CHAIN, certificateChain);
     }
 
+    public static String forwardProxyClientCertificatesByHost() {
+        return readPropertyHierarchically(PROPERTIES, MOCKSERVER_FORWARD_PROXY_CLIENT_CERTIFICATES_BY_HOST, "MOCKSERVER_FORWARD_PROXY_CLIENT_CERTIFICATES_BY_HOST", "");
+    }
+
+    /**
+     * Per-host outbound mTLS (client authentication) certificate/key map for forwarded or proxied requests.
+     * <p>
+     * A comma-separated list of {@code host=certificateChainPath;privateKeyPath} entries, where each path is a
+     * file system path or classpath location of an X.509 PEM certificate chain and a PKCS#8 or PKCS#1 PEM private
+     * key. When MockServer opens an outbound TLS connection to a matching upstream host (case-insensitive), it
+     * presents that host's certificate/key pair for mTLS; any host without an entry falls back to the global
+     * {@code forwardProxyPrivateKey} / {@code forwardProxyCertificateChain} pair (or MockServer's own generated
+     * key/cert). The default is empty (global pair only). Example:
+     * {@code api.internal=/certs/api-chain.pem;/certs/api-key.pem,billing.internal=/certs/billing-chain.pem;/certs/billing-key.pem}
+     *
+     * @param clientCertificatesByHost comma-separated host=certificateChainPath;privateKeyPath entries
+     */
+    public static void forwardProxyClientCertificatesByHost(String clientCertificatesByHost) {
+        setProperty(MOCKSERVER_FORWARD_PROXY_CLIENT_CERTIFICATES_BY_HOST, clientCertificatesByHost != null ? clientCertificatesByHost : "");
+    }
+
     @SuppressWarnings("ConstantConditions")
     static void fileExists(String file) {
         try {
@@ -5133,6 +5768,28 @@ public class ConfigurationProperties {
             );
             return defaultValue;
         }
+    }
+
+    /**
+     * Reads a millisecond duration that may be configured under either the primary key (e.g.
+     * {@code mockserver.maxSocketTimeout} — the name the programmatic setters and the rest of the code
+     * use) or the unit-bearing {@code InMillis}-suffixed alias (e.g.
+     * {@code mockserver.maxSocketTimeoutInMillis}) that matches {@link Configuration#maxSocketTimeoutInMillis()}
+     * and the key reported in the {@code /mockserver/configuration} JSON. The two names are synonyms for
+     * the same setting, so an operator who reaches for the alias is honoured rather than silently ignored.
+     * <p>
+     * The primary key is read first, so a value applied at runtime via the programmatic setter (which
+     * writes the primary key) always takes effect — a launch-time alias can never silently override a
+     * later programmatic set. The alias is consulted only when the primary key is not set by any source.
+     * If both names are set at launch to different values (a contradictory configuration that cannot be
+     * ordered), the primary key wins.
+     */
+    private static Long readLongPropertyWithMillisAlias(String key, String environmentVariableKey, String aliasKey, String aliasEnvironmentVariableKey, long defaultValue) {
+        long primary = readLongProperty(key, environmentVariableKey, defaultValue);
+        if (primary != defaultValue) {
+            return primary;
+        }
+        return readLongProperty(aliasKey, aliasEnvironmentVariableKey, defaultValue);
     }
 
     private static double readDoubleProperty(String key, String environmentVariableKey, double defaultValue) {

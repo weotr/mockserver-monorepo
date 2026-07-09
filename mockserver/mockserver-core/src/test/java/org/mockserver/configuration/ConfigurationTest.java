@@ -40,7 +40,11 @@ public class ConfigurationTest {
     }
 
     private static void clearRingBufferSizeOverride() {
-        System.clearProperty("mockserver.ringBufferSize");
+        clearPropertyAndCache("mockserver.ringBufferSize");
+    }
+
+    private static void clearPropertyAndCache(String key) {
+        System.clearProperty(key);
         // ConfigurationProperties resolves cache-first, so clearing the system property alone is not
         // enough — also drop the in-memory cache entry (mirror of the production clearProperty()).
         try {
@@ -48,13 +52,13 @@ public class ConfigurationTest {
             cacheField.setAccessible(true);
             Object cache = cacheField.get(null);
             if (cache instanceof Map) {
-                ((Map<?, ?>) cache).remove("mockserver.ringBufferSize");
+                ((Map<?, ?>) cache).remove(key);
             }
             java.lang.reflect.Field keysField = ConfigurationProperties.class.getDeclaredField("programmaticallySetKeys");
             keysField.setAccessible(true);
             Object keys = keysField.get(null);
             if (keys instanceof Set) {
-                ((Set<?>) keys).remove("mockserver.ringBufferSize");
+                ((Set<?>) keys).remove(key);
             }
         } catch (Exception ignore) {
             // best effort — if the internals change, the System property clear above still helps
@@ -493,6 +497,98 @@ public class ConfigurationTest {
             assertThat(configuration.ringBufferSize(), equalTo(1024));
         } finally {
             ConfigurationProperties.maxLogEntries(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetMaxEventLogSizeInBytes() {
+        try {
+            // default
+            clearPropertyAndCache("mockserver.maxEventLogSizeInBytes");
+            assertThat(ConfigurationProperties.maxEventLogSizeInBytes(), equalTo(0L));
+            assertThat(new Configuration().maxEventLogSizeInBytes(), equalTo(0L));
+
+            // system property -> property
+            ConfigurationProperties.maxEventLogSizeInBytes(1048576L);
+            assertThat(ConfigurationProperties.maxEventLogSizeInBytes(), equalTo(1048576L));
+            assertThat(System.getProperty("mockserver.maxEventLogSizeInBytes"), equalTo("1048576"));
+            assertThat(new Configuration().maxEventLogSizeInBytes(), equalTo(1048576L));
+
+            // fluent setter -> property (instance value overrides the static one)
+            assertThat(configuration.maxEventLogSizeInBytes(2097152L).maxEventLogSizeInBytes(), equalTo(2097152L));
+
+            // validation: negative values clamp to 0 (>= 0, 0 = disabled)
+            ConfigurationProperties.maxEventLogSizeInBytes(-5L);
+            assertThat(ConfigurationProperties.maxEventLogSizeInBytes(), equalTo(0L));
+        } finally {
+            clearPropertyAndCache("mockserver.maxEventLogSizeInBytes");
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetMaxLoggedBodyBytes() {
+        try {
+            // default
+            clearPropertyAndCache("mockserver.maxLoggedBodyBytes");
+            assertThat(ConfigurationProperties.maxLoggedBodyBytes(), equalTo(0));
+            assertThat(new Configuration().maxLoggedBodyBytes(), equalTo(0));
+
+            // system property -> property
+            ConfigurationProperties.maxLoggedBodyBytes(4096);
+            assertThat(ConfigurationProperties.maxLoggedBodyBytes(), equalTo(4096));
+            assertThat(System.getProperty("mockserver.maxLoggedBodyBytes"), equalTo("4096"));
+            assertThat(new Configuration().maxLoggedBodyBytes(), equalTo(4096));
+
+            // fluent setter -> property (instance value overrides the static one)
+            assertThat(configuration.maxLoggedBodyBytes(8192).maxLoggedBodyBytes(), equalTo(8192));
+
+            // validation: negative values clamp to 0 (>= 0, 0 = unlimited)
+            ConfigurationProperties.maxLoggedBodyBytes(-5);
+            assertThat(ConfigurationProperties.maxLoggedBodyBytes(), equalTo(0));
+        } finally {
+            clearPropertyAndCache("mockserver.maxLoggedBodyBytes");
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetPersistRecordedRequestsToDisk() {
+        try {
+            // default
+            clearPropertyAndCache("mockserver.persistRecordedRequestsToDisk");
+            assertThat(ConfigurationProperties.persistRecordedRequestsToDisk(), equalTo(false));
+            assertThat(new Configuration().persistRecordedRequestsToDisk(), equalTo(false));
+
+            // system property -> property
+            ConfigurationProperties.persistRecordedRequestsToDisk(true);
+            assertThat(ConfigurationProperties.persistRecordedRequestsToDisk(), equalTo(true));
+            assertThat(System.getProperty("mockserver.persistRecordedRequestsToDisk"), equalTo("true"));
+            assertThat(new Configuration().persistRecordedRequestsToDisk(), equalTo(true));
+
+            // fluent setter -> property (instance value overrides the static one)
+            assertThat(configuration.persistRecordedRequestsToDisk(false).persistRecordedRequestsToDisk(), equalTo(false));
+        } finally {
+            clearPropertyAndCache("mockserver.persistRecordedRequestsToDisk");
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetPersistedRecordedRequestsPath() {
+        try {
+            // default
+            clearPropertyAndCache("mockserver.persistedRecordedRequestsPath");
+            assertThat(ConfigurationProperties.persistedRecordedRequestsPath(), equalTo("recordedRequests.ndjson"));
+            assertThat(new Configuration().persistedRecordedRequestsPath(), equalTo("recordedRequests.ndjson"));
+
+            // system property -> property
+            ConfigurationProperties.persistedRecordedRequestsPath("target/captured.ndjson");
+            assertThat(ConfigurationProperties.persistedRecordedRequestsPath(), equalTo("target/captured.ndjson"));
+            assertThat(System.getProperty("mockserver.persistedRecordedRequestsPath"), equalTo("target/captured.ndjson"));
+            assertThat(new Configuration().persistedRecordedRequestsPath(), equalTo("target/captured.ndjson"));
+
+            // fluent setter -> property (instance value overrides the static one)
+            assertThat(configuration.persistedRecordedRequestsPath("target/other.ndjson").persistedRecordedRequestsPath(), equalTo("target/other.ndjson"));
+        } finally {
+            clearPropertyAndCache("mockserver.persistedRecordedRequestsPath");
         }
     }
 
@@ -1213,6 +1309,86 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void shouldHonourMaxSocketTimeoutInMillisAliasSystemProperty() {
+        // Reproduces the silent-ignore bug: the Configuration API and the /mockserver/configuration JSON
+        // expose this value as `maxSocketTimeoutInMillis`, so an operator naturally sets
+        // -Dmockserver.maxSocketTimeoutInMillis — but ConfigurationProperties historically read only the
+        // canonical `mockserver.maxSocketTimeout`, so the override was silently dropped and the 20s default
+        // stood (the LLM-proxy first-byte 502 we chased). The InMillis alias must now be honoured.
+        try {
+            // given - neither key set: the 20s default
+            clearPropertyAndCache("mockserver.maxSocketTimeout");
+            clearPropertyAndCache("mockserver.maxSocketTimeoutInMillis");
+            assertThat(configuration.maxSocketTimeoutInMillis(), equalTo(20000L));
+
+            // when - only the InMillis alias is set (as a -D system property would be)
+            clearPropertyAndCache("mockserver.maxSocketTimeout");
+            clearPropertyAndCache("mockserver.maxSocketTimeoutInMillis");
+            System.setProperty("mockserver.maxSocketTimeoutInMillis", "300000");
+
+            // then - honoured end to end (static property reader AND Configuration instance)
+            assertThat(ConfigurationProperties.maxSocketTimeout(), equalTo(300000L));
+            assertThat(new Configuration().maxSocketTimeoutInMillis(), equalTo(300000L));
+
+            // and - the two names are synonyms; the primary key is read first, so when both are set to
+            // contradictory launch values the primary `mockserver.maxSocketTimeout` wins (and, in turn, a
+            // programmatic/runtime set of the primary key can never be silently overridden by the alias)
+            clearPropertyAndCache("mockserver.maxSocketTimeout");
+            clearPropertyAndCache("mockserver.maxSocketTimeoutInMillis");
+            System.setProperty("mockserver.maxSocketTimeoutInMillis", "300000");
+            System.setProperty("mockserver.maxSocketTimeout", "90000");
+            assertThat(ConfigurationProperties.maxSocketTimeout(), equalTo(90000L));
+        } finally {
+            clearPropertyAndCache("mockserver.maxSocketTimeout");
+            clearPropertyAndCache("mockserver.maxSocketTimeoutInMillis");
+        }
+    }
+
+    @Test
+    public void shouldHonourSocketConnectionTimeoutInMillisAliasSystemProperty() {
+        // Same naming footgun as maxSocketTimeout: accept the `InMillis`-suffixed alias.
+        try {
+            clearPropertyAndCache("mockserver.socketConnectionTimeout");
+            clearPropertyAndCache("mockserver.socketConnectionTimeoutInMillis");
+            System.setProperty("mockserver.socketConnectionTimeoutInMillis", "45000");
+
+            assertThat(ConfigurationProperties.socketConnectionTimeout(), equalTo(45000L));
+            assertThat(new Configuration().socketConnectionTimeoutInMillis(), equalTo(45000L));
+        } finally {
+            clearPropertyAndCache("mockserver.socketConnectionTimeout");
+            clearPropertyAndCache("mockserver.socketConnectionTimeoutInMillis");
+        }
+    }
+
+    @Test
+    public void shouldHonourMaxFutureTimeoutInMillisAliasSystemProperty() {
+        // Same naming footgun as maxSocketTimeout: the Configuration API and the /mockserver/configuration
+        // JSON expose this as `maxFutureTimeoutInMillis`, but ConfigurationProperties read only the
+        // unit-less `mockserver.maxFutureTimeout`, so the natural -Dmockserver.maxFutureTimeoutInMillis was
+        // silently dropped and the 90s default stood. The InMillis alias must now be honoured.
+        try {
+            // when - only the InMillis alias is set
+            clearPropertyAndCache("mockserver.maxFutureTimeout");
+            clearPropertyAndCache("mockserver.maxFutureTimeoutInMillis");
+            System.setProperty("mockserver.maxFutureTimeoutInMillis", "120000");
+
+            assertThat(ConfigurationProperties.maxFutureTimeout(), equalTo(120000L));
+            assertThat(new Configuration().maxFutureTimeoutInMillis(), equalTo(120000L));
+
+            // and - the two names are synonyms; the primary key is read first, so when both are set to
+            // contradictory launch values the primary `mockserver.maxFutureTimeout` wins
+            clearPropertyAndCache("mockserver.maxFutureTimeout");
+            clearPropertyAndCache("mockserver.maxFutureTimeoutInMillis");
+            System.setProperty("mockserver.maxFutureTimeoutInMillis", "120000");
+            System.setProperty("mockserver.maxFutureTimeout", "30000");
+            assertThat(ConfigurationProperties.maxFutureTimeout(), equalTo(30000L));
+        } finally {
+            clearPropertyAndCache("mockserver.maxFutureTimeout");
+            clearPropertyAndCache("mockserver.maxFutureTimeoutInMillis");
+        }
+    }
+
+    @Test
     public void shouldSetAndGetAlwaysCloseSocketConnections() {
         boolean original = ConfigurationProperties.alwaysCloseSocketConnections();
         try {
@@ -1362,6 +1538,32 @@ public class ConfigurationTest {
             assertThat(configuration.useSemicolonAsQueryParameterSeparator(), equalTo(false));
         } finally {
             ConfigurationProperties.useSemicolonAsQueryParameterSeparator(original);
+        }
+    }
+
+    @Test
+    public void shouldSetAndGetStartupWarmup() {
+        boolean original = ConfigurationProperties.startupWarmup();
+        try {
+            // then - default value
+            assertThat(configuration.startupWarmup(), equalTo(true));
+
+            // when - system property setter
+            ConfigurationProperties.startupWarmup(false);
+
+            // then - system property getter
+            assertThat(ConfigurationProperties.startupWarmup(), equalTo(false));
+            assertThat(System.getProperty("mockserver.startupWarmup"), equalTo("false"));
+            assertThat(configuration.startupWarmup(), equalTo(false));
+            ConfigurationProperties.startupWarmup(original);
+
+            // when - setter
+            configuration.startupWarmup(false);
+
+            // then - getter
+            assertThat(configuration.startupWarmup(), equalTo(false));
+        } finally {
+            ConfigurationProperties.startupWarmup(original);
         }
     }
 

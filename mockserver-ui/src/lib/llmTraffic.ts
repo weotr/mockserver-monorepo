@@ -29,6 +29,10 @@ export interface AnthropicContentBlock {
 export interface AnthropicUsage {
   input_tokens?: number;
   output_tokens?: number;
+  // Prompt-caching counters (agentic CLIs lean heavily on prompt caching).
+  // Without these the input side is materially undercounted.
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
 }
 
 export interface AnthropicParsed {
@@ -212,6 +216,13 @@ export interface RequestTiming {
   requestStartedMillis: number | null;
   connectionEstablishedMillis: number | null;
   responseReceivedMillis: number | null;
+  // Injected-vs-real latency waterfall (additive; may be absent on older servers): the portion of
+  // totalTimeInMillis that MockServer deliberately injected, split by source. "Real" time (connect,
+  // processing, upstream) is derived as total minus the sum of these. Optional so older payloads and
+  // callers that predate these fields remain valid.
+  injectedChaosLatencyMillis?: number | null;
+  injectedDelayMillis?: number | null;
+  breakpointHeldMillis?: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +377,13 @@ interface ReassembledAnthropic {
   stopReason: string | null;
 }
 
+// Upper bound on the number of distinct SSE content-block indices we will
+// materialise. A hostile or buggy stream can carry an arbitrarily large
+// `index` (e.g. 100000000); without a cap the `while (length <= index)` growth
+// loop allocates a gigantic array and freezes the tab. Real responses have a
+// handful of blocks, so a few thousand is far above any legitimate ceiling.
+const MAX_ANTHROPIC_CONTENT_BLOCKS = 4096;
+
 function reassembleAnthropicSse(events: SseEvent[]): ReassembledAnthropic {
   const result: ReassembledAnthropic = {
     content: [],
@@ -390,12 +408,17 @@ function reassembleAnthropicSse(events: SseEvent[]): ReassembledAnthropic {
         if (usage) {
           const inputTokens = getNumber(usage, 'input_tokens');
           if (inputTokens !== null) result.usage.input_tokens = inputTokens;
+          const cacheCreation = getNumber(usage, 'cache_creation_input_tokens');
+          if (cacheCreation !== null) result.usage.cache_creation_input_tokens = cacheCreation;
+          const cacheRead = getNumber(usage, 'cache_read_input_tokens');
+          if (cacheRead !== null) result.usage.cache_read_input_tokens = cacheRead;
         }
       }
     } else if (evt.event === 'content_block_start') {
       const block = getObject(data, 'content_block');
       const index = getNumber(data, 'index');
-      if (block && index !== null) {
+      // Ignore out-of-range / hostile indices so the growth loop below stays bounded.
+      if (block && index !== null && index >= 0 && index <= MAX_ANTHROPIC_CONTENT_BLOCKS) {
         const type = getString(block, 'type') ?? 'text';
         const contentBlock: AnthropicContentBlock = { type };
         if (type === 'tool_use') {
@@ -470,7 +493,10 @@ function isOpenAiPath(path: string | null): boolean {
 }
 
 function isOpenAiResponsesPath(path: string | null): boolean {
-  return path !== null && /\/v1\/responses/.test(path);
+  // The standard hosted path (/v1/responses) and the OpenAI Codex backend used by
+  // coding CLIs such as opencode, which serves the same Responses wire format at
+  // chatgpt.com/backend-api/codex/responses.
+  return path !== null && /\/v1\/responses|\/codex\/responses/.test(path);
 }
 
 function isGeminiPath(path: string | null): boolean {
@@ -497,20 +523,172 @@ function isOllamaPath(path: string | null): boolean {
   return /(^|\/)api\/chat(?:\/?$|\?)/.test(path);
 }
 
+/**
+ * Host-based provider detection, mirroring the server's LlmProviderSniffer.
+ * A request to a well-known provider host is classified as that provider
+ * regardless of the path, so the dashboard agrees with the server even for
+ * non-chat paths (e.g. /v1/models) to a known host. Returns the parser kind to
+ * use, or null when the host is unknown (callers then fall back to path / body
+ * shape). Maps to the parsers the dashboard implements: Azure -> openai (same
+ * wire format), Bedrock and Vertex map to the anthropic / gemini parsers.
+ *
+ * Note: embeddings-only hosts (api.cohere.com, api.voyageai.com) are recognised
+ * by the server but have no dedicated dashboard parser, so they are not mapped
+ * here and fall through to generic.
+ */
+function detectByHost(
+  host: string | null,
+  path: string | null,
+): 'anthropic' | 'openai' | 'openai_responses' | 'gemini' | null {
+  if (!host) return null;
+  // Strip any port suffix before matching (Host headers may include :443).
+  const h = host.toLowerCase().replace(/:\d+$/, '');
+
+  if (h === 'api.openai.com') {
+    // Distinguish the Responses API (/responses) from Chat Completions.
+    return path !== null && /\/responses/.test(path.toLowerCase()) ? 'openai_responses' : 'openai';
+  }
+  if (h.endsWith('.openai.azure.com')) return 'openai';
+  if (h === 'api.anthropic.com') return 'anthropic';
+  // OpenAI Codex backend used by coding CLIs (opencode): chatgpt.com serves the
+  // Responses API. Path-gated so non-LLM chatgpt.com traffic stays generic.
+  if (h === 'chatgpt.com' || h.endsWith('.chatgpt.com')) {
+    return isOpenAiResponsesPath(path) ? 'openai_responses' : null;
+  }
+  if (h === 'generativelanguage.googleapis.com') return 'gemini';
+  // Vertex AI: aiplatform.googleapis.com or <region>-aiplatform.googleapis.com.
+  // Fully anchored so an arbitrary host cannot be glued in front (e.g.
+  // evil.com-aiplatform.googleapis.com): the region label is [a-z0-9-]+ and
+  // contains no dot, so only genuine *.googleapis.com Vertex hosts match.
+  if (/^(?:[a-z0-9-]+-)?aiplatform\.googleapis\.com$/.test(h)) return 'gemini';
+  // Bedrock: bedrock*.amazonaws.com — uses the native Anthropic wire shape.
+  if (h.endsWith('.amazonaws.com') && (h.startsWith('bedrock') || h.includes('.bedrock'))) return 'anthropic';
+
+  return null;
+}
+
+/**
+ * Resilient fallback: infer the provider from the request/response BODY SHAPE
+ * alone — no host or path required. The wire format is the provider's API
+ * contract and changes far more slowly than the host/path a given CLI uses, so
+ * recognising LLM traffic by its body keeps the Traffic / LLM Traces / LLM
+ * Optimise views working when a tool moves to a new endpoint or a new tool
+ * appears. Mirrors `LlmProviderSniffer.sniffByBodyShape` on the server. Stays
+ * conservative (returns null rather than guess) so non-LLM traffic is not
+ * mis-classified.
+ */
+function toBodyString(content: unknown): string | null {
+  if (content === null || content === undefined) return null;
+  if (typeof content === 'string') return content.length > 0 ? content : null;
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return null;
+  }
+}
+
+function detectByBodyShape(
+  reqContent: unknown,
+  resContent: unknown,
+  requestHeaders: unknown,
+): 'anthropic' | 'openai' | 'openai_responses' | 'gemini' | null {
+  // Response markers are the most distinctive — check them first. Each pattern
+  // is anchored to a JSON key/value or SSE-field boundary so a hostile message
+  // body that merely contains the substring (e.g. a user pasting "message_start"
+  // into a prompt) cannot force a misclassification. Real provider responses
+  // always carry these tokens as `"type":"…"` / `"object":"…"` values or as
+  // `event:` field names.
+  const res = toBodyString(resContent);
+  if (res) {
+    // OpenAI Chat Completions: object "chat.completion" / "chat.completion.chunk".
+    if (/"object"\s*:\s*"chat\.completion/.test(res)) return 'openai';
+    // OpenAI Responses: object "response" or any `"type":"response.*"` SSE event.
+    if (
+      /"type"\s*:\s*"response\./.test(res) ||
+      /"object"\s*:\s*"response"/.test(res)
+    ) {
+      return 'openai_responses';
+    }
+    // Anthropic: streamed `content_block_*` / `message_start` / `message_delta`
+    // event types (as `"type":"…"` values or `event:` field names), or a
+    // non-streamed message envelope (`"type":"message"` with a stop_reason).
+    if (
+      /"type"\s*:\s*"(content_block|message_start|message_delta)/.test(res) ||
+      /(^|\n)event:\s*(content_block|message_start|message_delta)/.test(res) ||
+      (/"type"\s*:\s*"message"/.test(res) && res.includes('stop_reason'))
+    ) {
+      return 'anthropic';
+    }
+    // Gemini: a `candidates` array alongside `usageMetadata` (both as keys).
+    if (/"candidates"\s*:/.test(res) && /"usageMetadata"\s*:/.test(res)) return 'gemini';
+  }
+  // Anthropic sends the anthropic-version header on every request.
+  if (getHeaderValue(requestHeaders, 'anthropic-version')) return 'anthropic';
+  // Request markers — used when the response is absent or unrecognised.
+  const req = toBodyString(reqContent);
+  if (req) {
+    const hasModel = req.includes('"model"');
+    // OpenAI Responses hallmark: top-level "input" array (Chat Completions and
+    // Anthropic both use "messages").
+    if (hasModel && req.includes('"input"') && !req.includes('"messages"')) return 'openai_responses';
+    if (req.includes('"contents"') && (req.includes('"parts"') || req.includes('generationConfig'))) return 'gemini';
+    if (hasModel && req.includes('"messages"')) return 'openai';
+  }
+  return null;
+}
+
 function isMcpJsonRpc(body: unknown): boolean {
   if (typeof body !== 'object' || body === null) return false;
   const obj = body as Record<string, unknown>;
   return obj['jsonrpc'] === '2.0' && (typeof obj['method'] === 'string' || 'result' in obj || 'error' in obj);
 }
 
+/**
+ * Find the first JSON-RPC 2.0 message in a body, looking through three shapes
+ * that modern MCP transports use:
+ *   1. a single JSON-RPC object,
+ *   2. a JSON-RPC batch (top-level array of objects), and
+ *   3. JSON-RPC carried over SSE (`event: message\ndata: {jsonrpc...}`), as the
+ *      Streamable HTTP transport returns.
+ * Returns the first matching message, or null when the body is not MCP traffic.
+ */
+function firstJsonRpcMessage(bodyContent: unknown): Record<string, unknown> | null {
+  const parsed = safeParseJson(bodyContent);
+  if (Array.isArray(parsed)) {
+    const found = parsed.find(isMcpJsonRpc);
+    if (found) return found as Record<string, unknown>;
+  } else if (parsed && isMcpJsonRpc(parsed)) {
+    return parsed as Record<string, unknown>;
+  }
+
+  // SSE-framed JSON-RPC (Streamable HTTP transport).
+  if (typeof bodyContent === 'string' && /(^|\n)data:/.test(bodyContent.replace(/\r\n?/g, '\n'))) {
+    for (const evt of parseSseStream(bodyContent)) {
+      const data = safeParseJson(evt.data);
+      if (Array.isArray(data)) {
+        const found = data.find(isMcpJsonRpc);
+        if (found) return found as Record<string, unknown>;
+      } else if (data && isMcpJsonRpc(data)) {
+        return data as Record<string, unknown>;
+      }
+    }
+  }
+
+  return null;
+}
+
 function isStreamResponse(responseHeaders: unknown, responseBody: unknown): boolean {
   const contentType = getHeaderValue(responseHeaders, 'content-type');
   if (contentType && contentType.includes('text/event-stream')) return true;
 
-  // Check if body looks like SSE
+  // Check if the body looks like SSE. OpenAI Chat Completions and Gemini emit
+  // `data:`-only frames (no `event:` line), so requiring BOTH markers dropped
+  // those streams. A line that STARTS with `data:` or `event:` (after CR/LF
+  // normalisation) is the SSE field grammar — a JSON value like `{"data":...}`
+  // never begins a line with `data:`, so this stays conservative.
   if (typeof responseBody === 'string') {
-    const firstLines = responseBody.slice(0, 500);
-    return firstLines.includes('event:') && firstLines.includes('data:');
+    const head = responseBody.slice(0, 500).replace(/\r\n?/g, '\n');
+    return /(^|\n)data:/.test(head) || /(^|\n)event:/.test(head);
   }
 
   return false;
@@ -533,7 +711,10 @@ function parseAnthropicRequest(
 ): AnthropicParsed {
   const req = safeParseJson(requestBody) as Record<string, unknown> | undefined;
   const { streamed, truncated } = hasStreamingHeaders(responseHeaders);
-  const isStream = isStreamResponse(responseHeaders, responseBody);
+  // Trust the server's `x-mockserver-streamed` signal as well as body sniffing:
+  // a no-content-type SSE body (common for OpenAI-chat / Gemini) otherwise gets
+  // parsed as non-stream JSON, fails, and renders empty.
+  const isStream = streamed || isStreamResponse(responseHeaders, responseBody);
 
   const result: AnthropicParsed = {
     kind: 'anthropic',
@@ -583,7 +764,10 @@ function parseOpenAiRequest(
 ): OpenAiParsed {
   const req = safeParseJson(requestBody) as Record<string, unknown> | undefined;
   const { streamed, truncated } = hasStreamingHeaders(responseHeaders);
-  const isStream = isStreamResponse(responseHeaders, responseBody);
+  // Trust the server's `x-mockserver-streamed` signal too — OpenAI Chat
+  // Completions streams emit only `data:` frames with no content-type, which
+  // would otherwise be parsed as non-stream JSON and render empty.
+  const isStream = streamed || isStreamResponse(responseHeaders, responseBody);
 
   const result: OpenAiParsed = {
     kind: 'openai',
@@ -684,10 +868,10 @@ function parseOpenAiRequest(
   return result;
 }
 
-function parseMcpRequest(requestBody: unknown, responseBody: unknown): McpParsed {
-  const req = safeParseJson(requestBody) as Record<string, unknown> | undefined;
-  const res = safeParseJson(responseBody) as Record<string, unknown> | undefined;
-
+function parseMcpRequest(
+  req: Record<string, unknown> | null,
+  res: Record<string, unknown> | null,
+): McpParsed {
   // Could be a request or a response in JSON-RPC
   const isResponse = req ? !('method' in req) : false;
   const primary = isResponse ? res : req;
@@ -715,6 +899,7 @@ function parseOpenAiResponsesRequest(
 ): OpenAiResponsesParsed {
   const req = safeParseJson(requestBody) as Record<string, unknown> | undefined;
   const { streamed, truncated } = hasStreamingHeaders(responseHeaders);
+  const isStream = streamed || isStreamResponse(responseHeaders, responseBody);
 
   const result: OpenAiResponsesParsed = {
     kind: 'openai_responses',
@@ -729,7 +914,7 @@ function parseOpenAiResponsesRequest(
     streamTruncated: truncated,
   };
 
-  if (isStreamResponse(responseHeaders, responseBody) && typeof responseBody === 'string') {
+  if (isStream && typeof responseBody === 'string') {
     const events = parseSseStream(responseBody);
     result.sseEvents = events;
     const reassembled = reassembleResponsesSse(events);
@@ -831,13 +1016,28 @@ function reassembleGeminiSse(events: SseEvent[]): { candidates: unknown[]; usage
   return { candidates, usage, model };
 }
 
+/**
+ * Extract the Gemini model from the request path, e.g.
+ * `/v1beta/models/gemini-2.5-pro:generateContent` -> `gemini-2.5-pro`.
+ * The model is in the URL for Gemini, so it is available even when the response
+ * body omits `modelVersion` (notably on streamed or error responses).
+ */
+function modelFromGeminiPath(path: string | null): string | null {
+  if (!path) return null;
+  const m = path.match(/\/models\/([^/:?]+):(?:streamGenerateContent|generateContent)/);
+  return m ? m[1]! : null;
+}
+
 function parseGeminiRequest(
   requestBody: unknown,
   responseBody: unknown,
   responseHeaders: unknown,
+  path: string | null,
 ): GeminiParsed {
   const req = safeParseJson(requestBody) as Record<string, unknown> | undefined;
   const { streamed, truncated } = hasStreamingHeaders(responseHeaders);
+  const isStream = streamed || isStreamResponse(responseHeaders, responseBody);
+  const pathModel = modelFromGeminiPath(path);
 
   const result: GeminiParsed = {
     kind: 'gemini',
@@ -852,13 +1052,14 @@ function parseGeminiRequest(
     streamTruncated: truncated,
   };
 
-  if (isStreamResponse(responseHeaders, responseBody) && typeof responseBody === 'string') {
+  if (isStream && typeof responseBody === 'string') {
     const events = parseSseStream(responseBody);
     result.sseEvents = events;
     const reassembled = reassembleGeminiSse(events);
     result.candidates = reassembled.candidates;
     result.usage = reassembled.usage;
     if (reassembled.model && !result.model) result.model = reassembled.model;
+    if (!result.model) result.model = pathModel;
     return result;
   }
 
@@ -876,6 +1077,8 @@ function parseGeminiRequest(
       result.model = getString(res, 'modelVersion') ?? getString(res, 'model');
     }
   }
+
+  if (!result.model) result.model = pathModel;
 
   return result;
 }
@@ -949,6 +1152,22 @@ export function parseTraffic(value: Record<string, unknown>): ParsedTraffic {
     // Extract body string or object — MockServer can encode body as { type, string } or { type, json }
     const reqBodyContent = extractBodyContent(requestBody);
     const resBodyContent = extractBodyContent(responseBody);
+    const requestHeaders = httpRequest ? httpRequest['headers'] : null;
+
+    // Host-based detection FIRST, mirroring the server (LlmProviderSniffer):
+    // a call to a well-known provider host is that provider regardless of path,
+    // so non-chat paths to a known host classify consistently with the server.
+    const host = getHeaderValue(requestHeaders, 'host');
+    switch (detectByHost(host, path)) {
+      case 'anthropic':
+        return parseAnthropicRequest(reqBodyContent, resBodyContent, responseHeaders);
+      case 'openai':
+        return parseOpenAiRequest(reqBodyContent, resBodyContent, responseHeaders);
+      case 'openai_responses':
+        return parseOpenAiResponsesRequest(reqBodyContent, resBodyContent, responseHeaders);
+      case 'gemini':
+        return parseGeminiRequest(reqBodyContent, resBodyContent, responseHeaders, path);
+    }
 
     if (isAnthropicPath(path)) {
       return parseAnthropicRequest(reqBodyContent, resBodyContent, responseHeaders);
@@ -977,23 +1196,33 @@ export function parseTraffic(value: Record<string, unknown>): ParsedTraffic {
     }
 
     if (isGeminiPath(path)) {
-      return parseGeminiRequest(reqBodyContent, resBodyContent, responseHeaders);
+      return parseGeminiRequest(reqBodyContent, resBodyContent, responseHeaders, path);
     }
 
     if (isOllamaPath(path)) {
       return parseOllamaRequest(reqBodyContent, resBodyContent, responseHeaders);
     }
 
-    // Check MCP on request body
-    const parsedReqBody = safeParseJson(reqBodyContent);
-    if (parsedReqBody && isMcpJsonRpc(parsedReqBody)) {
-      return parseMcpRequest(reqBodyContent, resBodyContent);
+    // Check MCP on request or response body. Handles a single JSON-RPC object, a
+    // JSON-RPC batch (top-level array), and JSON-RPC carried over SSE.
+    const reqRpc = firstJsonRpcMessage(reqBodyContent);
+    const resRpc = firstJsonRpcMessage(resBodyContent);
+    if (reqRpc || resRpc) {
+      return parseMcpRequest(reqRpc, resRpc);
     }
 
-    // Check MCP on response body
-    const parsedResBody = safeParseJson(resBodyContent);
-    if (parsedResBody && isMcpJsonRpc(parsedResBody)) {
-      return parseMcpRequest(reqBodyContent, resBodyContent);
+    // Resilient fallback: recognise LLM traffic by its body shape when the host/
+    // path was not a known LLM endpoint (e.g. a coding CLI on a private gateway
+    // or a renamed endpoint). The body is the slowest-moving signal.
+    switch (detectByBodyShape(reqBodyContent, resBodyContent, requestHeaders)) {
+      case 'anthropic':
+        return parseAnthropicRequest(reqBodyContent, resBodyContent, responseHeaders);
+      case 'openai':
+        return parseOpenAiRequest(reqBodyContent, resBodyContent, responseHeaders);
+      case 'openai_responses':
+        return parseOpenAiResponsesRequest(reqBodyContent, resBodyContent, responseHeaders);
+      case 'gemini':
+        return parseGeminiRequest(reqBodyContent, resBodyContent, responseHeaders, path);
     }
 
     const statusCode = httpResponse ? getNumber(httpResponse, 'statusCode') : null;
@@ -1003,6 +1232,33 @@ export function parseTraffic(value: Record<string, unknown>): ParsedTraffic {
   } catch {
     return { kind: 'generic', method: null, path: null, statusCode: null };
   }
+}
+
+/**
+ * Per-object parse cache for {@link parseTraffic}.
+ *
+ * `parseTraffic` fully classifies a request/response pair and, for streamed
+ * responses, reassembles the entire SSE body and base64-decodes binary bodies —
+ * expensive to re-run for every captured request on every ~1/sec WebSocket push
+ * (and every render that groups or summarises traffic). The store's
+ * `reconcileByKey` preserves each unchanged item's `value` reference across
+ * pushes, so a WeakMap keyed on that reference returns the previously-parsed
+ * result until the underlying object actually changes — a changed item is
+ * delivered as a fresh reference and so misses the cache and re-parses. The
+ * WeakMap lets entries be collected once the item object is unreachable.
+ *
+ * This mirrors the `summaryCache` / `searchTextCache` pattern already used in
+ * TrafficInspector, and is shared by `summarizeTraffic` here and by the Trace
+ * view's session grouping so both reuse a single parse per item.
+ */
+const parseTrafficCache = new WeakMap<Record<string, unknown>, ParsedTraffic>();
+
+export function cachedParseTraffic(value: Record<string, unknown>): ParsedTraffic {
+  const hit = parseTrafficCache.get(value);
+  if (hit !== undefined) return hit;
+  const parsed = parseTraffic(value);
+  parseTrafficCache.set(value, parsed);
+  return parsed;
 }
 
 /**
@@ -1063,7 +1319,7 @@ export function summarizeTraffic(value: Record<string, unknown>): TrafficSummary
     }
   }
 
-  const parsed = parseTraffic(value);
+  const parsed = cachedParseTraffic(value);
 
   // Extract per-request timing from the forwarded response (if present)
   let timing: RequestTiming | null = null;
@@ -1077,6 +1333,9 @@ export function summarizeTraffic(value: Record<string, unknown>): TrafficSummary
         requestStartedMillis: getNumber(timingObj, 'requestStartedMillis'),
         connectionEstablishedMillis: getNumber(timingObj, 'connectionEstablishedMillis'),
         responseReceivedMillis: getNumber(timingObj, 'responseReceivedMillis'),
+        injectedChaosLatencyMillis: getNumber(timingObj, 'injectedChaosLatencyMillis'),
+        injectedDelayMillis: getNumber(timingObj, 'injectedDelayMillis'),
+        breakpointHeldMillis: getNumber(timingObj, 'breakpointHeldMillis'),
       };
     }
   }
@@ -1115,6 +1374,9 @@ export function getTokenSummary(parsed: ParsedTraffic): string | null {
     const parts: string[] = [];
     if (parsed.usage.input_tokens != null) parts.push(`${parsed.usage.input_tokens} in`);
     if (parsed.usage.output_tokens != null) parts.push(`${parsed.usage.output_tokens} out`);
+    // Surface prompt-cache counters so agentic CLI traffic isn't undercounted.
+    if (parsed.usage.cache_creation_input_tokens != null) parts.push(`${parsed.usage.cache_creation_input_tokens} cache write`);
+    if (parsed.usage.cache_read_input_tokens != null) parts.push(`${parsed.usage.cache_read_input_tokens} cache read`);
     return parts.length > 0 ? parts.join(' / ') : null;
   }
   if (parsed.kind === 'openai' && parsed.usage) {
@@ -1206,3 +1468,378 @@ export function getTimingBreakdown(timing: RequestTiming | null): string | null 
   if (timing.totalTimeInMillis !== null) parts.push(`total ${timing.totalTimeInMillis}ms`);
   return parts.length > 0 ? parts.join(' / ') : null;
 }
+
+// ---------------------------------------------------------------------------
+// MCP server health aggregation
+//
+// When a coding-assistant CLI is proxied through MockServer its MCP servers
+// (chrome-devtools, devbot, …) are frequently the real latency bottleneck — the
+// MCP server stalls for tens of seconds while MockServer's own part is a couple
+// of seconds. The dashboard surfaces per-MCP-server health so the user can SEE
+// which server is slow or erroring instead of guessing.
+//
+// This is a PURE aggregation over the same `summarizeTraffic` classification the
+// Traffic view uses (no duplicated MCP detection): it groups MCP JSON-RPC
+// exchanges by upstream host and derives call counts, error rate, latency
+// percentiles, the slowest method, and a slow flag. Kept React-free so it is
+// unit-testable.
+// ---------------------------------------------------------------------------
+
+/**
+ * Latency (ms) at or above which a server is flagged `slow`. A real
+ * chrome-devtools MCP exchange that stalled ~32s sits far above this; a healthy
+ * tool call returns in well under a second, so 5s cleanly separates the two.
+ */
+export const MCP_SLOW_THRESHOLD_MS = 5000;
+
+export interface McpServerHealth {
+  /** Upstream host the MCP server was reached on, or a placeholder when absent. */
+  server: string;
+  /** Total MCP JSON-RPC exchanges seen for this server. */
+  callCount: number;
+  /** Exchanges that carried a JSON-RPC `error` or a non-2xx HTTP status. */
+  errorCount: number;
+  /** errorCount / callCount, in 0..1. */
+  errorRate: number;
+  /** Slowest single exchange (ms), or null when no exchange had timing. */
+  maxLatencyMs: number | null;
+  /** 95th-percentile latency (ms, nearest-rank), or null when no timing. */
+  p95LatencyMs: number | null;
+  /** Median latency (ms, nearest-rank), or null when no timing. */
+  medianLatencyMs: number | null;
+  /** JSON-RPC method of the single slowest exchange, or null when unknown. */
+  slowestMethod: string | null;
+  /** True when p95 (or max, when p95 is unavailable) is at/over the threshold. */
+  slow: boolean;
+}
+
+const UNKNOWN_MCP_SERVER = '(unknown host)';
+
+/**
+ * Nearest-rank percentile over an already-ascending-sorted array. Returns null
+ * for an empty input. q is clamped to 0..1.
+ */
+function nearestRankPercentile(sortedAsc: number[], q: number): number | null {
+  if (sortedAsc.length === 0) return null;
+  const clamped = q < 0 ? 0 : q > 1 ? 1 : q;
+  const rank = Math.ceil(clamped * sortedAsc.length);
+  const index = Math.min(Math.max(rank, 1), sortedAsc.length) - 1;
+  return sortedAsc[index] ?? null;
+}
+
+interface McpServerAccumulator {
+  callCount: number;
+  errorCount: number;
+  latencies: number[];
+  maxLatencyMs: number | null;
+  slowestMethod: string | null;
+}
+
+/**
+ * Total response time in milliseconds for a recorded exchange, preferring the rich
+ * forward-path {@link RequestTiming} (`timing.totalTimeInMillis`, present on
+ * transparent-proxy traffic) and falling back to MockServer's measured
+ * `x-mockserver-response-time-ms` response header — present on recorded / replayed /
+ * expectation-forwarded responses that carry no full timing object. Null when neither
+ * is available.
+ */
+function exchangeLatencyMs(summary: TrafficSummary, value: Record<string, unknown>): number | null {
+  const fromTiming = summary.timing?.totalTimeInMillis ?? null;
+  if (fromTiming != null && Number.isFinite(fromTiming)) return fromTiming;
+  // An externally-measured latency hint on the REQUEST, used when MockServer did not itself time the
+  // call: the stdio-MCP capture bridge (scripts/llm-proxy-capture/mcp-stdio-capture.mjs) times the real
+  // out-of-band MCP exchange and forwards it as `x-mcp-latency-ms`, since MockServer's own response time
+  // would otherwise reflect only its tiny processing time for that injected record. Preferred over the
+  // response-time header so a slow stdio MCP server shows its true latency in the panel.
+  const httpRequest = getObject(value, 'httpRequest');
+  if (httpRequest) {
+    const ext = getHeaderValue(httpRequest['headers'], 'x-mcp-latency-ms');
+    const extMs = ext != null ? Number(ext) : NaN;
+    if (Number.isFinite(extMs)) return extMs;
+  }
+  const httpResponse = getObject(value, 'httpResponse');
+  if (!httpResponse) return null;
+  const raw = getHeaderValue(httpResponse['headers'], 'x-mockserver-response-time-ms');
+  if (raw == null) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * Aggregate captured proxied/recorded request values into per-MCP-server health.
+ *
+ * @param values - The `JsonListItem.value` objects from the store's
+ *   `proxiedRequests` / `recordedRequests`. Non-MCP traffic is ignored.
+ * @param slowThresholdMs - Latency at/above which a server is flagged slow.
+ * @returns One entry per MCP server, sorted worst-first (errors, then latency).
+ */
+export function aggregateMcpServerHealth(
+  values: Array<Record<string, unknown>>,
+  slowThresholdMs: number = MCP_SLOW_THRESHOLD_MS,
+): McpServerHealth[] {
+  const byServer = new Map<string, McpServerAccumulator>();
+
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    let summary: TrafficSummary;
+    try {
+      summary = summarizeTraffic(value);
+    } catch {
+      continue;
+    }
+    if (summary.parsed.kind !== 'mcp') continue;
+    const parsed = summary.parsed;
+
+    const server = summary.host ?? UNKNOWN_MCP_SERVER;
+    let acc = byServer.get(server);
+    if (!acc) {
+      acc = { callCount: 0, errorCount: 0, latencies: [], maxLatencyMs: null, slowestMethod: null };
+      byServer.set(server, acc);
+    }
+
+    acc.callCount += 1;
+
+    // Error rule mirrors the Traffic view (mcpErrorInfo): a JSON-RPC `error`
+    // object OR a non-2xx HTTP status counts as a failed exchange.
+    const status = summary.statusCode;
+    const isError = parsed.error != null || (status != null && (status < 200 || status >= 300));
+    if (isError) acc.errorCount += 1;
+
+    const latency = exchangeLatencyMs(summary, value);
+    if (latency != null && Number.isFinite(latency)) {
+      acc.latencies.push(latency);
+      if (acc.maxLatencyMs == null || latency > acc.maxLatencyMs) {
+        acc.maxLatencyMs = latency;
+        acc.slowestMethod = parsed.method;
+      }
+    }
+  }
+
+  const result: McpServerHealth[] = [];
+  for (const [server, acc] of byServer) {
+    const sorted = [...acc.latencies].sort((a, b) => a - b);
+    const p95 = nearestRankPercentile(sorted, 0.95);
+    const median = nearestRankPercentile(sorted, 0.5);
+    const slowBasis = p95 ?? acc.maxLatencyMs;
+    result.push({
+      server,
+      callCount: acc.callCount,
+      errorCount: acc.errorCount,
+      errorRate: acc.callCount > 0 ? acc.errorCount / acc.callCount : 0,
+      maxLatencyMs: acc.maxLatencyMs,
+      p95LatencyMs: p95,
+      medianLatencyMs: median,
+      slowestMethod: acc.slowestMethod,
+      slow: slowBasis != null && slowBasis >= slowThresholdMs,
+    });
+  }
+
+  // Worst-first: most errors, then highest error rate, then slowest (p95 or max),
+  // then busiest, then host name for a stable, deterministic order.
+  result.sort((a, b) => {
+    if (b.errorCount !== a.errorCount) return b.errorCount - a.errorCount;
+    if (b.errorRate !== a.errorRate) return b.errorRate - a.errorRate;
+    const aLat = a.p95LatencyMs ?? a.maxLatencyMs ?? -1;
+    const bLat = b.p95LatencyMs ?? b.maxLatencyMs ?? -1;
+    if (bLat !== aLat) return bLat - aLat;
+    if (b.callCount !== a.callCount) return b.callCount - a.callCount;
+    return a.server.localeCompare(b.server);
+  });
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Growing-conversation grouping
+//
+// A stateless coding-assistant CLI (e.g. opencode → OpenAI Codex) resends its
+// ENTIRE growing conversation on every turn: 10 consecutive requests to the same
+// endpoint each carry a message list that is a growing SUPERSET of the previous
+// one. Rendered one-per-request that reads as endless near-duplicate history.
+//
+// `groupConversationTurns` is a PURE, provider-agnostic, deterministic walk that
+// collapses a run of consecutive entries into ONE conversation whenever each
+// entry's request-message list is a prefix (leading subset) of the next entry's.
+// Within a group, each turn exposes only the NEW messages it added (the delta
+// beyond the previous turn); the final assistant response is carried on the last
+// turn's `parsed`. Entries that are not part of a growing run stay as their own
+// single-turn group. Grouping is non-destructive: every turn keeps its original
+// `parsed` and opaque `data` payload, so the raw per-request data stays reachable.
+// ---------------------------------------------------------------------------
+
+/** Provider kinds that carry a request-side conversation message list. */
+const CONVERSATION_KINDS: ReadonlySet<ParsedTraffic['kind']> = new Set([
+  'anthropic',
+  'openai',
+  'openai_responses',
+  'gemini',
+  'ollama',
+]);
+
+/**
+ * The ordered request-side message list for a parsed entry, or null when the
+ * kind has no conversation history (mcp / generic). Each provider stores the
+ * growing history under a different field; this normalises them to one array of
+ * raw provider message objects without altering their shape.
+ */
+function conversationMessageList(parsed: ParsedTraffic): unknown[] | null {
+  switch (parsed.kind) {
+    case 'anthropic':
+    case 'openai':
+    case 'ollama':
+      return parsed.messages;
+    case 'openai_responses':
+      return parsed.input;
+    case 'gemini':
+      return parsed.contents;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Stable text signature of a single message, used only for the prefix
+ * comparison. The CLI resends byte-identical history, so JSON.stringify yields
+ * identical strings for unchanged leading messages. Total — never throws.
+ */
+function messageSignature(message: unknown): string {
+  try {
+    const json = JSON.stringify(message);
+    return json === undefined ? ` ${String(message)}` : json;
+  } catch {
+    return ` ${String(message)}`;
+  }
+}
+
+/**
+ * True when `prev` is a leading prefix of `next` (equality allowed, so an exact
+ * resend still counts as the same conversation). A single differing or missing
+ * leading message means the histories diverged (edited history) — not a prefix.
+ */
+function isSignaturePrefix(prev: readonly string[], next: readonly string[]): boolean {
+  if (prev.length > next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    if (prev[i] !== next[i]) return false;
+  }
+  return true;
+}
+
+/** One entry to be grouped: its parsed traffic, upstream host, and an opaque payload. */
+export interface ConversationEntryInput<T> {
+  parsed: ParsedTraffic;
+  /** Upstream host (from the Host header). Two different hosts never group together. */
+  host: string | null;
+  /** Opaque per-entry payload returned untouched on the resulting turn (e.g. the request item). */
+  data: T;
+}
+
+/** One turn within a grouped conversation. */
+export interface ConversationTurn<T> {
+  /** 0-based position of this turn within its group. */
+  turnIndex: number;
+  parsed: ParsedTraffic;
+  data: T;
+  /**
+   * The messages this turn added relative to the previous turn (the full initial
+   * history for turn 0). Raw provider message objects, in order. Empty when a
+   * turn re-sent an identical history (an exact duplicate resend).
+   */
+  newMessages: unknown[];
+}
+
+/** A run of consecutive entries that form one growing conversation (or a lone entry). */
+export interface ConversationGroup<T> {
+  /** Stable, unique key for React lists (deterministic given input order). */
+  key: string;
+  host: string | null;
+  kind: ParsedTraffic['kind'];
+  /** The opaque payloads of every entry in this group, in order. */
+  entries: T[];
+  turns: ConversationTurn<T>[];
+  /** True when the group collapses more than one entry into a single thread. */
+  collapsed: boolean;
+}
+
+/**
+ * Group a chronological (oldest-first) list of LLM entries into growing
+ * conversation threads. See the section comment above for the collapse rule.
+ *
+ * Conservative by construction: a group only extends while the next entry's
+ * request-message list is a genuine prefix-extension of the current one AND the
+ * provider kind and host match. Any divergence starts a fresh group, so
+ * unrelated or edited-history requests are never merged. Non-conversation
+ * traffic (mcp / generic) is always its own single-turn group.
+ */
+export function groupConversationTurns<T>(
+  entries: ReadonlyArray<ConversationEntryInput<T>>,
+): ConversationGroup<T>[] {
+  const groups: ConversationGroup<T>[] = [];
+  let counter = 0;
+
+  // Build state for the group currently being extended.
+  let current:
+    | { group: ConversationGroup<T>; lastSignatures: string[]; lastLength: number }
+    | null = null;
+
+  const flush = () => {
+    if (current) {
+      current.group.collapsed = current.group.turns.length > 1;
+      groups.push(current.group);
+      current = null;
+    }
+  };
+
+  for (const entry of entries) {
+    const messages = conversationMessageList(entry.parsed);
+
+    // Non-conversation traffic never groups — always a standalone single-turn group.
+    if (messages === null) {
+      flush();
+      groups.push({
+        key: `${entry.parsed.kind}:${counter++}`,
+        host: entry.host,
+        kind: entry.parsed.kind,
+        entries: [entry.data],
+        turns: [{ turnIndex: 0, parsed: entry.parsed, data: entry.data, newMessages: [] }],
+        collapsed: false,
+      });
+      continue;
+    }
+
+    const signatures = messages.map(messageSignature);
+    const canExtend =
+      current !== null &&
+      current.group.kind === entry.parsed.kind &&
+      current.group.host === entry.host &&
+      isSignaturePrefix(current.lastSignatures, signatures);
+
+    if (canExtend && current) {
+      current.group.turns.push({
+        turnIndex: current.group.turns.length,
+        parsed: entry.parsed,
+        data: entry.data,
+        newMessages: messages.slice(current.lastLength),
+      });
+      current.group.entries.push(entry.data);
+      current.lastSignatures = signatures;
+      current.lastLength = messages.length;
+    } else {
+      flush();
+      const group: ConversationGroup<T> = {
+        key: `${entry.parsed.kind}:${counter++}`,
+        host: entry.host,
+        kind: entry.parsed.kind,
+        entries: [entry.data],
+        // Turn 0's delta is the full initial history.
+        turns: [{ turnIndex: 0, parsed: entry.parsed, data: entry.data, newMessages: messages }],
+        collapsed: false,
+      };
+      current = { group, lastSignatures: signatures, lastLength: messages.length };
+    }
+  }
+
+  flush();
+  return groups;
+}
+
+export { CONVERSATION_KINDS };

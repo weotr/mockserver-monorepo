@@ -12,6 +12,7 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.mockserver.client.MockServerClient;
+import org.mockserver.configuration.Configuration;
 import org.mockserver.configuration.ConfigurationProperties;
 import org.mockserver.model.Body;
 import org.mockserver.model.Header;
@@ -35,6 +36,8 @@ import java.util.function.BooleanSupplier;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
+import static org.mockserver.configuration.Configuration.configuration;
+import static org.mockserver.model.HttpForward.forward;
 import static org.mockserver.model.HttpOverrideForwardedRequest.forwardOverriddenRequest;
 import static org.mockserver.model.HttpRequest.request;
 import static org.mockserver.model.HttpResponse.response;
@@ -153,6 +156,12 @@ public class StreamingProxyResponseIntegrationTest {
                 sendAndCloseResponse(ctx);
             } else if ("/binary-stream".equals(path)) {
                 sendBinaryStreamResponse(ctx);
+            } else if ("/sse-long-pause".equals(path)) {
+                sendLongPauseSseResponse(ctx);
+            } else if ("/codex-stream".equals(path)) {
+                sendNoContentTypeSseResponse(ctx);
+            } else if ("/codex-binary-stream".equals(path)) {
+                sendNoContentTypeBinaryStreamResponse(ctx);
             } else {
                 DefaultFullHttpResponse resp = new DefaultFullHttpResponse(
                     HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND,
@@ -254,6 +263,75 @@ public class StreamingProxyResponseIntegrationTest {
                     .addListener(f -> ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT)
                         .addListener(ChannelFutureListener.CLOSE));
             }, 50, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * Mimics the OpenAI Codex backend used by the opencode CLI: a Server-Sent Events
+         * stream served with NO Content-Type header at all. Sends the response head and an
+         * early event immediately, then DELAYS the final event + completion by 2s. A correct
+         * streaming relay forwards the head + early event to the client at once (so its headers
+         * arrive promptly); a buffering proxy withholds everything until the 2s completion,
+         * which is what made opencode time out waiting for response headers.
+         */
+        private void sendNoContentTypeSseResponse(ChannelHandlerContext ctx) {
+            DefaultHttpResponse head = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+            // Deliberately NO Content-Type (this is the codex-backend behaviour).
+            head.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-cache");
+            HttpUtil.setTransferEncodingChunked(head, true);
+            ctx.writeAndFlush(head);
+            ctx.writeAndFlush(new DefaultHttpContent(
+                Unpooled.copiedBuffer("data: early\n\n", StandardCharsets.UTF_8)));
+            ctx.executor().schedule(() -> {
+                if (ctx.channel().isActive()) {
+                    ctx.writeAndFlush(new DefaultHttpContent(
+                        Unpooled.copiedBuffer("data: late\n\n", StandardCharsets.UTF_8)))
+                        .addListener(f -> ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT)
+                            .addListener(ChannelFutureListener.CLOSE));
+                }
+            }, 2000, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * A genuine {@code text/event-stream} SSE response with a LONG inter-chunk pause. Sends the
+         * response head + an early {@code data:} event immediately, then withholds the late event for
+         * 1500ms before completing the stream. The 1500ms gap is deliberately longer than the short
+         * {@code maxSocketTimeout} used by
+         * {@link #shouldNotTruncateForwardedStreamWhenStreamIdleTimeoutDisabledAndPauseExceedsSocketTimeout()},
+         * so that test is decisive: the socket read timeout would fire during the pause unless it is
+         * removed when the response switches to streaming.
+         */
+        private void sendLongPauseSseResponse(ChannelHandlerContext ctx) {
+            DefaultHttpResponse head = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+            head.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/event-stream");
+            head.headers().set(HttpHeaderNames.CACHE_CONTROL, "no-cache");
+            HttpUtil.setTransferEncodingChunked(head, true);
+            ctx.writeAndFlush(head);
+            ctx.writeAndFlush(new DefaultHttpContent(
+                Unpooled.copiedBuffer("data: early\n\n", StandardCharsets.UTF_8)));
+            ctx.executor().schedule(() -> {
+                if (ctx.channel().isActive()) {
+                    ctx.writeAndFlush(new DefaultHttpContent(
+                        Unpooled.copiedBuffer("data: late\n\n", StandardCharsets.UTF_8)))
+                        .addListener(f -> ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT)
+                            .addListener(ChannelFutureListener.CLOSE));
+                }
+            }, 1500, TimeUnit.MILLISECONDS);
+        }
+
+        /**
+         * Like {@link #sendNoContentTypeSseResponse} but streams genuinely binary bytes (with a
+         * NUL/control byte) and still no Content-Type. Guards the no-Content-Type body sniffing:
+         * such a stream must be logged as BINARY, not coerced into a STRING.
+         */
+        private void sendNoContentTypeBinaryStreamResponse(ChannelHandlerContext ctx) {
+            DefaultHttpResponse head = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+            // Deliberately NO Content-Type.
+            HttpUtil.setTransferEncodingChunked(head, true);
+            ctx.writeAndFlush(head);
+            byte[] binaryData = new byte[]{0x00, 0x01, 0x02, (byte) 0xFF, (byte) 0xFE, (byte) 0xFD};
+            ctx.writeAndFlush(new DefaultHttpContent(Unpooled.copiedBuffer(binaryData)))
+                .addListener(f -> ctx.writeAndFlush(LastHttpContent.EMPTY_LAST_CONTENT)
+                    .addListener(ChannelFutureListener.CLOSE));
         }
 
         private void scheduleChunks(ChannelHandlerContext ctx, String[] chunks, int index, long delayMs, boolean closeAfterLast) {
@@ -395,88 +473,66 @@ public class StreamingProxyResponseIntegrationTest {
     }
 
     @Test
-    public void shouldFullyAggregateForForwardReplaceWithResponseOverride() throws Exception {
-        // When a FORWARD_REPLACE expectation has a response override, the upstream streaming
-        // response must be fully aggregated (not streamed) so the override can be applied.
-        // The upstream /sse endpoint sends text/event-stream chunked, but the override adds
-        // a custom header — the response should arrive with the override applied.
+    public void shouldStreamForwardReplaceWhenResponseOverrideIsHeaderOnly() throws Exception {
+        // A FORWARD_REPLACE with a HEADER-ONLY response override (adds a header, no body change) must
+        // NOT force the streaming upstream to be aggregated: the header is applied to the streamed
+        // response HEAD while the body chunks are relayed untouched. Decisive because the upstream
+        // /sse-long-pause withholds the late event for 1500ms — with aggregation the head would only
+        // arrive after that completion, whereas streaming relays the head + early event promptly.
         mockServerClient
-            .when(request().withPath("/sse"))
+            .when(request().withPath("/replace-header-only"))
             .forward(
                 forwardOverriddenRequest(
-                    request().withHeader("Host", "localhost:" + upstreamPort),
+                    request().withPath("/sse-long-pause").withHeader("Host", "localhost:" + upstreamPort),
                     response().withHeader("X-Custom-Override", "applied")
                 )
             );
 
-        List<String> receivedLines = new ArrayList<>();
-        try (Socket socket = new Socket("localhost", mockServerPort)) {
-            socket.setSoTimeout(15000);
-            OutputStream output = socket.getOutputStream();
-            output.write(("GET /sse HTTP/1.1\r\n" +
-                "Host: localhost:" + upstreamPort + "\r\n" +
-                "Connection: close\r\n" +
-                "\r\n").getBytes(StandardCharsets.UTF_8));
-            output.flush();
+        String req = "GET /replace-header-only HTTP/1.1\r\n" +
+            "Host: localhost:" + upstreamPort + "\r\n" +
+            "Connection: close\r\n\r\n";
+        TimedResponse r = sendAndMeasure(req, 15000);
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                receivedLines.add(line);
-            }
-        }
-
-        String fullResponse = String.join("\n", receivedLines);
-        // The override header should be present (proves the response was fully aggregated
-        // and the override was applied)
+        assertThat("response should contain HTTP 200", r.body, containsString("200"));
+        // The override header must be applied to the streamed head.
         assertThat("response should contain the custom override header",
-            fullResponse, containsString("X-Custom-Override: applied"));
-        // The body should contain all SSE events (fully aggregated)
-        assertThat("response should contain event data",
-            fullResponse, containsString("data: event1"));
-        assertThat("response should contain HTTP 200", fullResponse, containsString("200"));
+            r.body, containsString("X-Custom-Override: applied"));
+        assertThat("should receive the early event", r.body, containsString("data: early"));
+        assertThat("should receive the late event", r.body, containsString("data: late"));
+        // The decisive assertion: the head is relayed promptly, proving streaming was preserved for
+        // the header-only override rather than aggregating until the 1500ms completion.
+        assertThat("head should arrive promptly (streaming preserved for header-only override)",
+            r.firstByteMs, lessThan(1000L));
     }
 
     @Test
-    public void shouldFullyAggregateSseForForwardReplaceWithResponseOverride() throws Exception {
-        // When a FORWARD_REPLACE expectation has a response override, even an SSE upstream
-        // that would normally be streamed must be fully aggregated so the override applies.
-        // Uses /sse to exercise the DISABLE_RESPONSE_STREAMING path for a genuinely
-        // streaming upstream.
+    public void shouldAggregateForForwardReplaceWhenResponseOverrideReplacesBody() throws Exception {
+        // A FORWARD_REPLACE whose response override REPLACES the body needs the full upstream body,
+        // so the streaming upstream must be aggregated (streaming disabled). Decisive: the head only
+        // arrives after the upstream's 1500ms completion, and the streamed events are discarded.
         mockServerClient
-            .when(request().withPath("/sse-override-test"))
+            .when(request().withPath("/replace-body"))
             .forward(
                 forwardOverriddenRequest(
-                    request()
-                        .withPath("/sse")
-                        .withHeader("Host", "localhost:" + upstreamPort),
-                    response().withHeader("X-Override-SSE", "yes")
+                    request().withPath("/sse-long-pause").withHeader("Host", "localhost:" + upstreamPort),
+                    response().withBody("replaced-body")
                 )
             );
 
-        List<String> receivedLines = new ArrayList<>();
-        try (Socket socket = new Socket("localhost", mockServerPort)) {
-            socket.setSoTimeout(15000);
-            OutputStream output = socket.getOutputStream();
-            output.write(("GET /sse-override-test HTTP/1.1\r\n" +
-                "Host: localhost:" + upstreamPort + "\r\n" +
-                "Connection: close\r\n" +
-                "\r\n").getBytes(StandardCharsets.UTF_8));
-            output.flush();
+        String req = "GET /replace-body HTTP/1.1\r\n" +
+            "Host: localhost:" + upstreamPort + "\r\n" +
+            "Connection: close\r\n\r\n";
+        TimedResponse r = sendAndMeasure(req, 15000);
 
-            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                receivedLines.add(line);
-            }
-        }
-
-        String fullResponse = String.join("\n", receivedLines);
-        assertThat("response should contain override header",
-            fullResponse, containsString("X-Override-SSE: yes"));
-        assertThat("response should contain SSE event data",
-            fullResponse, containsString("data: event1"));
-        assertThat("response should contain HTTP 200", fullResponse, containsString("200"));
+        assertThat("response should contain HTTP 200", r.body, containsString("200"));
+        assertThat("override body should replace the streamed content",
+            r.body, containsString("replaced-body"));
+        assertThat("streamed events should be discarded by the body override",
+            r.body, not(containsString("data: early")));
+        // The decisive assertion: a body override forces aggregation, so the head only arrives after
+        // the upstream's 1500ms completion.
+        assertThat("body override forces aggregation (head arrives only after the 1500ms completion)",
+            r.firstByteMs, greaterThanOrEqualTo(1300L));
     }
 
     @Test
@@ -594,5 +650,219 @@ public class StreamingProxyResponseIntegrationTest {
         // Binary chunked body should be logged as BINARY type (standard aggregation)
         assertThat("binary chunked body should be logged as BINARY",
             loggedResponse.getBody().getType(), is(Body.Type.BINARY));
+    }
+
+    /** A raw response read back with the time (ms) until the first response byte arrived. */
+    private static final class TimedResponse {
+        final long firstByteMs;
+        final String body;
+        TimedResponse(long firstByteMs, String body) {
+            this.firstByteMs = firstByteMs;
+            this.body = body;
+        }
+    }
+
+    private TimedResponse sendAndMeasure(String rawRequest, int soTimeoutMs) throws Exception {
+        try (Socket socket = new Socket("localhost", mockServerPort)) {
+            socket.setSoTimeout(soTimeoutMs);
+            OutputStream output = socket.getOutputStream();
+            long start = System.currentTimeMillis();
+            output.write(rawRequest.getBytes(StandardCharsets.UTF_8));
+            output.flush();
+            java.io.InputStream in = socket.getInputStream();
+            int first = in.read(); // blocks until the first response byte is relayed back
+            long firstByteMs = System.currentTimeMillis() - start;
+            StringBuilder sb = new StringBuilder();
+            if (first != -1) {
+                sb.append((char) first);
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                }
+            }
+            return new TimedResponse(firstByteMs, sb.toString());
+        }
+    }
+
+    @Test
+    public void shouldStreamWhenClientRequestedStreamEvenWithoutSseContentType() throws Exception {
+        // Regression test for the opencode/Codex header-timeout bug. Exercises the FORWARD-action
+        // path (HttpActionHandler -> NettyHttpClient), which is the path real coding-CLI proxy
+        // traffic takes (it carries the x-mockserver-response-time-ms header). The upstream streams
+        // SSE with NO Content-Type and delays completion by 2s. The request body carries
+        // "stream": true, so MockServer must relay the response as a stream regardless of the
+        // missing content-type — the head + early event must reach the client promptly rather than
+        // after the 2s completion (which is what made opencode time out on response headers).
+        mockServerClient
+            .when(request().withPath("/codex-stream"))
+            .forward(forward().withHost("localhost").withPort(upstreamPort));
+
+        String body = "{\"stream\":true,\"model\":\"x\"}";
+        String req = "POST /codex-stream HTTP/1.1\r\n" +
+            "Host: localhost\r\n" +
+            "Content-Type: application/json\r\n" +
+            "Content-Length: " + body.getBytes(StandardCharsets.UTF_8).length + "\r\n" +
+            "Connection: close\r\n\r\n" + body;
+
+        TimedResponse r = sendAndMeasure(req, 10000);
+
+        assertThat("response should contain HTTP 200", r.body, containsString("200"));
+        assertThat("should receive the early event", r.body, containsString("data: early"));
+        assertThat("should receive the late event", r.body, containsString("data: late"));
+        // The key assertion: response headers arrive well before the upstream's 2s completion,
+        // proving the stream was relayed incrementally (not buffered) despite no content-type.
+        assertThat("response headers should arrive promptly (streaming), not after the 2s body delay",
+            r.firstByteMs, lessThan(1500L));
+
+        // The recorded body must capture the streamed SSE text even though the upstream sent no
+        // Content-Type. Regression guard for the opencode/Codex LLM-trace bug where the streamed
+        // forward logged an empty (4-byte BINARY "null") body instead of the SSE event text.
+        pollUntilTrue(() -> mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/codex-stream")).length >= 1);
+        LogEventRequestAndResponse[] recorded = mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/codex-stream"));
+        assertThat("should have recorded at least one codex-stream request", recorded.length, greaterThanOrEqualTo(1));
+        HttpResponse loggedResponse = recorded[0].getHttpResponse();
+        assertThat("logged response should not be null", loggedResponse, notNullValue());
+        assertThat("logged response should have a body", loggedResponse.getBody(), notNullValue());
+        // A text SSE stream with no Content-Type must still be logged as STRING, not BINARY.
+        assertThat("no-content-type SSE streaming body should be logged as STRING, not BINARY",
+            loggedResponse.getBody().getType(), is(Body.Type.STRING));
+        String bodyString = loggedResponse.getBodyAsString();
+        assertThat("logged body should contain the early SSE event text",
+            bodyString, containsString("data: early"));
+        assertThat("logged body should contain the late SSE event text",
+            bodyString, containsString("data: late"));
+    }
+
+    @Test
+    public void shouldLogNoContentTypeBinaryStreamAsBinary() throws Exception {
+        // Guard for the no-Content-Type body sniffing: a streamed response with no Content-Type
+        // whose bytes are genuinely binary (contain NUL/control bytes) must stay BINARY, not be
+        // coerced into a STRING by the text heuristic that recovers SSE/JSON streams.
+        mockServerClient
+            .when(request().withPath("/codex-binary-stream"))
+            .forward(forward().withHost("localhost").withPort(upstreamPort));
+
+        String body = "{\"stream\":true}";
+        String req = "POST /codex-binary-stream HTTP/1.1\r\n" +
+            "Host: localhost\r\n" +
+            "Content-Type: application/json\r\n" +
+            "Content-Length: " + body.getBytes(StandardCharsets.UTF_8).length + "\r\n" +
+            "Connection: close\r\n\r\n" + body;
+
+        sendAndMeasure(req, 10000);
+
+        pollUntilTrue(() -> mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/codex-binary-stream")).length >= 1);
+        LogEventRequestAndResponse[] recorded = mockServerClient.retrieveRecordedRequestsAndResponses(
+            request().withPath("/codex-binary-stream"));
+        assertThat("should have recorded at least one codex-binary-stream request",
+            recorded.length, greaterThanOrEqualTo(1));
+        HttpResponse loggedResponse = recorded[0].getHttpResponse();
+        assertThat("logged response should have a body", loggedResponse.getBody(), notNullValue());
+        assertThat("genuinely binary no-content-type stream should be logged as BINARY",
+            loggedResponse.getBody().getType(), is(Body.Type.BINARY));
+    }
+
+    @Test
+    public void shouldAggregateNoContentTypeStreamWhenClientDidNotRequestStream() throws Exception {
+        // Same forward path and no-Content-Type upstream, but a plain GET with no streaming intent
+        // (no "stream": true, no Accept: text/event-stream). MockServer aggregates as before, so the
+        // first byte only arrives after the upstream completes (~2s). Proves the streaming relay is
+        // gated on the client's request intent, not merely on the endpoint — so ordinary
+        // (non-streaming) forward traffic is unaffected.
+        mockServerClient
+            .when(request().withPath("/codex-stream"))
+            .forward(forward().withHost("localhost").withPort(upstreamPort));
+
+        String req = "GET /codex-stream HTTP/1.1\r\n" +
+            "Host: localhost\r\n" +
+            "Connection: close\r\n\r\n";
+
+        TimedResponse r = sendAndMeasure(req, 10000);
+
+        assertThat("aggregated response should still contain both events",
+            r.body, allOf(containsString("data: early"), containsString("data: late")));
+        assertThat("without a streaming request the response is buffered until completion (~2s)",
+            r.firstByteMs, greaterThanOrEqualTo(1500L));
+    }
+
+    @Test(timeout = 30000)
+    public void shouldNotTruncateForwardedStreamWhenStreamIdleTimeoutDisabledAndPauseExceedsSocketTimeout() throws Exception {
+        // Regression test for the streamIdleTimeoutSeconds=0 truncation fix (commit 8a803f9a9).
+        //
+        // streamIdleTimeoutSeconds is documented to REPLACE the per-request socket read timeout
+        // (maxSocketTimeout) for streaming responses, with 0 meaning "no idle bound" (unbounded stream).
+        // The bug: the socket read timeout was only removed inside the "streamIdleTimeoutSeconds > 0"
+        // branch, so setting it to 0 paradoxically left the short socket timeout armed and truncated a
+        // long-paused stream.
+        //
+        // Here a dedicated MockServer is configured with maxSocketTimeout=800ms AND
+        // streamIdleTimeoutSeconds=0, forwarding to an SSE upstream that sends an early event
+        // immediately then PAUSES 1500ms (comfortably > 800ms) before the late event. The forward path
+        // arms a ReadTimeoutHandler(800ms) on the non-pooled upstream channel; once the response switches
+        // to streaming the fix removes it, so with idle bound disabled the stream runs unbounded and the
+        // late event survives. WITHOUT the fix the 800ms read timeout fires during the 1500ms pause,
+        // tears down the upstream connection, and the late event is lost (stream truncated).
+        Configuration configuration = configuration()
+            .streamingResponsesEnabled(true)
+            .streamIdleTimeoutSeconds(0)
+            .maxSocketTimeoutInMillis(800L);
+        MockServer streamingForwardServer = new MockServer(configuration);
+        int streamingForwardPort = streamingForwardServer.getLocalPort();
+        MockServerClient streamingForwardClient = new MockServerClient("localhost", streamingForwardPort);
+        try {
+            streamingForwardClient
+                .when(request().withPath("/sse-long-pause"))
+                .forward(forward().withHost("localhost").withPort(upstreamPort));
+
+            String req = "GET /sse-long-pause HTTP/1.1\r\n" +
+                "Host: localhost\r\n" +
+                "Accept: text/event-stream\r\n" +
+                "Connection: close\r\n\r\n";
+
+            List<String> receivedLines = new ArrayList<>();
+            long startTime = System.currentTimeMillis();
+            long firstByteMs;
+            try (Socket socket = new Socket("localhost", streamingForwardPort)) {
+                socket.setSoTimeout(10000);
+                OutputStream output = socket.getOutputStream();
+                output.write(req.getBytes(StandardCharsets.UTF_8));
+                output.flush();
+
+                java.io.InputStream in = socket.getInputStream();
+                int first = in.read(); // blocks until the first relayed byte (head + early event)
+                firstByteMs = System.currentTimeMillis() - startTime;
+                StringBuilder sb = new StringBuilder();
+                if (first != -1) {
+                    sb.append((char) first);
+                    byte[] buf = new byte[4096];
+                    int n;
+                    while ((n = in.read(buf)) != -1) {
+                        sb.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+                    }
+                }
+                for (String line : sb.toString().split("\n")) {
+                    receivedLines.add(line);
+                }
+            }
+
+            String fullResponse = String.join("\n", receivedLines);
+            assertThat("response should contain HTTP 200", fullResponse, containsString("200"));
+            // Decisive assertions: BOTH events arrive. The late event only survives the 1500ms pause
+            // because the 800ms socket read timeout was removed on switching to streaming (the fix).
+            assertThat("should receive the early event", fullResponse, containsString("data: early"));
+            assertThat("should receive the late event (stream NOT truncated by the socket timeout during the pause)",
+                fullResponse, containsString("data: late"));
+            // The head + early event are relayed promptly (incrementally), well before the 1500ms
+            // completion — proving the relay streams rather than buffering to the end.
+            assertThat("response head should arrive promptly (streaming), not after the 1500ms pause",
+                firstByteMs, lessThan(1200L));
+        } finally {
+            stopQuietly(streamingForwardClient);
+            stopQuietly(streamingForwardServer);
+        }
     }
 }

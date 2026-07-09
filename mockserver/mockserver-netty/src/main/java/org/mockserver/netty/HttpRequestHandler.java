@@ -41,6 +41,7 @@ import static org.apache.commons.lang3.StringUtils.isNotBlank;
 import static org.mockserver.exception.ExceptionHandling.closeOnFlush;
 import static org.mockserver.exception.ExceptionHandling.connectionClosedException;
 import static org.mockserver.exception.ExceptionHandling.isSslOrDecoderFault;
+import static org.mockserver.exception.ExceptionHandling.sniDescription;
 import static org.mockserver.log.model.LogEntry.LogMessageType.AUTHENTICATION_FAILED;
 import static org.mockserver.metrics.Metrics.Name.REQUESTS_RECEIVED_COUNT;
 import static org.mockserver.mock.HttpState.PATH_PREFIX;
@@ -339,6 +340,19 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
                     }
                     handleOptimisationReport(request, responseWriter);
 
+                } else if (request.matches("PUT", PATH_PREFIX + "/llm/diffRuns", "/llm/diffRuns")) {
+
+                    // Prompt-level diff of two recorded agent runs. It only READS captured traffic
+                    // (never mutates state), but it streams that traffic's decoded prompts, so it
+                    // takes the SAME control-plane authn + authorization + audit decision as
+                    // /llm/optimisationReport and /dashboard: route through the shared core gate
+                    // (which writes the 401/403 and audits on failure) and return on false. Default
+                    // (no control-plane auth configured) is unchanged: the gate returns true.
+                    if (!httpState.controlPlaneRequestAuthenticated(request, responseWriter)) {
+                        return;
+                    }
+                    handleDiffRuns(request, responseWriter);
+
                 } else if (request.matches("GET", PATH_PREFIX + "/http3status", "/http3status")) {
 
                     int http3Port = server instanceof MockServer ? ((MockServer) server).getHttp3Port() : -1;
@@ -349,6 +363,18 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
 
                 } else if (request.getMethod().getValue().equals("GET") && request.getPath().getValue().startsWith(PATH_PREFIX + "/dashboard")) {
 
+                    // The dashboard streams all captured traffic (request/response bodies included),
+                    // so it must take the SAME control-plane authn + authorization + audit decision as
+                    // /configuration and the operations dispatched through HttpState.handle — otherwise
+                    // anyone with network reach reads the live traffic even when control-plane auth is
+                    // enabled. Route through the shared core gate FIRST and return on false (the gate
+                    // writes the 401/403 via the ResponseWriter, which completes the in-flight token).
+                    // It is a GET (a READ), so a read-only control-plane role may view it. Default (no
+                    // control-plane auth configured) is unchanged: the gate returns true and the
+                    // dashboard stays open with no credentials.
+                    if (!httpState.controlPlaneRequestAuthenticated(request, responseWriter)) {
+                        return;
+                    }
                     // Direct ctx write inside the handler bypasses NettyResponseWriter, so complete
                     // the in-flight token explicitly to keep the graceful-shutdown drain unblocked.
                     completeInFlight(inFlightRequest);
@@ -494,47 +520,215 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
      * capture yields a 200 with an empty report / "no LLM traffic" brief.
      */
     private void handleOptimisationReport(HttpRequest request, ResponseWriter responseWriter) {
-        try {
-            String format = request.getFirstQueryStringParameter("format");
-            if (format == null || format.isEmpty()) {
-                format = "json";
-            }
-            if (!"json".equalsIgnoreCase(format) && !"markdown".equalsIgnoreCase(format) && !"csv".equalsIgnoreCase(format)) {
-                responseWriter.writeResponse(request, BAD_REQUEST, "format must be one of: json, markdown, csv", MediaType.create("text", "plain").toString());
-                return;
-            }
+        // Building the report retrieves, redacts and renders potentially large captured traffic
+        // (retrieveRecordedPairs blocks on the retrieve future; service.build redacts + renders), so
+        // it must not run on the Netty event loop. Offload to the scheduler and write the response
+        // from there — ctx.writeAndFlush is thread-safe and hops back onto the channel event loop, so
+        // the response (status/body/content-type) and error handling below are byte-for-byte unchanged.
+        httpState.getScheduler().submit(() -> {
+            try {
+                String format = request.getFirstQueryStringParameter("format");
+                if (format == null || format.isEmpty()) {
+                    format = "json";
+                }
+                java.util.Optional<org.mockserver.llm.analysis.LlmDatasetExporter.DatasetFormat> datasetFormat =
+                    org.mockserver.llm.analysis.LlmDatasetExporter.DatasetFormat.fromWire(format);
+                if (!datasetFormat.isPresent()
+                    && !"json".equalsIgnoreCase(format) && !"markdown".equalsIgnoreCase(format) && !"csv".equalsIgnoreCase(format)) {
+                    responseWriter.writeResponse(request, BAD_REQUEST, "format must be one of: json, markdown, csv, openai-evals, fine-tune, promptfoo", MediaType.create("text", "plain").toString());
+                    return;
+                }
 
-            org.mockserver.llm.analysis.LlmOptimisationReportService.Filter filter =
-                new org.mockserver.llm.analysis.LlmOptimisationReportService.Filter(
-                    request.getFirstQueryStringParameter("session"),
-                    request.getFirstQueryStringParameter("host"),
-                    request.getFirstQueryStringParameter("provider"));
+                org.mockserver.llm.analysis.LlmOptimisationReportService.Filter filter =
+                    new org.mockserver.llm.analysis.LlmOptimisationReportService.Filter(
+                        request.getFirstQueryStringParameter("session"),
+                        request.getFirstQueryStringParameter("host"),
+                        request.getFirstQueryStringParameter("provider"));
 
-            org.mockserver.llm.analysis.LlmOptimisationReportService service =
-                new org.mockserver.llm.analysis.LlmOptimisationReportService();
-            org.mockserver.llm.analysis.LlmOptimisationReportService.Result result =
-                service.build(retrieveRecordedPairs(), filter);
+                org.mockserver.llm.analysis.LlmOptimisationReportService service =
+                    new org.mockserver.llm.analysis.LlmOptimisationReportService();
+                org.mockserver.llm.analysis.LlmOptimisationReportService.Result result =
+                    service.build(retrieveRecordedPairs(), filter);
 
-            if ("markdown".equalsIgnoreCase(format)) {
-                responseWriter.writeResponse(request, OK, service.renderBrief(result), "text/markdown; charset=utf-8");
-            } else if ("csv".equalsIgnoreCase(format)) {
-                responseWriter.writeResponse(request, OK, service.renderCsv(result), "text/csv; charset=utf-8");
-            } else {
-                String json = ObjectMapperFactory.createObjectMapper()
-                    .writerWithDefaultPrettyPrinter().writeValueAsString(result.getReport());
-                responseWriter.writeResponse(request, OK, json, "application/json");
+                if (datasetFormat.isPresent()) {
+                    String dataset = service.renderDataset(result, datasetFormat.get());
+                    // promptfoo emits a single JSON test-suite document; the eval / fine-tune
+                    // formats emit JSON Lines (one sample per line).
+                    String contentType = datasetFormat.get() == org.mockserver.llm.analysis.LlmDatasetExporter.DatasetFormat.PROMPTFOO
+                        ? "application/json; charset=utf-8" : "application/x-ndjson; charset=utf-8";
+                    responseWriter.writeResponse(request, OK, dataset, contentType);
+                } else if ("markdown".equalsIgnoreCase(format)) {
+                    responseWriter.writeResponse(request, OK, service.renderBrief(result), "text/markdown; charset=utf-8");
+                } else if ("csv".equalsIgnoreCase(format)) {
+                    responseWriter.writeResponse(request, OK, service.renderCsv(result), "text/csv; charset=utf-8");
+                } else {
+                    String json = ObjectMapperFactory.createObjectMapper()
+                        .writerWithDefaultPrettyPrinter().writeValueAsString(result.getReport());
+                    responseWriter.writeResponse(request, OK, json, "application/json");
+                }
+            } catch (Exception e) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setHttpRequest(request)
+                        .setMessageFormat("exception building LLM optimisation report:{}")
+                        .setArguments(e.getMessage())
+                        .setThrowable(e)
+                );
+                responseWriter.writeResponse(request, INTERNAL_SERVER_ERROR, "Internal error generating optimisation report", MediaType.create("text", "plain").toString());
             }
-        } catch (Exception e) {
-            mockServerLogger.logEvent(
-                new LogEntry()
-                    .setLogLevel(Level.ERROR)
-                    .setHttpRequest(request)
-                    .setMessageFormat("exception building LLM optimisation report:{}")
-                    .setArguments(e.getMessage())
-                    .setThrowable(e)
-            );
-            responseWriter.writeResponse(request, INTERNAL_SERVER_ERROR, "Internal error generating optimisation report", MediaType.create("text", "plain").toString());
+        });
+    }
+
+    /**
+     * Serve {@code PUT /mockserver/llm/diffRuns}. Diffs two recorded agent runs at
+     * the prompt level. The request body selects each run with the same
+     * {@code session}/{@code host}/{@code provider} filter the optimisation report
+     * uses:
+     * <pre>{@code
+     * {
+     *   "before": {"session": "...", "host": "...", "provider": "..."},
+     *   "after":  {"session": "...", "host": "...", "provider": "..."},
+     *   "normalization": { ...NormalizationOptions... }   // optional
+     * }
+     * }</pre>
+     * Each side is turned into an {@link org.mockserver.llm.analysis.LlmOptimisationReportService.Result}
+     * (reusing the report plumbing for provider detection + token/cost totals), then
+     * {@link org.mockserver.llm.analysis.AgentRunDiff} normalises the prompts and
+     * diffs them at the message level. Message text is masked for credential shapes
+     * before it is returned.
+     */
+    private void handleDiffRuns(HttpRequest request, ResponseWriter responseWriter) {
+        // Retrieving + decoding potentially large captured traffic must not run on the Netty
+        // event loop (same rationale as handleOptimisationReport), so offload to the scheduler.
+        httpState.getScheduler().submit(() -> {
+            try {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = ObjectMapperFactory.createObjectMapper();
+                com.fasterxml.jackson.databind.JsonNode body = request.getBodyAsString() == null || request.getBodyAsString().trim().isEmpty()
+                    ? mapper.createObjectNode() : mapper.readTree(request.getBodyAsString());
+
+                org.mockserver.llm.analysis.LlmOptimisationReportService.Filter beforeFilter = filterFromNode(body.path("before"));
+                org.mockserver.llm.analysis.LlmOptimisationReportService.Filter afterFilter = filterFromNode(body.path("after"));
+
+                org.mockserver.model.NormalizationOptions options = null;
+                if (body.has("normalization") && body.get("normalization").isObject()) {
+                    options = mapper.treeToValue(body.get("normalization"), org.mockserver.model.NormalizationOptions.class);
+                }
+
+                org.mockserver.llm.analysis.LlmOptimisationReportService service =
+                    new org.mockserver.llm.analysis.LlmOptimisationReportService();
+                List<org.mockserver.model.LogEventRequestAndResponse> pairs = retrieveRecordedPairs();
+                org.mockserver.llm.analysis.LlmOptimisationReportService.Result beforeResult = service.build(pairs, beforeFilter);
+                org.mockserver.llm.analysis.LlmOptimisationReportService.Result afterResult = service.build(pairs, afterFilter);
+
+                // Redact each run's requests via the SAME FixtureRedactor the export path uses
+                // (default sensitive headers/query params + configured fixtureBodyRedactFields)
+                // BEFORE the diff decodes and surfaces their prompt text, so a configured body
+                // field (e.g. non-credential PII) is masked in beforeText/afterText. AgentRunDiff's
+                // maskSecrets stays on top as credential-shape defence-in-depth.
+                org.mockserver.fixture.FixtureRedactor redactor = service.redactor();
+                org.mockserver.llm.analysis.AgentRunDiff.RunSide before = runSide(beforeResult, redactor);
+                org.mockserver.llm.analysis.AgentRunDiff.RunSide after = runSide(afterResult, redactor);
+
+                org.mockserver.llm.analysis.AgentRunDiff.RunDiffResult diff =
+                    new org.mockserver.llm.analysis.AgentRunDiff().diff(before, after, options);
+
+                responseWriter.writeResponse(request, OK, serializeDiff(mapper, diff), "application/json");
+            } catch (Exception e) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setLogLevel(Level.ERROR)
+                        .setHttpRequest(request)
+                        .setMessageFormat("exception diffing LLM agent runs:{}")
+                        .setArguments(e.getMessage())
+                        .setThrowable(e)
+                );
+                responseWriter.writeResponse(request, INTERNAL_SERVER_ERROR, "Internal error diffing agent runs", MediaType.create("text", "plain").toString());
+            }
+        });
+    }
+
+    private static org.mockserver.llm.analysis.LlmOptimisationReportService.Filter filterFromNode(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return new org.mockserver.llm.analysis.LlmOptimisationReportService.Filter(null, null, null);
         }
+        // emptyToNull for parity with the MCP diff_agent_runs path (Filter also blank-to-nulls,
+        // but normalising here keeps the two callers byte-identical).
+        return new org.mockserver.llm.analysis.LlmOptimisationReportService.Filter(
+            emptyToNull(node.path("session").asText(null)),
+            emptyToNull(node.path("host").asText(null)),
+            emptyToNull(node.path("provider").asText(null)));
+    }
+
+    private static String emptyToNull(String value) {
+        return value == null || value.trim().isEmpty() ? null : value;
+    }
+
+    /**
+     * Build a diff {@link org.mockserver.llm.analysis.AgentRunDiff.RunSide} from a
+     * report result: the included exchanges' requests (redacted via
+     * {@code redactor} before their prompt text is surfaced), the provider detected
+     * from the first LLM exchange, and the token / cost totals from the report.
+     */
+    private static org.mockserver.llm.analysis.AgentRunDiff.RunSide runSide(
+        org.mockserver.llm.analysis.LlmOptimisationReportService.Result result,
+        org.mockserver.fixture.FixtureRedactor redactor) {
+        List<HttpRequest> requests = new java.util.ArrayList<>();
+        org.mockserver.model.Provider provider = null;
+        for (org.mockserver.llm.analysis.LlmOptimisationReportBuilder.CapturedExchange exchange : result.getIncludedExchanges()) {
+            if (exchange.getRequest() == null) {
+                continue;
+            }
+            // Detect on the RAW exchange (path/host/body-shape) then decode the REDACTED request,
+            // mirroring the export path's toSample: redaction masks header/query/body-field VALUES
+            // but preserves the JSON structure detection and the codec rely on.
+            if (provider == null) {
+                provider = org.mockserver.llm.client.LlmProviderSniffer
+                    .detectForAnalysis(exchange.getRequest(), exchange.getResponse()).orElse(null);
+            }
+            org.mockserver.model.RequestDefinition redacted = redactor.redactRequestDefinition(exchange.getRequest());
+            requests.add(redacted instanceof HttpRequest ? (HttpRequest) redacted : exchange.getRequest());
+        }
+        org.mockserver.llm.analysis.LlmOptimisationReport.Totals totals = result.getReport().getTotals();
+        return new org.mockserver.llm.analysis.AgentRunDiff.RunSide(
+            requests, provider,
+            totals != null ? totals.getInputTokens() : null,
+            totals != null ? totals.getOutputTokens() : null,
+            totals != null ? totals.getEstimatedCostUsd() : null);
+    }
+
+    private static String serializeDiff(com.fasterxml.jackson.databind.ObjectMapper mapper,
+                                        org.mockserver.llm.analysis.AgentRunDiff.RunDiffResult diff) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode root = mapper.createObjectNode();
+        root.put("promptChanged", diff.isPromptChanged());
+        root.put("messageCountBefore", diff.getMessageCountBefore());
+        root.put("messageCountAfter", diff.getMessageCountAfter());
+        com.fasterxml.jackson.databind.node.ArrayNode messages = root.putArray("messageDiffs");
+        for (org.mockserver.llm.analysis.AgentRunDiff.MessageDiff md : diff.getMessageDiffs()) {
+            com.fasterxml.jackson.databind.node.ObjectNode m = messages.addObject();
+            m.put("changeType", md.getChangeType().name());
+            m.put("role", md.getRole());
+            m.put("beforeText", md.getBeforeText());
+            m.put("afterText", md.getAfterText());
+        }
+        com.fasterxml.jackson.databind.node.ArrayNode added = root.putArray("toolCallsAdded");
+        diff.getToolCallsAdded().forEach(added::add);
+        com.fasterxml.jackson.databind.node.ArrayNode removed = root.putArray("toolCallsRemoved");
+        diff.getToolCallsRemoved().forEach(removed::add);
+        if (diff.getTokenDelta() != null) {
+            org.mockserver.llm.analysis.AgentRunDiff.TokenDelta d = diff.getTokenDelta();
+            com.fasterxml.jackson.databind.node.ObjectNode t = root.putObject("tokenDelta");
+            t.put("inputTokensBefore", d.getInputTokensBefore());
+            t.put("inputTokensAfter", d.getInputTokensAfter());
+            t.put("inputTokensDelta", d.getInputTokensDelta());
+            t.put("outputTokensBefore", d.getOutputTokensBefore());
+            t.put("outputTokensAfter", d.getOutputTokensAfter());
+            t.put("outputTokensDelta", d.getOutputTokensDelta());
+            t.put("costUsdBefore", d.getCostUsdBefore());
+            t.put("costUsdAfter", d.getCostUsdAfter());
+            t.put("costUsdDelta", d.getCostUsdDelta());
+        }
+        return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
     }
 
     /**
@@ -580,7 +774,7 @@ public class HttpRequestHandler extends SimpleChannelInboundHandler<HttpRequest>
             mockServerLogger.logEvent(
                 new LogEntry()
                     .setLogLevel(Level.WARN)
-                    .setMessageFormat("SSL or decoder fault caught by " + server.getClass() + " handler -> closing pipeline " + ctx.channel())
+                    .setMessageFormat("SSL or decoder fault caught by " + server.getClass() + " handler -> closing pipeline " + ctx.channel() + sniDescription(ctx.channel()))
                     .setThrowable(cause)
             );
         }

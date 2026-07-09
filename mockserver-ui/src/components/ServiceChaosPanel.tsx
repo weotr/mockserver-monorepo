@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type SyntheticEvent } from 'react';
 import Box from '@mui/material/Box';
 import Collapse from '@mui/material/Collapse';
 import Paper from '@mui/material/Paper';
@@ -20,6 +20,7 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Switch from '@mui/material/Switch';
+import Slider from '@mui/material/Slider';
 import DeleteIcon from '@mui/icons-material/Delete';
 import DeleteSweepIcon from '@mui/icons-material/DeleteSweep';
 import EditIcon from '@mui/icons-material/Edit';
@@ -28,6 +29,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import RestoreIcon from '@mui/icons-material/Restore';
 import type { ConnectionParams } from '../hooks/useConnectionParams';
+import { usePolling } from '../hooks/usePolling';
 import {
   fetchServiceChaos,
   registerServiceChaos,
@@ -36,8 +38,13 @@ import {
   patchServiceChaos,
   summarizeChaosProfile,
   formatTtl,
+  buildQuickChaosProfile,
+  deriveQuickChaos,
+  QUICK_CHAOS_DEFAULT_PERCENT,
+  QUICK_CHAOS_LATENCY_MS,
   type HttpChaosProfileDTO,
   type ServiceChaosResponse,
+  type QuickChaosMode,
 } from '../lib/serviceChaos';
 import {
   fetchGrpcHealth,
@@ -75,19 +82,29 @@ import {
   saveChaosProfile,
   applyChaosProfile,
   deleteChaosProfile,
+  getExperimentHistory,
   formatDuration,
   type ExperimentDefinitionDTO,
   type ExperimentStageDTO,
   type ExperimentStatusDTO,
+  type ExperimentHistoryEntryDTO,
   type SloVerdictDTO,
   type SloObjectiveResultDTO,
   type SloResult,
 } from '../lib/chaosExperiment';
+import {
+  getPreemption,
+  startPreemption,
+  clearPreemption,
+  type PreemptionMode,
+  type PreemptionStatusDTO,
+} from '../lib/preemption';
 import AddIcon from '@mui/icons-material/Add';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopIcon from '@mui/icons-material/Stop';
 import LinearProgress from '@mui/material/LinearProgress';
 import { getConfiguration, updateConfiguration, type Configuration } from '../lib/configuration';
+import { useDashboardStore } from '../store';
 import ConfirmDialog from './ConfirmDialog';
 import HumanErrorAlert from './HumanErrorAlert';
 import { humanizeError, type HumanError } from '../lib/errorMessage';
@@ -101,6 +118,14 @@ const responsiveWidth = (px: number) => ({ width: { xs: '100%', sm: px } });
 // and wrap uniformly via CSS Grid auto-fit instead of fixed pixel widths.
 const CHAOS_GRID = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 1, alignItems: 'start' } as const;
 const CHAOS_GRID_WIDE = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 1, alignItems: 'start' } as const;
+
+// Canned Quick Chaos fault modes, in display order. Each maps to real server fault
+// fields via buildQuickChaosProfile: 500s + errorProbability, connection drop, +3s latency.
+const QUICK_CHAOS_MODE_OPTIONS: { mode: QuickChaosMode; label: string }[] = [
+  { mode: 'errors', label: '500 Errors' },
+  { mode: 'reset', label: 'Connection Reset' },
+  { mode: 'latency', label: 'Latency +3s' },
+];
 
 // --- SLO verdict display helpers (A1/A2: terminal experiment verdict) ---
 
@@ -521,6 +546,32 @@ function servingStatusColor(status: ServingStatus): 'success' | 'error' | 'defau
   }
 }
 
+// --- Preemption simulation form state ---
+
+const PREEMPTION_MODES: PreemptionMode[] = ['both', 'reject503', 'goaway'];
+
+interface PreemptionFormState {
+  mode: PreemptionMode;
+  drainMs: string;
+  ttlMs: string;
+}
+
+const EMPTY_PREEMPTION_FORM: PreemptionFormState = { mode: 'both', drainMs: '', ttlMs: '' };
+
+/** Map a terminal experiment-history status to a MUI Chip colour. */
+function historyStatusColor(status: string): ChipColor {
+  switch (status) {
+    case 'completed':
+      return 'success';
+    case 'halted_by_auto_halt':
+    case 'halted_by_slo_breach':
+    case 'aborted_baseline_unhealthy':
+      return 'error';
+    default:
+      return 'default';
+  }
+}
+
 export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPanelProps) {
   const [data, setData] = useState<ServiceChaosResponse>({ services: {} });
   const [polledAt, setPolledAt] = useState(0);
@@ -530,6 +581,13 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [refreshTick, setRefreshTick] = useState(0);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+
+  // Quick Chaos strip — local (pre-enable) form state. Once enabled, the live values
+  // are DERIVED from the polled registry (see quickChaos below); this local state only
+  // holds what to register when the user first turns it on.
+  const [quickHostInput, setQuickHostInput] = useState('');
+  const [quickPercent, setQuickPercent] = useState<number>(QUICK_CHAOS_DEFAULT_PERCENT);
+  const [quickModes, setQuickModes] = useState<QuickChaosMode[]>(['errors']);
 
   // Edit inline form state
   const [editingHost, setEditingHost] = useState<string | null>(null);
@@ -574,6 +632,13 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [grpcChaosPolledAt, setGrpcChaosPolledAt] = useState(0);
   const [grpcChaosForm, setGrpcChaosForm] = useState<GrpcChaosFormState>(EMPTY_GRPC_CHAOS_FORM);
 
+  // Preemption-simulation state
+  const [preemptionExpanded, setPreemptionExpanded] = useState(false);
+  const [preemptionData, setPreemptionData] = useState<PreemptionStatusDTO>({
+    state: 'inactive', inFlight: 0, drainRemainingMillis: 0,
+  });
+  const [preemptionForm, setPreemptionForm] = useState<PreemptionFormState>(EMPTY_PREEMPTION_FORM);
+
   // --- Auto-halt state (effects below, after `refresh` is declared) ---
   const [autoHaltEnabled, setAutoHaltEnabled] = useState<boolean | null>(null);
   const [autoHaltThreshold, setAutoHaltThreshold] = useState<string>('');
@@ -582,7 +647,6 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   // --- Chaos Experiments state ---
   const [experimentsExpanded, setExperimentsExpanded] = useState(false);
   const [experimentStatus, setExperimentStatus] = useState<ExperimentStatusDTO | null>(null);
-  const experimentStatusRef = useRef<ExperimentStatusDTO | null>(null);
   const [expName, setExpName] = useState('');
   const [expLoop, setExpLoop] = useState(false);
   const stageIdCounter = useRef(1);
@@ -604,7 +668,109 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
   const [profilesTick, setProfilesTick] = useState(0);
   const refreshProfiles = useCallback(() => setProfilesTick((t) => t + 1), []);
 
-  const refresh = useCallback(() => setRefreshTick((t) => t + 1), []);
+  // --- Experiment history state (fetched on expand, not continuously polled) ---
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [historyData, setHistoryData] = useState<ExperimentHistoryEntryDTO[]>([]);
+  const [historyTick, setHistoryTick] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const refreshHistory = useCallback(() => setHistoryTick((t) => t + 1), []);
+
+  // --- Registry / TCP / gRPC-fault / experiment polling ---
+  // Migrated from hand-rolled setTimeout loops to the shared usePolling hook so a
+  // hidden/background tab stops polling (and re-parsing/re-rendering) entirely and
+  // resumes with an immediate poll when shown again. usePolling is used purely as
+  // the scheduler (with its built-in visibility gating); each fetcher writes the
+  // existing component state exactly as the old loops did — an async fetcher body,
+  // not a synchronous setState-in-effect — so the rest of the component and its
+  // TTL-countdown timestamps are unchanged. The hasAnyTtl-gated 1s tick (below)
+  // is left as-is.
+  const chaosPoll = usePolling<ServiceChaosResponse>({
+    fetcher: async (signal) => {
+      try {
+        const response = await fetchServiceChaos(connectionParams, signal);
+        setData(response);
+        setPolledAt(Date.now());
+        setLoadError(null);
+        return response;
+      } catch (e) {
+        if (!signal.aborted) setLoadError(e instanceof Error ? e.message : String(e));
+        throw e; // let usePolling schedule the next poll
+      }
+    },
+    intervalMs: POLL_INTERVAL_MS,
+  });
+
+  // TCP and gRPC-fault chaos poll only while their section is expanded; the
+  // one-shot fetches on mount / refresh (effects below) still populate the
+  // collapsed header counts. Both the poll and the one-shot write the same state.
+  const tcpPoll = usePolling<TcpChaosResponse>({
+    fetcher: async (signal) => {
+      const result = await fetchTcpChaos(connectionParams, signal);
+      setTcpData(result);
+      setTcpPolledAt(Date.now());
+      return result;
+    },
+    intervalMs: POLL_INTERVAL_MS,
+    enabled: tcpExpanded,
+  });
+
+  const grpcChaosPoll = usePolling<GrpcChaosResponse>({
+    fetcher: async (signal) => {
+      const result = await fetchGrpcChaos(connectionParams, signal);
+      setGrpcChaosData(result);
+      setGrpcChaosPolledAt(Date.now());
+      return result;
+    },
+    intervalMs: POLL_INTERVAL_MS,
+    enabled: grpcPanelExpanded && grpcFaultExpanded,
+  });
+
+  // Preemption state polls only while its section is expanded (like TCP/gRPC); a
+  // one-shot fetch on mount / refresh (effect below) keeps the collapsed header
+  // badge current. Both write the same state.
+  const preemptionPoll = usePolling<PreemptionStatusDTO>({
+    fetcher: async (signal) => {
+      const result = await getPreemption(connectionParams, signal);
+      setPreemptionData(result);
+      return result;
+    },
+    intervalMs: POLL_INTERVAL_MS,
+    enabled: preemptionExpanded,
+  });
+
+  // Experiment status always polls: faster (2s) while an experiment runs with the
+  // section open, the normal 4s while open and idle, and slow (10s) while collapsed.
+  const isExperimentRunning = experimentStatus?.status === 'running' || experimentStatus?.status === 'starting';
+  const experimentIntervalMs = experimentsExpanded
+    ? (isExperimentRunning ? 2000 : POLL_INTERVAL_MS)
+    : 10000;
+  const experimentPoll = usePolling<ExperimentStatusDTO>({
+    fetcher: async (signal) => {
+      const status = await getChaosExperimentStatus(connectionParams, signal);
+      setExperimentStatus(status);
+      return status;
+    },
+    intervalMs: experimentIntervalMs,
+  });
+
+  // usePolling's refresh is a stable callback; destructure so the combined
+  // refresh below has stable deps (no per-render identity churn).
+  const { refresh: refreshChaosPoll } = chaosPoll;
+  const { refresh: refreshTcpPoll } = tcpPoll;
+  const { refresh: refreshGrpcChaosPoll } = grpcChaosPoll;
+  const { refresh: refreshExperimentPoll } = experimentPoll;
+  const { refresh: refreshPreemptionPoll } = preemptionPoll;
+
+  const refresh = useCallback(() => {
+    // Re-trigger the refreshTick-keyed fetches (config, saved profiles, the
+    // one-shot header-count fetches) AND force each poll to re-run immediately.
+    setRefreshTick((t) => t + 1);
+    refreshChaosPoll();
+    refreshTcpPoll();
+    refreshGrpcChaosPoll();
+    refreshExperimentPoll();
+    refreshPreemptionPoll();
+  }, [refreshChaosPoll, refreshTcpPoll, refreshGrpcChaosPoll, refreshExperimentPoll, refreshPreemptionPoll]);
 
   // --- Auto-halt configuration fetch + apply ---
   useEffect(() => {
@@ -630,35 +796,6 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       setActionError(humanizeError(e));
     }
   }, [connectionParams, refresh]);
-
-  // Poll the registry on an interval.
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll(): Promise<void> {
-      try {
-        const response = await fetchServiceChaos(connectionParams, controller.signal);
-        if (cancelled) return;
-        setData(response);
-        setPolledAt(Date.now());
-        setLoadError(null);
-      } catch (e) {
-        if (cancelled || controller.signal.aborted) return;
-        setLoadError(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
-      }
-    }
-
-    void poll();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      if (timer) clearTimeout(timer);
-    };
-  }, [connectionParams, refreshTick]);
 
   // Whether any active registration (HTTP service, TCP host, or gRPC service)
   // actually carries a TTL/expiry to count down. The `ttlRemainingMillis` maps
@@ -712,97 +849,61 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
     };
   }, [connectionParams, grpcPanelExpanded, grpcHealthExpanded, refreshTick]);
 
-  // Fetch TCP chaos on mount (so the collapsed header chip shows the real count),
-  // then keep polling only while the section is expanded.
+  // One-shot TCP chaos fetch on mount / refresh so the collapsed header chip shows
+  // the real count. Live updates while expanded are driven by `tcpPoll` above.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll(): Promise<void> {
-      try {
-        const result = await fetchTcpChaos(connectionParams, controller.signal);
+    void fetchTcpChaos(connectionParams, controller.signal)
+      .then((result) => {
         if (!cancelled) {
           setTcpData(result);
           setTcpPolledAt(Date.now());
         }
-      } catch {
-        // ignore
-      } finally {
-        if (!cancelled && tcpExpanded) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
-      }
-    }
-
-    void poll();
+      })
+      .catch(() => { /* header count is best-effort */ });
     return () => {
       cancelled = true;
       controller.abort();
-      if (timer) clearTimeout(timer);
     };
-  }, [connectionParams, tcpExpanded, refreshTick]);
+  }, [connectionParams, refreshTick]);
 
-  // Fetch gRPC fault injection chaos on mount (so the collapsed header chip shows the real count),
-  // then keep polling only while the gRPC panel + fault sub-section are expanded.
+  // One-shot gRPC fault-injection chaos fetch on mount / refresh so the collapsed
+  // header chip shows the real count. Live updates while the gRPC panel + fault
+  // sub-section are expanded are driven by `grpcChaosPoll` above.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll(): Promise<void> {
-      try {
-        const result = await fetchGrpcChaos(connectionParams, controller.signal);
+    void fetchGrpcChaos(connectionParams, controller.signal)
+      .then((result) => {
         if (!cancelled) {
           setGrpcChaosData(result);
           setGrpcChaosPolledAt(Date.now());
         }
-      } catch {
-        // ignore
-      } finally {
-        if (!cancelled && grpcPanelExpanded && grpcFaultExpanded) timer = setTimeout(() => void poll(), POLL_INTERVAL_MS);
-      }
-    }
-
-    void poll();
+      })
+      .catch(() => { /* header count is best-effort */ });
     return () => {
       cancelled = true;
       controller.abort();
-      if (timer) clearTimeout(timer);
     };
-  }, [connectionParams, grpcPanelExpanded, grpcFaultExpanded, refreshTick]);
+  }, [connectionParams, refreshTick]);
 
-  // Poll chaos experiment status on mount and while the experiments section is
-  // expanded. Poll more frequently (2s) while a running experiment is active.
+  // One-shot preemption fetch on mount / refresh so the collapsed header badge
+  // shows the real state. Live updates while expanded are driven by
+  // `preemptionPoll` above.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll(): Promise<void> {
-      try {
-        const status = await getChaosExperimentStatus(connectionParams, controller.signal);
-        if (!cancelled) {
-          experimentStatusRef.current = status;
-          setExperimentStatus(status);
-        }
-      } catch {
-        // ignore
-      } finally {
-        if (!cancelled) {
-          const latest = experimentStatusRef.current;
-          const isRunning = latest?.status === 'running' || latest?.status === 'starting';
-          const interval = isRunning ? 2000 : POLL_INTERVAL_MS;
-          timer = setTimeout(() => void poll(), experimentsExpanded ? interval : 10000);
-        }
-      }
-    }
-
-    void poll();
+    void getPreemption(connectionParams, controller.signal)
+      .then((result) => {
+        if (!cancelled) setPreemptionData(result);
+      })
+      .catch(() => { /* header badge is best-effort */ });
     return () => {
       cancelled = true;
       controller.abort();
-      if (timer) clearTimeout(timer);
     };
-  }, [connectionParams, experimentsExpanded, refreshTick]);
+  }, [connectionParams, refreshTick]);
 
   // ADV3: load saved chaos profile names while the experiments section is open.
   useEffect(() => {
@@ -822,6 +923,53 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       controller.abort();
     };
   }, [connectionParams, experimentsExpanded, profilesTick]);
+
+  // Load experiment history when the History sub-section is open (fetched on
+  // expand and on an explicit refresh — not continuously polled).
+  useEffect(() => {
+    if (!experimentsExpanded || !historyExpanded) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    void (async () => {
+      if (!cancelled) setHistoryLoading(true);
+      try {
+        const entries = await getExperimentHistory(connectionParams, controller.signal);
+        if (!cancelled) setHistoryData(entries);
+      } catch {
+        // ignore — history is best-effort in the UI
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [connectionParams, experimentsExpanded, historyExpanded, historyTick]);
+
+  // Consume a pending chaos draft handed off from a flow's "Add Chaos For This
+  // Host/Path" launchpad action: prefill the HTTP register form's host scope and
+  // open the (collapsed-by-default) HTTP Service Chaos card, then clear the draft
+  // so it applies exactly once. HTTP chaos is host-scoped, so the request's host
+  // is the scope field; a draft with only a path still opens the card so the user
+  // can fill in the host.
+  const pendingChaosDraft = useDashboardStore((s) => s.pendingChaosDraft);
+  const clearPendingChaosDraft = useDashboardStore((s) => s.clearPendingChaosDraft);
+  useEffect(() => {
+    // Clear the one-shot hand-off on teardown so a draft can never survive an
+    // unmount mid-apply and re-apply on re-mount.
+    if (!pendingChaosDraft) return clearPendingChaosDraft;
+    const host = pendingChaosDraft.host?.trim();
+    // Consuming a one-shot store hand-off is the legitimate "sync React state
+    // from an external system" case; the effect clears the signal so it runs
+    // exactly once (same pattern as the Composer/Breakpoints panels).
+    /* eslint-disable react-hooks/set-state-in-effect */
+    if (host) setForm((prev) => ({ ...prev, host }));
+    setHttpExpanded(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+    clearPendingChaosDraft();
+    return clearPendingChaosDraft;
+  }, [pendingChaosDraft, clearPendingChaosDraft]);
 
   const hosts = useMemo(() => Object.keys(data.services).sort(), [data.services]);
 
@@ -862,6 +1010,94 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       setForm(EMPTY_FORM);
     });
   }, [connectionParams, form, runAction]);
+
+  // --- Quick Chaos strip ---------------------------------------------------
+  // Live state is DERIVED from the polled registry so the strip round-trips on load
+  // (no hidden client state): a host carrying a canonical Quick-Chaos-shaped rule means
+  // "on". When on, the host/percent/modes shown come from that rule; when off, the local
+  // form state (quickHostInput/quickPercent/quickModes) drives what to register.
+  const quickChaos = useMemo(() => deriveQuickChaos(data.services), [data.services]);
+  const quickEnabled = quickChaos != null;
+  const quickHost = quickEnabled ? quickChaos.host : quickHostInput;
+  // The slider is always driven by local state so the thumb tracks a drag even while
+  // a rule is active; the derived (server) percent re-syncs it whenever it changes —
+  // on load/adoption, after a commit, or when a PUT fails and the poll snaps back.
+  const derivedQuickPercent = quickChaos?.percent ?? null;
+  const [lastDerivedQuickPercent, setLastDerivedQuickPercent] = useState<number | null>(null);
+  if (derivedQuickPercent !== lastDerivedQuickPercent) {
+    setLastDerivedQuickPercent(derivedQuickPercent);
+    if (derivedQuickPercent != null) setQuickPercent(derivedQuickPercent);
+  }
+  const quickPercentValue = quickPercent;
+  const quickModesValue = quickEnabled ? quickChaos.modes : quickModes;
+  // The slider only governs the probability-scoped modes (errors/reset); latency is not
+  // probability-gated server-side, so a latency-only selection disables the slider.
+  const quickPercentAppliesToModes =
+    quickModesValue.includes('errors') || quickModesValue.includes('reset');
+
+  // Register (or replace) the Quick-Chaos rule for a host with the given modes/percent.
+  const applyQuickChaos = useCallback(
+    (host: string, modes: QuickChaosMode[], percent: number) =>
+      runAction(() =>
+        registerServiceChaos(connectionParams, host, buildQuickChaosProfile(modes, percent)),
+      ),
+    [connectionParams, runAction],
+  );
+
+  const handleQuickToggle = useCallback(
+    (_e: ChangeEvent<HTMLInputElement>, checked: boolean) => {
+      if (checked) {
+        const host = quickHostInput.trim();
+        if (host === '') {
+          setActionError({ message: 'Enter a target host to enable Quick Chaos' });
+          return;
+        }
+        if (quickModes.length === 0) {
+          setActionError({ message: 'Select at least one fault mode' });
+          return;
+        }
+        void applyQuickChaos(host, quickModes, quickPercent);
+      } else if (quickChaos) {
+        void runAction(() => removeServiceChaos(connectionParams, quickChaos.host));
+      }
+    },
+    [applyQuickChaos, connectionParams, quickChaos, quickHostInput, quickModes, quickPercent, runAction],
+  );
+
+  // Slider: update local state live; when enabled, commit the change to the server on release.
+  const handleQuickPercentChange = useCallback((_e: Event, value: number | number[]) => {
+    setQuickPercent(Array.isArray(value) ? value[0] ?? QUICK_CHAOS_DEFAULT_PERCENT : value);
+  }, []);
+  const handleQuickPercentCommit = useCallback(
+    (_e: Event | SyntheticEvent, value: number | number[]) => {
+      if (!quickChaos) return;
+      const percent = Array.isArray(value) ? value[0] ?? quickChaos.percent : value;
+      void applyQuickChaos(quickChaos.host, quickChaos.modes, percent);
+    },
+    [applyQuickChaos, quickChaos],
+  );
+
+  // Toggle one canned fault mode. When enabled, re-register (or, if the last mode is
+  // removed, delete the rule — i.e. turn Quick Chaos off).
+  const handleQuickModeToggle = useCallback(
+    (mode: QuickChaosMode) => {
+      if (quickChaos) {
+        const next = quickChaos.modes.includes(mode)
+          ? quickChaos.modes.filter((m) => m !== mode)
+          : [...quickChaos.modes, mode];
+        if (next.length === 0) {
+          void runAction(() => removeServiceChaos(connectionParams, quickChaos.host));
+        } else {
+          void applyQuickChaos(quickChaos.host, next, quickChaos.percent);
+        }
+      } else {
+        setQuickModes((prev) =>
+          prev.includes(mode) ? prev.filter((m) => m !== mode) : [...prev, mode],
+        );
+      }
+    },
+    [applyQuickChaos, connectionParams, quickChaos, runAction],
+  );
 
   const setField = (field: keyof FormState) => (e: ChangeEvent<HTMLInputElement>) =>
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
@@ -1051,6 +1287,40 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
       setGrpcChaosForm(EMPTY_GRPC_CHAOS_FORM);
     });
   }, [connectionParams, grpcChaosForm, runAction]);
+
+  // --- Preemption-simulation handlers ---
+
+  const preemptionActive = preemptionData.state !== 'inactive';
+
+  const setPreemptionField = (field: 'drainMs' | 'ttlMs') => (e: ChangeEvent<HTMLInputElement>) =>
+    setPreemptionForm((prev) => ({ ...prev, [field]: e.target.value }));
+
+  const handleStartPreemption = useCallback(() => {
+    const drainMs = num(preemptionForm.drainMs);
+    if (drainMs != null && (!Number.isInteger(drainMs) || drainMs < 1)) {
+      setActionError({ message: 'Drain must be a whole number of milliseconds >= 1' });
+      return;
+    }
+    const ttlMs = num(preemptionForm.ttlMs);
+    if (ttlMs != null && (!Number.isInteger(ttlMs) || ttlMs < 1)) {
+      setActionError({ message: 'TTL must be a whole number of milliseconds >= 1' });
+      return;
+    }
+    const request: { mode: PreemptionMode; drainMillis?: number; ttlMillis?: number } = {
+      mode: preemptionForm.mode,
+    };
+    if (drainMs != null) request.drainMillis = drainMs;
+    if (ttlMs != null) request.ttlMillis = ttlMs;
+    void runAction(async () => {
+      await startPreemption(connectionParams, request);
+    });
+  }, [connectionParams, preemptionForm, runAction]);
+
+  const handleClearPreemption = useCallback(() => {
+    void runAction(async () => {
+      await clearPreemption(connectionParams);
+    });
+  }, [connectionParams, runAction]);
 
   // --- Chaos Experiment handlers ---
 
@@ -1248,6 +1518,80 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
           onClose={() => setActionError(null)}
         />
       )}
+
+      {/* Quick Chaos — one-toggle approachability layer over per-host service chaos */}
+      <Paper
+        variant="outlined"
+        sx={{ p: 1.25, mb: 1.5, borderColor: quickEnabled ? 'warning.main' : undefined }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700 }}>
+            Quick Chaos
+          </Typography>
+          <FormControlLabel
+            control={
+              <Switch
+                size="small"
+                checked={quickEnabled}
+                onChange={handleQuickToggle}
+                disabled={busy}
+              />
+            }
+            label={<Typography variant="caption">Enable Chaos</Typography>}
+          />
+          <TextField
+            size="small"
+            label="Target Host"
+            placeholder="e.g. api.example.com"
+            value={quickHost}
+            disabled={quickEnabled || busy}
+            onChange={(e) => setQuickHostInput(e.target.value)}
+            sx={responsiveWidth(200)}
+          />
+          <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+            {QUICK_CHAOS_MODE_OPTIONS.map(({ mode, label }) => {
+              const selected = quickModesValue.includes(mode);
+              return (
+                <Chip
+                  key={mode}
+                  size="small"
+                  label={label}
+                  clickable
+                  color={selected ? 'warning' : 'default'}
+                  variant={selected ? 'filled' : 'outlined'}
+                  aria-pressed={selected}
+                  disabled={busy}
+                  onClick={() => handleQuickModeToggle(mode)}
+                />
+              );
+            })}
+          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 1, flexWrap: 'wrap' }}>
+          <Box sx={{ width: 200, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Slider
+              size="small"
+              min={1}
+              max={100}
+              value={quickPercentValue}
+              onChange={handleQuickPercentChange}
+              onChangeCommitted={handleQuickPercentCommit}
+              disabled={busy || !quickPercentAppliesToModes}
+              aria-label="Percentage of requests affected"
+              valueLabelDisplay="auto"
+            />
+            <Typography variant="caption" sx={{ minWidth: 34, textAlign: 'right' }}>
+              {quickPercentValue}%
+            </Typography>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            {quickPercentAppliesToModes
+              ? `Affects ~${quickPercentValue}% of requests forwarded to ${quickHost || 'the target host'}.`
+              : `Latency applies to all requests forwarded to ${quickHost || 'the target host'}.`}
+            {quickModesValue.includes('latency') && ` Latency mode adds +${QUICK_CHAOS_LATENCY_MS}ms to every request.`}
+          </Typography>
+        </Box>
+      </Paper>
 
       {/* Auto-halt controls (inline) */}
       {autoHaltEnabled !== null && (
@@ -1918,6 +2262,102 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
         </Collapse>
       </Paper>
 
+      {/* Preemption Simulation */}
+      <Paper variant="outlined" sx={{ p: 1.25, mb: 1.5 }}>
+        <Box
+          sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
+          onClick={() => setPreemptionExpanded((v) => !v)}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+            Preemption Simulation
+          </Typography>
+          <Chip
+            size="small"
+            label={preemptionData.state}
+            color={preemptionActive ? 'warning' : 'default'}
+            variant="outlined"
+          />
+          <Box sx={{ flex: 1 }} />
+          <Tooltip title="Uncordon: clear the preemption simulation">
+            <span>
+              <Button
+                size="small"
+                color="error"
+                startIcon={<DeleteSweepIcon fontSize="small" />}
+                disabled={busy || !preemptionActive}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleClearPreemption();
+                }}
+              >
+                Clear Preemption
+              </Button>
+            </span>
+          </Tooltip>
+          <IconButton size="small" aria-label={preemptionExpanded ? 'Collapse preemption' : 'Expand preemption'}>
+            {preemptionExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+          </IconButton>
+        </Box>
+        <Collapse in={preemptionExpanded} unmountOnExit>
+          <Box sx={{ mt: 1 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Simulate a Kubernetes node drain or Spot reclamation: the server cordons itself,
+              turning away new exchanges with a 503 and/or signalling HTTP/2 clients to drain via
+              GOAWAY, while in-flight requests finish. Add a TTL to auto-uncordon after a bounded
+              window (a dead-man&apos;s switch). This is a simulation only — it never stops the server.
+            </Typography>
+
+            {/* Current preemption state */}
+            <Paper variant="outlined" sx={{ p: 1, mb: 1 }}>
+              <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  Current State
+                </Typography>
+                <Chip size="small" label={preemptionData.state} color={preemptionActive ? 'warning' : 'default'} />
+                {preemptionData.mode && (
+                  <Typography variant="body2" color="text.secondary">
+                    mode {preemptionData.mode}
+                  </Typography>
+                )}
+                <Typography variant="body2" color="text.secondary">
+                  {preemptionData.inFlight} in-flight
+                </Typography>
+                {preemptionData.state === 'draining' && (
+                  <Typography variant="body2" color="text.secondary">
+                    drain remaining {formatDuration(preemptionData.drainRemainingMillis)}
+                  </Typography>
+                )}
+              </Box>
+            </Paper>
+
+            {/* Start form */}
+            <Paper variant="outlined" sx={{ p: 1 }}>
+              <Typography variant="caption" color="text.secondary">Start a preemption simulation</Typography>
+              <Box sx={{ ...CHAOS_GRID, mt: 0.75 }}>
+                <Select
+                  size="small"
+                  value={preemptionForm.mode}
+                  onChange={(e) => setPreemptionForm((prev) => ({ ...prev, mode: e.target.value as PreemptionMode }))}
+                  inputProps={{ 'aria-label': 'Preemption mode' }}
+                  fullWidth
+                >
+                  {PREEMPTION_MODES.map((m) => (
+                    <MenuItem key={m} value={m}>{m}</MenuItem>
+                  ))}
+                </Select>
+                <TextField size="small" label="Drain ms" placeholder="30000" value={preemptionForm.drainMs} onChange={setPreemptionField('drainMs')} fullWidth />
+                <TextField size="small" label="TTL ms" placeholder="60000" value={preemptionForm.ttlMs} onChange={setPreemptionField('ttlMs')} fullWidth />
+              </Box>
+              <Box sx={{ display: 'flex', mt: 0.5 }}>
+                <Button variant="contained" size="small" disabled={busy} onClick={handleStartPreemption} sx={{ ml: 'auto' }}>
+                  Start Preemption
+                </Button>
+              </Box>
+            </Paper>
+          </Box>
+        </Collapse>
+      </Paper>
+
       <ConfirmDialog
         open={confirm !== null}
         title={confirm?.title ?? ''}
@@ -2196,6 +2636,91 @@ export default function ServiceChaosPanel({ connectionParams }: ServiceChaosPane
                   </Box>
                 )}
               </Box>
+            </Paper>
+
+            {/* Experiment history (fetched on expand, not continuously polled) */}
+            <Paper variant="outlined" sx={{ p: 1, mt: 1 }}>
+              <Box
+                sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer' }}
+                onClick={() => setHistoryExpanded((v) => !v)}
+              >
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                  History
+                </Typography>
+                {historyData.length > 0 && (
+                  <Chip size="small" label={`${historyData.length} run${historyData.length === 1 ? '' : 's'}`} variant="outlined" />
+                )}
+                <Box sx={{ flex: 1 }} />
+                <Tooltip title="Refresh history">
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="Refresh history"
+                      disabled={historyLoading}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Ensure the section is open, then force a re-fetch. Opening the
+                        // section already fetches; the tick covers the already-open case.
+                        if (!historyExpanded) setHistoryExpanded(true);
+                        else refreshHistory();
+                      }}
+                    >
+                      <RefreshIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <IconButton size="small" aria-label={historyExpanded ? 'Collapse history' : 'Expand history'}>
+                  {historyExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                </IconButton>
+              </Box>
+              <Collapse in={historyExpanded} unmountOnExit>
+                <Box sx={{ mt: 1 }}>
+                  {historyData.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary">
+                      {historyLoading ? 'Loading history…' : 'No past experiment runs.'}
+                    </Typography>
+                  ) : (
+                    <TableContainer>
+                      <Table size="small">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell>Name</TableCell>
+                            <TableCell>Status</TableCell>
+                            <TableCell>Verdict</TableCell>
+                            <TableCell align="right">Terminated</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {historyData.map((entry, idx) => (
+                            <TableRow key={idx}>
+                              <TableCell>
+                                <Typography variant="body2" sx={{ fontWeight: 600 }}>{entry.name}</Typography>
+                              </TableCell>
+                              <TableCell>
+                                <Chip
+                                  size="small"
+                                  label={entry.status.replace(/_/g, ' ')}
+                                  color={historyStatusColor(entry.status)}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                {entry.verdict
+                                  ? <Chip size="small" color={sloResultColor(entry.verdict.result)} label={entry.verdict.result} />
+                                  : <Typography variant="caption" color="text.secondary">—</Typography>}
+                              </TableCell>
+                              <TableCell align="right">
+                                <Typography variant="caption" color="text.secondary">
+                                  {new Date(entry.terminatedAtMillis).toLocaleString()}
+                                </Typography>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )}
+                </Box>
+              </Collapse>
             </Paper>
           </Box>
         </Collapse>

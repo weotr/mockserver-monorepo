@@ -36,6 +36,8 @@ classDiagram
         +protocol: Protocol
         +socketAddress: SocketAddress
         +clientCertificateChain: List~X509Certificate~
+        +clientCertificate: ClientCertificate
+        +jwt: Jwt
     }
     class OpenAPIDefinition {
         +specUrlOrPayload: String
@@ -57,6 +59,55 @@ classDiagram
 ```
 
 `BinaryRequestDefinition` matches raw binary connections by byte content. `DnsRequestDefinition` matches DNS queries by name, record type, and record class.
+
+`HttpRequest` carries two distinct client-certificate fields that must not be confused:
+
+- **`clientCertificateChain`** (`List<X509Certificate>`) is the **actual** mTLS chain a request was
+  received with, captured from the TLS/QUIC handshake (see [tls-and-security.md](tls-and-security.md)).
+  It is populated on incoming requests and serialized on recorded requests; it is *not* a matcher.
+- **`clientCertificate`** (`ClientCertificate`) is the **expectation matching criteria** for that chain.
+  `ClientCertificateMatcher` (`org.mockserver.matchers`) matches it against the **leaf certificate**
+  (index `0` — the client's own certificate, per RFC 5246 / RFC 8446) of the request's
+  `clientCertificateChain`:
+
+  | Criterion | Nottable | Matched against (leaf certificate) |
+  |-----------|----------|-------------------------------------|
+  | `subject` | yes | Common Name, full subject Distinguished Name, or any Subject Alternative Name (DNS / IP / email / URI) — a match against any is a match |
+  | `issuer` | yes | issuer Common Name or full issuer Distinguished Name |
+  | `fingerprintSha256` | yes | SHA-256 fingerprint of the leaf's DER encoding; colons/whitespace stripped and compared case-insensitively so `AB:CD:...` == `abcd...` |
+
+  Each criterion is a `NottableString` (regex / `!` negation / optional). A blank criterion (no
+  `clientCertificate`, or every field blank) matches every request. A non-blank criterion never matches a
+  request that presents no certificate chain. Mismatches are reported through `MatchDifference` under the
+  `clientCertificate` field so `explainUnmatched` / `debugMismatch` explain them. This is **matching only**
+  and does not change mTLS authentication (`MTLSAuthenticationHandler`).
+
+`HttpRequest` also carries a **`jwt`** (`Jwt`) matcher — expectation criteria for a JSON Web Token
+carried in a request header:
+
+- **`jwt`** (`Jwt`, `org.mockserver.model`) matches a request by the claims inside a JWT read from a
+  header (default `authorization`, `Bearer ` prefix). `JwtMatcher` (`org.mockserver.matchers`) reads the
+  header named by `Jwt.header`, strips the `Jwt.scheme` prefix (case-insensitive), base64url + JSON
+  decodes the token's `header.payload` segments, and matches:
+
+  | Criterion | Type | Matched against |
+  |-----------|------|-----------------|
+  | `claims` | `Map<String, NottableString>` | each entry asserts a payload claim's value (exact / regex / `!` negation); an array claim matches if any element matches; an absent claim never matches a positive criterion but matches a negated one vacuously (same De Morgan semantics for `issuer` / `audience` / `algorithm`) |
+  | `issuer` | `NottableString` | convenience for the `iss` claim |
+  | `audience` | `NottableString` | convenience for the `aud` claim (string or array) |
+  | `algorithm` | `NottableString` | convenience for the JOSE header `alg` field |
+  | `header` | `String` | request header the token is read from (default `authorization`) |
+  | `scheme` | `String` | prefix stripped before decoding (default `Bearer`; blank ⇒ raw token) |
+
+  **No signature verification is performed** — this is request matching for test routing, not
+  authentication (the control-plane JWT auth stack under `authentication/` is a separate concern and is
+  untouched). A malformed or absent token never matches a non-blank criterion and never surfaces an
+  exception. A blank `Jwt` matches every request. Mismatches are reported through `MatchDifference` under
+  the `jwt` field; the diagnostic message can include decoded JWT payload claim values (`found:…`), which
+  is consistent with the token-bearing `Authorization` header already appearing in request logs — the JWT
+  is not treated as a secret by this matcher. Wired through `HttpRequest.jwt` → `HttpRequestDTO`/`RequestDefinitionDTODeserializer`
+  → `JwtSerializer`/`JwtDeserializer` (registered in `ObjectMapperFactory`) and the `jwt` block of the
+  `httpRequest` JSON schema.
 
 ### Action Types
 
@@ -282,6 +333,7 @@ classDiagram
     Body <|-- XPathBody
     Body <|-- ParameterBody
     Body <|-- GraphQLBody
+    Body <|-- AllOfBody
 
     BodyWithContentType <|-- StringBody
     BodyWithContentType <|-- JsonBody
@@ -290,7 +342,17 @@ classDiagram
     BodyWithContentType <|-- FileBody
 ```
 
-Body `Type` enum: `BINARY`, `FILE`, `JSON`, `JSON_SCHEMA`, `JSON_PATH`, `PARAMETERS`, `REGEX`, `STRING`, `XML`, `XML_SCHEMA`, `XPATH`, `JSON_RPC`, `GRAPHQL`, `LOG_EVENT`
+Body `Type` enum: `BINARY`, `FILE`, `JSON`, `JSON_SCHEMA`, `JSON_PATH`, `PARAMETERS`, `REGEX`, `STRING`, `XML`, `XML_SCHEMA`, `XPATH`, `JSON_RPC`, `GRAPHQL`, `LOG_EVENT`, `WASM`, `MULTIPART`, `ALL_OF`
+
+#### AllOfBody (Composite Body Matcher)
+
+`AllOfBody` (`org.mockserver.model`, type `ALL_OF`) is a composite request-body matcher that matches only when **all** of its component body matchers match the *same* request body — e.g. a body required to satisfy a `jsonPath`, a `jsonSchema` and a `regex` matcher at once. It composes the existing matcher implementations without changing any of their individual semantics.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `bodyAllOf` | `List<Body>` | the component body matchers; every one must match. An empty list matches any body |
+
+Static factories: `AllOfBody.allOf(Body...)`, `AllOfBody.allOf(List<Body>)`. Each component keeps its own `not` flag; the composite honours its own `not` (negate the whole conjunction) and `optional` (an absent body matches) flags. `BodyMatcherBuilder` builds an `AllOfBodyMatcher` holding the component `BodyMatcher`s, and `BodyMatching` performs the per-component dispatch (so each component sees the body representation and JSON decoder it needs). Serialised via `AllOfBodyDTO` / `AllOfBodySerializer` / `AllOfBodyDTOSerializer` and the `ALL_OF` alternative of the `body` JSON schema; the wire form is `{"type":"ALL_OF","bodyAllOf":[ ... ]}`.
 
 #### FileBody
 
@@ -664,6 +726,8 @@ classDiagram
     BodyMatcher <|-- MultiValueMapMatcher
     BodyMatcher <|-- HashMapMatcher
     BodyMatcher <|-- BooleanMatcher
+    BodyMatcher <|-- AllOfBodyMatcher
+    AllOfBodyMatcher --> BodyMatcher : composes (all must match)
 
     AbstractHttpRequestMatcher <|-- HttpRequestPropertiesMatcher
     AbstractHttpRequestMatcher <|-- HttpRequestsPropertiesMatcher
@@ -729,7 +793,7 @@ For `OpenAPIDefinition` request definitions, this matcher parses an OpenAPI spec
 
 Collects per-field match failure details for debugging. Fields correspond to HTTP request properties:
 
-`METHOD`, `PATH`, `PATH_PARAMETERS`, `QUERY_PARAMETERS`, `COOKIES`, `HEADERS`, `BODY`, `SECURE`, `PROTOCOL`, `KEEP_ALIVE`, `OPERATION`, `OPENAPI`, `DNS_NAME`, `DNS_TYPE`, `DNS_CLASS`, `BINARY_BODY`
+`METHOD`, `PATH`, `PATH_PARAMETERS`, `QUERY_PARAMETERS`, `COOKIES`, `HEADERS`, `BODY`, `SECURE`, `PROTOCOL`, `CLIENT_CERTIFICATE`, `JWT`, `KEEP_ALIVE`, `OPERATION`, `OPENAPI`, `DNS_NAME`, `DNS_TYPE`, `DNS_CLASS`, `BINARY_BODY`
 
 The "matched X/Y fields" closest-match log uses the total field count. OpenAPI fields (`OPERATION`, `OPENAPI`) are unused by non-OpenAPI matchers but still counted, which is imprecise but consistent.
 
@@ -807,7 +871,7 @@ Schema → example values"]
 
 `OpenAPIRequestValidator.validate(...)` validates a request against the matched operation. It checks both the request **body** (against the operation's `requestBody` schema) and the request **parameters**: for every declared `path`, `query`, `header`, and `cookie` parameter it enforces `required` presence in the matching `in` location and validates each supplied value against the parameter's `schema` using the same `JsonSchemaValidator.cachedJsonSchemaValidator` mechanism as the body. Path-parameter values are extracted by mapping the concrete request path back onto the matched path template (`OpenApiTrafficValidator` threads the already-resolved template through so it is not re-derived). This validator backs `OpenApiTrafficValidator` and the contract/traffic-validation surfaces (including the `verify_traffic` MCP tool).
 
-`array`/`object`-typed parameters are only schema-validated when the supplied value is already JSON-shaped; a value serialised in a non-JSON `style`/`explode` form (the OpenAPI default `form`/`explode`, or `simple` — e.g. `available,pending`) skips the schema check rather than false-positiving a valid request (`required`-presence is still enforced). **Deferred follow-up:** decode `style`/`explode`-serialised array/object parameter values before schema validation so they can be checked too.
+`array`/`object`-typed parameters are decoded from their `style`/`explode` serialisation into a JSON literal before schema validation by `OpenApiStyleParameterDeserializer`, so array elements and object properties are checked against the parameter `schema` (e.g. a `form`/`explode:false` query array `ids=1,not-a-number,3` now fails `items: integer`). The decoder covers query (`form`/`spaceDelimited`/`pipeDelimited`/`deepObject`), path (`simple`/`label`/`matrix`) and header (`simple`) parameters for both explode values, defaulting per the OpenAPI spec (query/cookie → `form`; path/header → `simple`; `explode` defaults to `true` only for `form`). It is **type-aware and fail-open**: each token is coerced to the JSON literal its element/property scalar schema expects (numeric/boolean tokens emitted unquoted, everything else quoted), so a request that was valid before stays valid — only a value the spec genuinely rejects now fails; whenever a value cannot be soundly reconstructed (a non-primitive item/property schema, or an ambiguous/unsupported style combination such as a `spaceDelimited`/`pipeDelimited` object) the schema check is skipped rather than false-positiving, while `required`-presence is still enforced.
 
 ### OpenAPI 3.1 Support
 
@@ -860,6 +924,17 @@ Independently of the `generateRealisticExampleValues` flag, `ExampleBuilder` hon
 | `minProperties` (free-form / `additionalProperties` objects) | Emits at least that many entries (clamped to a cap of 10). |
 
 Unconstrained schemas are unaffected — there is no behaviour change when none of these constraints are present.
+
+### `discriminator` and `readOnly`/`writeOnly` example generation
+
+`ExampleBuilder` also honours two OpenAPI object-composition keywords:
+
+| Keyword | Behaviour |
+|---------|-----------|
+| `discriminator` (on `oneOf`/`anyOf`) | Instead of blindly taking the first subschema, a concrete subschema is selected and the discriminator property is set to the matching value. With an explicit `mapping`, the first entry is used (`value -> schema ref`) and the discriminator property is set to that `value`; without a `mapping`, the first subschema is used and, if it is a `$ref`, the referenced schema's short name is the discriminator value. Falls back to the historic first-non-null selection when no usable discriminator is declared. |
+| `readOnly` / `writeOnly` | `readOnly` properties are excluded from **request** examples and `writeOnly` properties from **response** examples, per the spec. The direction is carried by a new `ExampleBuilder.Direction` (`REQUEST`/`RESPONSE`/`UNSPECIFIED`) threaded from the call sites: request-body / callback-request / parameter / contract-test / load-scenario generation pass `REQUEST`; response-body / response-header / JSON-schema-response synthesis pass `RESPONSE`. `UNSPECIFIED` (the default for the historic two-/three-arg `fromSchema` overloads) applies no filtering, so existing callers are unchanged. |
+
+The `discriminator` handling composes cleanly with the `allOf` scalar-`$ref` normalisation (`normalizeFlattenedExample`, #2357): discriminator selection only applies to `oneOf`/`anyOf`, leaving the `allOf` merge path untouched.
 
 ## Configuration
 

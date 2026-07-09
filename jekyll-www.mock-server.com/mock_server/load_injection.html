@@ -1,7 +1,7 @@
 ---
 title: Load Injection (Load Scenarios)
 shortTitle: Load Injection
-description: Drive API traffic from MockServer using declarative load scenarios — ramp virtual users, vary data across iterations with templates, and assert SLO verdicts over the generated traffic.
+description: "Drive load tests from MockServer with declarative scenarios: ramp virtual users, vary data per iteration, and assert SLO verdicts — no extra load tool needed."
 layout: page
 pageOrder: 1
 section: 'Performance Testing'
@@ -10,15 +10,99 @@ sitemap:
   priority: 0.8
   changefreq: 'monthly'
   lastmod: 2026-06-24T00:00:00+00:00
+keywords: load injection, mockserver load testing, mock server load generator, slo verdict, mockserver vs k6
+schema_faq:
+  - question: "Can MockServer generate load or act as a load testing tool?"
+    answer: "Yes. MockServer's built-in Load Scenarios turn any instance into a bounded load generator. Register a declarative scenario with stages (ramp or hold virtual users or an arrival rate), then trigger it — no external load tool required. One instance injects tens of thousands of requests per second."
+  - question: "How is MockServer load injection different from k6 or Gatling?"
+    answer: "MockServer combines mocking, chaos injection, and load generation in one control plane. You mock upstream dependencies, inject faults, drive load, and assert SLO verdicts — all from the same server. Reach for k6, Gatling, or JMeter when you need a dedicated distributed load tier, browser-level protocols, or very large raw throughput."
+  - question: "How do I assert an SLO over generated load?"
+    answer: "Add a thresholds array to your scenario with a metric, comparator, and threshold value. The run produces a PASS or FAIL verdict; after completion you can also call PUT /mockserver/verifySLO to assert SLO targets against the stored sample data. A JUnit XML summary report is available for CI integration."
+  - question: "Can I ramp virtual users with MockServer?"
+    answer: "Yes. Set the stage type to VU and supply startVus and endVus with a durationMillis to ramp concurrent virtual users linearly, quadratically, or exponentially. Alternatively use a named SPIKE or RAMP_HOLD shape to describe the traffic pattern without spelling out every stage."
 ---
 
-<p>MockServer can drive outbound API traffic on demand using <strong>Load Scenarios</strong> — a declarative, bounded load generator built into the server. A load scenario is an ordered list of templated request <em>steps</em> driven through a sequence of <em>stages</em> (a <em>load profile</em>), with per-iteration variable data. Each stage either holds or ramps the number of concurrent <strong>virtual users</strong> (<code class="inline code">VU</code>, closed model), holds or ramps an <strong>arrival rate</strong> in iterations per second (<code class="inline code">RATE</code>, open model), or <strong>pauses</strong>. Results feed both the metrics histograms and the SLO sample store so a load run can be asserted with <a href="/mock_server/chaos_testing.html#slo_resilience_verdicts"><code class="inline code">PUT /mockserver/verifySLO</code></a>.</p>
+<p itemprop="headline">Drive realistic API load from the same MockServer you already use for mocking — ramp virtual users or a fixed arrival rate, vary data per iteration, inject faults, and assert your SLOs over the generated traffic, all from one control plane with no second load tool. One instance injects tens of thousands of requests per second.</p>
+
+<p>The standout advantage: MockServer exposes a <strong>rich, first-class metrics stream for the load it drives</strong> — active VUs, throughput, latency percentiles, error and status-code breakdowns, throttling, and data transfer — over <strong>both Prometheus and OpenTelemetry (OTLP)</strong>. Point your existing observability stack at it and chart the injector's numbers <strong>side-by-side with your system under test on one dashboard</strong>, so a latency or error spike is instantly attributable to the right side. See the runnable <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/kubernetes/load-injection-observability" target="_blank" rel="noopener noreferrer">Kubernetes + Grafana example</a> for a one-command stack, and <a href="#observability">Observability &amp; Metrics</a> below for the full catalogue.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Page</th>
+            <th>Question it answers</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><a href="/mock_server/performance.html">Scalability &amp; Latency</a></td>
+            <td>How much traffic can one instance <strong>serve</strong> as a mock?</td>
+        </tr>
+        <tr>
+            <td><a href="/mock_server/load_injection.html">Load Injection</a></td>
+            <td>How do I <strong>drive</strong> load from MockServer?</td>
+        </tr>
+        <tr>
+            <td><a href="/mock_server/load_injection_performance.html">Load Injection Performance</a></td>
+            <td>How much load can MockServer <strong>inject</strong>, and how does it scale?</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>MockServer's built-in <strong>Load Scenarios</strong> are a declarative, bounded load generator. A load scenario is an ordered list of templated request <em>steps</em> driven through a sequence of <em>stages</em> (a <em>load profile</em>), with per-iteration variable data. Each stage either holds or ramps the number of concurrent <strong>virtual users</strong> (<code class="inline code">VU</code>, closed model), holds or ramps an <strong>arrival rate</strong> in iterations per second (<code class="inline code">RATE</code>, open model), or <strong>pauses</strong>. Results feed both the metrics histograms and the SLO sample store so a load run can be asserted with <a href="/mock_server/chaos_testing.html#slo_resilience_verdicts"><code class="inline code">PUT /mockserver/verifySLO</code></a>.</p>
 
 <p>This makes MockServer useful for <strong>resilience verification</strong>: inject a chaos fault (see <a href="/mock_server/chaos_testing.html">Chaos Testing</a>), apply load, then assert that your SLOs held — all from a single control plane, with no external load tool required.</p>
 
 <p>One instance injects tens of thousands of requests per second; to drive much more, run instances in parallel — see <a href="/mock_server/load_injection_performance.html">Load Injection Performance</a> for how injection scales across many instances.</p>
 
 <p><strong>Registry model: load, then trigger.</strong> Scenarios are organised as a <strong>registry of named scenarios</strong>. You first <strong>load</strong> (register) a scenario by name with <code class="inline code">PUT /mockserver/loadScenario</code> — this does <em>not</em> run it — then <strong>trigger</strong> one or many by name with <code class="inline code">PUT /mockserver/loadScenario/start</code> to run them <strong>concurrently</strong>, each with its own optional <strong>start delay</strong>. Loading is always allowed; <strong>triggering a run is off by default</strong>: <code class="inline code">start</code> returns <code class="inline code">403 Forbidden</code> until <code class="inline code">loadGenerationEnabled=true</code>. Hard caps on concurrent scenarios, virtual users, in-flight requests, RPS, duration, and step count prevent the feature from self-DoS-ing the server. Scenarios can be <strong>preloaded at startup</strong> from a JSON file via <code class="inline code">mockserver.loadScenarioInitializationJsonPath</code>.</p>
+
+<a id="when_to_use" class="anchor" href="#when_to_use">&nbsp;</a>
+
+<h2>When to use Load Scenarios vs k6 / Gatling / JMeter</h2>
+
+<p>The differentiating factor is <strong>a single control plane</strong>: MockServer mocks the upstreams, drives the load, injects faults, and asserts SLOs without a second tool. Reach for a dedicated load tool when you need its specific strengths.</p>
+
+<table class="table-standard">
+    <thead>
+        <tr>
+            <th>Need</th>
+            <th>MockServer Load Scenarios</th>
+            <th>k6 / Gatling / JMeter</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Mock upstreams <strong>and</strong> drive load from one control plane</td>
+            <td>Yes &mdash; same server, no extra tool</td>
+            <td>No &mdash; requires a separate mock server alongside</td>
+        </tr>
+        <tr>
+            <td>Inject chaos faults (latency, errors, outages) alongside load</td>
+            <td>Yes &mdash; built-in chaos profiles</td>
+            <td>No &mdash; requires a separate fault injector</td>
+        </tr>
+        <tr>
+            <td>Assert SLO verdicts from the same server</td>
+            <td>Yes &mdash; thresholds + <code class="inline code">verifySLO</code> built in</td>
+            <td>Requires custom scripting or an external integration</td>
+        </tr>
+        <tr>
+            <td>Chart the injector's metrics next to your system under test</td>
+            <td>Yes &mdash; <code class="inline code">mock_server_load_*</code> over <strong>Prometheus and OpenTelemetry</strong>, straight into Grafana/Datadog</td>
+            <td>Yes, but a separate metrics pipeline to wire up and correlate</td>
+        </tr>
+        <tr>
+            <td>Dedicated distributed load tier</td>
+            <td>Yes &mdash; only using fan-out deployment pattern</td>
+            <td>Yes &mdash; clustered distributed load or fan-out deployment pattern</td>
+        </tr>
+    </tbody>
+</table>
+
+<h3>How it works</h3>
+
+<p style="width: 72%; margin: 1em auto;"><img src="../images/mockserver_load_injection.png" alt="MockServer load injection flow: trigger a load scenario, ramp virtual users against the target service, record metrics into the SLO sample store, then verify the SLO." style="max-width:100%;"></p>
 
 <a id="on_this_page" class="anchor" href="#on_this_page">&nbsp;</a>
 
@@ -58,6 +142,7 @@ sitemap:
 					<li><a href="#iteration_variables">Per-Iteration Template Variables</a></li>
 					<li><a href="#data_feeders">Data Feeders</a></li>
 					<li><a href="#cross_step_capture">Cross-Step Capture</a></li>
+					<li><a href="#checks">Per-Step Response Checks</a></li>
 					<li><a href="#weighted_step_selection">Weighted Step Selection</a></li>
 				</ul>
 			</td>
@@ -204,7 +289,7 @@ client.close</code></pre>
         <pre class="prettyprint lang-go code"><code class="code">package main
 
 import (
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -391,7 +476,7 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
         <tr>
             <td><code class="inline code">GET</code></td>
             <td><code class="inline code">/mockserver/loadScenario</code></td>
-            <td>List <strong>all</strong> registered scenarios: <code class="inline code">{ scenarios: [ { name, state, startDelayMillis, definition, &hellip;live status fields } ] }</code>. <code class="inline code">state</code> ∈ <code class="inline code">LOADED</code> / <code class="inline code">PENDING</code> / <code class="inline code">RUNNING</code> / <code class="inline code">COMPLETED</code> / <code class="inline code">STOPPED</code>. Live fields (when active/run): <code class="inline code">stageIndex</code>, <code class="inline code">stageType</code>, <code class="inline code">currentTarget</code>, <code class="inline code">currentVus</code>, <code class="inline code">requestsSent</code>, <code class="inline code">succeeded</code>, <code class="inline code">failed</code>, <code class="inline code">p50Millis</code>, <code class="inline code">p95Millis</code>, <code class="inline code">p99Millis</code>, <code class="inline code">p999Millis</code>, <code class="inline code">droppedIterations</code>, <code class="inline code">verdict</code>, <code class="inline code">abortedByThreshold</code>, <code class="inline code">thresholdResults</code>, <code class="inline code">runId</code>, <code class="inline code">startedAt</code>, <code class="inline code">endedAt</code>.</td>
+            <td>List <strong>all</strong> registered scenarios: <code class="inline code">{ scenarios: [ { name, state, startDelayMillis, definition, &hellip;live status fields } ] }</code>. <code class="inline code">state</code> ∈ <code class="inline code">LOADED</code> / <code class="inline code">PENDING</code> / <code class="inline code">RUNNING</code> / <code class="inline code">COMPLETED</code> / <code class="inline code">STOPPED</code>. Live fields (when active/run): <code class="inline code">stageIndex</code>, <code class="inline code">stageType</code>, <code class="inline code">currentTarget</code>, <code class="inline code">currentVus</code>, <code class="inline code">requestsSent</code>, <code class="inline code">succeeded</code>, <code class="inline code">failed</code>, <code class="inline code">p50Millis</code>, <code class="inline code">p95Millis</code>, <code class="inline code">p99Millis</code>, <code class="inline code">p999Millis</code>, <code class="inline code">droppedIterations</code>, <code class="inline code">verdict</code>, <code class="inline code">abortedByThreshold</code>, <code class="inline code">thresholdResults</code>, <code class="inline code">checkResults</code>, <code class="inline code">runId</code>, <code class="inline code">startedAt</code>, <code class="inline code">endedAt</code>.</td>
         </tr>
         <tr>
             <td><code class="inline code">GET</code></td>
@@ -678,6 +763,11 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario/stop \
             <td>Optional list of capture rules that extract a value from this step's response and bind it to a named variable for use in later steps' templates. Each entry has a <code class="inline code">name</code>, a <code class="inline code">source</code> (<code class="inline code">BODY_JSONPATH</code> / <code class="inline code">HEADER</code> / <code class="inline code">BODY_REGEX</code>), an <code class="inline code">expression</code>, and an optional <code class="inline code">defaultValue</code>. See <a href="#cross_step_capture">Cross-Step Capture</a>.</td>
         </tr>
         <tr>
+            <td><code class="inline code">checks</code></td>
+            <td>array</td>
+            <td>Optional list of per-step response assertions (like a k6 <code class="inline code">check</code>). Each entry has a <code class="inline code">source</code> (<code class="inline code">STATUS</code> / <code class="inline code">HEADER</code> with <code class="inline code">headerName</code> / <code class="inline code">BODY_JSONPATH</code> with <code class="inline code">jsonPath</code>), a <code class="inline code">comparator</code> (<code class="inline code">EQUALS</code>, <code class="inline code">NOT_EQUALS</code>, <code class="inline code">CONTAINS</code>, <code class="inline code">MATCHES</code>, <code class="inline code">GT</code>, <code class="inline code">LT</code>, <code class="inline code">GTE</code>, <code class="inline code">LTE</code>), and an expected <code class="inline code">value</code>. See <a href="#checks">Per-Step Response Checks</a>.</td>
+        </tr>
+        <tr>
             <td><code class="inline code">weight</code></td>
             <td>number</td>
             <td>Relative selection weight used only when the scenario's <code class="inline code">stepSelection</code> is <code class="inline code">WEIGHTED</code>. Absent = <code class="inline code">1.0</code>; must be <code class="inline code">&gt; 0</code> when <code class="inline code">WEIGHTED</code>. Ignored under <code class="inline code">SEQUENTIAL</code> (default). See <a href="#weighted_step_selection">Weighted Step Selection</a>.</td>
@@ -897,7 +987,7 @@ client.close</code></pre>
         <pre class="prettyprint lang-go code"><code class="code">package main
 
 import (
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -1170,7 +1260,7 @@ client.close</code></pre>
         <pre class="prettyprint lang-go code"><code class="code">package main
 
 import (
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -1540,7 +1630,7 @@ client.close</code></pre>
         <pre class="prettyprint lang-go code"><code class="code">package main
 
 import (
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -2220,6 +2310,348 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
 
 <p>Step 1 logs in and captures the response body's <code class="inline code">$.accessToken</code> into <code class="inline code">token</code>. Step 2 — in the same iteration — sends it as <code class="inline code">Authorization: Bearer &lt;token&gt;</code>. With 5 VUs, each VU's iterations each capture and replay their own token independently.</p>
 
+<a id="checks" class="anchor" href="#checks">&nbsp;</a>
+
+<h2>Per-Step Response Checks</h2>
+
+<p>A load test that only tracks latency and errors will happily report <strong>green</strong> while your service returns a <code class="inline code">200</code> with the <em>wrong body</em> — a broken feature flag, an empty result set, a silently degraded response. Only 5xx and connection failures surface otherwise. <strong>Per-step checks</strong> (the load equivalent of a <a href="https://grafana.com/docs/k6/latest/using-k6/checks/">k6 <code class="inline code">check</code></a>) close that gap: attach <code class="inline code">checks</code> to a step and each one asserts something about that step's response.</p>
+
+<p>Each check has a <code class="inline code">source</code> (where to read the observed value), a <code class="inline code">comparator</code>, and an expected <code class="inline code">value</code>:</p>
+
+<table>
+    <thead>
+        <tr>
+            <th style="width: 130px;">Field</th>
+            <th>Values</th>
+            <th>Meaning</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code class="inline code">source</code></td>
+            <td><code class="inline code">STATUS</code>, <code class="inline code">HEADER</code>, <code class="inline code">BODY_JSONPATH</code></td>
+            <td>Where to read the observed value: the response status code; a response header (set <code class="inline code">headerName</code>); or a JSONPath over the response body (set <code class="inline code">jsonPath</code>).</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">comparator</code></td>
+            <td><code class="inline code">EQUALS</code>, <code class="inline code">NOT_EQUALS</code>, <code class="inline code">CONTAINS</code>, <code class="inline code">MATCHES</code>, <code class="inline code">GT</code>, <code class="inline code">LT</code>, <code class="inline code">GTE</code>, <code class="inline code">LTE</code></td>
+            <td>How the observed value is compared to <code class="inline code">value</code>. The string comparators work on the raw text (<code class="inline code">MATCHES</code> is a full-match regex); the numeric comparators (<code class="inline code">GT</code>/<code class="inline code">LT</code>/<code class="inline code">GTE</code>/<code class="inline code">LTE</code>) parse both sides as numbers and fail the check if either side is not a number.</td>
+        </tr>
+        <tr>
+            <td><code class="inline code">value</code></td>
+            <td>string</td>
+            <td>The expected value the observed value is compared against.</td>
+        </tr>
+    </tbody>
+</table>
+
+<p><strong>Checks never fail an individual request</strong> — they are observational. Each evaluated check is counted as a pass or a fail: the counts feed the <code class="inline code">mock_server_load_checks</code> metric (labelled <code class="inline code">outcome="pass"|"fail"</code>), the per-check <code class="inline code">checkResults</code> in the <a href="#summary_report">summary report</a> and live status, and the <a href="#thresholds"><code class="inline code">CHECK_FAILURE_RATE</code> threshold</a> — so you can <strong>fail a CI run</strong> when too many checks break (and, with <code class="inline code">abortOnFail</code>, stop it early). A check that can't be evaluated (a bad JSONPath, or no response at all on a connection error) simply counts as a fail. Omitting <code class="inline code">checks</code> changes nothing — it is off by default.</p>
+
+<button id="button_load_step_checks" class="accordion">attach per-step checks and a CHECK_FAILURE_RATE threshold</button>
+<div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.load.*;
+import org.mockserver.slo.SloObjective;
+
+import java.util.List;
+
+import static org.mockserver.model.HttpRequest.request;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+
+LoadScenario scenario = LoadScenario.loadScenario("checked-scenario")
+    .withProfile(LoadProfile.of(
+        LoadStage.constantVus(5, 60000)
+    ))
+    .withThresholds(
+        LoadThreshold.loadThreshold()
+            .withMetric(LoadThreshold.Metric.CHECK_FAILURE_RATE)
+            .withComparator(SloObjective.Comparator.LESS_THAN)
+            .withThreshold(0.01)
+    )
+    .withSteps(
+        LoadStep.loadStep(request().withMethod("GET").withPath("/api/orders/123")
+                .withSocketAddress("target", 8080))
+            .withChecks(List.of(
+                LoadCheck.loadCheck()
+                    .withSource(LoadCheck.Source.STATUS)
+                    .withComparator(LoadCheck.Comparator.EQUALS)
+                    .withValue("200"),
+                LoadCheck.loadCheck()
+                    .withSource(LoadCheck.Source.HEADER)
+                    .withHeaderName("Content-Type")
+                    .withComparator(LoadCheck.Comparator.CONTAINS)
+                    .withValue("application/json"),
+                LoadCheck.loadCheck()
+                    .withSource(LoadCheck.Source.BODY_JSONPATH)
+                    .withJsonPath("$.status")
+                    .withComparator(LoadCheck.Comparator.EQUALS)
+                    .withValue("CONFIRMED")
+            ))
+    );
+
+client.runLoadScenario(scenario);              // register + start (needs loadGenerationEnabled=true)
+client.stopLoadScenarios("checked-scenario");  // stop when done</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var client = mockServerClient("localhost", 1080);
+
+// The client submits raw JSON, so `checks` is expressed inline.
+var scenario = {
+    name: 'checked-scenario',
+    profile: { stages: [ { type: 'VU', vus: 5, durationMillis: 60000 } ] },
+    thresholds: [
+        { metric: 'CHECK_FAILURE_RATE', comparator: 'LESS_THAN', threshold: 0.01 }
+    ],
+    steps: [
+        {
+            request: { method: 'GET', path: '/api/orders/123',
+                       socketAddress: { host: 'target', port: 8080 } },
+            checks: [
+                { source: 'STATUS', comparator: 'EQUALS', value: '200' },
+                { source: 'HEADER', headerName: 'Content-Type', comparator: 'CONTAINS', value: 'application/json' },
+                { source: 'BODY_JSONPATH', jsonPath: '$.status', comparator: 'EQUALS', value: 'CONFIRMED' }
+            ]
+        }
+    ]
+};
+
+(async function () {
+    await client.runLoadScenario(scenario);            // register + start (needs loadGenerationEnabled=true)
+    await client.stopLoadScenarios('checked-scenario');
+})();</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver import MockServerClient
+
+# The typed LoadStep has no `checks` field yet, so submit the scenario as a raw dict.
+scenario = {
+    "name": "checked-scenario",
+    "profile": {"stages": [{"type": "VU", "vus": 5, "durationMillis": 60000}]},
+    "thresholds": [
+        {"metric": "CHECK_FAILURE_RATE", "comparator": "LESS_THAN", "threshold": 0.01}
+    ],
+    "steps": [
+        {
+            "request": {"method": "GET", "path": "/api/orders/123",
+                        "socketAddress": {"host": "target", "port": 8080}},
+            "checks": [
+                {"source": "STATUS", "comparator": "EQUALS", "value": "200"},
+                {"source": "HEADER", "headerName": "Content-Type", "comparator": "CONTAINS", "value": "application/json"},
+                {"source": "BODY_JSONPATH", "jsonPath": "$.status", "comparator": "EQUALS", "value": "CONFIRMED"},
+            ],
+        }
+    ],
+}
+
+with MockServerClient("localhost", 1080) as client:
+    client.run_load_scenario(scenario)             # register + start (needs loadGenerationEnabled=true)
+    client.stop_load_scenarios("checked-scenario")</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+include MockServer
+
+client = Client.new('localhost', 1080)
+
+# The typed LoadStep has no `checks` field yet, so submit the scenario as a raw Hash.
+scenario = {
+  'name' =&gt; 'checked-scenario',
+  'profile' =&gt; { 'stages' =&gt; [ { 'type' =&gt; 'VU', 'vus' =&gt; 5, 'durationMillis' =&gt; 60_000 } ] },
+  'thresholds' =&gt; [
+    { 'metric' =&gt; 'CHECK_FAILURE_RATE', 'comparator' =&gt; 'LESS_THAN', 'threshold' =&gt; 0.01 }
+  ],
+  'steps' =&gt; [
+    {
+      'request' =&gt; { 'method' =&gt; 'GET', 'path' =&gt; '/api/orders/123',
+                     'socketAddress' =&gt; { 'host' =&gt; 'target', 'port' =&gt; 8080 } },
+      'checks' =&gt; [
+        { 'source' =&gt; 'STATUS', 'comparator' =&gt; 'EQUALS', 'value' =&gt; '200' },
+        { 'source' =&gt; 'HEADER', 'headerName' =&gt; 'Content-Type', 'comparator' =&gt; 'CONTAINS', 'value' =&gt; 'application/json' },
+        { 'source' =&gt; 'BODY_JSONPATH', 'jsonPath' =&gt; '$.status', 'comparator' =&gt; 'EQUALS', 'value' =&gt; 'CONFIRMED' }
+      ]
+    }
+  ]
+}
+
+client.run_load_scenario(scenario)             # register + start (needs loadGenerationEnabled=true)
+client.stop_load_scenarios('checked-scenario')
+client.close</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">package main
+
+import (
+    "net/http"
+    "strings"
+)
+
+func main() {
+    // The typed LoadStep has no Checks field yet, so PUT the raw JSON directly.
+    scenario := `{
+      "name": "checked-scenario",
+      "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+      "thresholds": [
+        { "metric": "CHECK_FAILURE_RATE", "comparator": "LESS_THAN", "threshold": 0.01 }
+      ],
+      "steps": [
+        {
+          "request": { "method": "GET", "path": "/api/orders/123",
+                       "socketAddress": { "host": "target", "port": 8080 } },
+          "checks": [
+            { "source": "STATUS", "comparator": "EQUALS", "value": "200" },
+            { "source": "HEADER", "headerName": "Content-Type", "comparator": "CONTAINS", "value": "application/json" },
+            { "source": "BODY_JSONPATH", "jsonPath": "$.status", "comparator": "EQUALS", "value": "CONFIRMED" }
+          ]
+        }
+      ]
+    }`
+
+    base := "http://localhost:1080/mockserver"
+    reg, _ := http.NewRequest("PUT", base+"/loadScenario", strings.NewReader(scenario))
+    reg.Header.Set("Content-Type", "application/json")
+    http.DefaultClient.Do(reg) // 1. register (does NOT start it yet)
+
+    start, _ := http.NewRequest("PUT", base+"/loadScenario/start",
+        strings.NewReader(`{ "name": "checked-scenario" }`))
+    http.DefaultClient.Do(start) // 2. start (needs loadGenerationEnabled=true)
+}</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.Net.Http;
+using System.Text;
+
+// The typed LoadStep has no Checks property yet, so PUT the raw JSON directly.
+var scenario = """
+{
+  "name": "checked-scenario",
+  "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+  "thresholds": [
+    { "metric": "CHECK_FAILURE_RATE", "comparator": "LESS_THAN", "threshold": 0.01 }
+  ],
+  "steps": [
+    {
+      "request": { "method": "GET", "path": "/api/orders/123",
+                   "socketAddress": { "host": "target", "port": 8080 } },
+      "checks": [
+        { "source": "STATUS", "comparator": "EQUALS", "value": "200" },
+        { "source": "HEADER", "headerName": "Content-Type", "comparator": "CONTAINS", "value": "application/json" },
+        { "source": "BODY_JSONPATH", "jsonPath": "$.status", "comparator": "EQUALS", "value": "CONFIRMED" }
+      ]
+    }
+  ]
+}
+""";
+
+using var http = new HttpClient();
+var body = new StringContent(scenario, Encoding.UTF8, "application/json");
+await http.PutAsync("http://localhost:1080/mockserver/loadScenario", body);           // register
+await http.PutAsync("http://localhost:1080/mockserver/loadScenario/start",            // start
+    new StringContent("{ \"name\": \"checked-scenario\" }", Encoding.UTF8, "application/json"));</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use reqwest::blocking::Client;
+
+// The typed LoadStep has no `checks` field yet, so PUT the raw JSON directly.
+let scenario = r#"{
+  "name": "checked-scenario",
+  "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+  "thresholds": [
+    { "metric": "CHECK_FAILURE_RATE", "comparator": "LESS_THAN", "threshold": 0.01 }
+  ],
+  "steps": [
+    {
+      "request": { "method": "GET", "path": "/api/orders/123",
+                   "socketAddress": { "host": "target", "port": 8080 } },
+      "checks": [
+        { "source": "STATUS", "comparator": "EQUALS", "value": "200" },
+        { "source": "HEADER", "headerName": "Content-Type", "comparator": "CONTAINS", "value": "application/json" },
+        { "source": "BODY_JSONPATH", "jsonPath": "$.status", "comparator": "EQUALS", "value": "CONFIRMED" }
+      ]
+    }
+  ]
+}"#;
+
+let http = Client::new();
+http.put("http://localhost:1080/mockserver/loadScenario")            // register
+    .header("Content-Type", "application/json").body(scenario).send().unwrap();
+http.put("http://localhost:1080/mockserver/loadScenario/start")      // start (needs loadGenerationEnabled=true)
+    .body(r#"{ "name": "checked-scenario" }"#).send().unwrap();</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">require_once 'vendor/autoload.php';
+
+use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+
+// The typed LoadStep has no checks setter yet, so submit the scenario as a raw array.
+$scenario = [
+    'name' =&gt; 'checked-scenario',
+    'profile' =&gt; ['stages' =&gt; [['type' =&gt; 'VU', 'vus' =&gt; 5, 'durationMillis' =&gt; 60000]]],
+    'thresholds' =&gt; [
+        ['metric' =&gt; 'CHECK_FAILURE_RATE', 'comparator' =&gt; 'LESS_THAN', 'threshold' =&gt; 0.01],
+    ],
+    'steps' =&gt; [
+        [
+            'request' =&gt; ['method' =&gt; 'GET', 'path' =&gt; '/api/orders/123',
+                          'socketAddress' =&gt; ['host' =&gt; 'target', 'port' =&gt; 8080]],
+            'checks' =&gt; [
+                ['source' =&gt; 'STATUS', 'comparator' =&gt; 'EQUALS', 'value' =&gt; '200'],
+                ['source' =&gt; 'HEADER', 'headerName' =&gt; 'Content-Type', 'comparator' =&gt; 'CONTAINS', 'value' =&gt; 'application/json'],
+                ['source' =&gt; 'BODY_JSONPATH', 'jsonPath' =&gt; '$.status', 'comparator' =&gt; 'EQUALS', 'value' =&gt; 'CONFIRMED'],
+            ],
+        ],
+    ],
+];
+
+$client-&gt;runLoadScenario($scenario);             // register + start (needs loadGenerationEnabled=true)
+$client-&gt;stopLoadScenarios('checked-scenario');</code></pre>
+    </div>
+    <button class="accordion inner">REST API</button>
+    <div class="panel">
+        <pre class="prettyprint lang-bash code"><code class="code"># Start the server with load generation enabled:
+#   docker run -e MOCKSERVER_LOAD_GENERATION_ENABLED=true mockserver/mockserver
+
+# 1. REGISTER the scenario (does NOT run it) — PUT /mockserver/loadScenario
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "checked-scenario",
+    "profile": { "stages": [ { "type": "VU", "vus": 5, "durationMillis": 60000 } ] },
+    "thresholds": [
+      { "metric": "CHECK_FAILURE_RATE", "comparator": "LESS_THAN", "threshold": 0.01 }
+    ],
+    "steps": [
+      {
+        "request": { "method": "GET", "path": "/api/orders/123",
+                     "socketAddress": { "host": "target", "port": 8080 } },
+        "checks": [
+          { "source": "STATUS", "comparator": "EQUALS", "value": "200" },
+          { "source": "HEADER", "headerName": "Content-Type", "comparator": "CONTAINS", "value": "application/json" },
+          { "source": "BODY_JSONPATH", "jsonPath": "$.status", "comparator": "EQUALS", "value": "CONFIRMED" }
+        ]
+      }
+    ]
+  }'
+
+# 2. START it (requires loadGenerationEnabled=true; else 403)
+curl -s -X PUT http://localhost:1080/mockserver/loadScenario/start -d '{ "name": "checked-scenario" }'</code></pre>
+    </div>
+</div>
+
+<p>Every iteration fires the request and evaluates all three checks against the response. The status verdict flips to <code class="inline code">FAIL</code> if more than 1% of checks fail, so a service that returns <code class="inline code">200</code> but with <code class="inline code">$.status != "CONFIRMED"</code> is caught even though no request errored.</p>
+
 <a id="weighted_step_selection" class="anchor" href="#weighted_step_selection">&nbsp;</a>
 
 <h2>Weighted Step Selection</h2>
@@ -2503,8 +2935,8 @@ curl -s -X PUT http://localhost:1080/mockserver/loadScenario \
     <tbody>
         <tr>
             <td><code class="inline code">metric</code></td>
-            <td><code class="inline code">LATENCY_P50</code>, <code class="inline code">LATENCY_P95</code>, <code class="inline code">LATENCY_P99</code>, <code class="inline code">LATENCY_P999</code>, <code class="inline code">ERROR_RATE</code>, <code class="inline code">THROUGHPUT_RPS</code></td>
-            <td>The metric to check. Latency percentiles are in milliseconds; <code class="inline code">ERROR_RATE</code> is a 0–1 fraction; <code class="inline code">THROUGHPUT_RPS</code> is requests/second.</td>
+            <td><code class="inline code">LATENCY_P50</code>, <code class="inline code">LATENCY_P95</code>, <code class="inline code">LATENCY_P99</code>, <code class="inline code">LATENCY_P999</code>, <code class="inline code">ERROR_RATE</code>, <code class="inline code">THROUGHPUT_RPS</code>, <code class="inline code">CHECK_FAILURE_RATE</code></td>
+            <td>The metric to check. Latency percentiles are in milliseconds; <code class="inline code">ERROR_RATE</code> is a 0–1 fraction; <code class="inline code">THROUGHPUT_RPS</code> is requests/second; <code class="inline code">CHECK_FAILURE_RATE</code> is the 0–1 fraction of failed <a href="#checks">per-step checks</a> (0 when no checks ran).</td>
         </tr>
         <tr>
             <td><code class="inline code">comparator</code></td>
@@ -2654,7 +3086,7 @@ client.close</code></pre>
 import (
     "fmt"
 
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -2889,7 +3321,7 @@ client.close</code></pre>
 import (
     "os"
 
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -3099,7 +3531,7 @@ client.close</code></pre>
         <pre class="prettyprint lang-go code"><code class="code">package main
 
 import (
-    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go"
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
 )
 
 func main() {
@@ -3794,6 +4226,8 @@ curl -s -w "\n%{http_code}" -X PUT http://localhost:1080/mockserver/verifySLO \
 
 <p>Every completed load-scenario dispatch is recorded into a dedicated <code class="inline code">mock_server_load_*</code> metric family that MockServer exposes through <strong>both</strong> of its observability channels — a <strong>Prometheus</strong> scrape endpoint and <strong>OpenTelemetry (OTLP)</strong> push. The same metrics drive the dashboard's live <a href="#dashboard_ui">throughput &amp; latency chart</a>. This lets you chart the injector's latency, throughput, and error rate alongside your system-under-test in Grafana, Datadog, or any OTEL-compatible backend — without a separate load tool.</p>
 
+<div class="alert" style="background-color: #eaf3fb; border-left: 4px solid #4a90d9; padding: 12px 16px; margin: 16px 0;"><strong>Runnable example — see it in Grafana in one command.</strong> The <a href="https://github.com/mock-server/mockserver-monorepo/tree/master/examples/kubernetes/load-injection-observability" target="_blank" rel="noopener noreferrer"><code class="inline code">examples/kubernetes/load-injection-observability</code></a> stack spins up MockServer, Prometheus, an OpenTelemetry Collector and Grafana on a local <a href="https://k3s.io" target="_blank" rel="noopener noreferrer">k3s</a> cluster (via <a href="https://k3d.io" target="_blank" rel="noopener noreferrer">k3d</a>), triggers a load run, and opens a <strong>provisioned dashboard</strong> that renders VUs, throughput, latency percentiles, failures, status codes, data transfer, and JVM plus pod CPU/memory — with the same metrics arriving over <strong>both</strong> Prometheus and OTLP. It's the fastest way to see this section's metrics live.</div>
+
 <a id="observability_exposure" class="anchor" href="#observability_exposure">&nbsp;</a>
 
 <h3>How the metrics are exposed</h3>
@@ -4136,7 +4570,7 @@ rate(mock_server_load_throttled_total[1m])</code></pre>
 
 <h2>Configuration</h2>
 
-<table class="table-standard">
+<table class="table-standard table-scroll">
     <thead>
         <tr>
             <th>Property</th>

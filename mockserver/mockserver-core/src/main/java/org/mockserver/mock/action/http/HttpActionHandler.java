@@ -10,6 +10,8 @@ import org.mockserver.closurecallback.websocketregistry.LocalCallbackRegistry;
 import org.mockserver.configuration.Configuration;
 import org.mockserver.cors.CORSHeaders;
 import org.mockserver.filters.HopByHopHeaderFilter;
+import org.mockserver.grpc.GrpcForwardTranslator;
+import org.mockserver.grpc.GrpcProtoDescriptorStore;
 import org.mockserver.httpclient.NettyHttpClient;
 import org.mockserver.httpclient.SocketCommunicationException;
 import org.mockserver.log.model.LogEntry;
@@ -101,6 +103,8 @@ public class HttpActionHandler {
 
     // forwarding
     private NettyHttpClient httpClient;
+    private final NettySslContextFactory nettySslContextFactory;
+    private WebSocketProxyRelayHandler webSocketProxyRelayHandler;
     private HopByHopHeaderFilter hopByHopHeaderFilter = new HopByHopHeaderFilter();
     private HttpRequestToCurlSerializer httpRequestToCurlSerializer;
     private final org.mockserver.metrics.Metrics metrics;
@@ -114,14 +118,76 @@ public class HttpActionHandler {
         return scheduler;
     }
 
-    public HttpActionHandler(Configuration configuration, EventLoopGroup eventLoopGroup, HttpState httpStateHandler, List<ProxyConfiguration> proxyConfigurations, NettySslContextFactory nettySslContextFactory) {
+    public HttpActionHandler(Configuration configuration, java.util.function.Supplier<EventLoopGroup> eventLoopGroupSupplier, HttpState httpStateHandler, List<ProxyConfiguration> proxyConfigurations, NettySslContextFactory nettySslContextFactory) {
         this.configuration = configuration;
         this.httpStateHandler = httpStateHandler;
         this.scheduler = httpStateHandler.getScheduler();
         this.mockServerLogger = httpStateHandler.getMockServerLogger();
         this.httpRequestToCurlSerializer = new HttpRequestToCurlSerializer(mockServerLogger);
-        this.httpClient = new NettyHttpClient(configuration, mockServerLogger, eventLoopGroup, proxyConfigurations, true, nettySslContextFactory);
+        // The event-loop group is supplied lazily (resolved on first forward) so a pure-mock server
+        // never triggers creation of the disjoint forward-client group. See NettyHttpClient and
+        // LifeCycle#getForwardClientEventLoopGroup().
+        this.httpClient = new NettyHttpClient(configuration, mockServerLogger, eventLoopGroupSupplier, proxyConfigurations, true, nettySslContextFactory);
+        this.nettySslContextFactory = nettySslContextFactory;
         this.metrics = new org.mockserver.metrics.Metrics(configuration);
+    }
+
+    private WebSocketProxyRelayHandler getWebSocketProxyRelayHandler() {
+        if (webSocketProxyRelayHandler == null) {
+            webSocketProxyRelayHandler = new WebSocketProxyRelayHandler(configuration, mockServerLogger, nettySslContextFactory);
+        }
+        return webSocketProxyRelayHandler;
+    }
+
+    /**
+     * Attempt to relay a WebSocket upgrade request straight through to a real upstream server (passthrough proxy).
+     * Returns {@code true} when the request is a WebSocket upgrade and an upstream address could be resolved, in
+     * which case the relay takes over the channel; {@code false} otherwise so the caller falls back to normal HTTP
+     * forwarding / matching. Only ever invoked with a live Netty {@code ctx} (never in WAR deployments).
+     */
+    private boolean attemptWebSocketPassthrough(final HttpRequest request, final ChannelHandlerContext ctx,
+                                                final String forwardHost, final Integer forwardPort, final Boolean forwardTls) {
+        if (ctx == null || !WebSocketProxyRelayHandler.isWebSocketUpgrade(request)) {
+            return false;
+        }
+        String host;
+        int port;
+        boolean tls;
+        if (isNotBlank(forwardHost)) {
+            host = forwardHost;
+            port = forwardPort != null ? forwardPort : (Boolean.TRUE.equals(forwardTls) ? 443 : 80);
+            tls = Boolean.TRUE.equals(forwardTls);
+        } else {
+            InetSocketAddress remoteAddress = getRemoteAddressWithFallback(ctx);
+            tls = Boolean.TRUE.equals(request.isSecure());
+            if (remoteAddress != null) {
+                host = remoteAddress.getHostString();
+                port = remoteAddress.getPort();
+            } else {
+                // reverse-proxy by Host header (SUT points its WebSocket client at MockServer as a proxy)
+                String hostHeader = request.getFirstHeader(HOST.toString());
+                if (isEmpty(hostHeader)) {
+                    return false;
+                }
+                String[] hostParts = HttpRequest.splitHostPort(hostHeader);
+                host = hostParts[0];
+                if (hostParts.length > 1) {
+                    try {
+                        port = Integer.parseInt(hostParts[1]);
+                    } catch (NumberFormatException e) {
+                        // malformed Host header port — fall back to normal forwarding rather than relaying
+                        return false;
+                    }
+                } else {
+                    port = tls ? 443 : 80;
+                }
+            }
+        }
+        if (isEmpty(host)) {
+            return false;
+        }
+        getWebSocketProxyRelayHandler().relay(request, ctx, host, port, tls);
+        return true;
     }
 
     /**
@@ -147,11 +213,16 @@ public class HttpActionHandler {
             }
         };
 
+        // force-response-variant: honour the caller-supplied response-sequence index on the early path too.
+        // The control header is NOT stripped from the (shared, already-logged) request here — it is omitted
+        // only when the outbound forward request is built (MockServerHttpRequestToFullHttpRequest), so
+        // recorded traffic deterministically retains it and forwards never carry it.
+        final Integer forcedResponseIndex = Expectation.parseForcedResponseIndex(request);
         // declarative capture (WS2.2): extract request value(s) into scenario state for early-matched
         // expectations too (header/query/cookie/path sources; body-based sources are typically empty here)
         org.mockserver.mock.CaptureProcessor.process(expectation.getCapture(), request);
 
-        final Action action = expectation.getAction();
+        final Action action = expectation.getAction(forcedResponseIndex);
         switch (action.getType()) {
             case RESPONSE -> {
                 // capture matchCount before scheduling to avoid race with concurrent requests
@@ -286,9 +357,37 @@ public class HttpActionHandler {
 
         } else if (proxyingRequest || potentiallyHttpProxy) {
 
+            // WebSocket passthrough: a WS upgrade request in proxy mode with no matching mock expectation is
+            // relayed straight through to the real upstream server (101 handshake + bidirectional frame relay),
+            // rather than being forwarded as a plain (broken) HTTP request. Falls back to normal forwarding when
+            // the request is not a WS upgrade or no upstream address can be resolved.
+            if (attemptWebSocketPassthrough(request, ctx, null, null, null)) {
+                return;
+            }
             handleUnmatchedProxyForward(request, responseWriter, ctx, synchronous, potentiallyHttpProxy);
 
         } else {
+
+            // OpenAI Responses API server-side state: serve GET /v1/responses/{id} from the
+            // store of previously-issued responses. Only reached when nothing else matched and
+            // the server is not proxying, so user-configured expectations always win; a request
+            // for an unknown id returns null here and falls through to the normal 404 path.
+            HttpResponse storedResponse = org.mockserver.llm.OpenAiResponsesStore.getInstance()
+                .retrievalResponseOrNull(request);
+            if (storedResponse != null) {
+                mockServerLogger.logEvent(
+                    new LogEntry()
+                        .setType(EXPECTATION_RESPONSE)
+                        .setLogLevel(Level.INFO)
+                        .setCorrelationId(request.getLogCorrelationId())
+                        .setHttpRequest(request)
+                        .setHttpResponse(storedResponse)
+                        .setMessageFormat("returning stored OpenAI Responses API response for request:{}")
+                        .setArguments(request)
+                );
+                responseWriter.writeResponse(request, storedResponse, false);
+                return;
+            }
 
             // breakpoint: REQUEST-phase pause on the unmatched-404 path — lets a registered matcher
             // pause / modify / abort even though nothing matched and the server is not proxying.
@@ -390,12 +489,32 @@ public class HttpActionHandler {
      * dispatch without restructuring the action-type switch.
      */
     private void dispatchPrimaryActionInternal(final Expectation expectation, final HttpRequest request, final ResponseWriter responseWriter, final ChannelHandlerContext ctx, final boolean synchronous, final Runnable expectationPostProcessor) {
+        // force-response-variant: read the caller-supplied 0-based response-sequence index (if any). The
+        // control header is deliberately NOT stripped from the shared request object here (it is already
+        // referenced by the RECEIVED_REQUEST log entry, and LogEntry stores requests by reference) — that
+        // would make recordings non-deterministically lose the header. Instead the header is omitted only
+        // when the outbound forward request is built (MockServerHttpRequestToFullHttpRequest), so recorded
+        // traffic retains it and forwards never carry it. A null / invalid / out-of-bounds index leaves
+        // normal selection in place (see Expectation.getPrimaryAction).
+        final Integer forcedResponseIndex = Expectation.parseForcedResponseIndex(request);
         // declarative capture (WS2.2): extract value(s) from the matched request into scenario
         // state BEFORE the response is built, so a response template can read them via scenario.get(name)
         org.mockserver.mock.CaptureProcessor.process(expectation.getCapture(), request);
         // fire cross-protocol scenario transitions when this expectation has them
         fireCrossProtocolEvents(expectation, request);
-        final Action action = expectation.getAction();
+        final Action action = expectation.getAction(forcedResponseIndex);
+        // WebSocket passthrough for a matched plain FORWARD expectation: relay the WS upgrade to the forward
+        // target (host/port/scheme) instead of forwarding it as a plain HTTP request. Only the plain HttpForward
+        // action carries a static host/port/scheme; the template/callback/replace forward variants fall through to
+        // their normal handlers (documented boundary).
+        if (action instanceof HttpForward && WebSocketProxyRelayHandler.isWebSocketUpgrade(request) && ctx != null) {
+            HttpForward forward = (HttpForward) action;
+            if (attemptWebSocketPassthrough(request, ctx, forward.getHost(), forward.getPort(),
+                forward.getScheme() == HttpForward.Scheme.HTTPS)) {
+                expectationPostProcessor.run();
+                return;
+            }
+        }
         // capture matchCount before scheduling to avoid race with concurrent requests
         final int capturedMatchCount = expectation.getMatchCount();
         // chaos: gate by the time-based outage window once per request and apply the
@@ -939,8 +1058,26 @@ public class HttpActionHandler {
                             }
                         }
 
+                        // Apply the same HTTP/2-upgrade protocol selection as the breakpoint-continuation
+                        // forward (executeUnmatchedForward) and the MATCHED forward path (HttpForwardAction),
+                        // so the common (no-breakpoint) transparent-proxy / unmatched forward also honours
+                        // forwardProxyHttp2Upgrade. This is the path the opencode CLI actually hits: an
+                        // HTTP/1.1 inbound that matches no expectation. Without it the upstream leg stays
+                        // HTTP/1.1 and streaming SSE backends (e.g. the OpenAI Codex endpoint) withhold the
+                        // response head until completion, collapsing time-to-first-byte to total time. Only
+                        // activates for the opt-in flag AND secure requests (ALPN; falls back to HTTP/1.1 if
+                        // the upstream declines), so the default path is unchanged.
+                        if (configuration != null
+                            && Boolean.TRUE.equals(configuration.forwardProxyHttp2Upgrade())
+                            && Boolean.TRUE.equals(clonedRequest.isSecure())) {
+                            clonedRequest.withProtocol(Protocol.HTTP_2);
+                        }
                         long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
-                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), null, remoteAddress);
+                        // gRPC forward-proxy: capture the decode override from the (still-tagged) request,
+                        // then re-encode the JSON body to protobuf frames for the upstream gRPC call.
+                        final java.util.function.Function<HttpResponse, HttpResponse> grpcDecode = grpcDecodeOverride(clonedRequest);
+                        final HttpRequest requestToSend = grpcEncodeForForward(clonedRequest);
+                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(requestToSend, remoteAddress, potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()), grpcDecode, remoteAddress);
                         HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
                         long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
                         if (response == null) {
@@ -1130,12 +1267,31 @@ public class HttpActionHandler {
                 return;
             }
 
+            // Apply the same HTTP/2-upgrade protocol selection the MATCHED forward path uses
+            // (HttpForwardAction.sendRequest), so the transparent-proxy (unmatched) path also honours
+            // forwardProxyHttp2Upgrade. Without it an HTTP/1.1 inbound (e.g. the opencode CLI) is always
+            // forwarded upstream over HTTP/1.1; some streaming backends — notably the OpenAI Codex SSE
+            // endpoint (chatgpt.com/backend-api/codex/responses) — withhold the response head over HTTP/1.1
+            // and only flush at completion, so MockServer's streaming relay (which DOES engage here) has
+            // nothing to relay until the end and time-to-first-byte collapses to total time. Forcing the
+            // upstream leg to HTTP/2 via ALPN (TLS only; ALPN falls back to HTTP/1.1 if the upstream
+            // declines) lets the backend stream the head immediately. This only activates when the opt-in
+            // flag is set AND the request is secure, so the default path is unchanged; the unmatched path
+            // already preserves the inbound protocol otherwise, so no explicit downgrade is applied.
+            if (configuration != null
+                && Boolean.TRUE.equals(configuration.forwardProxyHttp2Upgrade())
+                && Boolean.TRUE.equals(requestToForward.isSecure())) {
+                requestToForward.withProtocol(Protocol.HTTP_2);
+            }
             long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
+            // gRPC forward-proxy: capture the decode override then re-encode to protobuf for upstream.
+            final java.util.function.Function<HttpResponse, HttpResponse> grpcDecode = grpcDecodeOverride(requestToForward);
+            final HttpRequest requestToSend = grpcEncodeForForward(requestToForward);
             final HttpForwardActionResult responseFuture = new HttpForwardActionResult(
                 requestToForward,
-                httpClient.sendRequest(requestToForward, remoteAddress,
+                httpClient.sendRequest(requestToSend, remoteAddress,
                     potentiallyHttpProxy ? 1000 : configuration.socketConnectionTimeoutInMillis()),
-                null, remoteAddress
+                grpcDecode, remoteAddress
             );
             HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
             long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
@@ -1341,8 +1497,24 @@ public class HttpActionHandler {
                             return;
                         }
 
+                        // Apply the same HTTP/2-upgrade protocol selection as the matched forward and
+                        // transparent-proxy paths so the proxyPassMappings reverse-proxy route also honours
+                        // forwardProxyHttp2Upgrade. Without it a streaming SSE backend reached via a proxy-pass
+                        // mapping (e.g. the OpenAI Codex endpoint) stays on HTTP/1.1, where it withholds the
+                        // response head until completion, collapsing time-to-first-byte. Only the opt-in flag +
+                        // a secure target triggers it (clonedRequest.isSecure() reflects mapping.isTargetSecure(),
+                        // set above), so the default path is unchanged; ALPN falls back to HTTP/1.1 if the
+                        // upstream declines.
+                        if (configuration != null
+                            && Boolean.TRUE.equals(configuration.forwardProxyHttp2Upgrade())
+                            && Boolean.TRUE.equals(clonedRequest.isSecure())) {
+                            clonedRequest.withProtocol(Protocol.HTTP_2);
+                        }
                         long forwardStartNanos = org.mockserver.time.TimeService.nanoTime();
-                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(clonedRequest, targetAddress), null, targetAddress);
+                        // gRPC forward-proxy: capture the decode override then re-encode to protobuf for upstream.
+                        final java.util.function.Function<HttpResponse, HttpResponse> grpcDecode = grpcDecodeOverride(clonedRequest);
+                        final HttpRequest requestToSend = grpcEncodeForForward(clonedRequest);
+                        final HttpForwardActionResult responseFuture = new HttpForwardActionResult(clonedRequest, httpClient.sendRequest(requestToSend, targetAddress), grpcDecode, targetAddress);
                         HttpResponse response = responseFuture.getHttpResponse().get(configuration.maxFutureTimeoutInMillis(), MILLISECONDS);
                         long responseTimeMs = (org.mockserver.time.TimeService.nanoTime() - forwardStartNanos) / 1_000_000;
                         if (response == null) {
@@ -2214,6 +2386,17 @@ public class HttpActionHandler {
         // returned unchanged, so existing behaviour is byte-for-byte preserved.
         Delay resolvedActionDelay = getDelayTemplateResolver().resolve(effectiveResponse.getDelay(), request);
         Delay[] delays = combineWithChaosAndGlobalDelay(resolvedActionDelay, chaosLatency);
+        // Injected-vs-real latency waterfall: capture what MockServer is about to inject so the dashboard
+        // can distinguish it from real processing time. Sampled once here (exact for static delays; an
+        // independent draw for distribution delays) and measured against a nanoTime taken before the
+        // injected delays are applied. A few longs + one Timing object per response — no hot-path threads.
+        final long timingStartNanos = System.nanoTime();
+        final Long injectedChaosLatencyMillis = chaosLatency != null ? chaosLatency.sampleValueMillis() : null;
+        final long resolvedActionDelayMillis = resolvedActionDelay != null ? resolvedActionDelay.sampleValueMillis() : 0L;
+        final Long configuredGlobalDelayMillis = configuration.globalResponseDelayMillis();
+        final long globalDelayMillis = configuredGlobalDelayMillis != null && configuredGlobalDelayMillis > 0 ? configuredGlobalDelayMillis : 0L;
+        final long totalInjectedDelayMillis = resolvedActionDelayMillis + globalDelayMillis;
+        final Long injectedDelayMillis = totalInjectedDelayMillis > 0 ? totalInjectedDelayMillis : null;
         scheduler.schedule(() -> {
             // breakpoint: RESPONSE-phase pause for matched mock responses (RESPONSE / RESPONSE_TEMPLATE /
             // RESPONSE_CLASS_CALLBACK only — scoped by action type so the protocol-specific write paths that
@@ -2226,7 +2409,12 @@ public class HttpActionHandler {
                 if (responseBreakpoint != null) {
                     final java.util.concurrent.Executor continuationExecutor = scheduler.getExecutorService() != null
                         ? scheduler.getExecutorService() : Runnable::run;
+                    // breakpoint: measure how long the exchange is held paused so the waterfall can attribute
+                    // the hold to MockServer rather than to real processing time.
+                    final long breakpointPauseNanos = System.nanoTime();
                     if (attemptResponseBreakpoint(responseBreakpoint, request, effectiveResponse, action.getExpectationId(), responseWriter, continuationExecutor, responseToWrite -> {
+                        final long breakpointHeldMillis = Math.max(0L, (System.nanoTime() - breakpointPauseNanos) / 1_000_000L);
+                        attachMockServedTiming(responseToWrite, timingStartNanos, injectedChaosLatencyMillis, injectedDelayMillis, breakpointHeldMillis);
                         mockServerLogger.logEvent(
                             new LogEntry()
                                 .setType(EXPECTATION_RESPONSE)
@@ -2248,6 +2436,10 @@ public class HttpActionHandler {
                 }
             }
             try {
+                // Injected-vs-real latency waterfall: give the mock response a timing block (measured total +
+                // the injected components) before it is logged/written so the dashboard renders a waterfall for
+                // mock-served entries too, not just proxied ones. No breakpoint fired on this path.
+                attachMockServedTiming(effectiveResponse, timingStartNanos, injectedChaosLatencyMillis, injectedDelayMillis, null);
                 mockServerLogger.logEvent(
                     new LogEntry()
                         .setType(EXPECTATION_RESPONSE)
@@ -2324,6 +2516,49 @@ public class HttpActionHandler {
         System.arraycopy(baseDelays, 0, combined, 0, baseDelays.length);
         combined[baseDelays.length] = chaosLatency;
         return combined;
+    }
+
+    /**
+     * Attaches an injected-vs-real latency {@link Timing} block to a mock-served response so the dashboard
+     * waterfall is not proxy-only. Mock responses have no upstream connect/TTFB timing, so the block carries
+     * the measured total plus the injected components (chaos latency, action delay, breakpoint hold); the UI
+     * derives "real" processing time as total minus injected. Timing is metadata only — it is serialised for
+     * the dashboard/API but never written to the HTTP wire (mirrors the forwarded-response timing block).
+     */
+    private static void attachMockServedTiming(final HttpResponse response, final long startNanos, final Long injectedChaosLatencyMillis, final Long injectedDelayMillis, final Long breakpointHeldMillis) {
+        if (response == null) {
+            return;
+        }
+        // Only attach a timing block when MockServer actually injected latency (chaos, delay, or a
+        // breakpoint hold) and the response does not already carry a timing. A plain mock response with
+        // no injection is left untouched, so its serialised form — and therefore recorded log messages
+        // and retrieved responses — stays byte-identical to the pre-waterfall behaviour. The waterfall
+        // only has something to attribute when there is injected latency, which is exactly this case.
+        final boolean hasInjection = injectedChaosLatencyMillis != null
+            || injectedDelayMillis != null
+            || breakpointHeldMillis != null;
+        if (!hasInjection && response.getTiming() == null) {
+            return;
+        }
+        final long totalMillis = Math.max(0L, (System.nanoTime() - startNanos) / 1_000_000L);
+        // Copy rather than mutate any pre-existing Timing: an in-JVM expectation whose response
+        // carries a preset Timing would otherwise share (and race on) one instance across requests.
+        final Timing existing = response.getTiming();
+        Timing timing = Timing.timing();
+        if (existing != null) {
+            timing
+                .withRequestStartedMillis(existing.getRequestStartedMillis())
+                .withConnectionEstablishedMillis(existing.getConnectionEstablishedMillis())
+                .withResponseReceivedMillis(existing.getResponseReceivedMillis())
+                .withConnectionTimeInMillis(existing.getConnectionTimeInMillis())
+                .withTimeToFirstByteInMillis(existing.getTimeToFirstByteInMillis())
+                .withTotalTimeInMillis(existing.getTotalTimeInMillis());
+        }
+        response.withTiming(timing
+            .withTotalTimeInMillis(totalMillis)
+            .withInjectedChaosLatencyMillis(injectedChaosLatencyMillis)
+            .withInjectedDelayMillis(injectedDelayMillis)
+            .withBreakpointHeldMillis(breakpointHeldMillis));
     }
 
     /**
@@ -2440,12 +2675,25 @@ public class HttpActionHandler {
                 }
                 if (chaosLatency != null) {
                     org.mockserver.metrics.Metrics.incrementHttpChaosInjected("latency");
+                    // Injected-vs-real latency waterfall: annotate the forwarded response's existing timing
+                    // block (real connect/TTFB/upstream from NettyHttpClient) with the chaos latency MockServer
+                    // is about to inject, so the dashboard can separate injected from real time on proxied flows.
+                    if (effectiveResponse != null && effectiveResponse.getTiming() != null) {
+                        effectiveResponse.getTiming().withInjectedChaosLatencyMillis(chaosLatency.sampleValueMillis());
+                    }
                 }
 
                 // Drift detection: asynchronously compare the real upstream response against
                 // any response-type stub expectations matching this request.
                 // responseTimeMs already captured at line above via nanoTime delta.
-                analyseDrift(request, response, responseTimeMs);
+                // Gated by driftDetectionEnabled (master switch, default on) and sampled by
+                // driftSampleRate (default 1.0 = every eligible forward). ChaosProbability's
+                // draw is thread-safe (ThreadLocalRandom) and treats >=1.0 as always / <=0 as
+                // never, so out-of-range rates are handled safely without extra clamping here.
+                if (configuration.driftDetectionEnabled()
+                    && ChaosProbability.shouldInject(configuration.driftSampleRate(), null)) {
+                    analyseDrift(request, response, responseTimeMs);
+                }
 
                 // OpenTelemetry: emit a request-level span for the forwarded request
                 emitRequestSpan(request, effectiveResponse, action, ctx, responseTimeMs, responseFuture.getRemoteAddress());
@@ -3163,8 +3411,22 @@ public class HttpActionHandler {
      * (see {@code maxStreamingCaptureBytes}), so it is stored verbatim as text rather
      * than re-parsed into a structured JsonBody/XmlBody - re-parsing would fail to
      * serialize when the captured JSON is incomplete.
+     * <p>
+     * When the response carries NO {@code Content-Type} header at all — as the OpenAI
+     * Codex backend used by the opencode CLI does for its SSE stream — the captured bytes
+     * are sniffed: valid UTF-8 text (SSE/JSON/plain) is stored as a readable STRING so the
+     * dashboard and LLM trace/optimise views render it, while genuinely binary streams fall
+     * back to BINARY. Without this, a no-Content-Type SSE stream was stored as BINARY and
+     * appeared empty/unreadable in the LLM body views.
      */
     private static void setCapturedStreamingBody(HttpResponse logResponse, byte[] captured) {
+        // Clear the live StreamingBody reference copied by clone() so the retained log entry
+        // does not pin the live ≤256 KB capture buffer, the upstream EventLoop, or the
+        // onChunk/requestMore callbacks for the entry's lifetime in the ring buffer. The
+        // FIXED captured bytes are stored as the body below; the live sink is no longer needed.
+        // Done here (rather than at each call site) so all four streaming-completion paths are
+        // covered in one place — this helper is only ever called from those paths.
+        logResponse.withStreamingBody(null);
         if (captured.length == 0) {
             return;
         }
@@ -3175,8 +3437,45 @@ public class HttpActionHandler {
                 logResponse.withBody(new String(captured, mediaType.getCharsetOrDefault()));
                 return;
             }
+            // Explicit non-textual content type (e.g. application/octet-stream): store as binary.
+            logResponse.withBody(captured);
+            return;
         }
-        logResponse.withBody(captured);
+        // No Content-Type header: sniff the captured bytes so text streams stay readable.
+        if (isProbablyUtf8Text(captured)) {
+            logResponse.withBody(new String(captured, StandardCharsets.UTF_8));
+        } else {
+            logResponse.withBody(captured);
+        }
+    }
+
+    /**
+     * Heuristic used only when a streamed response has no {@code Content-Type} header, to
+     * decide whether the captured bytes should be stored as a readable STRING or as BINARY.
+     * Returns true when the bytes look like UTF-8 text (SSE/JSON/plain): they contain no NUL
+     * or non-whitespace C0 control bytes (the hallmark of binary data) and decode as UTF-8
+     * with at most a single replacement character (tolerating one multi-byte character split
+     * by capture truncation). Returns false for empty or binary-looking content.
+     */
+    private static boolean isProbablyUtf8Text(byte[] bytes) {
+        if (bytes.length == 0) {
+            return false;
+        }
+        for (byte b : bytes) {
+            int c = b & 0xFF;
+            if (c == 0 || (c < 0x20 && c != '\t' && c != '\n' && c != '\r')) {
+                return false;
+            }
+        }
+        // Lenient decode: clean text yields no U+FFFD; allow one for a truncated trailing char.
+        String decoded = new String(bytes, StandardCharsets.UTF_8);
+        int replacements = 0;
+        for (int i = 0; i < decoded.length(); i++) {
+            if (decoded.charAt(i) == '�' && ++replacements > 1) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -3233,9 +3532,36 @@ public class HttpActionHandler {
         return httpResponseObjectCallbackActionHandler;
     }
 
+    /**
+     * gRPC forward-proxy (anonymous / unmatched proxy path): re-encode a decoded gRPC request back
+     * into gRPC-framed protobuf for the upstream call. No-op (returns the same request) when the
+     * request is not a decoded gRPC exchange or no descriptors are loaded.
+     */
+    private HttpRequest grpcEncodeForForward(HttpRequest request) {
+        return GrpcForwardTranslator.encodeRequestForUpstream(request, httpStateHandler.getGrpcDescriptorStore());
+    }
+
+    /**
+     * Companion to {@link #grpcEncodeForForward}: a response override that decodes the upstream
+     * gRPC-framed protobuf response back to JSON and re-stamps the {@code x-grpc-*} headers, so the
+     * client response can be re-framed and the recorded {@code FORWARDED_REQUEST} is replayable.
+     * Returns {@code null} (no override) when the request is not a gRPC exchange. Must be called with
+     * the request BEFORE {@link #grpcEncodeForForward} strips its {@code x-grpc-*} headers.
+     */
+    private java.util.function.Function<HttpResponse, HttpResponse> grpcDecodeOverride(HttpRequest grpcRequest) {
+        GrpcProtoDescriptorStore store = httpStateHandler.getGrpcDescriptorStore();
+        if (store == null || !store.hasServices() || !GrpcForwardTranslator.isGrpcForwardRequest(grpcRequest)) {
+            return null;
+        }
+        final String service = grpcRequest.getFirstHeader(GrpcForwardTranslator.SERVICE_HEADER);
+        final String method = grpcRequest.getFirstHeader(GrpcForwardTranslator.METHOD_HEADER);
+        return resp -> GrpcForwardTranslator.decodeResponseFromUpstream(resp, service, method, store);
+    }
+
     private HttpForwardActionHandler getHttpForwardActionHandler() {
         if (httpForwardActionHandler == null) {
             httpForwardActionHandler = new HttpForwardActionHandler(mockServerLogger, configuration, httpClient);
+            httpForwardActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpForwardActionHandler;
     }
@@ -3243,6 +3569,7 @@ public class HttpActionHandler {
     private HttpForwardTemplateActionHandler getHttpForwardTemplateActionHandler() {
         if (httpForwardTemplateActionHandler == null) {
             httpForwardTemplateActionHandler = new HttpForwardTemplateActionHandler(mockServerLogger, configuration, httpClient);
+            httpForwardTemplateActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpForwardTemplateActionHandler;
     }
@@ -3250,6 +3577,7 @@ public class HttpActionHandler {
     private HttpForwardClassCallbackActionHandler getHttpForwardClassCallbackActionHandler() {
         if (httpForwardClassCallbackActionHandler == null) {
             httpForwardClassCallbackActionHandler = new HttpForwardClassCallbackActionHandler(mockServerLogger, configuration, httpClient);
+            httpForwardClassCallbackActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpForwardClassCallbackActionHandler;
     }
@@ -3257,6 +3585,7 @@ public class HttpActionHandler {
     private HttpForwardObjectCallbackActionHandler getHttpForwardObjectCallbackActionHandler() {
         if (httpForwardObjectCallbackActionHandler == null) {
             httpForwardObjectCallbackActionHandler = new HttpForwardObjectCallbackActionHandler(httpStateHandler, configuration, httpClient);
+            httpForwardObjectCallbackActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpForwardObjectCallbackActionHandler;
     }
@@ -3264,6 +3593,7 @@ public class HttpActionHandler {
     private HttpOverrideForwardedRequestActionHandler getHttpOverrideForwardedRequestCallbackActionHandler() {
         if (httpOverrideForwardedRequestCallbackActionHandler == null) {
             httpOverrideForwardedRequestCallbackActionHandler = new HttpOverrideForwardedRequestActionHandler(mockServerLogger, configuration, httpClient);
+            httpOverrideForwardedRequestCallbackActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpOverrideForwardedRequestCallbackActionHandler;
     }
@@ -3271,6 +3601,7 @@ public class HttpActionHandler {
     private HttpForwardValidateActionHandler getHttpForwardValidateActionHandler() {
         if (httpForwardValidateActionHandler == null) {
             httpForwardValidateActionHandler = new HttpForwardValidateActionHandler(mockServerLogger, configuration, httpClient);
+            httpForwardValidateActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpForwardValidateActionHandler;
     }
@@ -3278,13 +3609,14 @@ public class HttpActionHandler {
     private HttpForwardWithFallbackActionHandler getHttpForwardWithFallbackActionHandler() {
         if (httpForwardWithFallbackActionHandler == null) {
             httpForwardWithFallbackActionHandler = new HttpForwardWithFallbackActionHandler(mockServerLogger, configuration, httpClient);
+            httpForwardWithFallbackActionHandler.setGrpcDescriptorStore(httpStateHandler.getGrpcDescriptorStore());
         }
         return httpForwardWithFallbackActionHandler;
     }
 
     private HttpSseResponseActionHandler getHttpSseResponseActionHandler() {
         if (httpSseResponseActionHandler == null) {
-            httpSseResponseActionHandler = new HttpSseResponseActionHandler(mockServerLogger, scheduler);
+            httpSseResponseActionHandler = new HttpSseResponseActionHandler(mockServerLogger, scheduler, configuration);
         }
         return httpSseResponseActionHandler;
     }

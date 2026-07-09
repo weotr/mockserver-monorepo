@@ -45,13 +45,30 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
     private final HttpTemplateOutputDeserializer httpTemplateOutputDeserializer;
     private final Configuration configuration;
     private final Predicate<String> classFilter;
+    private final boolean polyglotAvailable;
+    // Per-engine seeded faker when templateFakerSeed is non-zero, else null (the shared unseeded faker
+    // from BUILT_IN_HELPERS is used). Resolved once so the seeded sequence is deterministic across renders.
+    private final Object seededFaker;
 
     public JavaScriptTemplateEngine(MockServerLogger mockServerLogger, Configuration configuration) {
+        this(mockServerLogger, configuration, POLYGLOT_AVAILABLE);
+    }
+
+    /**
+     * Visible for testing: allows exercising the polyglot-unavailable (fail-loud) path even when the
+     * GraalVM Polyglot API is present on the test classpath. Production always uses the public two-arg
+     * constructor, which pins {@code polyglotAvailable} to the real classpath probe {@link #POLYGLOT_AVAILABLE}.
+     */
+    JavaScriptTemplateEngine(MockServerLogger mockServerLogger, Configuration configuration, boolean polyglotAvailable) {
+        this.polyglotAvailable = polyglotAvailable;
         this.configuration = (configuration == null) ? configuration() : configuration;
         this.mockServerLogger = mockServerLogger;
         this.httpTemplateOutputDeserializer = new HttpTemplateOutputDeserializer(mockServerLogger);
         this.objectMapper = ObjectMapperFactory.createObjectMapper();
         this.classFilter = className -> isClassAllowed(className, this.configuration);
+        this.seededFaker = this.configuration.templateFakerSeed() != 0L
+            ? org.mockserver.templates.engine.TemplateFunctions.resolveFaker(this.configuration.templateFakerSeed())
+            : null;
         if (mockServerLogger != null
             && mockServerLogger.isEnabledForInstance(Level.WARN)
             && !isNotBlank(this.configuration.javascriptDisallowedClasses())) {
@@ -100,47 +117,90 @@ public class JavaScriptTemplateEngine implements TemplateEngine {
     public String renderTemplate(String template, HttpRequest request) {
         // JavaScript templates are designed to construct and return a full response object, not a text
         // fragment, so they are not supported for FileBody templating. Use httpResponseTemplate (or
-        // httpResponseTemplate with templateFile) with a JavaScript template instead.
+        // httpResponseTemplate with templateFile) with a JavaScript template instead. Streaming payload
+        // templating uses renderTemplateText(...) below, which executes the template and coerces its
+        // return value to text.
         throw new UnsupportedOperationException("JavaScript templates are not supported for file body templating; use a Velocity or Mustache templateType, or an httpResponseTemplate for JavaScript");
     }
 
-    private <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, org.mockserver.load.IterationContext iteration, Class<? extends DTO<T>> dtoClass, boolean includeResponse) {
-        String script = includeResponse ? wrapTemplateWithResponse(template) : wrapTemplate(template);
+    @Override
+    public String renderTemplateText(String template, HttpRequest request) {
+        assertPolyglotAvailable(request);
+        String script = wrapTemplate(template);
         try {
             validateTemplate(template);
-            if (POLYGLOT_AVAILABLE) {
-                // Delegate to PolyglotRunner (nested holder class). The JVM only resolves the
-                // org.graalvm.polyglot.* references inside PolyglotRunner when this branch is
-                // taken, so the standard distribution (no GraalVM on classpath) loads this class
-                // and degrades gracefully via the else branch instead of failing with NoClassDefFoundError.
-                Long executionTimeout = configuration.javascriptTemplateExecutionTimeout();
-                return PolyglotRunner.run(
-                    script,
-                    includeResponse,
-                    request,
-                    response,
-                    iteration,
-                    classFilter,
-                    objectMapper,
-                    mockServerLogger,
-                    httpTemplateOutputDeserializer,
-                    dtoClass,
-                    executionTimeout == null ? 0L : executionTimeout
-                );
-            } else {
+            Long executionTimeout = configuration.javascriptTemplateExecutionTimeout();
+            // rawText=true: the template's handle(request) return value is coerced to text (a string is
+            // used verbatim, any other value is JSON.stringify'd) rather than deserialised into a response.
+            return PolyglotRunner.run(
+                script,
+                false,
+                request,
+                null,
+                null,
+                classFilter,
+                objectMapper,
+                mockServerLogger,
+                httpTemplateOutputDeserializer,
+                null,
+                executionTimeout == null ? 0L : executionTimeout,
+                true,
+                seededFaker
+            );
+        } catch (JavaScriptTemplateTimeoutException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(formatLogMessage("Exception:{}transforming template:{}for request:{}", isNotBlank(e.getMessage()) ? e.getMessage() : e.getClass().getSimpleName(), template, request), e);
+        }
+    }
+
+    /**
+     * Fail loudly rather than silently degrade. If a JavaScript template is actually used but the
+     * GraalVM Polyglot API (GraalJS) is not on the classpath, we cannot render it, so surface a clear,
+     * actionable error the same way a template transform failure does (RuntimeException) instead of
+     * returning null and producing a confusing empty/degraded response.
+     */
+    private void assertPolyglotAvailable(HttpRequest request) {
+        if (!polyglotAvailable) {
+            String message = "JavaScript response templates require the GraalJS engine, which is not on the classpath. " +
+                "Add the org.graalvm.polyglot:js (or js-community) dependency, or use the Velocity or Mustache template engine.";
+            if (mockServerLogger != null) {
                 mockServerLogger.logEvent(
                     new LogEntry()
                         .setLogLevel(Level.ERROR)
                         .setHttpRequest(request)
-                        .setMessageFormat(
-                            "JavaScript based templating requires GraalVM Polyglot on the classpath, " +
-                                "please add org.graalvm.polyglot:polyglot and org.graalvm.polyglot:js to the classpath, " +
-                                "or use the MockServer 'graaljs' Docker image variant"
-                        )
-                        .setArguments(new RuntimeException("GraalVM Polyglot API not on classpath"))
+                        .setMessageFormat(message)
                 );
-                return null;
             }
+            throw new RuntimeException(message);
+        }
+    }
+
+    private <T> T executeTemplateInternal(String template, HttpRequest request, HttpResponse response, org.mockserver.load.IterationContext iteration, Class<? extends DTO<T>> dtoClass, boolean includeResponse) {
+        assertPolyglotAvailable(request);
+        String script = includeResponse ? wrapTemplateWithResponse(template) : wrapTemplate(template);
+        try {
+            validateTemplate(template);
+            // Delegate to PolyglotRunner (nested holder class). The JVM only resolves the
+            // org.graalvm.polyglot.* references inside PolyglotRunner when this branch is
+            // reached, so the standard distribution (no GraalVM on classpath) never triggers a
+            // NoClassDefFoundError — that case is handled by the fail-loud guard above.
+            Long executionTimeout = configuration.javascriptTemplateExecutionTimeout();
+            return PolyglotRunner.run(
+                script,
+                includeResponse,
+                request,
+                response,
+                iteration,
+                classFilter,
+                objectMapper,
+                mockServerLogger,
+                httpTemplateOutputDeserializer,
+                dtoClass,
+                executionTimeout == null ? 0L : executionTimeout,
+                false,
+                seededFaker
+            );
         } catch (JavaScriptTemplateTimeoutException e) {
             // Surface the timeout as-is (with its clear, already-logged message) rather than wrapping
             // it in the generic transform-failure message, so callers/tests can recognise the cap firing.

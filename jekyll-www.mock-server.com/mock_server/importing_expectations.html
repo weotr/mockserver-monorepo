@@ -1,7 +1,7 @@
 ---
-title: Importing Expectations from HAR, Postman & Pact
-description: Import expectations into MockServer from HAR (HTTP Archive), Postman Collection, or Pact v3 contract files via a single PUT /mockserver/import request, with format auto-detection.
-shortTitle: Import HAR / Postman / Pact
+title: Importing Expectations from HAR, Postman, Pact, WireMock, Mountebank & Mockoon
+description: Import expectations into MockServer from HAR (HTTP Archive), Postman Collection, Pact v3 contract, WireMock stub, Mountebank imposter, or Mockoon environment files via a single PUT /mockserver/import request, with format auto-detection.
+shortTitle: Import & Migrate
 layout: page
 pageOrder: 6
 section: 'Creating Mocks'
@@ -12,7 +12,7 @@ sitemap:
   lastmod: 2026-06-17T00:00:00+00:00
 ---
 
-<p>MockServer can import expectations directly from <strong>HAR (HTTP Archive)</strong> files, <strong>Postman Collection v2.x</strong> files, and <strong>Pact v3 consumer contracts</strong>. This lets you record real HTTP traffic, reuse existing collections, or bootstrap stubs from a published contract without writing expectations by hand.</p>
+<p>MockServer can import expectations directly from <strong>HAR (HTTP Archive)</strong> files, <strong>Postman Collection v2.x</strong> files, <strong>Pact v3 consumer contracts</strong>, and &mdash; to migrate off another mock tool &mdash; <strong>WireMock</strong> stub mappings, <strong>Mountebank</strong> imposters, and <strong>Mockoon</strong> environments. This lets you record real HTTP traffic, reuse existing collections, bootstrap stubs from a published contract, or move your whole existing mock suite into MockServer without rewriting stubs by hand.</p>
 
 <p><strong>Note:</strong> import is a server-side REST operation — all clients import by calling <span class="inline_code">PUT /mockserver/import</span> directly with the document as the request body. The examples below use <span class="inline_code">curl</span>; any HTTP client (or the language client's raw request method) sends the same request.</p>
 
@@ -22,6 +22,7 @@ sitemap:
     <li><strong>Migrate existing collections</strong> &mdash; teams with an existing Postman collection can import their saved example responses into MockServer</li>
     <li><strong>Bootstrap mocks quickly</strong> &mdash; import a HAR from staging traffic to get a working mock in seconds, then fine-tune individual expectations as needed</li>
     <li><strong>Replay a Pact contract</strong> &mdash; import a Pact v3 consumer contract to create a stub provider that satisfies the contract without standing up the real service</li>
+    <li><strong>Migrate off another mock tool</strong> &mdash; convert an existing WireMock, Mountebank, or Mockoon stub suite into MockServer expectations in one request, with a warning for every construct that could not be mapped 1:1</li>
 </ul>
 
 <a id="import_endpoint" class="anchor" href="#import_endpoint">&nbsp;</a>
@@ -39,6 +40,9 @@ sitemap:
     <li>If the body contains <span class="inline_code">log.entries</span>, it is treated as HAR</li>
     <li>If the body contains <span class="inline_code">info</span> and <span class="inline_code">item</span>, it is treated as a Postman Collection</li>
     <li>If the body contains a top-level <span class="inline_code">interactions</span> array, it is treated as a Pact v3 contract</li>
+    <li>If the body contains a <span class="inline_code">mappings</span> array (or a stub with <span class="inline_code">request.urlPath</span>/<span class="inline_code">urlPattern</span> or a <span class="inline_code">response.fault</span>/<span class="inline_code">jsonBody</span>), it is treated as WireMock stubs</li>
+    <li>If the body contains an <span class="inline_code">imposters</span> array (or <span class="inline_code">protocol</span> + <span class="inline_code">stubs</span>), it is treated as Mountebank imposters</li>
+    <li>If the body contains a top-level <span class="inline_code">routes</span> array, it is treated as a Mockoon environment</li>
 </ul>
 
 <p>You can also override auto-detection with the <span class="inline_code">format</span> query parameter:</p>
@@ -67,12 +71,106 @@ sitemap:
             <td><span class="inline_code">pact</span></td>
             <td>Force Pact v3 contract parsing</td>
         </tr>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">wiremock</span></td>
+            <td>Force WireMock stub-mapping parsing (see <a href="#migration_importers">Migrating from WireMock, Mountebank &amp; Mockoon</a>)</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">mountebank</span></td>
+            <td>Force Mountebank imposter parsing</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">mockoon</span></td>
+            <td>Force Mockoon environment parsing</td>
+        </tr>
+        <tr>
+            <td><span class="inline_code">format</span></td>
+            <td><span class="inline_code">recording</span></td>
+            <td>Reload a persisted recorded-traffic NDJSON archive (see <a href="#recording_reimport">Reloading Recorded Traffic</a>). Unlike the other formats this does not create expectations — it re-loads recorded request/response pairs so they are retrievable like live in-memory recordings. Must be specified explicitly (NDJSON is never auto-detected).</td>
+        </tr>
     </tbody>
 </table>
 
 <p>If auto-detection fails and no <span class="inline_code">format</span> parameter is provided, MockServer returns <span class="inline_code">400 Bad Request</span> with a message suggesting you specify the format explicitly.</p>
 
-<p><strong>Insomnia is not a supported import format</strong> &mdash; the only recognised formats are <span class="inline_code">har</span>, <span class="inline_code">postman</span>, and <span class="inline_code">pact</span>. Export from Insomnia as HAR, or convert to a Postman collection, then import that instead.</p>
+<a id="recording_reimport" class="anchor" href="#recording_reimport">&nbsp;</a>
+
+<h3>Reloading Recorded Traffic</h3>
+
+<p>When <a href="/mock_server/configuration_properties.html"><span class="inline_code">persistRecordedRequestsToDisk</span></a> is enabled, MockServer appends every recorded exchange (both proxied and mocked request/response pairs) to a durable NDJSON archive at <span class="inline_code">persistedRecordedRequestsPath</span>. That archive outlives in-memory log eviction and restarts. Reload it with <span class="inline_code">format=recording</span> so the exchanges become retrievable exactly like live recordings via <span class="inline_code">PUT /mockserver/retrieve?type=REQUEST_RESPONSES</span>:</p>
+
+<pre class="prettyprint code"><code class="code"># reload the archive at the configured persistedRecordedRequestsPath
+curl -v -X PUT "http://localhost:1080/mockserver/import?format=recording&amp;source=disk"
+
+# or supply an archive file in the request body
+curl -v -X PUT "http://localhost:1080/mockserver/import?format=recording" \
+    --data-binary @recordedRequests.ndjson</code></pre>
+
+<p>Reload is idempotent — reloaded exchanges are not written back to the archive, so reloading the same file never grows it. Sensitive-data redaction (below) applies to <span class="inline_code">recording</span> imports too.</p>
+
+<p><strong>Crash recovery.</strong> The archive is written one line at a time, so a hard crash can leave a partially-written final line. Reload skips any malformed or truncated line (reporting how many in the <span class="inline_code">x-mockserver-recorded-requests-skipped</span> response header) and still loads every intact exchange, so <span class="inline_code">source=disk</span> reliably recovers a session after a crash. An empty archive simply reloads nothing (<span class="inline_code">201</span> with an empty list).</p>
+
+<p><strong>Note:</strong> reloaded exchanges are recorded as <em>forwarded</em> requests, so an originally-mocked exchange counts as forwarded if you later verify by disposition (forwarded vs mocked). This is an accepted limitation of the initial version.</p>
+
+<p><strong>Insomnia is not a supported import format</strong> &mdash; the recognised expectation formats are <span class="inline_code">har</span>, <span class="inline_code">postman</span>, <span class="inline_code">pact</span>, <span class="inline_code">wiremock</span>, <span class="inline_code">mountebank</span>, and <span class="inline_code">mockoon</span>. Export from Insomnia as HAR, or convert to a Postman collection, then import that instead.</p>
+
+<a id="migration_importers" class="anchor" href="#migration_importers">&nbsp;</a>
+
+<h2>Migrating from WireMock, Mountebank &amp; Mockoon</h2>
+
+<p>Moving off another mock tool? Send its stub definitions to <span class="inline_code">PUT /mockserver/import</span> and MockServer converts them into expectations in one shot. Because these tools have constructs with no exact MockServer equivalent, the response body for these three formats is a JSON object with <strong>both</strong> the imported expectations <strong>and</strong> a list of structured warnings &mdash; every construct that could not be mapped 1:1 produces a warning instead of being silently dropped:</p>
+
+<pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import?format=wiremock" \
+    --data-binary @wiremock-mappings.json
+
+# 201 Created
+# {
+#   "expectations": [ ... ],
+#   "warnings": [
+#     { "item": "stub[3]", "construct": "bodyPatterns.matchesXPath",
+#       "detail": "XML/XPath body matching is not mapped by this importer" }
+#   ]
+# }</code></pre>
+
+<p>Each warning has an <span class="inline_code">item</span> (which source stub/route it came from), a <span class="inline_code">construct</span> (the foreign feature), and a <span class="inline_code">detail</span> explaining what happened. Review the warnings after a migration and add any missing matchers by hand. Secret redaction (below) applies to these imports too.</p>
+
+<a id="import_wiremock" class="anchor" href="#import_wiremock">&nbsp;</a>
+
+<h3>WireMock stub mappings</h3>
+
+<p>Accepts a single stub object, a <span class="inline_code">{ "mappings": [ ... ] }</span> export (from <span class="inline_code">GET /__admin/mappings</span> or a <span class="inline_code">mappings/</span> directory), or a bare JSON array. Mapping:</p>
+<ul>
+    <li><strong>Request</strong> &mdash; <span class="inline_code">method</span>, <span class="inline_code">urlPath</span> (exact), <span class="inline_code">urlPathPattern</span>/<span class="inline_code">urlPattern</span> (regex path), <span class="inline_code">url</span> (path + query); <span class="inline_code">queryParameters</span> and <span class="inline_code">headers</span> predicates (<span class="inline_code">equalTo</span>, <span class="inline_code">matches</span>, <span class="inline_code">contains</span>); <span class="inline_code">bodyPatterns</span> (<span class="inline_code">equalToJson</span>, <span class="inline_code">matchesJsonPath</span>, <span class="inline_code">contains</span>, <span class="inline_code">matches</span>, <span class="inline_code">equalTo</span>).</li>
+    <li><strong>Response</strong> &mdash; <span class="inline_code">status</span>, <span class="inline_code">headers</span>, <span class="inline_code">body</span>/<span class="inline_code">base64Body</span>/<span class="inline_code">jsonBody</span>, <span class="inline_code">fixedDelayMilliseconds</span> (delay). A <span class="inline_code">fault</span> becomes a connection-drop error; a <span class="inline_code">proxyBaseUrl</span> response becomes a forward to that host.</li>
+    <li><strong>Scenarios &amp; priority</strong> &mdash; WireMock scenarios (<span class="inline_code">scenarioName</span>/<span class="inline_code">requiredScenarioState</span>/<span class="inline_code">newScenarioState</span>) map straight onto MockServer scenarios; <span class="inline_code">priority</span> is inverted (WireMock 1 = highest).</li>
+</ul>
+<p><em>Warned, not mapped:</em> <span class="inline_code">matchesXPath</span>/<span class="inline_code">equalToXml</span> body matching, random <span class="inline_code">delayDistribution</span>, response templating <span class="inline_code">transformers</span>, and <span class="inline_code">bodyFileName</span> references.</p>
+
+<a id="import_mountebank" class="anchor" href="#import_mountebank">&nbsp;</a>
+
+<h3>Mountebank imposters</h3>
+
+<p>Accepts a single imposter, a <span class="inline_code">{ "imposters": [ ... ] }</span> config, or a bare array. Only <span class="inline_code">http</span>/<span class="inline_code">https</span> imposters are imported &mdash; <span class="inline_code">tcp</span>/<span class="inline_code">smtp</span> imposters are skipped with a warning. Mapping:</p>
+<ul>
+    <li><strong>Predicates</strong> &mdash; <span class="inline_code">equals</span>, <span class="inline_code">deepEquals</span>, <span class="inline_code">contains</span>, <span class="inline_code">matches</span>, <span class="inline_code">exists</span>, <span class="inline_code">startsWith</span>, <span class="inline_code">endsWith</span> over <span class="inline_code">method</span>/<span class="inline_code">path</span>/<span class="inline_code">query</span>/<span class="inline_code">headers</span>/<span class="inline_code">body</span> become request matchers (all predicates in a stub are combined).</li>
+    <li><strong>Responses</strong> &mdash; <span class="inline_code">is</span> becomes a response, <span class="inline_code">proxy</span> becomes a forward, <span class="inline_code">fault</span> becomes a connection-drop error. <span class="inline_code">_behaviors.wait</span> becomes a delay and <span class="inline_code">_behaviors.repeat</span> becomes a repeat count. Several <span class="inline_code">is</span> responses in one stub become a single cycling response.</li>
+</ul>
+<p><em>Warned, not mapped:</em> <span class="inline_code">tcp</span>/<span class="inline_code">smtp</span> imposters, compound <span class="inline_code">and</span>/<span class="inline_code">or</span>/<span class="inline_code">not</span> predicates, JavaScript <span class="inline_code">inject</span>, and post-processing behaviours (<span class="inline_code">decorate</span>/<span class="inline_code">copy</span>/<span class="inline_code">lookup</span>/<span class="inline_code">shellTransform</span>).</p>
+
+<a id="import_mockoon" class="anchor" href="#import_mockoon">&nbsp;</a>
+
+<h3>Mockoon environments</h3>
+
+<p>Import a Mockoon environment export (a JSON file with a top-level <span class="inline_code">routes</span> array). Mapping:</p>
+<ul>
+    <li><strong>Route</strong> &mdash; <span class="inline_code">method</span> and <span class="inline_code">endpoint</span> become the request matcher; Express-style <span class="inline_code">:param</span> segments become single-segment wildcards.</li>
+    <li><strong>Response</strong> &mdash; <span class="inline_code">statusCode</span>, <span class="inline_code">headers</span>, <span class="inline_code">body</span>, and <span class="inline_code">latency</span> (delay). Response <span class="inline_code">rules</span> (query/header/body targets) become extra request matchers, with descending priority so the route's response order is preserved and the <span class="inline_code">default</span> response acts as a catch-all.</li>
+    <li><strong>Response mode</strong> &mdash; <span class="inline_code">SEQUENTIAL</span> and <span class="inline_code">RANDOM</span> map to the matching MockServer cycling response mode.</li>
+</ul>
+<p><em>Warned, not mapped:</em> the <span class="inline_code">crud</span> route type, cookie/path rule targets, the <span class="inline_code">null</span>/<span class="inline_code">empty_array</span> rule operators, <span class="inline_code">OR</span>-combined rules (only the first rule maps), file-backed bodies, data buckets, and Handlebars <span class="inline_code">{% raw %}{{...}}{% endraw %}</span> templating (served verbatim).</p>
 
 <a id="import_redaction" class="anchor" href="#import_redaction">&nbsp;</a>
 
@@ -130,12 +228,103 @@ sitemap:
 
 <p>When a HAR entry has <span class="inline_code">postData.text</span>, it is included in the request matcher if the body is reasonably sized (under 4 KB). Larger request bodies are omitted from matching to keep expectations permissive.</p>
 
+<h3>Consolidating a HAR into reusable mocks</h3>
+
+<p>A HAR captured from a browser or staging traffic often hits the same endpoint many times. By default MockServer creates one expectation per entry. Add <span class="inline_code">consolidate=true</span> (and optionally <span class="inline_code">parameterize=true</span>) to <span class="inline_code">PUT /mockserver/import?format=har&consolidate=true</span> to collapse those into a compact set of unlimited-use mocks &mdash; grouping by request shape, inferring <span class="inline_code">/users/{id}</span> path parameters from varying id segments, stripping volatile request headers, and sequencing differing responses for the same request. This is the same consolidation used by the proxy <a href="/proxy/record_and_replay.html#consolidate_on_retrieve">record &amp; replay</a> flow.</p>
+
 <h3>Base64 response bodies</h3>
 
 <p>HAR files sometimes encode response bodies as Base64 (indicated by <span class="inline_code">content.encoding: "base64"</span>). MockServer automatically decodes these back to plain text for the generated response body.</p>
 
+<p>Each language client has a typed <span class="inline_code">importHar</span> helper (<span class="inline_code">import_har</span> / <span class="inline_code">ImportHar</span>) that wraps <span class="inline_code">PUT /mockserver/import?format=har</span> and returns the upserted expectations. Read the <span class="inline_code">traffic.har</span> file and pass its contents to the helper. The REST API tab shows the equivalent raw request.</p>
+
 <button id="button_import_har" class="accordion">import expectations from a HAR file</button>
 <div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.mock.Expectation;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+String harJson = Files.readString(Path.of("traffic.har"));
+Expectation[] generatedExpectations = client.importHar(harJson);
+// generatedExpectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var fs = require('fs');
+
+var harJson = fs.readFileSync("traffic.har", "utf8");
+mockServerClient("localhost", 1080).importHar(harJson).then(
+    function (expectations) {
+        console.log(expectations); // the upserted expectations, one per HAR entry
+    },
+    function (error) {
+        console.log(error);
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+with open("traffic.har") as har:
+    expectations = client.import_har(har.read())
+# expectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+expectations = client.import_har(File.read('traffic.har'))
+# expectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "os"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+)
+
+client := mockserver.New("localhost", 1080)
+harJSON, _ := os.ReadFile("traffic.har")
+expectations, _ := client.ImportHar(string(harJSON))
+// expectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var harJson = File.ReadAllText("traffic.har");
+var expectations = client.ImportHar(harJson);
+// expectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+use std::fs;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let har_json = fs::read_to_string("traffic.har").unwrap();
+let expectations = client.import_har(&har_json).unwrap();
+// expectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$expectations = $client-&gt;importHar(file_get_contents('traffic.har'));
+// $expectations holds the upserted expectations, one per HAR entry</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import" \
@@ -159,8 +348,95 @@ sitemap:
 
 <p>The Postman <span class="inline_code">url</span> field is handled whether it appears as a plain string or as the structured object format with <span class="inline_code">path[]</span> and <span class="inline_code">query[]</span> arrays.</p>
 
+<p>Each language client has a typed <span class="inline_code">importPostmanCollection</span> helper (<span class="inline_code">import_postman_collection</span> / <span class="inline_code">ImportPostmanCollection</span>) that wraps <span class="inline_code">PUT /mockserver/import?format=postman</span> and returns the upserted expectations. Read the <span class="inline_code">my-collection.postman_collection.json</span> file and pass its contents to the helper. The REST API tab shows the equivalent raw request.</p>
+
 <button id="button_import_postman" class="accordion">import expectations from a Postman Collection</button>
 <div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import org.mockserver.mock.Expectation;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+String postmanJson = Files.readString(Path.of("my-collection.postman_collection.json"));
+Expectation[] generatedExpectations = client.importPostmanCollection(postmanJson);
+// generatedExpectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var fs = require('fs');
+
+var collectionJson = fs.readFileSync("my-collection.postman_collection.json", "utf8");
+mockServerClient("localhost", 1080).importPostmanCollection(collectionJson).then(
+    function (expectations) {
+        console.log(expectations); // the upserted expectations, one per saved example response
+    },
+    function (error) {
+        console.log(error);
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+with open("my-collection.postman_collection.json") as collection:
+    expectations = client.import_postman_collection(collection.read())
+# expectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+expectations = client.import_postman_collection(File.read('my-collection.postman_collection.json'))
+# expectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "os"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+)
+
+client := mockserver.New("localhost", 1080)
+collectionJSON, _ := os.ReadFile("my-collection.postman_collection.json")
+expectations, _ := client.ImportPostmanCollection(string(collectionJSON))
+// expectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var collectionJson = File.ReadAllText("my-collection.postman_collection.json");
+var expectations = client.ImportPostmanCollection(collectionJson);
+// expectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+use std::fs;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let collection_json = fs::read_to_string("my-collection.postman_collection.json").unwrap();
+let expectations = client.import_postman_collection(&collection_json).unwrap();
+// expectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$expectations = $client-&gt;importPostmanCollection(file_get_contents('my-collection.postman_collection.json'));
+// $expectations holds the upserted expectations, one per saved example response</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import?format=postman" \
@@ -227,8 +503,94 @@ sitemap:
 
 <p>Both the generic and dedicated endpoints accept the same <a href="#import_redaction">redaction query parameters</a> and return <span class="inline_code">201 Created</span> with the generated expectations as JSON.</p>
 
+<p>Each language client has a typed <span class="inline_code">pactImport</span> helper (<span class="inline_code">pact_import</span> / <span class="inline_code">PactImport</span>) that wraps the dedicated <span class="inline_code">PUT /mockserver/pact/import</span> endpoint and returns the upserted expectations. Read the <span class="inline_code">consumer-provider.json</span> contract and pass its contents to the helper. The REST API tab shows the equivalent raw request.</p>
+
 <button id="button_import_pact" class="accordion">import expectations from a Pact v3 contract</button>
 <div class="panel">
+    <button class="accordion inner">Java</button>
+    <div class="panel">
+        <pre class="prettyprint lang-java code"><code class="code">import org.mockserver.client.MockServerClient;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+MockServerClient client = new MockServerClient("localhost", 1080);
+String pactJson = Files.readString(Path.of("consumer-provider.json"));
+String generatedExpectations = client.pactImport(pactJson);
+// generatedExpectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
+    <button class="accordion inner">JavaScript</button>
+    <div class="panel">
+        <pre class="prettyprint lang-javascript code"><code class="code">var mockServerClient = require('mockserver-client').mockServerClient;
+var fs = require('fs');
+
+var pactJson = fs.readFileSync("consumer-provider.json", "utf8");
+mockServerClient("localhost", 1080).pactImport(pactJson).then(
+    function (expectations) {
+        console.log(expectations); // the upserted expectations, one per interaction
+    },
+    function (error) {
+        console.log(error);
+    }
+);</code></pre>
+    </div>
+    <button class="accordion inner">Python</button>
+    <div class="panel">
+        <pre class="prettyprint lang-python code"><code class="code">from mockserver.client import MockServerClient
+
+client = MockServerClient("localhost", 1080)
+with open("consumer-provider.json") as pact:
+    generated_expectations = client.pact_import(pact.read())
+# generated_expectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
+    <button class="accordion inner">Ruby</button>
+    <div class="panel">
+        <pre class="prettyprint lang-ruby code"><code class="code">require 'mockserver-client'
+
+client = MockServer::Client.new('localhost', 1080)
+generated_expectations = client.pact_import(File.read('consumer-provider.json'))
+# generated_expectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
+    <button class="accordion inner">Go</button>
+    <div class="panel">
+        <pre class="prettyprint lang-go code"><code class="code">import (
+    "os"
+
+    mockserver "github.com/mock-server/mockserver-monorepo/mockserver-client-go/v7"
+)
+
+client := mockserver.New("localhost", 1080)
+pactJSON, _ := os.ReadFile("consumer-provider.json")
+expectations, _ := client.PactImport(string(pactJSON))
+// expectations holds the upserted expectations, one per interaction</code></pre>
+    </div>
+    <button class="accordion inner">.NET</button>
+    <div class="panel">
+        <pre class="prettyprint lang-csharp code"><code class="code">using System.IO;
+using MockServer.Client;
+
+using var client = new MockServerClient("localhost", 1080);
+var pactJson = File.ReadAllText("consumer-provider.json");
+var expectations = client.PactImport(pactJson);
+// expectations holds the upserted expectations, one per interaction</code></pre>
+    </div>
+    <button class="accordion inner">Rust</button>
+    <div class="panel">
+        <pre class="prettyprint lang-rust code"><code class="code">use mockserver_client::ClientBuilder;
+use std::fs;
+
+let client = ClientBuilder::new("localhost", 1080).build().unwrap();
+let pact_json = fs::read_to_string("consumer-provider.json").unwrap();
+let expectations = client.pact_import(&pact_json).unwrap();
+// expectations holds the upserted expectations, one per interaction</code></pre>
+    </div>
+    <button class="accordion inner">PHP</button>
+    <div class="panel">
+        <pre class="prettyprint lang-php code"><code class="code">use MockServer\MockServerClient;
+
+$client = new MockServerClient('localhost', 1080);
+$generatedExpectations = $client-&gt;pactImport(file_get_contents('consumer-provider.json'));
+// $generatedExpectations holds the upserted expectations as a JSON array string</code></pre>
+    </div>
     <button class="accordion inner">REST API</button>
     <div class="panel">
         <pre class="prettyprint code"><code class="code">curl -v -X PUT "http://localhost:1080/mockserver/import?format=pact" \

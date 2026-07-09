@@ -17,14 +17,14 @@ github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go
 
 ```bash
 # 1. Tag the module with the release version (must match the Go module path prefix)
-git tag mockserver-testcontainers/go/v7.2.0
+git tag mockserver-testcontainers/go/v7.4.0
 
 # 2. Push the tag to GitHub
-git push origin mockserver-testcontainers/go/v7.2.0
+git push origin mockserver-testcontainers/go/v7.4.0
 
 # 3. Request the Go module proxy to index it (optional — happens on first `go get`)
 GOPROXY=https://proxy.golang.org GO111MODULE=on \
-  go list -m github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go@v7.2.0
+  go list -m github.com/mock-server/mockserver-monorepo/mockserver-testcontainers/go@v7.4.0
 ```
 
 ## Secret Required
@@ -34,12 +34,11 @@ automatically on first fetch after a valid semver tag exists on the repository.
 
 ## Version Bumping
 
-When releasing a new MockServer version, update the `DefaultImage` constant in
-`mockserver.go` to reference the new tag:
-
-```go
-DefaultImage = "mockserver/mockserver:mockserver-X.Y.Z"
-```
+No source edit is required. `DefaultImage` is derived at init from this module's
+own resolved version in the build info, so tagging the release
+(`mockserver-testcontainers/go/vX.Y.Z`) is sufficient; the default image tag
+follows automatically (falling back to `:latest` when the version cannot be
+resolved, e.g. in-module tests).
 
 ## Verification
 

@@ -25,6 +25,7 @@ import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import DeleteIcon from '@mui/icons-material/Delete';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import ScienceOutlinedIcon from '@mui/icons-material/ScienceOutlined';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import List from '@mui/material/List';
@@ -40,10 +41,16 @@ import { buildBaseUrl } from '../lib/mcpClient';
 import LlmConversationForm from './LlmConversationForm';
 import HumanErrorAlert from './HumanErrorAlert';
 import StandardReview from './StandardReview';
+import MatcherPlaygroundDialog from './MatcherPlaygroundDialog';
 import {
   buildExpectationJson,
+  unmodeledFieldNames,
+  ACTION_FAMILY_KEYS,
   chaosFromExpectation,
   captureFromExpectation,
+  allOfEntryFromWire,
+  jwtFromRequest,
+  jwtFaithfullyModeled,
   sideEffectsFromExpectation,
   stepsFromExpectation,
   CAPTURE_SOURCES,
@@ -83,6 +90,9 @@ import {
   type StepActionType,
   type StandardCaptureRule,
   type CaptureSource,
+  type StandardBodyAllOfEntry,
+  type AllOfSubBodyType,
+  type StandardJwtMatcher,
 } from '../lib/standardCodegen';
 import McpToolsPanel from './McpToolsPanel';
 import ScenarioPanel from './ScenarioPanel';
@@ -336,6 +346,10 @@ interface MatcherState {
   jsonMatchType: JsonMatchType;
   /** SubString toggle (only when bodyMatcherType is 'string'). */
   bodySubString: boolean;
+  /** Sub-matchers composed by an `allOf` body (only when bodyMatcherType is 'allOf'). */
+  bodyAllOf?: StandardBodyAllOfEntry[];
+  /** JWT request-matcher criteria (Advanced form's optional JWT section). */
+  jwt?: StandardJwtMatcher;
   secure: boolean;
   priority: number;
   times: number;         // 0 = unlimited
@@ -359,6 +373,8 @@ function emptyMatcher(): MatcherState {
     graphqlOptions: { selectionSetMatchType: 'NORMALISED_STRING', fields: '' },
     jsonMatchType: 'ONLY_MATCHING_FIELDS',
     bodySubString: false,
+    bodyAllOf: [],
+    jwt: undefined,
     secure: false,
     priority: 0,
     times: 0,
@@ -468,7 +484,198 @@ function bodyEditorConfig(type: BodyMatcherType): { language: string; schema?: o
   }
 }
 
+/**
+ * Count the non-empty lines that `parseKeyValueLines` (in standardCodegen) will
+ * silently drop at codegen time: a line with no separator, or one whose key is
+ * empty before the separator. Kept deliberately in lockstep with that parser so
+ * the surfaced warning reflects exactly what gets dropped — the registered
+ * payload is unchanged; this only makes the drop visible.
+ */
+function countIgnoredKeyValueLines(text: string, separator: ':' | '='): number {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const idx = line.indexOf(separator);
+      if (idx < 0) return true;
+      return line.slice(0, idx).trim().length === 0;
+    }).length;
+}
+
+/**
+ * Non-blocking helper text for a matcher line-list field: undefined when every
+ * line parses, otherwise "N line(s) ignored — expected <format>".
+ */
+function ignoredLinesWarning(text: string, separator: ':' | '=', formatHint: string): string | undefined {
+  const n = countIgnoredKeyValueLines(text, separator);
+  if (n === 0) return undefined;
+  return `${n} line${n === 1 ? '' : 's'} ignored — expected ${formatHint}`;
+}
+
+const ALLOF_SUB_TYPES: { value: AllOfSubBodyType; label: string }[] = [
+  { value: 'string', label: 'String (exact)' },
+  { value: 'json', label: 'JSON' },
+  { value: 'json-schema', label: 'JSON Schema' },
+  { value: 'json-path', label: 'JSON Path' },
+  { value: 'xml', label: 'XML' },
+  { value: 'xml-schema', label: 'XML Schema' },
+  { value: 'xpath', label: 'XPath' },
+  { value: 'regex', label: 'Regex' },
+];
+
+/** Repeatable sub-matcher rows for an `allOf` composite body (logical AND of body matchers). */
+function AllOfMatcherRows({ matcher, setMatcher }: { matcher: MatcherState; setMatcher: (m: MatcherState) => void }) {
+  const rows = matcher.bodyAllOf ?? [];
+  const update = (next: StandardBodyAllOfEntry[]) => setMatcher({ ...matcher, bodyAllOf: next });
+  const addRow = () => update([...rows, { type: 'json', value: '' }]);
+  const removeRow = (idx: number) => update(rows.filter((_, i) => i !== idx));
+  const patchRow = (idx: number, patch: Partial<StandardBodyAllOfEntry>) =>
+    update(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  return (
+    <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1 }} data-testid="allof-section">
+      <Typography variant="caption" color="text.secondary">
+        The request body must satisfy every sub-matcher below (logical AND). Add two or more.
+      </Typography>
+      {rows.map((row, idx) => (
+        <Paper key={idx} variant="outlined" sx={{ p: 1, display: 'flex', gap: 1, alignItems: 'flex-start' }} data-testid="allof-row">
+          <TextField
+            label="Type"
+            size="small"
+            select
+            value={row.type}
+            onChange={(e) => patchRow(idx, { type: e.target.value as AllOfSubBodyType })}
+            sx={{ minWidth: 150 }}
+            slotProps={{ htmlInput: { 'data-testid': `allof-type-${idx}` } }}
+          >
+            {ALLOF_SUB_TYPES.map((t) => (
+              <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            label="Matcher value"
+            size="small"
+            fullWidth
+            multiline
+            maxRows={4}
+            value={row.value}
+            onChange={(e) => patchRow(idx, { value: e.target.value })}
+            sx={{ flex: 1 }}
+            slotProps={{
+              input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } },
+              htmlInput: { 'data-testid': `allof-value-${idx}` },
+            }}
+          />
+          <IconButton size="small" aria-label="Remove sub-matcher" onClick={() => removeRow(idx)} data-testid={`allof-remove-${idx}`}>
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </Paper>
+      ))}
+      <Box>
+        <Button size="small" variant="outlined" onClick={addRow} data-testid="add-allof-row">
+          Add sub-matcher
+        </Button>
+      </Box>
+    </Box>
+  );
+}
+
+/** Optional JWT request-matcher section (httpRequest.jwt). Off by default so an
+ *  untouched matcher emits byte-identical JSON to before this section existed. */
+function JwtMatcherSection({ matcher, setMatcher }: { matcher: MatcherState; setMatcher: (m: MatcherState) => void }) {
+  const enabled = matcher.jwt != null;
+  const jwt = matcher.jwt ?? {};
+  const patch = (p: Partial<StandardJwtMatcher>) => setMatcher({ ...matcher, jwt: { ...jwt, ...p } });
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5 }} data-testid="jwt-section">
+      <FormControlLabel
+        control={
+          <Switch
+            size="small"
+            checked={enabled}
+            onChange={(e) => setMatcher({ ...matcher, jwt: e.target.checked ? (matcher.jwt ?? {}) : undefined })}
+            slotProps={{ input: { 'aria-label': 'Match a JWT', 'data-testid': 'jwt-enable' } as Record<string, unknown> }}
+          />
+        }
+        label={<Typography variant="body2">Match a JWT (JSON Web Token)</Typography>}
+      />
+      <Collapse in={enabled} unmountOnExit>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1 }}>
+          <Typography variant="caption" color="text.secondary">
+            Matches claims in a JWT carried in a request header. No signature is verified — this is request routing, not authentication.
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <TextField
+              label="Header (default authorization)"
+              size="small"
+              value={jwt.header ?? ''}
+              onChange={(e) => patch({ header: e.target.value })}
+              sx={{ flex: 1, minWidth: 180 }}
+              slotProps={{ htmlInput: { 'data-testid': 'jwt-header' } }}
+            />
+            <TextField
+              label="Scheme (default Bearer)"
+              size="small"
+              value={jwt.scheme ?? ''}
+              onChange={(e) => patch({ scheme: e.target.value })}
+              sx={{ flex: 1, minWidth: 180 }}
+              slotProps={{ htmlInput: { 'data-testid': 'jwt-scheme' } }}
+            />
+          </Box>
+          <TextField
+            label="Claims (name=value per line, ! negates)"
+            size="small"
+            multiline
+            minRows={2}
+            maxRows={6}
+            value={jwt.claims ?? ''}
+            onChange={(e) => patch({ claims: e.target.value })}
+            placeholder={'sub=user-1\nscope=.*admin.*'}
+            slotProps={{
+              input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } },
+              htmlInput: { 'data-testid': 'jwt-claims' },
+            }}
+          />
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+            <TextField
+              label="Issuer (iss)"
+              size="small"
+              value={jwt.issuer ?? ''}
+              onChange={(e) => patch({ issuer: e.target.value })}
+              sx={{ flex: 1, minWidth: 150 }}
+              slotProps={{ htmlInput: { 'data-testid': 'jwt-issuer' } }}
+            />
+            <TextField
+              label="Audience (aud)"
+              size="small"
+              value={jwt.audience ?? ''}
+              onChange={(e) => patch({ audience: e.target.value })}
+              sx={{ flex: 1, minWidth: 150 }}
+              slotProps={{ htmlInput: { 'data-testid': 'jwt-audience' } }}
+            />
+            <TextField
+              label="Algorithm (alg)"
+              size="small"
+              value={jwt.algorithm ?? ''}
+              onChange={(e) => patch({ algorithm: e.target.value })}
+              sx={{ flex: 1, minWidth: 150 }}
+              slotProps={{ htmlInput: { 'data-testid': 'jwt-algorithm' } }}
+            />
+          </Box>
+        </Box>
+      </Collapse>
+    </Paper>
+  );
+}
+
 function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatcher: (m: MatcherState) => void }) {
+  // Non-blocking warnings for lines that MockServer's codegen will drop. They do
+  // NOT change what is registered — malformed lines are still dropped — they just
+  // surface the silent loss so a typo'd matcher isn't shipped unnoticed.
+  const headersWarning = ignoredLinesWarning(matcher.headers, ':', 'Name: value');
+  const queryWarning = ignoredLinesWarning(matcher.queryString, '=', 'key=value');
+  const cookiesWarning = ignoredLinesWarning(matcher.cookies, '=', 'name=value');
+  const pathParamsWarning = ignoredLinesWarning(matcher.pathParams, '=', 'name=value');
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Box sx={{ display: 'flex', gap: 1 }}>
@@ -518,7 +725,11 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           value={matcher.headers}
           onChange={(e) => setMatcher({ ...matcher, headers: e.target.value })}
           placeholder={'Accept: application/json\n!Authorization: Bearer …'}
-          slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } } }}
+          helperText={headersWarning}
+          slotProps={{
+            input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } },
+            formHelperText: headersWarning ? { sx: { color: 'warning.main' } } : undefined,
+          }}
         />
         <TextField
           label="Query params (key=value per line)"
@@ -529,7 +740,11 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           value={matcher.queryString}
           onChange={(e) => setMatcher({ ...matcher, queryString: e.target.value })}
           placeholder={'limit=50\noffset=0'}
-          slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } } }}
+          helperText={queryWarning}
+          slotProps={{
+            input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } },
+            formHelperText: queryWarning ? { sx: { color: 'warning.main' } } : undefined,
+          }}
         />
       </Box>
       <Box sx={{ display: 'flex', gap: 1 }}>
@@ -542,7 +757,11 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           value={matcher.cookies}
           onChange={(e) => setMatcher({ ...matcher, cookies: e.target.value })}
           placeholder={'session=abc123\ntheme=dark'}
-          slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } } }}
+          helperText={cookiesWarning}
+          slotProps={{
+            input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } },
+            formHelperText: cookiesWarning ? { sx: { color: 'warning.main' } } : undefined,
+          }}
         />
         <TextField
           label="Path parameters (name=value per line)"
@@ -553,7 +772,11 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           value={matcher.pathParams}
           onChange={(e) => setMatcher({ ...matcher, pathParams: e.target.value })}
           placeholder={'id=42  (for paths like /users/{id})'}
-          slotProps={{ input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } } }}
+          helperText={pathParamsWarning}
+          slotProps={{
+            input: { sx: { fontFamily: monospaceFontFamily, fontSize: '0.78rem' } },
+            formHelperText: pathParamsWarning ? { sx: { color: 'warning.main' } } : undefined,
+          }}
         />
       </Box>
       <Box>
@@ -585,9 +808,13 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
             <MenuItem value="regex">Regex</MenuItem>
             <MenuItem value="parameters">Parameters</MenuItem>
             <MenuItem value="wasm">WASM module</MenuItem>
+            <MenuItem value="allOf">All of (compose matchers)</MenuItem>
           </TextField>
         </Box>
-        {(() => {
+        {matcher.bodyMatcherType === 'allOf' && (
+          <AllOfMatcherRows matcher={matcher} setMatcher={setMatcher} />
+        )}
+        {matcher.bodyMatcherType !== 'allOf' && (() => {
           const bodyLabel =
             matcher.bodyMatcherType === 'binary'
               ? 'Body matcher (base64 bytes)'
@@ -727,6 +954,7 @@ function MatcherPanel({ matcher, setMatcher }: { matcher: MatcherState; setMatch
           </Box>
         )}
       </Box>
+      <JwtMatcherSection matcher={matcher} setMatcher={setMatcher} />
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
         <FormControlLabel
           control={
@@ -910,12 +1138,20 @@ export function matcherFromExpectation(item: JsonListItem): MatcherState {
   let bodyMatcherType: BodyMatcherType = 'string';
   let jsonMatchType: JsonMatchType = 'ONLY_MATCHING_FIELDS';
   let bodySubString = false;
+  let bodyAllOf: StandardBodyAllOfEntry[] = [];
   const graphqlOptions: GraphQLMatcherOptions = { selectionSetMatchType: 'NORMALISED_STRING', fields: '' };
   if (typeof rawBody === 'string') {
     bodyText = rawBody;
   } else if (rawBody && typeof rawBody === 'object') {
     const b = rawBody as Record<string, unknown>;
-    if (b['type'] === 'BINARY' && typeof b['base64Bytes'] === 'string') {
+    if (b['type'] === 'ALL_OF' && Array.isArray(b['bodyAllOf'])) {
+      // Composite conjunction — round-trip the sub-matchers the allOf form can
+      // represent; drop the rest so editing preserves what the form models.
+      bodyMatcherType = 'allOf';
+      bodyAllOf = (b['bodyAllOf'] as unknown[])
+        .map((sub) => allOfEntryFromWire(sub))
+        .filter((e): e is StandardBodyAllOfEntry => e != null);
+    } else if (b['type'] === 'BINARY' && typeof b['base64Bytes'] === 'string') {
       bodyText = b['base64Bytes'] as string;
       bodyBinary = true;
       bodyMatcherType = 'binary';
@@ -1005,6 +1241,8 @@ export function matcherFromExpectation(item: JsonListItem): MatcherState {
     graphqlOptions,
     jsonMatchType,
     bodySubString,
+    bodyAllOf,
+    jwt: jwtFromRequest(req),
     secure: req['secure'] === true,
     priority: typeof v['priority'] === 'number' ? (v['priority'] as number) : 0,
     // 0 = unlimited. An explicitly unlimited expectation prefills 0 rather than its
@@ -3358,6 +3596,19 @@ function ExistingMocksList({
             {filtered.map((e) => {
               const idShort = e.key.slice(0, 8);
               const summary = summaryForExpectation(e.value, kind === 'mcp' ? 'standard' : kind);
+              // response sequences (httpResponses) support forcing a specific variant per request
+              const isResponseSequence = !!e.value['httpResponses'];
+              const summaryLabel = (
+                <Typography
+                  component="span"
+                  sx={{ fontSize: '0.78rem', fontFamily: monospaceFontFamily }}
+                >
+                  <Box component="span" sx={{ color: 'text.secondary', mr: 0.5 }}>
+                    {idShort}...
+                  </Box>
+                  {summary}
+                </Typography>
+              );
               return (
                 <ListItemButton
                   key={e.key}
@@ -3374,15 +3625,16 @@ function ExistingMocksList({
                 >
                   <ListItemText
                     primary={
-                      <Typography
-                        component="span"
-                        sx={{ fontSize: '0.78rem', fontFamily: monospaceFontFamily }}
-                      >
-                        <Box component="span" sx={{ color: 'text.secondary', mr: 0.5 }}>
-                          {idShort}...
-                        </Box>
-                        {summary}
-                      </Typography>
+                      isResponseSequence ? (
+                        <Tooltip
+                          arrow
+                          title="Force a specific variant per request with the x-mockserver-response-index header (0-based); it peeks without advancing the sequence."
+                        >
+                          {summaryLabel}
+                        </Tooltip>
+                      ) : (
+                        summaryLabel
+                      )
                     }
                     sx={{ m: 0 }}
                   />
@@ -3417,6 +3669,9 @@ interface QuickMockFormProps {
   setStaticState: (s: StaticState) => void;
   registering: boolean;
   editingExisting: boolean;
+  /** Fields the retained original carries that this form does not model; kept on
+   *  Update rather than dropped. Drives the "Preserving N fields …" indicator. */
+  preservedFields: string[];
   onRegister: () => void;
   onSwitchToAdvanced: () => void;
 }
@@ -3428,6 +3683,7 @@ function QuickMockForm({
   setStaticState,
   registering,
   editingExisting,
+  preservedFields,
   onRegister,
   onSwitchToAdvanced,
 }: QuickMockFormProps) {
@@ -3509,6 +3765,22 @@ function QuickMockForm({
           />
         )}
       </Box>
+
+      {preservedFields.length > 0 && (
+        <Alert
+          severity="info"
+          variant="outlined"
+          icon={<InfoOutlinedIcon fontSize="small" />}
+          data-testid="quick-preserved-fields-info"
+          sx={{ py: 0, '& .MuiAlert-message': { py: 0.75 } }}
+        >
+          Preserving {preservedFields.length}{' '}
+          {preservedFields.length === 1 ? 'field' : 'fields'} not shown in this form:{' '}
+          <Box component="span" sx={{ fontFamily: monospaceFontFamily }}>
+            {preservedFields.join(', ')}
+          </Box>
+        </Alert>
+      )}
 
       <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
         <Tooltip title={!registering && disabledReason ? disabledReason : ''}>
@@ -3690,6 +3962,38 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
   const [captureEnabled, setCaptureEnabled] = useState(false);
   const [captureRules, setCaptureRules] = useState<StandardCaptureRule[]>([]);
 
+  // Edit overlay — when an existing expectation is loaded for editing (or
+  // duplicating), its original JSON is retained here so Register/preview can
+  // deep-merge the form output onto it, preserving every field the form does
+  // not model (scenario bindings, response sequences, cross-protocol scenarios,
+  // request-matcher extras, …) instead of silently dropping them. Null on the
+  // new-compose flow, which is therefore unaffected. `editActionModeled` records
+  // whether the form loaded the original's action (so it may replace it) or not
+  // (so the original action is preserved).
+  const [editOriginal, setEditOriginal] = useState<Record<string, unknown> | null>(null);
+  const [editActionModeled, setEditActionModeled] = useState(true);
+  // Whether the Advanced JWT form faithfully owns the original's httpRequest.jwt
+  // on edit. False when the original carries a jwt the form cannot round-trip
+  // losslessly (e.g. object-form NottableString claims): the jwt is then
+  // preserved as passthrough instead of being rewritten by a lossy prefill.
+  const [editJwtModeled, setEditJwtModeled] = useState(true);
+
+  // Optional scenario bindings (Advanced form's Scenario section). Blank on a
+  // fresh compose; prefilled from the original on edit. These three keys are
+  // form-authoritative only on the Advanced path (scenarioModeled) — the Quick
+  // path preserves them as unmodeled passthrough. See lib/standardCodegen.ts.
+  const [scenarioBindingName, setScenarioBindingName] = useState('');
+  const [scenarioBindingState, setScenarioBindingState] = useState('');
+  const [scenarioBindingNext, setScenarioBindingNext] = useState('');
+
+  // Prefill the three scenario fields from an expectation value (empty when the
+  // key is absent, so loading a non-scenario mock clears any stale binding).
+  const prefillScenarioBinding = useCallback((value: Record<string, unknown>) => {
+    setScenarioBindingName(typeof value['scenarioName'] === 'string' ? (value['scenarioName'] as string) : '');
+    setScenarioBindingState(typeof value['scenarioState'] === 'string' ? (value['scenarioState'] as string) : '');
+    setScenarioBindingNext(typeof value['newScenarioState'] === 'string' ? (value['newScenarioState'] as string) : '');
+  }, []);
+
   const [registering, setRegistering] = useState(false);
   // Humanised register error (short message + raw details behind an expander).
   const [error, setError] = useState<HumanError | null>(null);
@@ -3768,29 +4072,41 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
       if (!item) return;
       setMatcher(matcherFromExpectation(item));
 
+      // Retain the original expectation JSON so Register/preview overlays the
+      // form output onto it, preserving unmodeled fields. `editActionModeled`
+      // records whether the form recognised the action (may replace it) or not
+      // (preserve the original action). Steps are recognised via a separate
+      // reader, so they count as "modeled" too.
+      const existingStepsForFlag = stepsFromExpectation(item.value);
+      setEditOriginal(item.value);
+      prefillScenarioBinding(item.value);
+      setEditJwtModeled(jwtFaithfullyModeled(item.value['httpRequest']));
+
       // Detect the action shape and prefill the matching panel + switch the radio.
       const prefill = actionFromExpectation(item);
-      if (!prefill) return;
-      // Infer the correct kind from the action type and switch to it. MCP is a
-      // view over standard HTTP response expectations, so loading one from the
-      // MCP list must NOT switch the user away from the MCP kind.
-      const inferredKind = kindForActionType(prefill.type);
-      setKind((prevKind) => (prevKind === 'mcp' && inferredKind === 'standard') ? 'mcp' : inferredKind);
-      setActionType(prefill.type);
-      if (prefill.staticState) setStaticState(prefill.staticState);
-      if (prefill.forwardState) setForwardState(prefill.forwardState);
-      if (prefill.forwardOverrideState) setForwardOverrideState(prefill.forwardOverrideState);
-      if (prefill.forwardFallbackState) setForwardFallbackState(prefill.forwardFallbackState);
-      if (prefill.callbackState) setCallbackState(prefill.callbackState);
-      if (prefill.templateState) setTemplateState(prefill.templateState);
-      if (prefill.errorState) setErrorState(prefill.errorState);
-      if (prefill.websocketState) setWebsocketState(prefill.websocketState);
-      if (prefill.sseState) setSseState(prefill.sseState);
-      if (prefill.binaryResponseState) setBinaryResponseState(prefill.binaryResponseState);
-      if (prefill.dnsResponseState) setDnsResponseState(prefill.dnsResponseState);
-      if (prefill.forwardTemplateState) setForwardTemplateState(prefill.forwardTemplateState);
-      if (prefill.forwardClassCallbackState) setForwardClassCallbackState(prefill.forwardClassCallbackState);
-      if (prefill.grpcStreamState) setGrpcStreamState(prefill.grpcStreamState);
+      setEditActionModeled(!!prefill || !!existingStepsForFlag);
+      if (prefill) {
+        // Infer the correct kind from the action type and switch to it. MCP is a
+        // view over standard HTTP response expectations, so loading one from the
+        // MCP list must NOT switch the user away from the MCP kind.
+        const inferredKind = kindForActionType(prefill.type);
+        setKind((prevKind) => (prevKind === 'mcp' && inferredKind === 'standard') ? 'mcp' : inferredKind);
+        setActionType(prefill.type);
+        if (prefill.staticState) setStaticState(prefill.staticState);
+        if (prefill.forwardState) setForwardState(prefill.forwardState);
+        if (prefill.forwardOverrideState) setForwardOverrideState(prefill.forwardOverrideState);
+        if (prefill.forwardFallbackState) setForwardFallbackState(prefill.forwardFallbackState);
+        if (prefill.callbackState) setCallbackState(prefill.callbackState);
+        if (prefill.templateState) setTemplateState(prefill.templateState);
+        if (prefill.errorState) setErrorState(prefill.errorState);
+        if (prefill.websocketState) setWebsocketState(prefill.websocketState);
+        if (prefill.sseState) setSseState(prefill.sseState);
+        if (prefill.binaryResponseState) setBinaryResponseState(prefill.binaryResponseState);
+        if (prefill.dnsResponseState) setDnsResponseState(prefill.dnsResponseState);
+        if (prefill.forwardTemplateState) setForwardTemplateState(prefill.forwardTemplateState);
+        if (prefill.forwardClassCallbackState) setForwardClassCallbackState(prefill.forwardClassCallbackState);
+        if (prefill.grpcStreamState) setGrpcStreamState(prefill.grpcStreamState);
+      }
 
       // Populate the DNS matcher fields from the httpRequest if this is a
       // DNS expectation (the server serialises dnsName / dnsType / dnsClass
@@ -3851,7 +4167,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
         setCaptureRules([]);
       }
     },
-    [activeExpectations],
+    [activeExpectations, prefillScenarioBinding],
   );
 
   // Reset the whole form to a blank HTTP static mock. Shared by the
@@ -3870,6 +4186,14 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     setStepsState([]);
     setCaptureEnabled(false);
     setCaptureRules([]);
+    // Drop the edit overlay so a fresh compose does not merge onto a stale
+    // original (and cannot resurrect an old expectation's unmodeled fields).
+    setEditOriginal(null);
+    setEditActionModeled(true);
+    setEditJwtModeled(true);
+    setScenarioBindingName('');
+    setScenarioBindingState('');
+    setScenarioBindingNext('');
     setError(null);
     setRegisteredLabel(null);
   }, []);
@@ -3903,12 +4227,22 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     // effect clears the signal at the end so it runs exactly once per hand-off.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setMode('advanced');
+    // A hand-off may arrive while the Scenarios tab is active (the Scenarios
+    // view's per-mock Edit). Switch to the Compose tab so the loaded form (and
+    // its now-prefilled Scenario section) is actually visible.
+    setComposerTab(0);
     if (inList) {
       handleLoadExisting(inList.key);
     } else {
       const item: JsonListItem = { key, value };
       setMatcher(matcherFromExpectation(item));
+      // Retain the original so Register/preview preserves unmodeled fields.
+      const existingStepsForFlag = stepsFromExpectation(value);
+      setEditOriginal(value);
+      prefillScenarioBinding(value);
+      setEditJwtModeled(jwtFaithfullyModeled(value['httpRequest']));
       const prefill = actionFromExpectation(item);
+      setEditActionModeled(!!prefill || !!existingStepsForFlag);
       if (prefill) {
         const inferredKind = kindForActionType(prefill.type);
         setKind(inferredKind);
@@ -3949,7 +4283,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     }
     // Consume the hand-off so re-renders don't reload it.
     clearPendingEditExpectation();
-  }, [pendingEditExpectation, activeExpectations, handleLoadExisting, clearPendingEditExpectation]);
+  }, [pendingEditExpectation, activeExpectations, handleLoadExisting, clearPendingEditExpectation, prefillScenarioBinding]);
 
   // Standard kind picker only lists expectations that AREN'T LLM
   // Conversation scenarios — those have their own picker on the
@@ -3963,6 +4297,97 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
     () => listConversationScenarios(activeExpectations),
     [activeExpectations],
   );
+
+  // The draft action assembled from the current form state. Lifted to the
+  // component level (from the Review step's inline builder) so the "Test
+  // Matcher" playground and the Review preview share ONE buildExpectationJson
+  // call — the matcher you test is byte-for-byte the one that would register.
+  const draftAction = useMemo<StandardActionPayload>(() => {
+    const a: StandardActionPayload = { type: actionType };
+    if (actionType === 'static') a.static = staticState;
+    if (actionType === 'forward') a.forward = forwardState;
+    if (actionType === 'forward_override') a.forwardOverride = forwardOverrideState;
+    if (actionType === 'forward_fallback') a.forwardFallback = forwardFallbackState;
+    if (actionType === 'callback') a.callback = callbackState;
+    if (actionType === 'template') a.template = templateState;
+    if (actionType === 'error') a.error = errorState;
+    if (actionType === 'websocket') a.websocket = {
+      subprotocol: websocketState.subprotocol,
+      messages: websocketState.messages,
+      closeConnection: websocketState.closeConnection,
+      matchers: websocketState.matchers,
+    };
+    if (actionType === 'sse') a.sse = sseState;
+    if (actionType === 'binary_response') a.binaryResponse = binaryResponseState;
+    if (actionType === 'dns_response') a.dnsResponse = dnsResponseState;
+    if (actionType === 'forward_template') a.forwardTemplate = forwardTemplateState;
+    if (actionType === 'forward_class_callback') a.forwardClassCallback = forwardClassCallbackState;
+    if (actionType === 'grpc_stream') a.grpcStream = grpcStreamState;
+    if (chaosEnabled && actionType !== 'error') a.chaos = chaosState;
+    // Steps override top-level side-effects
+    if (stepsEnabled && stepsState.length > 0) {
+      a.steps = stepsState;
+    } else if (sideEffectsEnabled && sideEffects.length > 0) {
+      a.sideEffects = sideEffects;
+    }
+    if (captureEnabled && captureRules.length > 0) {
+      a.capture = captureRules;
+    }
+    // Scenario bindings — the Advanced form renders the Scenario section, so it
+    // OWNS these three keys (scenarioModeled): set when non-empty, removed when
+    // cleared on edit. The Quick path never sets scenarioModeled, so it keeps
+    // the bindings as unmodeled passthrough. Blank fields emit nothing, so a
+    // fresh Advanced compose is byte-identical to before this section existed.
+    a.scenario = {
+      name: scenarioBindingName,
+      requiredState: scenarioBindingState,
+      transitionTo: scenarioBindingNext,
+    };
+    // GUARD: scenarioModeled makes the three scenario keys form-authoritative
+    // (delete-when-cleared). It is safe ONLY because this draftAction is consumed
+    // exclusively by the Advanced register path, which always renders the Scenario
+    // section and prefills it on edit. Any future kind reusing draftAction to
+    // register WITHOUT rendering/prefilling that section would silently delete
+    // scenario bindings — keep this flag out of such paths.
+    a.scenarioModeled = true;
+    // Edit overlay — carry the retained original so buildExpectationJson merges
+    // the form output onto it (preserving unmodeled fields).
+    if (editOriginal) {
+      a.editOriginal = editOriginal;
+      a.editActionModeled = editActionModeled;
+      // The Advanced form always renders + prefills the JWT section, so it owns
+      // jwt on edit — but only when it can faithfully round-trip the original
+      // (editJwtModeled); otherwise the original jwt is preserved as passthrough.
+      a.jwtModeled = editJwtModeled;
+    }
+    return a;
+  }, [
+    actionType, staticState, forwardState, forwardOverrideState, forwardFallbackState,
+    callbackState, templateState, errorState, websocketState, sseState, binaryResponseState,
+    dnsResponseState, forwardTemplateState, forwardClassCallbackState, grpcStreamState,
+    chaosEnabled, chaosState, stepsEnabled, stepsState, sideEffectsEnabled, sideEffects,
+    captureEnabled, captureRules, editOriginal, editActionModeled, editJwtModeled,
+    scenarioBindingName, scenarioBindingState, scenarioBindingNext,
+  ]);
+
+  // For DNS kind, attach the DNS matcher so buildExpectationJson emits the DNS
+  // request shape instead of the HTTP request-matcher shape.
+  const effectiveMatcher = useMemo<MatcherState>(
+    () => (kind === 'dns' ? { ...matcher, dns: dnsMatcher } : matcher),
+    [kind, matcher, dnsMatcher],
+  );
+
+  // The exact expectation JSON that would be registered, used to seed the
+  // "Test Matcher" playground. Empty string when the draft can't be built yet.
+  const draftExpectationJson = useMemo(() => {
+    try {
+      return JSON.stringify(buildExpectationJson(effectiveMatcher, draftAction), null, 2);
+    } catch {
+      return '';
+    }
+  }, [effectiveMatcher, draftAction]);
+
+  const [matcherPlaygroundOpen, setMatcherPlaygroundOpen] = useState(false);
 
   return (
     <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0 }}>
@@ -4041,18 +4466,42 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
           </ToggleButtonGroup>
         </Box>
 
-        {mode === 'quick' && (
-          <QuickMockForm
-            matcher={matcher}
-            setMatcher={setMatcher}
-            staticState={staticState}
-            setStaticState={setStaticState}
-            registering={registering}
-            editingExisting={matcher.id.trim().length > 0}
-            onRegister={() => void handleRegister({ type: 'static', static: staticState }, matcher)}
-            onSwitchToAdvanced={() => setMode('advanced')}
-          />
-        )}
+        {mode === 'quick' && (() => {
+          // Quick mode only ever authors a plain static httpResponse, so it may
+          // own the action slot ONLY when the original action is itself a plain
+          // httpResponse. Reusing the shared `editActionModeled` (true for all 14
+          // recognised action types) would let a Quick "Update mock" on e.g. an
+          // httpForward original silently overwrite it with a 200 response. When
+          // the original is a non-static recognised action (forward, template,
+          // error, …) we preserve it and warn — Advanced remains the path for an
+          // explicit conversion.
+          const quickActionModeled =
+            !!editOriginal &&
+            'httpResponse' in editOriginal &&
+            !ACTION_FAMILY_KEYS.some((k) => k !== 'httpResponse' && k in editOriginal);
+          return (
+            <QuickMockForm
+              matcher={matcher}
+              setMatcher={setMatcher}
+              staticState={staticState}
+              setStaticState={setStaticState}
+              registering={registering}
+              editingExisting={matcher.id.trim().length > 0}
+              preservedFields={editOriginal ? unmodeledFieldNames(editOriginal, { actionModeled: quickActionModeled }) : []}
+              // Thread the edit overlay through the Quick path too, so a Quick
+              // "Update mock" preserves every field this form does not model
+              // instead of PUTting form-only JSON under the same id. `editOriginal`
+              // is set only when editing/duplicating; new-compose stays unaffected.
+              onRegister={() => void handleRegister(
+                editOriginal
+                  ? { type: 'static', static: staticState, editOriginal, editActionModeled: quickActionModeled }
+                  : { type: 'static', static: staticState },
+                matcher,
+              )}
+              onSwitchToAdvanced={() => setMode('advanced')}
+            />
+          );
+        })()}
 
         {/* Top-level kind selector — each kind has a different form path.
             Hidden in Quick mode (Quick is always an HTTP static mock). */}
@@ -4289,6 +4738,16 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               ) : (
                 <>
                   <MatcherPanel matcher={matcher} setMatcher={setMatcher} />
+                  <Box sx={{ mt: 1 }}>
+                    <Button
+                      size="small"
+                      variant="text"
+                      startIcon={<ScienceOutlinedIcon fontSize="small" />}
+                      onClick={() => setMatcherPlaygroundOpen(true)}
+                    >
+                      Test Matcher
+                    </Button>
+                  </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
                     {kind === 'grpc'
                       ? 'gRPC path convention: /package.Service/Method. gRPC clients send Content-Type: application/grpc — add it to the matcher headers to restrict to gRPC traffic only.'
@@ -4513,50 +4972,63 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
               </Collapse>
             </Paper>
 
+            {/* Scenario bindings — optional state-machine wiring. Blank fields
+                are omitted (a stateless mock). On edit these are prefilled and
+                stay authoritative (clearing a field removes the binding); the
+                Quick path preserves them untouched as passthrough. */}
+            <Paper variant="outlined" sx={{ p: 2 }} data-testid="scenario-section">
+              <Typography variant="subtitle2" sx={{ textTransform: 'uppercase', letterSpacing: 0.5, color: 'text.secondary' }}>
+                Scenario (optional)
+              </Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, mb: 1 }}>
+                Bind this mock to a scenario state machine: it matches only while the scenario is in
+                the required state, then advances it to the transition state. Leave blank for a
+                stateless mock.
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                <TextField
+                  size="small"
+                  label="Scenario Name"
+                  value={scenarioBindingName}
+                  onChange={(e) => setScenarioBindingName(e.target.value)}
+                  sx={{ flex: 1, minWidth: 160 }}
+                />
+                <TextField
+                  size="small"
+                  label="Required State"
+                  value={scenarioBindingState}
+                  onChange={(e) => setScenarioBindingState(e.target.value)}
+                  sx={{ flex: 1, minWidth: 140 }}
+                />
+                <TextField
+                  size="small"
+                  label="Transition To"
+                  value={scenarioBindingNext}
+                  onChange={(e) => setScenarioBindingNext(e.target.value)}
+                  sx={{ flex: 1, minWidth: 140 }}
+                />
+              </Box>
+            </Paper>
+
             {/* Step 4: review & register — shows the generated Java / JSON /
                 curl, then the single Register button (mirrors the
                 LLM Conversation form's review-and-register section). */}
             {(() => {
-              const currentAction: StandardActionPayload = { type: actionType };
-              if (actionType === 'static') currentAction.static = staticState;
-              if (actionType === 'forward') currentAction.forward = forwardState;
-              if (actionType === 'forward_override') currentAction.forwardOverride = forwardOverrideState;
-              if (actionType === 'forward_fallback') currentAction.forwardFallback = forwardFallbackState;
-              if (actionType === 'callback') currentAction.callback = callbackState;
-              if (actionType === 'template') currentAction.template = templateState;
-              if (actionType === 'error') currentAction.error = errorState;
-              if (actionType === 'websocket') currentAction.websocket = {
-                subprotocol: websocketState.subprotocol,
-                messages: websocketState.messages,
-                closeConnection: websocketState.closeConnection,
-                matchers: websocketState.matchers,
-              };
-              if (actionType === 'sse') currentAction.sse = sseState;
-              if (actionType === 'binary_response') currentAction.binaryResponse = binaryResponseState;
-              if (actionType === 'dns_response') currentAction.dnsResponse = dnsResponseState;
-              if (actionType === 'forward_template') currentAction.forwardTemplate = forwardTemplateState;
-              if (actionType === 'forward_class_callback') currentAction.forwardClassCallback = forwardClassCallbackState;
-              if (actionType === 'grpc_stream') currentAction.grpcStream = grpcStreamState;
-              if (chaosEnabled && actionType !== 'error') currentAction.chaos = chaosState;
-              // Steps override top-level side-effects
-              if (stepsEnabled && stepsState.length > 0) {
-                currentAction.steps = stepsState;
-              } else if (sideEffectsEnabled && sideEffects.length > 0) {
-                currentAction.sideEffects = sideEffects;
-              }
-              // Capture rules are cross-cutting — they apply regardless of action
-              // / steps mode (blank rows are dropped at codegen time).
-              if (captureEnabled && captureRules.length > 0) {
-                currentAction.capture = captureRules;
-              }
+              // Assembled at the component level (memoised `draftAction`) so the
+              // Review preview and the "Test Matcher" playground share the SAME
+              // buildExpectationJson call and cannot drift. The edit-overlay
+              // (editOriginal / editActionModeled) is already folded in there.
+              const currentAction = draftAction;
 
-              // Build the effective matcher: for DNS kind, attach the DNS
-              // matcher fields so buildExpectationJson emits { dnsName, ... }
-              // instead of the HTTP request matcher shape.
-              const effectiveMatcher = kind === 'dns'
-                ? { ...matcher, dns: dnsMatcher }
-                : matcher;
+              // Fields being preserved through the edit that this form does not
+              // model — surfaced as a subtle indicator so the user knows they are
+              // kept (not silently dropped) on Update.
+              const preservedFields = editOriginal
+                ? unmodeledFieldNames(editOriginal, { actionModeled: editActionModeled, scenarioModeled: true, jwtModeled: editJwtModeled })
+                : [];
 
+              // `effectiveMatcher` is memoised at the component level (attaches
+              // the DNS matcher for DNS kind).
               const dispatchRegister = () => void handleRegister(currentAction, effectiveMatcher);
 
               // Per-action validation — returns why the Register button is disabled (or null when
@@ -4667,6 +5139,21 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
                     4 · Review &amp; register
                   </Typography>
                   <Divider sx={{ mb: 1 }} />
+                  {preservedFields.length > 0 && (
+                    <Alert
+                      severity="info"
+                      variant="outlined"
+                      icon={<InfoOutlinedIcon fontSize="small" />}
+                      data-testid="preserved-fields-info"
+                      sx={{ mb: 1, py: 0, '& .MuiAlert-message': { py: 0.75 } }}
+                    >
+                      Preserving {preservedFields.length}{' '}
+                      {preservedFields.length === 1 ? 'field' : 'fields'} not shown in this form:{' '}
+                      <Box component="span" sx={{ fontFamily: monospaceFontFamily }}>
+                        {preservedFields.join(', ')}
+                      </Box>
+                    </Alert>
+                  )}
                   <StandardReview
                     matcher={effectiveMatcher}
                     action={currentAction}
@@ -4717,7 +5204,7 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
             data-testid="register-success"
             onClose={() => setRegisteredLabel(null)}
           >
-            <AlertTitle sx={{ mb: 0.5 }}>Mock registered</AlertTitle>
+            <AlertTitle sx={{ mb: 0.5 }}>Mock Registered</AlertTitle>
             <Typography variant="body2" sx={{ mb: 1 }}>
               <code>{registeredLabel}</code> is now live. What next?
             </Typography>
@@ -4759,6 +5246,16 @@ export default function ComposerView({ connectionParams }: ComposerViewProps) {
         message={snackMessage ?? ''}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
+      {/* Locally-rendered matcher playground seeded with the current draft, so a
+          user can dry-run the matcher they're building without leaving the form.
+          Mounted only while open so it re-seeds from the latest draft each time. */}
+      {matcherPlaygroundOpen && (
+        <MatcherPlaygroundDialog
+          open
+          onClose={() => setMatcherPlaygroundOpen(false)}
+          initialExpectation={draftExpectationJson}
+        />
+      )}
     </Box>
   );
 }

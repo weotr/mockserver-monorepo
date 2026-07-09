@@ -31,8 +31,13 @@ Pre-allocated LogEntry slots"]
 
     subgraph "Single Consumer Thread"
         PROC[processLogEntry]
-        PROC --> STORE["CircularConcurrentLinkedDeque
-Bounded event store"]
+        PROC -->|"1 disk write first"| NDJSON["RecordedRequestsFileSystemPersistence
+NDJSON file (full bodies)"]
+        PROC -->|"2 optional truncation"| TRUNC["truncateBodiesForLog
+x-mockserver-body-truncated header"]
+        TRUNC --> STORE["CircularConcurrentLinkedDeque
+Count bound: maxLogEntries
+Byte bound: maxEventLogSizeInBytes"]
         PROC --> NOTIFY[notifyListeners]
         PROC --> SLF4J[SLF4J / Console output]
     end
@@ -117,12 +122,12 @@ disruptor.getRingBuffer().tryPublishEvent(
 
 ## LogEntry
 
-Each event is represented by a `LogEntry` with 25 possible types, organized into `LogMessageTypeCategory` groups for per-category log level overrides:
+Each event is represented by a `LogEntry` with 26 possible types, organized into `LogMessageTypeCategory` groups for per-category log level overrides:
 
 | Category Group | Types |
 |----------------|-------|
 | `MATCHING` | `EXPECTATION_MATCHED`, `EXPECTATION_NOT_MATCHED`, `NO_MATCH_RESPONSE` |
-| `REQUEST_LIFECYCLE` | `RECEIVED_REQUEST`, `FORWARDED_REQUEST`, `EXPECTATION_RESPONSE`, `TEMPLATE_GENERATED` |
+| `REQUEST_LIFECYCLE` | `RECEIVED_REQUEST`, `FORWARDED_REQUEST`, `EXPECTATION_RESPONSE`, `TEMPLATE_GENERATED`, `TEMPLATE_GENERATION_FAILED` |
 | `EXPECTATION_MANAGEMENT` | `CREATED_EXPECTATION`, `UPDATED_EXPECTATION`, `REMOVED_EXPECTATION`, `CLEARED` |
 | `VERIFICATION` | `VERIFICATION`, `VERIFICATION_FAILED`, `VERIFICATION_PASSED`, `RETRIEVED` |
 | `SERVER` | `SERVER_CONFIGURATION`, `AUTHENTICATION_FAILED`, `OPENAPI_RESPONSE_VALIDATION_FAILED` |
@@ -166,7 +171,10 @@ If the upstream connection closes mid-stream (`channelInactive`), the relay hand
 
 ## Event Log Storage
 
-`CircularConcurrentLinkedDeque<LogEntry>` is a bounded, thread-safe deque. When capacity (`maxLogEntries`) is reached, the oldest entries are evicted and their `clear()` method is called (releasing references for GC).
+`CircularConcurrentLinkedDeque<LogEntry>` is a bounded, thread-safe deque. When either bound is reached, the oldest entries are evicted and their `clear()` method is called (releasing references for GC):
+
+- **Count bound** — `maxLogEntries` (default: heap-based formula, up to 100,000).
+- **Byte-budget bound** — `maxEventLogSizeInBytes` (default: 0 = disabled). When set, the deque also tracks a running total of body bytes (`LogEntry.estimatedHeapSize()`) and evicts oldest-first when an incoming entry would push the total over the budget. See [memory-management.md](memory-management.md) for the full byte-budget eviction design.
 
 ### Filtering Predicates
 
@@ -511,9 +519,115 @@ Library → Export (format dropdown + "Copy as code" button). The same Export ta
 Rust — that code is generated client-side in the dashboard (by `verificationCodegen.ts`) from the
 retrieved request JSON, one `verify(...)` per request, rather than by a server-side serializer.
 
+## Record &rarr; Mock (Consolidation, Promotion, HAR Import)
+
+Raw recorded expectations are a verbatim 1:1 dump: `MockServerEventLog.retrieveRecordedExpectations()`
+maps every `FORWARDED_REQUEST` log entry (via `LogEntry::getExpectation`) to an exact-match
+`Times.once()` expectation. Recording 50 hits to `GET /users/123` therefore yields 50 identical,
+brittle expectations. `RecordedExpectationPostProcessor` turns that dump into reusable mocks.
+
+```mermaid
+flowchart LR
+    LOG["FORWARDED_REQUEST\nlog entries"] --> RET["retrieveRecordedExpectations()\n(verbatim, Times.once())"]
+    RET -->|"?consolidate=true"| CONS["RecordedExpectationPostProcessor.consolidate()"]
+    CONS --> OUT["reusable mocks:\nTimes.unlimited(),\n{id} path params,\nSEQUENTIAL responses,\nvolatile headers stripped"]
+    RET -->|"default (no option)"| VERBATIM["unchanged output"]
+```
+
+Two engines live in `RecordedExpectationPostProcessor` (both pure functions):
+
+| Method | Behaviour | Trigger |
+|--------|-----------|---------|
+| `deduplicateAndTemplatize(list, templatizeValues)` | Conservative dedup: preserves recorded `Times`, emits **one expectation per distinct response** (differing responses are *not* merged). | config flags `deduplicateRecordedExpectations` / `templatizeRecordedValues` |
+| `consolidate(list, parameterizeValues)` | Record&rarr;mock: **one expectation per request shape**, `Times.unlimited()`, differing responses **sequenced** into a `SEQUENTIAL` list, volatile request headers stripped (reusing `HarImporter.volatileRequestHeaders()`). | `?consolidate=true` retrieve/import query param, or the promote endpoint |
+
+`consolidate` groups eligible exchanges (concrete `HttpResponse` only) by structural signature
+(method + templatized path shape + body shape). Where a group spans several concrete ids the varying
+`/users/{id}` segments become declared path parameters; a single id keeps its concrete path. Distinct
+responses are collected in first-seen order and de-duplicated — identical hits collapse to one
+response, differing responses become a `ResponseMode.SEQUENTIAL` multi-response list on a single
+expectation. With `parameterizeValues` (`?parameterize=true`) volatile query-parameter, header and
+JSON-body leaf values are additionally generalised to regex matchers (same heuristics as
+`deduplicateAndTemplatize`).
+
+`HttpState.postProcessRecordedExpectations(list, request)` wires the query parameters into every
+`RECORDED_EXPECTATIONS` retrieve format: `?consolidate=true` (and/or `?parameterize=true`) takes
+precedence over the config-flag path; with neither present and the flag off, output is byte-for-byte
+identical to historical behaviour (non-breaking).
+
+**Promotion (`PUT /mockserver/recordings/promote`).** The server-side equivalent of the MCP
+`create_expectations_from_recorded_traffic` tool. It retrieves recorded expectations matching an
+optional request-matcher filter (JSON body; empty body = all), **redacts secrets first** (via
+`ImportRedaction`, on by default — redacting the raw single-response recordings before consolidation
+so responses differing only in a secret collapse and the single-response redactor never flattens a
+sequenced list), consolidates/parameterizes them (`?consolidate` / `?parameterize`, both on by
+default; `?consolidate=false` promotes verbatim but still upgraded to `Times.unlimited()`), then
+**activates** the result via `HttpState.add(...)` and returns it as `201 Created`.
+
+**HAR import.** `PUT /mockserver/import?format=har` already turns a HAR capture into expectations via
+`HarImporter` (HAR was previously export-only for the recorded-request path; import has since been
+added for HAR/Postman/Pact). `?consolidate=true` / `?parameterize=true` now run the same consolidation
+engine over the imported expectations before they are upserted, so a HAR that captured one endpoint
+many times collapses into a compact reusable mock set.
+
+**Redaction preserves multi-response lists.** `FixtureRedactor.redactExpectation` now redacts and
+preserves a `SEQUENTIAL`/`WEIGHTED`/`SWITCH` `httpResponses` list (with its `responseMode`,
+`responseWeights` and `switchAfter`) instead of silently dropping all but the single
+`getHttpResponse()` — required because consolidation can emit sequenced responses that later pass
+through the config-driven `redactSecretsInRecordedExpectations` step on the retrieve path.
+
 ## Persistence System
 
-### File Persistence
+### Disk Capture for Recorded Requests (NDJSON)
+
+When `persistRecordedRequestsToDisk` is `true`, every recorded exchange — both `FORWARDED_REQUEST` (proxied) and `EXPECTATION_RESPONSE` (mocked) log entries — is appended to an NDJSON file (one compact JSON object per line) by `RecordedRequestsFileSystemPersistence`, wired in as a per-entry hook on the Disruptor consumer thread.
+
+```mermaid
+sequenceDiagram
+    participant CT as Consumer Thread
+    participant FP as RecordedRequestsFileSystemPersistence
+    participant FS as NDJSON file
+    participant EL as Event Log (in-memory)
+
+    CT->>CT: processLogEntry(logEntry)
+    Note over CT: 1. disk capture runs FIRST (full bodies)
+    CT->>FP: recordedRequestConsumer.accept(logEntry)
+    FP->>FP: serialize to compact NDJSON line
+    FP->>FS: writer.write(line + "\n")
+    FP->>FS: writer.flush()
+    Note over CT: 2. optional in-memory truncation
+    CT->>CT: truncateBodiesForLog(logEntry) [if maxLoggedBodyBytes > 0]
+    Note over CT: 3. add to bounded in-memory log
+    CT->>EL: eventLog.add(logEntry)
+```
+
+**Key design points:**
+
+- **Disk-before-truncation ordering.** The disk write runs in `processLogEntry` before `truncateBodiesForLog()`, so the NDJSON archive always receives full-fidelity bodies even when `maxLoggedBodyBytes` clips the in-memory copy.
+- **Append-only, flush-per-line.** The file is opened with `StandardOpenOption.CREATE | APPEND`. Each line is flushed immediately after writing, so a crash or OOM-kill loses at most the in-flight entry, not the whole session — and re-import backs that guarantee up: because the write is `line + "\n" + flush`, a hard kill can leave a **truncated mid-JSON final line**, and `RecordedTrafficImporter` **skips (and counts) that malformed line rather than aborting**, so `?format=recording&source=disk` recovers every intact exchange.
+- **Write path is a side-channel; reload it explicitly.** Live reads (retrieve, verify, dashboard) query the in-memory `CircularConcurrentLinkedDeque` only, so entries evicted from memory under the byte budget are on disk but not visible until the archive is reloaded. **Re-import** the archive with `PUT /mockserver/import?format=recording` — supply the NDJSON in the request body, or add `?source=disk` (or send an empty body) to read the configured `persistedRecordedRequestsPath`. `RecordedTrafficImporter` parses each line and `MockServerEventLog.importRecordedRequestResponse(...)` re-injects each pair as a `FORWARDED_REQUEST` entry, so it becomes retrievable exactly like an in-memory recording. (A reloaded originally-mocked exchange therefore counts as forwarded under verify-by-disposition — an accepted v1 boundary.)
+- **Malformed/truncated lines are skipped, not fatal.** A single unparseable line (the classic crash-truncated last line, or any corruption) is skipped and counted; the skipped count is returned in the `x-mockserver-recorded-requests-skipped` response header and logged at WARN. The importer only fails (`400`) when the body has non-blank lines but **none** parse (i.e. it is not a recorded-traffic archive at all). An empty/whitespace archive imports **0** exchanges (`201`), not an error.
+- **Re-import is idempotent.** Re-injected entries carry `LogEntry.skipRecordedRequestPersistence = true`, so `processLogEntry` does not hand them back to the disk consumer — reloading an archive never appends the reloaded exchanges back to the (possibly same) file.
+- **Inert when disabled.** When `persistRecordedRequestsToDisk` is `false`, the `RecordedRequestsFileSystemPersistence` instance has all fields `null` and `append()` / `stop()` are no-ops. The hook (`recordedRequestConsumer`) is not set on `MockServerEventLog`. (Re-import via `PUT /mockserver/import?format=recording` still works with an archive supplied in the request body.)
+- **Both mocked and forwarded entries.** The hook is guarded by `logEntry.getType() == FORWARDED_REQUEST || logEntry.getType() == EXPECTATION_RESPONSE` in `processLogEntry`, so the archive is a complete record of served traffic (proxied and mocked). Other event types (RECEIVED_REQUEST, NO_MATCH_RESPONSE, etc.) are not written.
+
+**Format.** Each line is a serialized `HttpRequestAndHttpResponse` (via `HttpRequestAndHttpResponseSerializer`) with formatting whitespace collapsed so the entire object is one line. The format is identical to what `PUT /mockserver/retrieve?type=REQUEST_RESPONSES` returns for a single entry, and is exactly what `RecordedTrafficImporter` reads back on re-import.
+
+**Redaction.** The persisted archive honours `mockserver.redactSecretsInLog` exactly like the in-memory retrieval/export path — `append()` uses the redaction-aware `LogEntry.getRedactedHttpRequest()` / `getRedactedHttpResponse()` accessors, so secrets are masked on disk by default when redaction is on. Re-import re-masks via `ImportRedaction` (on by default) as a defence-in-depth step, consistent with HAR/Postman import.
+
+**Recommended combo.** Pair disk capture with `maxEventLogSizeInBytes` to get bounded memory and complete session history on disk:
+
+```
+persistRecordedRequestsToDisk=true      # full bodies to disk
+maxEventLogSizeInBytes=268435456        # 256 MB in-memory byte budget
+maxLoggedBodyBytes=0                    # keep in-memory bodies untruncated (budget evicts instead)
+```
+
+The launcher `mockserver-ui/scripts/launch-with-llm-capture.sh` uses exactly this combination by default.
+
+**Throughput trade-off.** With `persistRecordedRequestsToDisk` enabled, every recorded exchange — now including each mocked `EXPECTATION_RESPONSE`, of which a single streaming LLM/SSE/gRPC request can emit several — triggers a synchronous serialize + write + `flush()` on the single Disruptor consumer thread. This is opt-in and off by default, but under sustained high-volume mocking it can become the consumer-thread bottleneck. If that matters, a buffered/periodic-flush writer (trading a slightly larger crash-loss window for throughput) is possible future work; today the design favours the per-line durability guarantee above.
+
+### File Persistence for Expectations
 
 When `configuration.persistExpectations()` is true, `ExpectationFileSystemPersistence` implements `MockServerMatcherListener` and writes all active expectations to a JSON file whenever they change.
 
@@ -648,8 +762,9 @@ flowchart LR
 - **Redaction (by omission).** Entries carry no headers and no body, and the path has its query string stripped — so there is no credential-bearing free text to scrub. The `summary` field is unused (always `null`) in v1, so safety is by omission rather than active redaction. If a non-null `summary` derived from a header or query value is ever added, scrub it through `FixtureRedactor.defaultSensitiveHeaders()` + `REDACTED_PLACEHOLDER` at that point.
 - **Reset clears the audit log, including its own `reset` entry.** A `PUT /mockserver/reset` records its `reset` audit entry and then `reset()` clears the store, so the wipe leaves no durable trace — intentional for an off-by-default, best-effort, in-memory log (not a tamper-evident compliance log).
 - **Capacity.** The `AuditStore` singleton reads `controlPlaneAuditMaxEntries` (default 1000) **once at construction** — a fixed-capacity ring, like `DriftStore`. `HttpState.reset()` clears it alongside `DriftStore`.
+- **Durable NDJSON file sink (optional).** Because the in-memory ring is bounded and is wiped by the very `reset` it records, an optional durable sink can persist the trail. Set `auditLogFile` to a path and every recorded `AuditEntry` is *also* appended — as one compact JSON object per line (newline-delimited JSON) — by `AuditFileSink`, a **separate writer** that only *observes* the same entry `recordAudit` hands the ring. The ring is unchanged: `AuditFileSink` never reads or mutates it, honouring the `AuditEntry` contract that the in-memory store must never "become a sink". The path is resolved once, on the first entry written (fixed thereafter, like the ring's capacity), and missing parent directories are created; the file is opened append-only (survives restart and `reset`). It flushes per line and is thread-safe. All open/write failures are fail-soft: a single WARN is logged and the sink self-disables — request handling and the in-memory ring are never affected. Rotation is out of scope (append-only growth); use external log rotation. Empty default = off, behaviour unchanged.
 
-**Deferred (not in v1):** persistent/external sink; tamper-evidence; process-signal control of auditing. (Verified-principal / external-IdP integration shipped in Tier 1.5-A via `OidcAuthenticationHandler` — an OIDC-verified `sub` is recorded with `principalSource=verified-oidc`. Coarse control-plane authorization — Tier 1.5-A Wave 2 — now populates `outcome=FORBIDDEN` for denied operations; FORBIDDEN denials are always recorded when auditing is enabled, even for reads, whereas AUTHORIZED reads honour `controlPlaneAuditReads`.)
+**Deferred (not in v1):** tamper-evidence; process-signal control of auditing. (Verified-principal / external-IdP integration shipped in Tier 1.5-A via `OidcAuthenticationHandler` — an OIDC-verified `sub` is recorded with `principalSource=verified-oidc`. Coarse control-plane authorization — Tier 1.5-A Wave 2 — now populates `outcome=FORBIDDEN` for denied operations; FORBIDDEN denials are always recorded when auditing is enabled, even for reads, whereas AUTHORIZED reads honour `controlPlaneAuditReads`.)
 
 ## Class Reference
 
@@ -669,6 +784,8 @@ flowchart LR
 | `HttpResponseMatcher` | `mockserver-core/.../matchers/HttpResponseMatcher.java` | Response matcher for response verification (status, headers, body) |
 | `BodyMatcherBuilder` | `mockserver-core/.../matchers/BodyMatcherBuilder.java` | Factory for body matchers, shared by request and response matching |
 | `ExpectationFileSystemPersistence` | `mockserver-core/.../persistence/ExpectationFileSystemPersistence.java` | Write expectations to disk |
+| `RecordedRequestsFileSystemPersistence` | `mockserver-core/.../persistence/RecordedRequestsFileSystemPersistence.java` | Append-only NDJSON disk capture for recorded exchanges (forwarded + mocked) |
+| `RecordedTrafficImporter` | `mockserver-core/.../imports/RecordedTrafficImporter.java` | Parse a persisted NDJSON archive back into `HttpRequestAndHttpResponse` pairs for re-import (`PUT /mockserver/import?format=recording`) |
 | `ExpectationFileWatcher` | `mockserver-core/.../persistence/ExpectationFileWatcher.java` | Monitor initialization files |
 | `FileWatcher` | `mockserver-core/.../persistence/FileWatcher.java` | Low-level file polling |
 | `MockServerEventLogNotifier` | `mockserver-core/.../mock/listeners/MockServerEventLogNotifier.java` | Observer pattern base for log |

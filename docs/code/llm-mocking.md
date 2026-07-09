@@ -31,7 +31,7 @@ flowchart LR
 - `encodeRerank(RerankResponse, documents)` -- rerank results (Cohere/Voyage)
 - `decode(HttpRequest)` -- parse inbound request to `ParsedConversation` (for conversation matchers)
 
-All embedding codecs share `EmbeddingVectors` (deterministic-from-input or random, then L2-normalised); only the JSON envelope differs per provider. Embedding shapes: OpenAI/Azure `{"object":"list","data":[{"embedding":[...]}]}` (default 1536 dims); Gemini `{"embedding":{"values":[...]}}` (768); Ollama `{"embeddings":[[...]]}` — the `/api/embed` shape (768); Bedrock Titan `{"embedding":[...],"inputTextTokenCount":N}` or Bedrock Cohere `{"embeddings":[[...]]}` when the model id starts with `cohere` (1024). `ANTHROPIC` and `OPENAI_RESPONSES` have no embeddings endpoint and throw (surfaced as a 400 by the handler). Rerank shares `RerankScoring` (per-document relevance scores — reproducible when `deterministicFromInput` is set, else random — descending, capped to `topN`) and emits the provider-correct envelope via a `RerankScoring.Envelope` selector: Cohere `{"results":[{"index":N,"relevance_score":F}, ...]}`, Voyage `{"object":"list","data":[...],"usage":{"total_tokens":N}}`.
+All embedding codecs share `EmbeddingVectors` (deterministic-from-input or random, then L2-normalised); only the JSON envelope differs per provider. When `deterministicFromInput` is set, the vector is built by **n-gram feature hashing** rather than a hash-seeded PRNG, so it is not only deterministic but also **semantically plausible**: the input is tokenised (Unicode-aware, lowercased) into word unigrams, word bigrams, and character 3-grams; each feature is hashed (seeded FNV-1a) into one of `dimensions` buckets with a **signed** contribution (a second hash picks +/- to reduce collision bias), weighted by a sublinear term frequency (`1 + ln(count)`, character n-grams down-weighted x0.5); the accumulated vector is L2-normalised. Texts that share vocabulary / n-grams land in overlapping buckets, so their **cosine similarity is higher** (paraphrases score ~0.3-0.6) while unrelated texts are **near-orthogonal** (~0.0-0.1) — letting offline RAG / vector-search code rank related documents above unrelated ones without a real embedding model. The transform is deterministic for the same `input`, `seed`, and `dimensions` (the seeded FNV-1a feature hash is JVM-stable, though the floating-point vector is not promised bit-exact across platforms — feature summation order and `Math.log` ULP differences can perturb the low bits; the cosine ordering is what is guaranteed); feature-less input (empty/punctuation-only) falls back to a seeded non-zero vector so the result is always unit-length. The non-deterministic path (default) is unchanged (uniform-random unit vector). Embedding shapes: OpenAI/Azure `{"object":"list","data":[{"embedding":[...]}]}` (default 1536 dims); Gemini `{"embedding":{"values":[...]}}` (768); Ollama `{"embeddings":[[...]]}` — the `/api/embed` shape (768); Bedrock Titan `{"embedding":[...],"inputTextTokenCount":N}` or Bedrock Cohere `{"embeddings":[[...]]}` when the model id starts with `cohere` (1024). `ANTHROPIC` and `OPENAI_RESPONSES` have no embeddings endpoint and throw (surfaced as a 400 by the handler). Rerank shares `RerankScoring` (per-document relevance scores — reproducible when `deterministicFromInput` is set, else random — descending, capped to `topN`) and emits the provider-correct envelope via a `RerankScoring.Envelope` selector: Cohere `{"results":[{"index":N,"relevance_score":F}, ...]}`, Voyage `{"object":"list","data":[...],"usage":{"total_tokens":N}}`.
 
 Currently registered codecs:
 
@@ -41,11 +41,51 @@ Currently registered codecs:
 | OPENAI | `OpenAiChatCompletionsCodec` | Complete (chat + embeddings) |
 | OPENAI_RESPONSES | `OpenAiResponsesCodec` | Complete (no embeddings endpoint) |
 | GEMINI | `GeminiCodec` | Complete (chat + embeddings) |
-| BEDROCK | `BedrockCodec` | Complete (delegates chat to `AnthropicCodec`; streaming uses `application/vnd.amazon.eventstream` binary framing via `BedrockEventStreamEncoder`; SigV4 signing is a follow-up; embeddings = Titan default / Cohere by model) |
+| BEDROCK | `BedrockCodec` | Complete (delegates chat to `AnthropicCodec`; streaming uses `application/vnd.amazon.eventstream` binary framing via `BedrockEventStreamEncoder`; automatic AWS SigV4 request signing implemented via `AwsSigV4Signer` on the client path; embeddings = Titan default / Cohere by model) |
 | AZURE_OPENAI | `AzureOpenAiCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
 | OLLAMA | `OllamaCodec` | Complete (chat + embeddings; see security audit for NDJSON wire-format limitation) |
 | COHERE | `CohereCodec` | Rerank only (`/v1/rerank`) |
 | VOYAGE | `VoyageCodec` | Rerank only (`/v1/rerank`) |
+| MISTRAL | `MistralCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
+| XAI | `XaiCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
+| DEEPSEEK | `DeepSeekCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
+| GROQ | `GroqCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
+| OPENROUTER | `OpenRouterCodec` | Complete (delegates to `OpenAiChatCompletionsCodec`) |
+
+### OpenAI-compatible provider aliases
+
+`MISTRAL`, `XAI` (Grok), `DEEPSEEK`, `GROQ`, and `OPENROUTER` expose the OpenAI Chat Completions wire format on their own hosts. Their codecs extend `OpenAiCompatibleChatCodec` (which delegates every encode/decode to `OpenAiChatCompletionsCodec`, exactly like `AzureOpenAiCodec`) and their runtime clients extend `OpenAiLlmClient` (overriding only `provider()` and `defaultBaseUrl()`). Because the path is the shared `/chat/completions`, the **host** is the only distinguishing signal: `LlmProviderSniffer` (live forward/proxy path) and `ProviderDetector` (offline AUTO detection) map `api.mistral.ai`→`MISTRAL`, `api.x.ai`→`XAI`, `api.deepseek.com`→`DEEPSEEK`, `api.groq.com`→`GROQ`, `openrouter.ai`→`OPENROUTER`. This means proxy observability records traffic to these gateways as LLM (provider-correct GenAI spans + cost metrics) instead of dropping it as non-LLM. Pricing rows in `LlmPricing` are marked **approximate** (`isApproximate()`); OpenRouter routes vendor-prefixed model ids (`openai/…`, `anthropic/…`, `google/…`, `mistral*/…`, `x-ai/…`, `deepseek/…`) to the underlying vendor's table. Their wire shape is byte-identical to the `openai` golden fixtures, so they are covered by `OpenAiCompatibleProviderCodecTest` rather than dedicated golden files.
+
+## Realtime voice APIs (OpenAI Realtime, Gemini Live)
+
+The realtime (voice) protocols — **OpenAI Realtime** (GA 2025) and **Gemini Live** (`BidiGenerateContent`) — are a
+bidirectional **WebSocket event stream**, not a single HTTP request/response body, so they are a sibling feature to
+the `httpLlmResponse` codecs rather than part of them. They live in `org.mockserver.llm.realtime`
+(`OpenAiRealtimeCodec` / `GeminiLiveCodec`, pure event codecs) with their own `RealtimeProvider` enum
+(`OPENAI_REALTIME`, `GEMINI_LIVE`) kept **separate** from the HTTP `Provider` enum, and are wired through the
+`httpWebSocketResponse` action via the Java client `RealtimeMockBuilder`. Mapping the realtime providers onto the
+HTTP `Provider` enum (for pricing / sniffer / detector / proxy-observability parity) is **deferred**. See
+[ai-protocol-mocking.md → Realtime Voice API Mocking](ai-protocol-mocking.md#realtime-voice-api-mocking-openai-realtime-gemini-live)
+for the architecture, the event coverage matrix, and usage.
+
+## OpenAI Responses API server-side state
+
+The Responses API is stateful in a way Chat Completions and Anthropic Messages are not: a client may send only the new turn's `input` plus a `previous_response_id`, and the server reconstructs the full conversation from the prior turn. `OpenAiResponsesStore` (`org.mockserver.llm`) is the process-wide registry that models this, so agents that chain turns via `previous_response_id` run against the mock.
+
+```mermaid
+flowchart LR
+    T1["POST /v1/responses\ninput: hello"] --> ENC1["encode → resp_A"]
+    ENC1 --> STORE1["store resp_A\n[user hello, assistant hi]"]
+    T2["POST /v1/responses\ninput: and then?\nprevious_response_id: resp_A"] --> DEC["decode prepends resp_A\n[user hello, assistant hi, user and then?]"]
+    STORE1 -.-> DEC
+    GET["GET /v1/responses/resp_A"] --> STORE1
+```
+
+- **Recording** — `HttpLlmResponseActionHandler` calls `OpenAiResponsesStore.recordIfStored(...)` after encoding an `OPENAI_RESPONSES` completion. It honours the request's `store` flag (default `true`; `store:false` skips recording) and stores, keyed by the issued `resp_…` id, the fully-chained decode of the request plus this turn's assistant output — so a later turn referencing this id reconstructs the entire dialogue.
+- **Chaining** — `OpenAiResponsesCodec.decode` calls `OpenAiResponsesStore.priorMessagesFor(body)`; when the request carries a `previous_response_id` whose response is stored, the prior conversation is prepended to the current turn's messages, so conversation matchers and usage inference see the whole dialogue.
+- **Retrieval** — `GET /v1/responses/{id}` is served from the store by `HttpActionHandler` (on the otherwise-404 path, so user expectations always win) via `OpenAiResponsesStore.retrievalResponseOrNull(request)`, returning the stored body verbatim; an unknown id falls through to normal handling.
+
+The store is bounded (LRU, 10k) and cleared on `HttpState.reset()`. It is fail-soft — recording never affects the served response — and fully back-compatible: a request with no `previous_response_id` and the default `store:true` behaves exactly as before.
 
 ## Streaming Physics
 
@@ -56,8 +96,15 @@ Parameters:
 - `tokensPerSecond` -- base rate (1-10000)
 - `jitter` -- fractional uniform deviation (0.0-1.0)
 - `seed` -- PRNG seed for reproducible timing
+- `subwordStreaming` -- split completion text into finer, subword-sized deltas instead of whole words. **On by default** (unset/`null` resolves to subword); set explicitly to `false` to opt back into the legacy whole-word split
 
 The expanded events are handed to `HttpSseResponseActionHandler` which already honours per-event delays.
+
+### Streaming delta granularity (`subwordStreaming`)
+
+Each chat codec's `encodeStreaming` splits the completion text into deltas via `TokenCounter.streamingTextTokens(text, physics)`. **Subword deltas are now the default**: a `null` physics or an unset `subwordStreaming` flag segments the text into **subword-sized, concatenation-exact pieces** (a leading space absorbed into the following word, words chunked into ~4-character subword units) via `TokenCounter.segmentForStreaming`, approximating a real provider's per-token stream. Only an **explicit** `streamingPhysics.subwordStreaming: false` selects the legacy whitespace-boundary split — each word and each whitespace run its own delta. The per-event **timing math is unchanged** — each delta is still exactly one physics event getting the `timeToFirstToken` / `1000 / tokensPerSecond` delay — so subword mode simply emits more, smaller events (closer to real token counts), never altering the `StreamingPhysicsExpander` algorithm. Because a stream now carries more real-token deltas at the same per-token cadence, **the total stream duration is slightly longer** for a given `tokensPerSecond` than the old whole-word default. The joined deltas always equal the original text exactly, in both modes.
+
+> **Behaviour change (default flip).** `subwordStreaming` shipped default-`false` and was flipped to default-`true`. The streaming codec golden fixtures (`streaming-text.jsonl` for every provider) were regenerated to reflect the finer deltas; non-streaming and streaming-tool-call goldens are unchanged (the canonical tool-call completion has no text). Consumers that need the exact old whole-word wire output must now set `subwordStreaming: false` explicitly.
 
 ## Conversation Matchers
 
@@ -207,6 +254,8 @@ Two MCP tools expose the LLM mocking feature to agents:
 
 The first two validate provider availability against `ProviderCodecRegistry` at registration time. The analysis tools delegate to `org.mockserver.llm.analysis.AgentRunAnalyzer`.
 
+Beyond these LLM-specific tools, the same MCP server exposes generic **expectation-authoring and record/replay control tools** (`create_expectation`, `raw_expectation`, `list_expectations`, `clear_expectations`, `verify_request`, `retrieve_recorded_requests`, `retrieve_request_responses`, `set_operating_mode`, `promote_recordings`) so an agent can author and drive any mock — including recording real LLM traffic in SPY/CAPTURE mode and promoting it to mocks. Each is read/mutate-classified for the control-plane authorization gate. See [ai-protocol-mocking.md → Expectation-authoring and record/replay control tools](ai-protocol-mocking.md#expectation-authoring-and-recordreplay-control-tools).
+
 ## Structured-output validation
 
 Structured-output validation against a JSON Schema works on **both sides** of a mock, both built on `JsonSchemaValidator`:
@@ -217,7 +266,7 @@ Structured-output validation against a JSON Schema works on **both sides** of a 
 
 ## Approximate token counting and usage inference
 
-`TokenCounter` (`org.mockserver.llm`) is a pure, deterministic helper that estimates token counts for text. It is **an estimate, not a real tokenizer** — it does not implement BPE/SentencePiece or any provider's vocabulary, so its counts differ from a provider's billed counts (roughly within ±20% for ordinary English prose, further off for code or non-Latin text). The heuristic averages two cheap signals — characters ÷ 4 and words × 4/3 — plus a small punctuation-density allowance (BPE tends to split punctuation into its own tokens), clamped to ≥1 for any non-empty text and 0 for `null`/empty. It exposes `estimateTokens(text)`, `estimatePromptTokens(ParsedConversation)` (per-message text + a small per-message chat-format overhead, including tool-call args and tool results), and `estimateCompletionTokens(text, toolCalls)`.
+`TokenCounter` (`org.mockserver.llm`) is a pure, deterministic helper that estimates token counts for text. It is **an estimate, not a real tokenizer** — it loads no BPE merges, SentencePiece model, or provider vocabulary (no dependency, no embedded vocab), so its counts still differ from a provider's billed counts. It instead **approximates GPT-style BPE segmentation** with a handful of cheap structural rules so counts land close to real tokenizers — validated in `TokenCounterTest` against hard-coded OpenAI `cl100k_base` (GPT-4) reference counts to be **within ±15% for ordinary English prose** (further off for code, non-Latin scripts, or long punctuation runs). The text is walked once into runs: **words** (letters/digits, with `- ' _` kept word-internal so `open-source` stays one word) absorb a leading space, split at `lower→Upper` case and letter↔digit boundaries (so `ChatGPT`→`Chat`,`GPT`), and cost 1 token plus one extra per ~5 characters beyond the first five (short/common words stay whole, long words split); **CJK** is denser (Han/Hangul ~1.2 tokens/char, Kana ~0.5); **punctuation/symbols** ~1 token each; a plain **space** is free while a newline/tab costs ~1. The result is clamped to ≥1 for any non-empty text and 0 for `null`/empty. It exposes `estimateTokens(text)`, `estimatePromptTokens(ParsedConversation)` (per-message text + a small per-message chat-format overhead, including tool-call args and tool results), `estimateCompletionTokens(text, toolCalls)`, and the streaming segmenters `segmentForStreaming(text)` / `streamingTextTokens(text, physics)` (see Streaming Physics below).
 
 When the opt-in `mockserver.llmInferUsageEnabled` flag is set, `HttpLlmResponseActionHandler.withInferredUsageIfEnabled(...)` returns a **per-request shallow copy** of the completion carrying approximate `prompt_tokens` / `completion_tokens` for a mocked completion that omits `usage`, on both the non-streaming and streaming paths, **before** the codec encodes. The shared expectation `Completion` is never mutated, so the request-dependent prompt estimate is recomputed every request (no stale caching, no concurrent-write race). The prompt estimate comes from decoding the inbound request with the provider codec (`ProviderCodec.decode`); the completion estimate from the response text and tool-call arguments. It is **off by default** so existing responses are unchanged (an absent `usage` continues to encode as zeros) and a completion that already declares a non-zero `usage` is never overwritten. Decoding failures are fail-soft (prompt estimate degrades to 0, never an error). This is independent of `HttpLlmResponseActionHandler.estimateTokenCount(...)`, the existing rough character estimate that backs the token-based chaos quota, which is unchanged.
 
@@ -252,6 +301,16 @@ OpenAI Chat Completions has no reasoning-content representation on the response 
 
 `AdversarialResponseLibrary` (`org.mockserver.llm.adversarial`) is a curated catalog of hostile/malformed *responses* an agent might receive from a compromised tool or jailbroken model — prompt injection, jailbreak persona-swaps, data-exfiltration requests, malformed/truncated JSON, an empty response, and an over-long repetition. The `mock_adversarial_llm_response` MCP tool mocks a chosen payload as the provider-correct LLM response so you can test that your agent **resists** it. The payloads are short, well-known benign test fixtures (not working exploits) — a defensive testing aid — and generation is deterministic (each id maps to fixed text).
 
+## Moderation, content-filter, and refusal simulation
+
+Production agents must handle provider **content-filter blocks** and **refusals**; these opt-in, additive capabilities let you trigger them deterministically. All default to off / not-flagged.
+
+- **OpenAI Moderations endpoint** — set `moderation` (a `ModerationResponse`, `org.mockserver.model`) on an `HttpLlmResponse` and the handler returns OpenAI's `POST /v1/moderations` wire shape: `{"id":..,"model":..,"results":[{"flagged":bool,"categories":{..},"category_scores":{..}}]}`. Every canonical OpenAI category is emitted; those named in `flaggedCategories` are `true` with a high score, the rest `false` with a low score, and top-level `flagged` is `true` when any is flagged. Encoded by the pure `OpenAiModerationBodies` helper (`org.mockserver.llm`); category matching is case-insensitive; `model` defaults to `omni-moderation-latest`. An empty/absent list is the safe not-flagged default.
+- **Azure content-filter annotations** — set `contentFilter` (an `LlmContentFilter` carrying `hate`/`sexual`/`violence`/`selfHarm` severities: `safe`/`low`/`medium`/`high`) on an `AZURE_OPENAI` response and the handler adds Azure's `content_filter_results` (on each `choices[]` entry) and `prompt_filter_results` (top-level array) annotations after the codec encodes. Each category renders as `{"filtered":bool,"severity":..}`; Azure's default policy filters at `medium`/`high`, so `filtered` is derived at those severities. Non-Azure providers ignore `contentFilter` for annotations. Fail-soft — any parse error leaves the body unchanged.
+- **Anthropic refusal preset** — `LlmRefusalPresets.anthropicRefusal()` (`org.mockserver.llm`) returns a `Completion` with `stop_reason:"refusal"` (and no text, matching Anthropic's empty-content refusal), which the Anthropic codec encodes as an HTTP 200 refusal message. `anthropicRefusal(message)` includes a short refusal text.
+
+The `moderation` and `contentFilter` fields round-trip as top-level fields on `HttpLlmResponse` through the schema-validated expectation JSON.
+
 ## Fault / chaos injection
 
 `LlmChaosProfile` (`org.mockserver.model`) attaches a fault profile to any `HttpLlmResponse` for resilience testing. Applied by `HttpLlmResponseActionHandler`:
@@ -260,6 +319,7 @@ OpenAI Chat Completions has no reasoning-content representation on the response 
 - **Mid-stream truncation** — `applyStreamingChaos(...)` keeps a leading `truncateAtFraction` of the SSE events (default 0.5) so the stream ends early.
 - **Malformed SSE** — appends a deliberately broken-JSON chunk so the client must handle a corrupt event.
 - **Stateful request quota** — a deterministic fixed-window rate limit (`quotaName` + `quotaLimit` + `quotaWindowMillis`, optional `quotaErrorStatus` default 429). `quotaErrorResponseOrNull(...)` (called first inside `chaosErrorResponseOrNull`) records one request against `org.mockserver.llm.LlmQuotaRegistry` and returns the quota error once the in-window count exceeds the limit. The registry is a process-wide singleton keyed by `quotaName` (expectations sharing a name share one counter — model an upstream account limit), thread-safe via `ConcurrentHashMap`, with an injectable clock for testing, cleared on `HttpState.reset()`. A misconfigured/partial quota fails open (never rate-limits).
+- **Content-filter block** — `contentFilterBlockProbability` (0.0–1.0, seeded-deterministic, shares `seed`) emits the **provider-correct** content-filter block via the pure `LlmContentFilterBodies` helper (`org.mockserver.llm`): OpenAI-family → HTTP 400 `content_filter` error; `AZURE_OPENAI` → HTTP 400 whose `innererror` carries the per-category `content_filter_result` (severities from the response's `contentFilter`, defaulting to hate at `high`); `ANTHROPIC`/`BEDROCK` → HTTP 200 `stop_reason:"refusal"`; `GEMINI` → HTTP 200 `finishReason:"SAFETY"`; unknown provider → generic 400. Checked (after the quota) inside `chaosErrorResponseOrNull` and takes **priority over the generic probabilistic error**, so a would-be stream short-circuits to the block. Content-filter is a distinct wire shape, so it lives in a sibling helper rather than `LlmErrorBodies`' overload/rate-limit/server kinds.
 
 Truncation, malformed-SSE, and the stateful quota are fully deterministic; the probabilistic error path is deterministic at probability 0.0/1.0. Each injection increments the `LLM_CHAOS_INJECTED_COUNT` metric. The profile round-trips as the top-level `chaos` field on `HttpLlmResponse` (alongside `completion`, `embedding`, and `conversationPredicates`) and is exposed per turn in the dashboard wizard and via the `chaos` MCP parameter.
 
@@ -316,6 +376,16 @@ Agent-run analysis works identically for **proxied/forwarded** traffic. Every in
 **Provider auto-detection.** The `verify_tool_call` and `explain_agent_run` MCP tools accept `"AUTO"` as the `provider` parameter. `ProviderDetector` (`org.mockserver.llm.ProviderDetector`) infers the provider from recorded request paths (e.g. `/v1/messages` maps to `ANTHROPIC`, `/v1/chat/completions` to `OPENAI`), mirroring the UI-side detection in `llmTraffic.ts`. This is especially useful for proxy users who route real LLM calls through MockServer and may not know or want to specify the provider explicitly.
 
 **Dashboard Sessions view.** The Sessions view groups proxied LLM traffic by upstream host (from the `Host` header) when no conversation-isolation expectations are configured, so proxy traffic to different providers appears in separate session lanes. The call graph (via `AgentRunGraph`) is shown for all sessions including these host-grouped proxy sessions.
+
+**Capturing coding-assistant CLIs.** A common use is to point a coding assistant at MockServer as an HTTPS proxy and watch its model calls in the Traffic / LLM Traces / LLM Optimise views. Detection is path-based so it works regardless of the (possibly private) gateway host a tool is configured for:
+
+| CLI | LLM endpoint | Detected as |
+|-----|--------------|-------------|
+| Claude Code (`claude`) | `api.anthropic.com/v1/messages` | `ANTHROPIC` |
+| opencode (Codex backend) | `chatgpt.com/backend-api/codex/responses` | `OPENAI_RESPONSES` |
+| Tabnine CLI (Gemini-CLI fork) | `<gateway>/…/chat/completions` | `OPENAI` |
+
+opencode's OpenAI **Codex** backend serves the Responses API at the non-standard path `/backend-api/codex/responses`; `LlmProviderSniffer`, `ProviderDetector`, and `llmTraffic.ts` recognise the `/codex/responses` path (and the `chatgpt.com` host on it) the same as the hosted `/v1/responses`. A local-only smoke harness that drives the real CLIs end-to-end lives in `scripts/llm-proxy-capture/`; the CI-safe equivalent is `CodingCliLlmCaptureTest` (mockserver-core) and the `llmTraffic.test.ts` codex cases (mockserver-ui).
 
 ## Dashboard Rendering
 
@@ -387,6 +457,11 @@ classDiagram
         OLLAMA
         COHERE
         VOYAGE
+        MISTRAL
+        XAI
+        DEEPSEEK
+        GROQ
+        OPENROUTER
     }
     class ConversationPredicates {
         +turnIndex: Integer
@@ -451,7 +526,7 @@ flowchart TD
     F -- "timeout / error / non-2xx" --> C
 ```
 
-Adding a provider = implement `LlmClient` + one `register(...)` line — the same one-line story as codecs. **Ollama** is the reference backend (no auth, local, free) used to prove the path. **Bedrock** builds the Anthropic-on-Bedrock body and parses the Anthropic-shaped response, but automatic AWS SigV4 signing is not yet implemented — callers supply auth via the `headers` escape hatch or a signing proxy (tracked in `llm-security-audit.md`).
+Adding a provider = implement `LlmClient` + one `register(...)` line — the same one-line story as codecs. **Ollama** is the reference backend (no auth, local, free) used to prove the path. **Bedrock** builds the Anthropic-on-Bedrock body and parses the Anthropic-shaped response, and performs automatic AWS SigV4 request signing via `AwsSigV4Signer`: when `LlmBackend#apiKey()` carries credentials (`akid:secret[:token]`), `BedrockLlmClient` signs the request and the SigV4 headers take precedence over any `Authorization` supplied via the `headers` escape hatch; the escape hatch (or a signing proxy) remains supported for pre-signed setups.
 
 This SPI is never on the deterministic assertion/matching path. The features that consume it (drift detection, semantic matching) are opt-in and documented in this file above.
 
@@ -668,7 +743,9 @@ Key source files under `mockserver/mockserver-core/src/main/java/org/mockserver/
 | `llm/analysis/OptimisationSignals.java` | Six deterministic signal detectors (see below); pure — no network, no LLM |
 | `llm/analysis/LlmOptimisationBriefRenderer.java` | Renders an `LlmOptimisationReport` to a pre-framed Markdown brief |
 | `llm/analysis/LlmOptimisationCsvRenderer.java` | Renders an `LlmOptimisationReport` to CSV (per-call rows + totals/verdict summary, RFC-4180 escaped) |
-| `llm/analysis/LlmOptimisationReportService.java` | Façade: `build(pairs, filter)` + `renderBrief(result)` + `renderCsv(result)` — used by both the REST handler and the MCP tool; also pushes the verdict snapshot to `Metrics` for the optimisation gauges |
+| `llm/analysis/LlmDatasetExporter.java` | Exports captured sessions as eval / fine-tune / promptfoo datasets (OpenAI-evals JSONL, chat fine-tune JSONL, promptfoo test-suite JSON); redacts via `FixtureRedactor` + credential masking |
+| `llm/analysis/AgentRunDiff.java` | Prompt-level diff of two recorded runs — normalises via `PromptNormalizer`, LCS message alignment, tool-call add/remove, token/cost delta |
+| `llm/analysis/LlmOptimisationReportService.java` | Façade: `build(pairs, filter)` + `renderBrief(result)` + `renderCsv(result)` + `renderDataset(result, format)` — used by both the REST handler and the MCP tool; also pushes the verdict snapshot to `Metrics` for the optimisation gauges |
 
 ## LLM Optimisation Export
 
@@ -706,16 +783,44 @@ The per-call `latencyMs` is the measured upstream round-trip time. It is carried
 
 | Query parameter | Values | Default |
 |-----------------|--------|---------|
-| `format` | `json` \| `markdown` \| `csv` | `json` |
+| `format` | `json` \| `markdown` \| `csv` \| `openai-evals` \| `fine-tune` \| `promptfoo` | `json` |
 | `session` | grouping key | all captured LLM traffic |
 | `host` | upstream hostname | all hosts |
 | `provider` | `OPENAI` \| `ANTHROPIC` \| `GEMINI` \| `BEDROCK` \| `AZURE_OPENAI` \| `OLLAMA` | all providers |
 
-An unrecognised `format` returns `400` with `format must be one of: json, markdown, csv`. The `csv` format is served as `text/csv; charset=utf-8`.
+An unrecognised `format` returns `400` with `format must be one of: json, markdown, csv, openai-evals, fine-tune, promptfoo`. The `csv` format is served as `text/csv; charset=utf-8`; the JSONL dataset formats (`openai-evals`, `fine-tune`) as `application/x-ndjson; charset=utf-8`; and `promptfoo` as `application/json; charset=utf-8`.
 
 CORS is enabled on this endpoint so the dashboard UI can call it even when the dashboard and control plane are on different origins.
 
-**MCP tool** — `export_optimisation_report` (registered in `McpToolRegistry.registerExportOptimisationReport`), same parameters as the REST endpoint (`format` accepts `markdown` (default), `json`, or `csv`). Returns the brief text (`brief`), JSON bundle (`report`), or CSV text (`csv`) as a tool result.
+**MCP tool** — `export_optimisation_report` (registered in `McpToolRegistry.registerExportOptimisationReport`), same parameters as the REST endpoint (`format` accepts `markdown` (default), `json`, `csv`, or the three dataset formats). Returns the brief text (`brief`), JSON bundle (`report`), CSV text (`csv`), or dataset text (`dataset`) as a tool result.
+
+### Dataset export (eval / fine-tune / promptfoo)
+
+`format=openai-evals|fine-tune|promptfoo` turns the captured sessions into datasets that eval / fine-tune tooling consumes, served by `LlmDatasetExporter` via `LlmOptimisationReportService.renderDataset(result, format)` (reusing the same `Result.getIncludedExchanges()` the report is built from). For each captured exchange the exporter decodes the **prompt messages** from the request (via the provider `ProviderCodec`) and the **assistant / ideal turn** from the response (via the provider `LlmClient.parseCompletionResponse`). Non-LLM exchanges and requests that decode to no messages are skipped (mirroring the report's inclusion rule).
+
+| Format | Wire values | Shape |
+|--------|-------------|-------|
+| OpenAI-evals | `openai-evals`, `evals` | JSONL, one sample per line: `{"input":[{role,content}…],"ideal":"<assistant response>"}` |
+| Chat fine-tune | `fine-tune`, `finetune` | JSONL, one conversation per line: `{"messages":[…prompt…,{"role":"assistant","content":…}]}` (assistant `tool_calls` included when present) |
+| promptfoo | `promptfoo` | single JSON document `{"tests":[{"description":…,"vars":{"messages":[…]},"assert":[{"type":"equals","value":"<ideal>"}]}]}` |
+
+**Redaction (on by default).** Every export runs each request and response through `FixtureRedactor` before emission (default sensitive headers / query params plus any configured `mockserver.fixtureBodyRedactFields`), and additionally masks credential shapes (OpenAI `sk-…`, AWS `AKIA…`, bearer, GitHub tokens) in free-text message content via `LlmOptimisationBriefRenderer.maskSecrets` — so a key a user pasted into a prompt never reaches the dataset. An empty capture yields an empty JSONL document (or `{"tests":[]}` for promptfoo). The dataset shapes are additive convenience exports, not frozen wire contracts.
+
+### Agent-run diff
+
+`PUT /mockserver/llm/diffRuns` (handled by `HttpRequestHandler.handleDiffRuns`, MCP tool `diff_agent_runs`) diffs two recorded agent runs at the prompt level. Each side is selected by the same `session`/`host`/`provider` filter the report uses; the endpoint builds an `LlmOptimisationReportService.Result` per side (reusing the report plumbing for provider detection + token/cost totals), then `AgentRunDiff` reconstructs each run's canonical conversation (`AgentRunAnalyzer.canonicalConversation`), normalises every message through `PromptNormalizer`, and aligns the two message sequences with a longest-common-subsequence diff (an adjacent REMOVED+ADDED of the same role is coalesced into a single `CHANGED`).
+
+Request body:
+
+```json
+{
+  "before": {"session": "host:api.openai.com", "provider": "OPENAI"},
+  "after":  {"session": "host:api.openai.com", "provider": "OPENAI"},
+  "normalization": { "collapseWhitespace": true, "sortJsonKeys": true }
+}
+```
+
+Response: `{"promptChanged", "messageCountBefore/After", "messageDiffs":[{changeType, role, beforeText, afterText}], "toolCallsAdded", "toolCallsRemoved", "tokenDelta":{input/output tokens + cost before/after/delta}}`. `tokenDelta` is present only when both sides carry usage totals. The diff is deterministic and read-only — no LLM is called — and message text is masked for credential shapes. Prompt normalisation means cosmetic churn (whitespace, JSON key order, volatile ids/timestamps) is not reported as a change. The endpoint sits behind `controlPlaneRequestAuthenticated` like the other admin endpoints; no new configuration property is introduced.
 
 ### CSV format
 
